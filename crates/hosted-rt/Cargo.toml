@@ -1,0 +1,11 @@
+[package]
+name = "hosted-rt"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+test = false
+doctest = false
+
+[dependencies]
+hosted = { path = "../hosted" }
