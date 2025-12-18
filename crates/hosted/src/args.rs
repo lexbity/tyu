@@ -14,6 +14,8 @@ impl RawArgs {
     pub fn len(&self) -> usize {
         if self.argc <= 0 {
             0
+        } else if self.argc > 4096 {
+            4096
         } else {
             self.argc as usize
         }
