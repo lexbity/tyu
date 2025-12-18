@@ -55,6 +55,7 @@ impl WordSig {
 pub struct WordEntry {
     pub name: TypeAtom,
     pub sig: WordSig,
+    pub may_suspend: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -62,4 +63,3 @@ pub struct SigParseError {
     pub code: u32,
     pub span: Span,
 }
-
