@@ -3,6 +3,7 @@ use crate::{
     token::{Token, TokenKind},
 };
 
+#[derive(Clone, Copy)]
 pub struct Lexer<'a> {
     src: &'a [u8],
     i: usize,
@@ -90,6 +91,22 @@ impl<'a> Lexer<'a> {
                     return self.lex_ident(start);
                 }
             }
+            b'&' => match self.peek() {
+                Some(b'!') => {
+                    self.i += 1;
+                    if self.peek() == Some(b'[') {
+                        self.i += 1;
+                        TokenKind::PunctAmpBangLBracket
+                    } else {
+                        TokenKind::PunctAmpBang
+                    }
+                }
+                Some(b'[') => {
+                    self.i += 1;
+                    TokenKind::PunctAmpLBracket
+                }
+                _ => TokenKind::PunctAmp,
+            },
             b'!' => {
                 if self.peek() == Some(b'{') {
                     return self.lex_effect_set(start);
