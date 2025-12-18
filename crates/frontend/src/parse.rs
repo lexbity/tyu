@@ -35,6 +35,12 @@ pub struct SubtypeAst {
     pub max: i64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RegMapInstanceAst {
+    pub name: Span,
+    pub map: Span,
+}
+
 pub struct ImportAst {
     pub module: Span,
     pub names: FixedVec<Span, 64>,
@@ -48,6 +54,7 @@ pub struct DeclAst {
     pub body: Option<Span>,
     pub requires: Option<Span>,
     pub ensures: Option<Span>,
+    pub effect_suspend: bool,
 }
 
 pub struct ModuleAst {
@@ -57,6 +64,7 @@ pub struct ModuleAst {
     pub decls: FixedVec<DeclAst, 256>,
     pub has_export_stmt: bool,
     pub subtypes: FixedVec<SubtypeAst, 64>,
+    pub instances: FixedVec<RegMapInstanceAst, 64>,
 }
 
 pub struct Parser<'a> {
@@ -112,6 +120,7 @@ impl<'a> Parser<'a> {
             decls: FixedVec::new(),
             has_export_stmt: false,
             subtypes: FixedVec::new(),
+            instances: FixedVec::new(),
         };
 
         let mut pending_attrs: FixedVec<Span, 16> = FixedVec::new();
@@ -144,8 +153,7 @@ impl<'a> Parser<'a> {
                     let _ = ast.decls.push(decl);
                 }
                 TokenKind::KwRegisterMap => {
-                    let decl =
-                        self.parse_block_decl_ast(DeclKind::RegisterMap, &mut pending_attrs)?;
+                    let decl = self.parse_register_map_decl_ast(&mut pending_attrs)?;
                     let _ = ast.decls.push(decl);
                 }
                 TokenKind::KwType => {
@@ -160,8 +168,11 @@ impl<'a> Parser<'a> {
                     }
                 }
                 TokenKind::KwConst => {
-                    let decl = self.parse_semi_decl_ast(DeclKind::Const, &mut pending_attrs)?;
+                    let (decl, inst) = self.parse_const_decl_ast(&mut pending_attrs)?;
                     let _ = ast.decls.push(decl);
+                    if let Some(inst) = inst {
+                        let _ = ast.instances.push(inst);
+                    }
                 }
                 TokenKind::KwResource => {
                     let decl = self.parse_semi_decl_ast(DeclKind::Resource, &mut pending_attrs)?;
@@ -274,6 +285,12 @@ impl<'a> Parser<'a> {
             None
         };
 
+        let mut effect_suspend = false;
+        if self.look.kind == TokenKind::EffectSet {
+            effect_suspend = effect_has_suspend(self.slice(self.look.span));
+            self.bump();
+        }
+
         let mut requires: Option<Span> = None;
         let mut ensures: Option<Span> = None;
         loop {
@@ -307,6 +324,7 @@ impl<'a> Parser<'a> {
             body: Some(Span::new(body_start, body_end)),
             requires,
             ensures,
+            effect_suspend,
         })
     }
 
@@ -328,6 +346,7 @@ impl<'a> Parser<'a> {
             body: None,
             requires: None,
             ensures: None,
+            effect_suspend: false,
         })
     }
 
@@ -349,6 +368,102 @@ impl<'a> Parser<'a> {
             body: None,
             requires: None,
             ensures: None,
+            effect_suspend: false,
+        })
+    }
+
+    fn parse_const_decl_ast(
+        &mut self,
+        pending_attrs: &mut FixedVec<Span, 16>,
+    ) -> Result<(DeclAst, Option<RegMapInstanceAst>), ParseError> {
+        self.bump(); // const
+        let name = self.expect(TokenKind::Ident, 2180)?;
+        self.bump();
+
+        // attempt to parse: "= MAP @ <num> ;"
+        let mut inst: Option<RegMapInstanceAst> = None;
+        if self.look.kind == TokenKind::PunctEq {
+            self.bump();
+            if self.look.kind == TokenKind::Ident {
+                let map = self.look.span;
+                self.bump();
+                if self.look.kind == TokenKind::Ident && self.slice(self.look.span) == b"@" {
+                    self.bump();
+                    if self.look.kind == TokenKind::Number {
+                        self.bump();
+                        if self.look.kind == TokenKind::PunctSemi {
+                            inst = Some(RegMapInstanceAst {
+                                name: name.span,
+                                map,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        // regardless of whether pattern matched, skip to ';'
+        let _ = self.skip_until_semi();
+
+        let attrs = core::mem::replace(pending_attrs, FixedVec::new());
+        let decl = DeclAst {
+            kind: DeclKind::Const,
+            name: name.span,
+            sig: None,
+            attrs,
+            body: None,
+            requires: None,
+            ensures: None,
+            effect_suspend: false,
+        };
+        Ok((decl, inst))
+    }
+
+    fn parse_register_map_decl_ast(
+        &mut self,
+        pending_attrs: &mut FixedVec<Span, 16>,
+    ) -> Result<DeclAst, ParseError> {
+        self.bump(); // register-map
+        let name = self.expect(TokenKind::Ident, 2186)?;
+        self.bump();
+
+        let body_start = self.look.span.start;
+        let mut depth_paren = 0usize;
+        let mut depth_brace = 0usize;
+        let mut depth_bracket = 0usize;
+        let body_end;
+        loop {
+            if self.look.kind == TokenKind::Eof {
+                return Err(ParseError { code: 2161, span: self.look.span });
+            }
+            match self.look.kind {
+                TokenKind::PunctLParen => depth_paren += 1,
+                TokenKind::PunctRParen => depth_paren = depth_paren.saturating_sub(1),
+                TokenKind::PunctLBrace => depth_brace += 1,
+                TokenKind::PunctRBrace => depth_brace = depth_brace.saturating_sub(1),
+                TokenKind::PunctLBracket => depth_bracket += 1,
+                TokenKind::PunctRBracket => depth_bracket = depth_bracket.saturating_sub(1),
+                TokenKind::KwEnd if depth_paren == 0 && depth_brace == 0 && depth_bracket == 0 => {
+                    body_end = self.look.span.start;
+                    self.bump();
+                    self.expect(TokenKind::PunctSemi, 2160)?;
+                    self.bump();
+                    break;
+                }
+                _ => {}
+            }
+            self.bump();
+        }
+
+        let attrs = core::mem::replace(pending_attrs, FixedVec::new());
+        Ok(DeclAst {
+            kind: DeclKind::RegisterMap,
+            name: name.span,
+            sig: None,
+            attrs,
+            body: Some(Span::new(body_start, body_end)),
+            requires: None,
+            ensures: None,
+            effect_suspend: false,
         })
     }
 
@@ -399,6 +514,7 @@ impl<'a> Parser<'a> {
             body: None,
             requires: None,
             ensures: None,
+            effect_suspend: false,
         };
         let st = Some(SubtypeAst {
             name: name.span,
@@ -798,4 +914,16 @@ fn parse_i64(bytes: &[u8]) -> Option<i64> {
         i += 1;
     }
     Some(v * sign)
+}
+
+fn effect_has_suspend(effect_token: &[u8]) -> bool {
+    // token includes "!{...}"
+    if effect_token.len() < 4 {
+        return false;
+    }
+    // Scan for substring "suspend"
+    let needle = b"suspend";
+    effect_token
+        .windows(needle.len())
+        .any(|w| w == needle)
 }
