@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-use hosted::{args::RawArgs, cstr, diag, io};
+use hosted::{args::RawArgs, cstr, diag, io, process};
 
 hosted_rt::entry!(assemble_main);
 
@@ -9,6 +9,10 @@ extern "C" fn assemble_main(argc: isize, argv: *const *const hosted::c::c_char) 
     let args = unsafe { RawArgs::new(argc, argv) };
 
     let mut saw_help = false;
+    let mut out_path: Option<&[u8]> = None;
+    let mut fasm_path: Option<&[u8]> = None;
+    let mut input: Option<&[u8]> = None;
+
     for (i, a) in args.iter().enumerate() {
         if i == 0 {
             continue;
@@ -16,6 +20,23 @@ extern "C" fn assemble_main(argc: isize, argv: *const *const hosted::c::c_char) 
         unsafe {
             if cstr::eq(a, b"--help") || cstr::eq(a, b"-h") {
                 saw_help = true;
+                continue;
+            }
+            let bytes = cstr::as_bytes(a);
+            if bytes.starts_with(b"--out=") {
+                out_path = Some(&bytes[b"--out=".len()..]);
+                continue;
+            }
+            if bytes.starts_with(b"--fasm=") {
+                fasm_path = Some(&bytes[b"--fasm=".len()..]);
+                continue;
+            }
+            if bytes.starts_with(b"-") {
+                // Ignore unknown flags for now to keep CLI stable.
+                continue;
+            }
+            if input.is_none() {
+                input = Some(bytes);
             }
         }
     }
@@ -25,8 +46,25 @@ extern "C" fn assemble_main(argc: isize, argv: *const *const hosted::c::c_char) 
         return if saw_help { 0 } else { 2 };
     }
 
-    let _ = diag::error_simple(2001, b"not implemented: assembler/linker driver");
-    2
+    let Some(input) = input else {
+        let _ = diag::error_simple(2001, b"missing input .asm file");
+        return 2;
+    };
+
+    let out_path = out_path.unwrap_or(b"a.out");
+    let fasm = fasm_path.unwrap_or(b"fasm");
+
+    let status = process::run(fasm, &[input, out_path]).map_err(|_| diag::error_simple(2002, b"failed to run fasm"));
+    let status = match status {
+        Ok(s) => s,
+        Err(_) => return 2,
+    };
+    if status.code != 0 {
+        let _ = diag::error_simple(2003, b"fasm failed");
+        return 2;
+    }
+
+    0
 }
 
-const HELP: &[u8] = b"lang-assemble (tyu_lang) v0.1.0\n\nUSAGE:\n  lang-assemble [options] <file.asm>\n\nOPTIONS:\n  --help, -h          Print help\n+  --out=<path>        Output executable path (stub)\n+  --fasm=<path>       Path to fasm (stub)\n+  --ld=<path>         Path to ld/cc (stub)\n+\n";
+const HELP: &[u8] = b"lang-assemble (tyu_lang) v0.1.0\n\nUSAGE:\n  lang-assemble [options] <file.asm>\n\nOPTIONS:\n  --help, -h          Print help\n  --out=<path>        Output executable path\n  --fasm=<path>       Path to fasm (default: fasm)\n\n";
