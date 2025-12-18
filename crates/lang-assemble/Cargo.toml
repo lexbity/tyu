@@ -1,0 +1,15 @@
+[package]
+name = "lang-assemble"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "lang-assemble"
+path = "src/main.rs"
+harness = false
+test = false
+doctest = false
+
+[dependencies]
+hosted = { path = "../hosted" }
+hosted-rt = { path = "../hosted-rt" }
