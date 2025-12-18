@@ -1,0 +1,19 @@
+[package]
+name = "langc"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "langc"
+path = "src/main.rs"
+harness = false
+test = false
+doctest = false
+
+[dependencies]
+hosted = { path = "../hosted" }
+hosted-rt = { path = "../hosted-rt" }
+frontend = { path = "../frontend" }
+semantics = { path = "../semantics" }
+
+[dev-dependencies]
