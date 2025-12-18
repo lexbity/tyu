@@ -45,6 +45,11 @@ pub enum TokenKind {
     PunctDashDash,  // --
     PunctLessPipe,  // <|
     PunctPipeGreater, // |>
+
+    PunctAmp,       // &
+    PunctAmpBang,   // &!
+    PunctAmpLBracket,     // &[
+    PunctAmpBangLBracket, // &![
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
