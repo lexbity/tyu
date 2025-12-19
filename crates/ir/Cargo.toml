@@ -1,0 +1,12 @@
+[package]
+name = "ir"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+test = false
+doctest = false
+
+[dependencies]
+frontend = { path = "../frontend" }
+
