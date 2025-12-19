@@ -83,3 +83,32 @@ pub fn read_file(path: &[u8]) -> Result<ByteBuf, Errno> {
         }
     }
 }
+
+pub fn write_file(path: &[u8], bytes: &[u8]) -> Result<(), Errno> {
+    let path_c = CStrBuf::new(path)?;
+    let mode = b"wb\0";
+
+    let f = unsafe { c::fopen(path_c.as_ptr_i8(), mode.as_ptr() as *const i8) };
+    if f.is_null() {
+        return Err(Errno::last());
+    }
+
+    let mut off = 0usize;
+    while off < bytes.len() {
+        let n = unsafe { c::fwrite(bytes[off..].as_ptr() as *const c_void, 1, bytes.len() - off, f) };
+        if n == 0 {
+            let err = unsafe { c::ferror(f) };
+            let _ = unsafe { c::fclose(f) };
+            if err != 0 {
+                return Err(Errno::last());
+            }
+            return Err(Errno(5));
+        }
+        off += n;
+    }
+    let rc = unsafe { c::fclose(f) };
+    if rc != 0 {
+        return Err(Errno::last());
+    }
+    Ok(())
+}
