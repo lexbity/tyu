@@ -21,6 +21,8 @@ pub enum TokenKind {
     KwConst,
     KwResource,
     KwRegisterMap,
+    KwOwned,
+    KwIso,
     KwRequires,
     KwEnsures,
 
@@ -40,6 +42,7 @@ pub enum TokenKind {
     PunctEqEq, // ==
     PunctNe, // !=
 
+    PunctArrow, // ->
     PunctArrowBind, // =>
     PunctDblDot,    // ..
     PunctDashDash,  // --
