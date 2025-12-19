@@ -1,0 +1,14 @@
+module Core;
+: _CONTRACT_FAIL ( -- i64 ) ;
+: _SUBTYPE_FAIL ( -- i64 ) ;
+: _ASSERT_FAIL ( -- i64 ) ;
+: _UNREACHABLE ( -- i64 ) ;
+: _STACK_OVERFLOW ( -- i64 ) ;
+export {
+  _CONTRACT_FAIL,
+  _SUBTYPE_FAIL,
+  _ASSERT_FAIL,
+  _UNREACHABLE,
+  _STACK_OVERFLOW,
+};
+end;
