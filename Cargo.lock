@@ -18,6 +18,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ir"
+version = "0.1.0"
+dependencies = [
+ "frontend",
+]
+
+[[package]]
 name = "lang-assemble"
 version = "0.1.0"
 dependencies = [
@@ -32,6 +39,7 @@ dependencies = [
  "frontend",
  "hosted",
  "hosted-rt",
+ "ir",
  "semantics",
 ]
 
@@ -40,6 +48,7 @@ name = "semantics"
 version = "0.1.0"
 dependencies = [
  "frontend",
+ "ir",
 ]
 
 [[package]]
