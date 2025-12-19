@@ -24,6 +24,7 @@ extern "C" {
 
     pub fn fopen(path: *const c_char, mode: *const c_char) -> *mut FILE;
     pub fn fread(ptr: *mut c_void, size: size_t, nmemb: size_t, stream: *mut FILE) -> size_t;
+    pub fn fwrite(ptr: *const c_void, size: size_t, nmemb: size_t, stream: *mut FILE) -> size_t;
     pub fn ferror(stream: *mut FILE) -> c_int;
     pub fn feof(stream: *mut FILE) -> c_int;
     pub fn fclose(stream: *mut FILE) -> c_int;
