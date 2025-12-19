@@ -37,8 +37,19 @@ impl<T, const N: usize> FixedVec<T, N> {
         Some(unsafe { self.data[idx].assume_init_ref() })
     }
 
+    pub fn get_mut(&mut self, idx: usize) -> Option<&mut T> {
+        if idx >= self.len {
+            return None;
+        }
+        Some(unsafe { self.data[idx].assume_init_mut() })
+    }
+
     pub fn iter(&self) -> Iter<'_, T, N> {
         Iter { v: self, i: 0 }
+    }
+
+    pub fn iter_mut(&mut self) -> IterMut<'_, T, N> {
+        IterMut { v: self, i: 0 }
     }
 }
 
@@ -65,3 +76,22 @@ impl<'a, T, const N: usize> Iterator for Iter<'a, T, N> {
     }
 }
 
+pub struct IterMut<'a, T, const N: usize> {
+    v: &'a mut FixedVec<T, N>,
+    i: usize,
+}
+
+impl<'a, T, const N: usize> Iterator for IterMut<'a, T, N> {
+    type Item = &'a mut T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.i >= self.v.len {
+            return None;
+        }
+        // Safety: `self.i < len` and this iterator yields each index once.
+        let idx = self.i;
+        self.i += 1;
+        let ptr = self.v.data[idx].as_mut_ptr();
+        Some(unsafe { &mut *ptr })
+    }
+}
