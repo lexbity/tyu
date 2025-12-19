@@ -60,6 +60,9 @@ impl<'a> Lexer<'a> {
                 if self.peek() == Some(b'-') {
                     self.i += 1;
                     TokenKind::PunctDashDash
+                } else if self.peek() == Some(b'>') {
+                    self.i += 1;
+                    TokenKind::PunctArrow
                 } else {
                     return self.lex_number_or_ident(start);
                 }
@@ -183,6 +186,8 @@ impl<'a> Lexer<'a> {
             b"const" => TokenKind::KwConst,
             b"resource" => TokenKind::KwResource,
             b"register-map" => TokenKind::KwRegisterMap,
+            b"owned" => TokenKind::KwOwned,
+            b"iso" => TokenKind::KwIso,
             b"requires" => TokenKind::KwRequires,
             b"ensures" => TokenKind::KwEnsures,
             _ => TokenKind::Ident,
