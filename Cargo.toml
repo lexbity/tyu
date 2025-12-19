@@ -4,6 +4,7 @@ members = [
   "crates/hosted",
   "crates/hosted-rt",
   "crates/frontend",
+  "crates/ir",
   "crates/lang-assemble",
   "crates/langc",
   "crates/semantics",
