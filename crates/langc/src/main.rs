@@ -2,12 +2,14 @@
 #![no_main]
 
 use frontend::{
+    fixed::FixedVec,
     lex::Lexer,
     parse::{DeclAst, DeclKind, ModuleAst, Output, Parser},
     span::Span,
     token::TokenKind,
 };
-use hosted::{args::RawArgs, cstr, diag, fs, io};
+use hosted::{args::RawArgs, cstr, diag, errno::Errno, fs, io, process};
+use ir as lir;
 use semantics::types::{TypeAtom, WordEntry, WordSig};
 use semantics::typecheck::{ChecksMode, SubtypeInfo};
 
