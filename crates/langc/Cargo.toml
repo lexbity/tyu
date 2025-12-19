@@ -15,5 +15,6 @@ hosted = { path = "../hosted" }
 hosted-rt = { path = "../hosted-rt" }
 frontend = { path = "../frontend" }
 semantics = { path = "../semantics" }
+ir = { path = "../ir" }
 
 [dev-dependencies]
