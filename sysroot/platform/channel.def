@@ -1,0 +1,7 @@
+module platform/channel;
+
+: platform.channel.make ( -- Chan(i64) ) ;
+: platform.channel.send ( Chan(i64) i64 -- ) ;
+: platform.channel.recv ( Chan(i64) -- i64 ) ;
+
+end;
