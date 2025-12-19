@@ -25,6 +25,8 @@ pub enum DeclKind {
     Const,
     Resource,
     RegisterMap,
+    Owned,
+    Iso,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -39,11 +41,35 @@ pub struct SubtypeAst {
 pub struct RegMapInstanceAst {
     pub name: Span,
     pub map: Span,
+    pub base_addr: Span,
 }
 
 pub struct ImportAst {
     pub module: Span,
     pub names: FixedVec<Span, 64>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StructFieldAst {
+    pub name: Span,
+    pub ty: Span,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EnumVariantAst {
+    pub name: Span,
+    pub value: i64,
+}
+
+pub struct StructDeclAst {
+    pub name: Span,
+    pub fields: FixedVec<StructFieldAst, 32>,
+}
+
+pub struct EnumDeclAst {
+    pub name: Span,
+    pub base: Option<Span>,
+    pub variants: FixedVec<EnumVariantAst, 64>,
 }
 
 pub struct DeclAst {
@@ -65,6 +91,8 @@ pub struct ModuleAst {
     pub has_export_stmt: bool,
     pub subtypes: FixedVec<SubtypeAst, 64>,
     pub instances: FixedVec<RegMapInstanceAst, 64>,
+    pub structs: FixedVec<StructDeclAst, 32>,
+    pub enums: FixedVec<EnumDeclAst, 32>,
 }
 
 pub struct Parser<'a> {
@@ -121,6 +149,8 @@ impl<'a> Parser<'a> {
             has_export_stmt: false,
             subtypes: FixedVec::new(),
             instances: FixedVec::new(),
+            structs: FixedVec::new(),
+            enums: FixedVec::new(),
         };
 
         let mut pending_attrs: FixedVec<Span, 16> = FixedVec::new();
@@ -145,12 +175,14 @@ impl<'a> Parser<'a> {
                     let _ = ast.decls.push(decl);
                 }
                 TokenKind::KwStruct => {
-                    let decl = self.parse_block_decl_ast(DeclKind::Struct, &mut pending_attrs)?;
+                    let (decl, sdecl) = self.parse_struct_decl_ast(&mut pending_attrs)?;
                     let _ = ast.decls.push(decl);
+                    let _ = ast.structs.push(sdecl);
                 }
                 TokenKind::KwEnum => {
-                    let decl = self.parse_block_decl_ast(DeclKind::Enum, &mut pending_attrs)?;
+                    let (decl, edecl) = self.parse_enum_decl_ast(&mut pending_attrs)?;
                     let _ = ast.decls.push(decl);
+                    let _ = ast.enums.push(edecl);
                 }
                 TokenKind::KwRegisterMap => {
                     let decl = self.parse_register_map_decl_ast(&mut pending_attrs)?;
@@ -175,7 +207,15 @@ impl<'a> Parser<'a> {
                     }
                 }
                 TokenKind::KwResource => {
-                    let decl = self.parse_semi_decl_ast(DeclKind::Resource, &mut pending_attrs)?;
+                    let decl = self.parse_resource_decl_ast(&mut pending_attrs)?;
+                    let _ = ast.decls.push(decl);
+                }
+                TokenKind::KwOwned => {
+                    let decl = self.parse_semi_decl_ast(DeclKind::Owned, &mut pending_attrs)?;
+                    let _ = ast.decls.push(decl);
+                }
+                TokenKind::KwIso => {
+                    let decl = self.parse_semi_decl_ast(DeclKind::Iso, &mut pending_attrs)?;
                     let _ = ast.decls.push(decl);
                 }
                 _ => {
@@ -206,7 +246,9 @@ impl<'a> Parser<'a> {
             TokenKind::KwType
             | TokenKind::KwSubtype
             | TokenKind::KwConst
-            | TokenKind::KwResource => self.parse_semi_decl_dump(out),
+            | TokenKind::KwResource
+            | TokenKind::KwOwned
+            | TokenKind::KwIso => self.parse_semi_decl_dump(out),
             _ => self.parse_unknown_stmt_dump(out),
         }
     }
@@ -221,8 +263,8 @@ impl<'a> Parser<'a> {
             self.bump();
             while self.look.kind != TokenKind::PunctRBrace && self.look.kind != TokenKind::Eof {
                 if self.look.kind == TokenKind::Ident {
-                    let _ = names.push(self.look.span);
-                    self.bump();
+                    let q = self.capture_qualified_name(2112)?;
+                    let _ = names.push(q);
                     continue;
                 }
                 if self.look.kind == TokenKind::PunctComma {
@@ -251,8 +293,8 @@ impl<'a> Parser<'a> {
             self.bump();
             while self.look.kind != TokenKind::PunctRBrace && self.look.kind != TokenKind::Eof {
                 if self.look.kind == TokenKind::Ident {
-                    let _ = ast.exports.push(self.look.span);
-                    self.bump();
+                    let q = self.capture_qualified_name(2121)?;
+                    let _ = ast.exports.push(q);
                     continue;
                 }
                 if self.look.kind == TokenKind::PunctComma {
@@ -264,8 +306,8 @@ impl<'a> Parser<'a> {
             self.expect(TokenKind::PunctRBrace, 2120)?;
             self.bump();
         } else if self.look.kind == TokenKind::Ident {
-            let _ = ast.exports.push(self.look.span);
-            self.bump();
+            let q = self.capture_qualified_name(2121)?;
+            let _ = ast.exports.push(q);
         }
 
         if self.look.kind == TokenKind::PunctSemi {
@@ -276,8 +318,7 @@ impl<'a> Parser<'a> {
 
     fn parse_word_ast(&mut self, pending_attrs: &mut FixedVec<Span, 16>) -> Result<DeclAst, ParseError> {
         self.bump(); // :
-        let name = self.expect(TokenKind::Ident, 2130)?;
-        self.bump();
+        let name_span = self.capture_qualified_name(2130)?;
 
         let sig = if self.look.kind == TokenKind::PunctLParen {
             Some(self.capture_balanced(TokenKind::PunctLParen, TokenKind::PunctRParen, 2131)?)
@@ -318,7 +359,7 @@ impl<'a> Parser<'a> {
         let attrs = core::mem::replace(pending_attrs, FixedVec::new());
         Ok(DeclAst {
             kind: DeclKind::Word,
-            name: name.span,
+            name: name_span,
             sig,
             attrs,
             body: Some(Span::new(body_start, body_end)),
@@ -328,18 +369,73 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_block_decl_ast(
-        &mut self,
-        kind: DeclKind,
-        pending_attrs: &mut FixedVec<Span, 16>,
-    ) -> Result<DeclAst, ParseError> {
-        self.bump(); // keyword already matched by caller
+    fn parse_struct_decl_ast(&mut self, pending_attrs: &mut FixedVec<Span, 16>) -> Result<(DeclAst, StructDeclAst), ParseError> {
+        self.bump(); // struct
         let name = self.expect(TokenKind::Ident, 2150)?;
         self.bump();
-        self.skip_until_end_semi()?;
+
+        let mut fields: FixedVec<StructFieldAst, 32> = FixedVec::new();
+        while self.look.kind != TokenKind::KwEnd && self.look.kind != TokenKind::Eof {
+            if self.look.kind != TokenKind::Ident {
+                self.bump();
+                continue;
+            }
+
+            // Heuristic: treat `Ident :` as a field starter.
+            let field_name = self.look;
+            let mut probe = self.lex;
+            let next = probe.next();
+            if next.kind != TokenKind::PunctColon {
+                self.bump();
+                continue;
+            }
+
+            self.bump(); // field name
+            self.bump(); // ':'
+            let start = self.look.span.start;
+            let mut end = start;
+
+            let mut depth_paren = 0usize;
+            let mut depth_bracket = 0usize;
+            loop {
+                if self.look.kind == TokenKind::Eof || self.look.kind == TokenKind::KwEnd {
+                    break;
+                }
+
+                // If we see `Ident :` at top-level, that's the next field.
+                if depth_paren == 0 && depth_bracket == 0 && self.look.kind == TokenKind::Ident {
+                    let mut probe = self.lex;
+                    let next = probe.next();
+                    if next.kind == TokenKind::PunctColon {
+                        break;
+                    }
+                }
+
+                match self.look.kind {
+                    TokenKind::PunctLParen => depth_paren += 1,
+                    TokenKind::PunctRParen => depth_paren = depth_paren.saturating_sub(1),
+                    TokenKind::PunctLBracket => depth_bracket += 1,
+                    TokenKind::PunctRBracket => depth_bracket = depth_bracket.saturating_sub(1),
+                    _ => {}
+                }
+                end = self.look.span.end;
+                self.bump();
+            }
+
+            let _ = fields.push(StructFieldAst {
+                name: field_name.span,
+                ty: Span::new(start, end),
+            });
+        }
+
+        self.expect(TokenKind::KwEnd, 2160)?;
+        self.bump();
+        self.expect(TokenKind::PunctSemi, 2160)?;
+        self.bump();
+
         let attrs = core::mem::replace(pending_attrs, FixedVec::new());
-        Ok(DeclAst {
-            kind,
+        let decl = DeclAst {
+            kind: DeclKind::Struct,
             name: name.span,
             sig: None,
             attrs,
@@ -347,7 +443,89 @@ impl<'a> Parser<'a> {
             requires: None,
             ensures: None,
             effect_suspend: false,
-        })
+        };
+        let sdecl = StructDeclAst {
+            name: name.span,
+            fields,
+        };
+        Ok((decl, sdecl))
+    }
+
+    fn parse_enum_decl_ast(&mut self, pending_attrs: &mut FixedVec<Span, 16>) -> Result<(DeclAst, EnumDeclAst), ParseError> {
+        self.bump(); // enum
+        let name = self.expect(TokenKind::Ident, 2150)?;
+        self.bump();
+
+        // Minimal v1 parsing: `enum Name : BaseTy ... end;`
+        let mut base_ty: Option<Span> = None;
+        if self.look.kind == TokenKind::PunctColon {
+            self.bump();
+            let start = self.look.span.start;
+            let mut end = start;
+            let mut depth_paren = 0usize;
+            while self.look.kind != TokenKind::KwEnd && self.look.kind != TokenKind::Eof {
+                // Stop the base type when we hit the first top-level `Variant = ...`.
+                if depth_paren == 0 && self.look.kind == TokenKind::Ident {
+                    let mut probe = self.lex;
+                    let next = probe.next();
+                    if next.kind == TokenKind::PunctEq {
+                        break;
+                    }
+                }
+                match self.look.kind {
+                    TokenKind::PunctLParen => depth_paren += 1,
+                    TokenKind::PunctRParen => depth_paren = depth_paren.saturating_sub(1),
+                    _ => {}
+                }
+                end = self.look.span.end;
+                self.bump();
+            }
+            if end > start {
+                base_ty = Some(Span::new(start, end));
+            }
+        }
+
+        let mut variants: FixedVec<EnumVariantAst, 64> = FixedVec::new();
+        while self.look.kind != TokenKind::KwEnd && self.look.kind != TokenKind::Eof {
+            if self.look.kind != TokenKind::Ident {
+                self.bump();
+                continue;
+            }
+            let vname = self.look;
+            self.bump();
+            self.expect(TokenKind::PunctEq, 2162)?;
+            self.bump();
+            let vnum = self.expect(TokenKind::Number, 2163)?;
+            let val = parse_i64(self.slice(vnum.span)).ok_or(ParseError { code: 2164, span: vnum.span })?;
+            self.bump();
+            let _ = variants.push(EnumVariantAst {
+                name: vname.span,
+                value: val,
+            });
+        }
+
+        self.expect(TokenKind::KwEnd, 2160)?;
+        self.bump();
+        self.expect(TokenKind::PunctSemi, 2160)?;
+        self.bump();
+
+        let attrs = core::mem::replace(pending_attrs, FixedVec::new());
+        let decl = DeclAst {
+            kind: DeclKind::Enum,
+            name: name.span,
+            sig: None,
+            attrs,
+            body: None,
+            requires: None,
+            ensures: None,
+            effect_suspend: false,
+        };
+        let edecl = EnumDeclAst {
+            name: name.span,
+            base: base_ty,
+            variants,
+        };
+        Ok((decl, edecl))
     }
 
     fn parse_semi_decl_ast(
@@ -372,6 +550,59 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn parse_resource_decl_ast(
+        &mut self,
+        pending_attrs: &mut FixedVec<Span, 16>,
+    ) -> Result<DeclAst, ParseError> {
+        self.bump(); // resource
+        let name = self.expect(TokenKind::Ident, 2151)?;
+        self.bump();
+
+        // Minimal v1 parsing: `resource NAME : Type ... ;`
+        // Store the `Type` span in `sig` (reusing `sig` field for non-word decls).
+        let mut ty_span: Option<Span> = None;
+        if self.look.kind == TokenKind::PunctColon {
+            self.bump();
+            let start = self.look.span.start;
+            let mut end = start;
+            let mut depth_paren = 0usize;
+            while self.look.kind != TokenKind::PunctSemi && self.look.kind != TokenKind::Eof {
+                // stop at '=' (initializer) or 'ceiling' (attributes)
+                if depth_paren == 0 {
+                    if self.look.kind == TokenKind::PunctEq {
+                        break;
+                    }
+                    if self.look.kind == TokenKind::Ident && self.slice(self.look.span) == b"ceiling" {
+                        break;
+                    }
+                }
+                match self.look.kind {
+                    TokenKind::PunctLParen => depth_paren += 1,
+                    TokenKind::PunctRParen => depth_paren = depth_paren.saturating_sub(1),
+                    _ => {}
+                }
+                end = self.look.span.end;
+                self.bump();
+            }
+            if end > start {
+                ty_span = Some(Span::new(start, end));
+            }
+        }
+
+        let _ = self.skip_until_semi();
+        let attrs = core::mem::replace(pending_attrs, FixedVec::new());
+        Ok(DeclAst {
+            kind: DeclKind::Resource,
+            name: name.span,
+            sig: ty_span,
+            attrs,
+            body: None,
+            requires: None,
+            ensures: None,
+            effect_suspend: false,
+        })
+    }
+
     fn parse_const_decl_ast(
         &mut self,
         pending_attrs: &mut FixedVec<Span, 16>,
@@ -388,19 +619,21 @@ impl<'a> Parser<'a> {
                 let map = self.look.span;
                 self.bump();
                 if self.look.kind == TokenKind::Ident && self.slice(self.look.span) == b"@" {
-                    self.bump();
-                    if self.look.kind == TokenKind::Number {
                         self.bump();
-                        if self.look.kind == TokenKind::PunctSemi {
-                            inst = Some(RegMapInstanceAst {
-                                name: name.span,
-                                map,
-                            });
+                        if self.look.kind == TokenKind::Number {
+                            let base_addr = self.look.span;
+                            self.bump();
+                            if self.look.kind == TokenKind::PunctSemi {
+                                inst = Some(RegMapInstanceAst {
+                                    name: name.span,
+                                    map,
+                                    base_addr,
+                                });
+                            }
                         }
                     }
                 }
             }
-        }
         // regardless of whether pattern matched, skip to ';'
         let _ = self.skip_until_semi();
 
@@ -543,8 +776,8 @@ impl<'a> Parser<'a> {
                         out.write(b" ");
                     }
                     first = false;
-                    out.write(self.slice(self.look.span));
-                    self.bump();
+                    let q = self.capture_qualified_name(2112)?;
+                    out.write(self.slice(q));
                     continue;
                 }
                 if self.look.kind == TokenKind::PunctComma {
@@ -582,8 +815,8 @@ impl<'a> Parser<'a> {
                         out.write(b" ");
                     }
                     first = false;
-                    out.write(self.slice(self.look.span));
-                    self.bump();
+                    let q = self.capture_qualified_name(2121)?;
+                    out.write(self.slice(q));
                     continue;
                 }
                 if self.look.kind == TokenKind::PunctComma {
@@ -596,8 +829,8 @@ impl<'a> Parser<'a> {
             self.bump();
             out.write(b"}");
         } else if self.look.kind == TokenKind::Ident {
-            out.write(self.slice(self.look.span));
-            self.bump();
+            let q = self.capture_qualified_name(2121)?;
+            out.write(self.slice(q));
         }
 
         if self.look.kind == TokenKind::PunctSemi {
@@ -609,11 +842,10 @@ impl<'a> Parser<'a> {
 
     fn parse_word_dump(&mut self, out: &mut impl Output) -> Result<(), ParseError> {
         self.bump(); // :
-        let name = self.expect(TokenKind::Ident, 2130)?;
-        self.bump();
+        let name = self.capture_qualified_name(2130)?;
 
         out.write(b"  word ");
-        out.write(self.slice(name.span));
+        out.write(self.slice(name));
         out.write(b"\n");
 
         if self.look.kind == TokenKind::PunctLParen {
@@ -680,6 +912,8 @@ impl<'a> Parser<'a> {
             TokenKind::KwSubtype => out.write(b"subtype "),
             TokenKind::KwConst => out.write(b"const "),
             TokenKind::KwResource => out.write(b"resource "),
+            TokenKind::KwOwned => out.write(b"owned "),
+            TokenKind::KwIso => out.write(b"iso "),
             _ => out.write(b"stmt "),
         }
 
@@ -701,6 +935,20 @@ impl<'a> Parser<'a> {
         // attempt to resync to ';' or next top-level item
         let _ = self.skip_until_semi();
         Ok(())
+    }
+
+    fn capture_qualified_name(&mut self, code: u32) -> Result<Span, ParseError> {
+        let first = self.expect(TokenKind::Ident, code)?;
+        let start = first.span.start;
+        let mut end = first.span.end;
+        self.bump();
+        while self.look.kind == TokenKind::PunctDot {
+            self.bump(); // dot
+            let seg = self.expect(TokenKind::Ident, code)?;
+            end = seg.span.end;
+            self.bump();
+        }
+        Ok(Span::new(start, end))
     }
 
     fn dump_terms_until(&mut self, out: &mut impl Output, stop: TokenKind) -> Result<(), ParseError> {
@@ -899,19 +1147,39 @@ fn parse_i64(bytes: &[u8]) -> Option<i64> {
         sign = -1;
         i = 1;
     }
+    if i >= bytes.len() {
+        return None;
+    }
+
+    let (radix, mut j) = if i + 1 < bytes.len() && bytes[i] == b'0' {
+        match bytes[i + 1] {
+            b'x' | b'X' => (16i64, i + 2),
+            b'b' | b'B' => (2i64, i + 2),
+            _ => (10i64, i),
+        }
+    } else {
+        (10i64, i)
+    };
+
     let mut v: i64 = 0;
-    while i < bytes.len() {
-        let b = bytes[i];
+    while j < bytes.len() {
+        let b = bytes[j];
         if b == b'_' {
-            i += 1;
+            j += 1;
             continue;
         }
-        if !b.is_ascii_digit() {
+        let digit = match b {
+            b'0'..=b'9' => (b - b'0') as i64,
+            b'a'..=b'f' if radix == 16 => (b - b'a') as i64 + 10,
+            b'A'..=b'F' if radix == 16 => (b - b'A') as i64 + 10,
+            _ => return None,
+        };
+        if digit >= radix {
             return None;
         }
-        v = v.checked_mul(10)?;
-        v = v.checked_add((b - b'0') as i64)?;
-        i += 1;
+        v = v.checked_mul(radix)?;
+        v = v.checked_add(digit)?;
+        j += 1;
     }
     Some(v * sign)
 }
