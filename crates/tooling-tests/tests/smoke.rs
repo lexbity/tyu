@@ -824,6 +824,52 @@ fn milestone4_contracts_and_subtypes_in_ir() {
 }
 
 #[test]
+fn opcode_ir_coverage_basic_ops() {
+    build_tools();
+    let dir = fresh_dir("opcode_ir_coverage_basic_ops");
+
+    std::fs::write(
+        dir.join("Main.mod"),
+        b"module Main;\n\
+: main ( -- i64 )\n\
+  1 dup swap drop drop\n\
+  2 3 + 4 - 5 * drop\n\
+  true false and true or not drop\n\
+  0 as usize as ptr_mut 42 !i64\n\
+  0 as usize as ptr @i64 drop\n\
+  1 1 == [ 0 ] [ 1 ] if\n\
+;\n\
+end;\n",
+    )
+    .unwrap();
+
+    let out = Command::new(exe("langc"))
+        .current_dir(&dir)
+        .args(["--emit=ir", "--allow-raw-casts", "Main.mod"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    for needle in [
+        "dup",
+        "swap",
+        "drop",
+        "add_i64",
+        "sub_i64",
+        "mul_i64",
+        "and_bool",
+        "or_bool",
+        "not_bool",
+        "cmp_eq",
+        "br_if",
+        "load i64",
+        "store i64",
+    ] {
+        assert!(stdout.contains(needle), "missing {needle} in IR");
+    }
+}
+
+#[test]
 fn milestone6_mmio_volatile_ops_in_ir() {
     build_tools();
     let dir = fresh_dir("milestone6_mmio_volatile_ops_in_ir");
@@ -1542,6 +1588,55 @@ end;\n",
 }
 
 #[test]
+fn milestone12_platform_task_sleep_runs() {
+    build_tools();
+    let dir = fresh_dir("milestone12_platform_task_sleep_runs");
+    let sysroot_arg = format!("--sysroot={}", repo_sysroot().to_string_lossy());
+
+    std::fs::write(
+        dir.join("Main.mod"),
+        b"module Main;\n\
+import platform/linux { };\n\
+: main ( -- i64 ) !{suspend}\n\
+  0 as usize platform.task.sleep-ms\n\
+  0 as usize platform.task.sleep-us\n\
+  0\n\
+;\n\
+end;\n",
+    )
+    .unwrap();
+
+    let status = Command::new(exe("langc"))
+        .current_dir(&dir)
+        .args(["--emit=obj", "--target=linux-x86_64-hosted", "--out-dir=."])
+        .arg(&sysroot_arg)
+        .arg("Main.mod")
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let status = Command::new(exe("lang-assemble"))
+        .current_dir(&dir)
+        .args([
+            "--out=rt.o",
+            runtime_asm_linux_x86_64_hosted().to_string_lossy().as_ref(),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let status = Command::new("ld")
+        .current_dir(&dir)
+        .args(["-o", "prog", "rt.o", "Main.o"])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let run = Command::new(dir.join("prog")).status().unwrap();
+    assert_eq!(run.code(), Some(0));
+}
+
+#[test]
 fn milestone13_array_type_and_scoped_slice_typechecks() {
     build_tools();
     let dir = fresh_dir("milestone13_array_type_and_scoped_slice_typechecks");
@@ -1936,6 +2031,47 @@ end;\n",
 }
 
 #[test]
+fn milestone16_channel_two_channels_independent_exit_code() {
+    build_tools();
+    let dir = fresh_dir("milestone16_channel_two_channels_independent_exit_code");
+    let sysroot_arg = format!("--sysroot={}", repo_sysroot().to_string_lossy());
+
+    std::fs::write(
+        dir.join("Main.mod"),
+        b"module Main;\n\
+import platform/channel { };\n\
+: main ( -- i64 )\n\
+  platform.channel.make => ch1\n\
+  platform.channel.make => ch2\n\
+  ch1 40 |>\n\
+  ch2 2 |>\n\
+  ch1 <| ch2 <| +\n\
+;\n\
+end;\n",
+    )
+    .unwrap();
+
+    let out = Command::new(exe("langc"))
+        .current_dir(&dir)
+        .arg(&sysroot_arg)
+        .args(["--emit=asm", "Main.mod"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    std::fs::write(dir.join("Main.asm"), &out.stdout).unwrap();
+
+    let status = Command::new(exe("lang-assemble"))
+        .current_dir(&dir)
+        .args(["--out=prog", "Main.asm"])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let run = Command::new(dir.join("prog")).status().unwrap();
+    assert_eq!(run.code(), Some(42));
+}
+
+#[test]
 fn milestone16_channel_send_type_mismatch_fails() {
     build_tools();
     let dir = fresh_dir("milestone16_channel_send_type_mismatch_fails");
@@ -1959,6 +2095,195 @@ end;\n",
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("error[E3732]"), "stderr: {stderr}");
+}
+
+#[test]
+fn milestone16_channel_task_roundtrip_exit_code() {
+    build_tools();
+    let dir = fresh_dir("milestone16_channel_task_roundtrip_exit_code");
+    let sysroot_arg = format!("--sysroot={}", repo_sysroot().to_string_lossy());
+
+    std::fs::write(
+        dir.join("Main.mod"),
+        b"module Main;\n\
+import platform/channel { };\n\
+import platform/linux { platform.task.spawn, platform.task.join };\n\
+: main ( -- i64 ) !{suspend}\n\
+  platform.channel.make drop\n\
+  [ ( -- ) ] platform.task.spawn => t\n\
+  0 bitcast Chan(Task) t |>\n\
+  0 bitcast Chan(Task) <| platform.task.join\n\
+  0\n\
+;\n\
+end;\n",
+    )
+    .unwrap();
+
+    let out = Command::new(exe("langc"))
+        .current_dir(&dir)
+        .arg(&sysroot_arg)
+        .args(["--emit=asm", "Main.mod"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    std::fs::write(dir.join("Main.asm"), &out.stdout).unwrap();
+
+    let status = Command::new(exe("lang-assemble"))
+        .current_dir(&dir)
+        .args(["--out=prog", "Main.asm"])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let run = Command::new(dir.join("prog")).status().unwrap();
+    assert_eq!(run.code(), Some(0));
+}
+
+#[test]
+fn milestone16_channel_send_blocks_on_full() {
+    build_tools();
+    let dir = fresh_dir("milestone16_channel_send_blocks_on_full");
+    let sysroot_arg = format!("--sysroot={}", repo_sysroot().to_string_lossy());
+
+    std::fs::write(
+        dir.join("Main.mod"),
+        b"module Main;\n\
+import platform/channel { };\n\
+import platform/linux { platform.task.spawn, platform.task.join };\n\
+register-map GPIO\n\
+  0x00 DATA[2] u32 rw\n\
+end;\n\
+const gpio = GPIO @ 0x0;\n\
+: main ( -- i64 ) !{suspend}\n\
+  platform.channel.make drop\n\
+  0 as u32 &!gpio.DATA[0] swap !u32\n\
+  0 as u32 &!gpio.DATA[1] swap !u32\n\
+  0\n\
+  [ dup 64 < ]\n\
+  [ dup 0 bitcast Chan(i64) swap |> 1 + ] while\n\
+  drop\n\
+  [ ( -- )\n\
+    &!gpio.DATA[0] @u32 as i64 1 == [ 1 as u32 &!gpio.DATA[1] swap !u32 ] [ ] if\n\
+    0 bitcast Chan(i64) <| drop\n\
+  ] platform.task.spawn\n\
+  0 bitcast Chan(i64) 99 |>\n\
+  1 as u32 &!gpio.DATA[0] swap !u32\n\
+  platform.task.join\n\
+  &gpio.DATA[1] @u32 as i64\n\
+;\n\
+end;\n",
+    )
+    .unwrap();
+
+    let out = Command::new(exe("langc"))
+        .current_dir(&dir)
+        .arg(&sysroot_arg)
+        .args(["--emit=asm", "Main.mod"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    std::fs::write(dir.join("Main.asm"), &out.stdout).unwrap();
+
+    let status = Command::new(exe("lang-assemble"))
+        .current_dir(&dir)
+        .args(["--out=prog", "Main.asm"])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let run = Command::new(dir.join("prog")).status().unwrap();
+    assert_eq!(run.code(), Some(0));
+}
+
+#[test]
+fn milestone16_channel_recv_blocks_on_empty() {
+    build_tools();
+    let dir = fresh_dir("milestone16_channel_recv_blocks_on_empty");
+    let sysroot_arg = format!("--sysroot={}", repo_sysroot().to_string_lossy());
+
+    std::fs::write(
+        dir.join("Main.mod"),
+        b"module Main;\n\
+import platform/channel { };\n\
+import platform/linux { platform.task.spawn, platform.task.join };\n\
+register-map GPIO\n\
+  0x00 DATA[2] u32 rw\n\
+end;\n\
+const gpio = GPIO @ 0x0;\n\
+: main ( -- i64 ) !{suspend}\n\
+  platform.channel.make drop\n\
+  0 as u32 &!gpio.DATA[0] swap !u32\n\
+  0 as u32 &!gpio.DATA[1] swap !u32\n\
+  [ ( -- )\n\
+    &!gpio.DATA[0] @u32 as i64 1 == [ 1 as u32 &!gpio.DATA[1] swap !u32 ] [ ] if\n\
+    0 bitcast Chan(i64) 123 |>\n\
+  ] platform.task.spawn\n\
+  0 bitcast Chan(i64) <| drop\n\
+  1 as u32 &!gpio.DATA[0] swap !u32\n\
+  platform.task.join\n\
+  &gpio.DATA[1] @u32 as i64\n\
+;\n\
+end;\n",
+    )
+    .unwrap();
+
+    let out = Command::new(exe("langc"))
+        .current_dir(&dir)
+        .arg(&sysroot_arg)
+        .args(["--emit=asm", "Main.mod"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    std::fs::write(dir.join("Main.asm"), &out.stdout).unwrap();
+
+    let status = Command::new(exe("lang-assemble"))
+        .current_dir(&dir)
+        .args(["--out=prog", "Main.asm"])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let run = Command::new(dir.join("prog")).status().unwrap();
+    assert_eq!(run.code(), Some(0));
+}
+
+#[test]
+fn milestone16_channel_deadlock_traps_exit_code() {
+    build_tools();
+    let dir = fresh_dir("milestone16_channel_deadlock_traps_exit_code");
+    let sysroot_arg = format!("--sysroot={}", repo_sysroot().to_string_lossy());
+
+    std::fs::write(
+        dir.join("Main.mod"),
+        b"module Main;\n\
+import platform/channel { };\n\
+: main ( -- i64 )\n\
+  platform.channel.make drop\n\
+  0 bitcast Chan(i64) <| drop\n\
+  0\n\
+;\n\
+end;\n",
+    )
+    .unwrap();
+
+    let out = Command::new(exe("langc"))
+        .current_dir(&dir)
+        .arg(&sysroot_arg)
+        .args(["--emit=asm", "Main.mod"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    std::fs::write(dir.join("Main.asm"), &out.stdout).unwrap();
+
+    let status = Command::new(exe("lang-assemble"))
+        .current_dir(&dir)
+        .args(["--out=prog", "Main.asm"])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let run = Command::new(dir.join("prog")).status().unwrap();
+    assert_eq!(run.code(), Some(23));
 }
 
 #[test]
@@ -2161,6 +2486,147 @@ end;\n",
 }
 
 #[test]
+fn task_call_allows_escaping_quote_body() {
+    build_tools();
+    let dir = fresh_dir("task_call_allows_escaping_quote_body");
+
+    std::fs::write(
+        dir.join("Main.mod"),
+        b"module Main;\n\
+: main ( -- i64 )\n\
+  41 [ ( i64 -- i64 ) 1 + ] call\n\
+;\n\
+end;\n",
+    )
+    .unwrap();
+
+    let out = Command::new(exe("langc"))
+        .current_dir(&dir)
+        .args(["--emit=asm", "Main.mod"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    std::fs::write(dir.join("Main.asm"), &out.stdout).unwrap();
+
+    let status = Command::new(exe("lang-assemble"))
+        .current_dir(&dir)
+        .args(["--out=prog", "Main.asm"])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let run = Command::new(dir.join("prog")).status().unwrap();
+    assert_eq!(run.code(), Some(42));
+}
+
+#[test]
+fn task_spawn_allows_escaping_quote_body() {
+    build_tools();
+    let dir = fresh_dir("task_spawn_allows_escaping_quote_body");
+    let sysroot_arg = format!("--sysroot={}", repo_sysroot().to_string_lossy());
+
+    std::fs::write(
+        dir.join("Main.mod"),
+        b"module Main;\n\
+import platform/linux { platform.task.spawn, platform.task.join };\n\
+register-map GPIO\n\
+  0x00 DATA u32 rw\n\
+end;\n\
+const gpio = GPIO @ 0x0;\n\
+: main ( -- i64 ) !{suspend}\n\
+  [ ( -- ) 7 as u32 &!gpio.DATA swap !u32 ] platform.task.spawn\n\
+  platform.task.join\n\
+  &gpio.DATA @u32 as i64\n\
+;\n\
+end;\n",
+    )
+    .unwrap();
+
+    let out = Command::new(exe("langc"))
+        .current_dir(&dir)
+        .arg(&sysroot_arg)
+        .args(["--emit=asm", "Main.mod"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    std::fs::write(dir.join("Main.asm"), &out.stdout).unwrap();
+
+    let status = Command::new(exe("lang-assemble"))
+        .current_dir(&dir)
+        .args(["--out=prog", "Main.asm"])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let run = Command::new(dir.join("prog")).status().unwrap();
+    assert_eq!(run.code(), Some(7));
+}
+
+#[test]
+fn task_scheduler_stress_many_tasks() {
+    build_tools();
+    let dir = fresh_dir("task_scheduler_stress_many_tasks");
+    let sysroot_arg = format!("--sysroot={}", repo_sysroot().to_string_lossy());
+
+    std::fs::write(
+        dir.join("Main.mod"),
+        b"module Main;\n\
+import platform/linux { platform.task.spawn, platform.task.join, platform.task.yield };\n\
+register-map GPIO\n\
+  0x00 DATA[8] u32 rw\n\
+end;\n\
+const gpio = GPIO @ 0x0;\n\
+: main ( -- i64 ) !{suspend}\n\
+  [ ( -- ) !{suspend} platform.task.yield 1 as u32 &!gpio.DATA[0] swap !u32 ] platform.task.spawn\n\
+  [ ( -- ) !{suspend} platform.task.yield 2 as u32 &!gpio.DATA[1] swap !u32 ] platform.task.spawn\n\
+  [ ( -- ) !{suspend} platform.task.yield 3 as u32 &!gpio.DATA[2] swap !u32 ] platform.task.spawn\n\
+  [ ( -- ) !{suspend} platform.task.yield 4 as u32 &!gpio.DATA[3] swap !u32 ] platform.task.spawn\n\
+  [ ( -- ) !{suspend} platform.task.yield 5 as u32 &!gpio.DATA[4] swap !u32 ] platform.task.spawn\n\
+  [ ( -- ) !{suspend} platform.task.yield 6 as u32 &!gpio.DATA[5] swap !u32 ] platform.task.spawn\n\
+  [ ( -- ) !{suspend} platform.task.yield 7 as u32 &!gpio.DATA[6] swap !u32 ] platform.task.spawn\n\
+  [ ( -- ) !{suspend} platform.task.yield 8 as u32 &!gpio.DATA[7] swap !u32 ] platform.task.spawn\n\
+  platform.task.join\n\
+  platform.task.join\n\
+  platform.task.join\n\
+  platform.task.join\n\
+  platform.task.join\n\
+  platform.task.join\n\
+  platform.task.join\n\
+  platform.task.join\n\
+  &gpio.DATA[0] @u32 as i64\n\
+  &gpio.DATA[1] @u32 as i64 +\n\
+  &gpio.DATA[2] @u32 as i64 +\n\
+  &gpio.DATA[3] @u32 as i64 +\n\
+  &gpio.DATA[4] @u32 as i64 +\n\
+  &gpio.DATA[5] @u32 as i64 +\n\
+  &gpio.DATA[6] @u32 as i64 +\n\
+  &gpio.DATA[7] @u32 as i64 +\n\
+;\n\
+end;\n",
+    )
+    .unwrap();
+
+    let out = Command::new(exe("langc"))
+        .current_dir(&dir)
+        .arg(&sysroot_arg)
+        .args(["--emit=asm", "Main.mod"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    std::fs::write(dir.join("Main.asm"), &out.stdout).unwrap();
+
+    let status = Command::new(exe("lang-assemble"))
+        .current_dir(&dir)
+        .args(["--out=prog", "Main.asm"])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let run = Command::new(dir.join("prog")).status().unwrap();
+    assert_eq!(run.code(), Some(36));
+}
+
+#[test]
 fn milestone8_typed_channel_u32_roundtrip_exit_code() {
     build_tools();
     let dir = fresh_dir("milestone8_typed_channel_u32_roundtrip_exit_code");
@@ -2207,6 +2673,55 @@ end;\n",
 
     let run = Command::new(dir.join("prog")).status().unwrap();
     assert_eq!(run.code(), Some(42));
+}
+
+#[test]
+fn milestone16_typed_channel_i8_roundtrip_exit_code() {
+    build_tools();
+    let dir = fresh_dir("milestone16_typed_channel_i8_roundtrip_exit_code");
+    let sysroot_arg = format!("--sysroot={}", repo_sysroot().to_string_lossy());
+
+    std::fs::write(
+        dir.join("Main.mod"),
+        b"module Main;\n\
+import platform/channel { };\n\
+: main ( -- i64 )\n\
+  platform.channel.make drop\n\
+  0 bitcast Chan(i8) -1 as i8 |>\n\
+  0 bitcast Chan(i8) <| as i64 -1 == [ 0 ] [ 1 ] if\n\
+;\n\
+end;\n",
+    )
+    .unwrap();
+
+    let status = Command::new(exe("langc"))
+        .current_dir(&dir)
+        .args(["--emit=obj", "--target=linux-x86_64-hosted", "--out-dir=."])
+        .arg(&sysroot_arg)
+        .arg("Main.mod")
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let status = Command::new(exe("lang-assemble"))
+        .current_dir(&dir)
+        .args([
+            "--out=rt.o",
+            runtime_asm_linux_x86_64_hosted().to_string_lossy().as_ref(),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let status = Command::new("ld")
+        .current_dir(&dir)
+        .args(["-o", "prog", "rt.o", "Main.o"])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let run = Command::new(dir.join("prog")).status().unwrap();
+    assert_eq!(run.code(), Some(0));
 }
 
 #[test]
