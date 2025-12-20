@@ -18,6 +18,14 @@ impl<'a> Lexer<'a> {
         self.src
     }
 
+    pub fn pos(&self) -> usize {
+        self.i
+    }
+
+    pub fn set_pos(&mut self, pos: usize) {
+        self.i = core::cmp::min(pos, self.src.len());
+    }
+
     pub fn next(&mut self) -> Token {
         self.skip_ws_and_comments();
         if self.i >= self.src.len() {
@@ -83,9 +91,10 @@ impl<'a> Lexer<'a> {
                     self.i += 1;
                     TokenKind::PunctPipeGreater
                 } else {
-                    return self.lex_ident(start);
+                    TokenKind::PunctPipe
                 }
             }
+            b'\'' => TokenKind::PunctApostrophe,
             b'>' => {
                 if self.peek() == Some(b'=') {
                     self.i += 1;
