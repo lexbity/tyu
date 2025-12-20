@@ -93,6 +93,8 @@ pub enum OpKind {
     MmioPlace { place: Atom, addr: u64 },
     ScopedEnter { ty: TypeId, len: u32 },
     TaskSpawn { name: Atom, task_ty: TypeId },
+    PtrAddConst { ty: TypeId, offset: u32 },
+    PtrAddIndex { ty: TypeId, scale: u32 },
 
     Dup { ty: TypeId },
     Drop { ty: TypeId },
@@ -265,6 +267,24 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
             }
             OpKind::TaskSpawn { task_ty, .. } => {
                 push(&mut stack, &mut sp, task_ty, op.span)?;
+            }
+            OpKind::PtrAddConst { ty, .. } => {
+                let top = pop(&mut stack, &mut sp, op.span)?;
+                if top != ty {
+                    return Err(VerifyError { code: 9011, span: op.span });
+                }
+                push(&mut stack, &mut sp, top, op.span)?;
+            }
+            OpKind::PtrAddIndex { ty, .. } => {
+                let idx = pop(&mut stack, &mut sp, op.span)?;
+                if idx != TY_I64 {
+                    return Err(VerifyError { code: 9018, span: op.span });
+                }
+                let top = pop(&mut stack, &mut sp, op.span)?;
+                if top != ty {
+                    return Err(VerifyError { code: 9011, span: op.span });
+                }
+                push(&mut stack, &mut sp, top, op.span)?;
             }
             OpKind::Dup { ty } => {
                 let top = pop(&mut stack, &mut sp, op.span)?;
@@ -518,7 +538,7 @@ fn write_sig(out: &mut impl Output, w: &Word, sig: &Sig) {
         if i != 0 {
             out.write(b" ");
         }
-        out.write(type_atom(w, sig.inputs[i]).as_bytes());
+        write_type_atom(out, type_atom(w, sig.inputs[i]), 4);
     }
     out.write(b" --");
     if sig.out_len > 0 {
@@ -528,7 +548,7 @@ fn write_sig(out: &mut impl Output, w: &Word, sig: &Sig) {
         if i != 0 {
             out.write(b" ");
         }
-        out.write(type_atom(w, sig.outputs[i]).as_bytes());
+        write_type_atom(out, type_atom(w, sig.outputs[i]), 4);
     }
     out.write(b" )");
 }
@@ -540,8 +560,51 @@ fn write_stack(out: &mut impl Output, w: &Word, stack: &FixedVec<TypeId, 32>) {
             out.write(b" ");
         }
         first = false;
-        out.write(type_atom(w, *a).as_bytes());
+        write_type_atom(out, type_atom(w, *a), 4);
     }
+}
+
+fn write_type_atom(out: &mut impl Output, atom: &Atom, depth: u8) {
+    if depth == 0 {
+        out.write(atom.as_bytes());
+        return;
+    }
+    let bytes = atom.as_bytes();
+    if bytes.starts_with(b"Chan(") && bytes.ends_with(b")") {
+        let inner = &bytes[b"Chan(".len()..bytes.len() - 1];
+        out.write(b"|");
+        if let Some(a) = Atom::new(inner) {
+            write_type_atom(out, &a, depth - 1);
+        } else {
+            out.write(inner);
+        }
+        out.write(b"|");
+        return;
+    }
+    if bytes.starts_with(b"Array(") && bytes.ends_with(b")") {
+        let inner = &bytes[b"Array(".len()..bytes.len() - 1];
+        let mut depth_paren = 0u32;
+        for (i, &c) in inner.iter().enumerate() {
+            match c {
+                b'(' => depth_paren = depth_paren.wrapping_add(1),
+                b')' => depth_paren = depth_paren.wrapping_sub(1),
+                b',' if depth_paren == 0 => {
+                    let elem = &inner[..i];
+                    let len = &inner[i + 1..];
+                    if let Some(a) = Atom::new(elem) {
+                        write_type_atom(out, &a, depth - 1);
+                    } else {
+                        out.write(elem);
+                    }
+                    out.write(b"'");
+                    out.write(len);
+                    return;
+                }
+                _ => {}
+            }
+        }
+    }
+    out.write(bytes);
 }
 
 fn write_op(out: &mut impl Output, w: &Word, op: &Op) {
@@ -582,6 +645,18 @@ fn write_op(out: &mut impl Output, w: &Word, op: &Op) {
         OpKind::TaskSpawn { name, .. } => {
             out.write(b"task_spawn ");
             out.write(name.as_bytes());
+        }
+        OpKind::PtrAddConst { ty, offset } => {
+            out.write(b"ptr_add_const ");
+            out.write(type_atom(w, ty).as_bytes());
+            out.write(b" ");
+            write_u32(out, offset);
+        }
+        OpKind::PtrAddIndex { ty, scale } => {
+            out.write(b"ptr_add_index ");
+            out.write(type_atom(w, ty).as_bytes());
+            out.write(b" ");
+            write_u32(out, scale);
         }
         OpKind::Dup { ty } => {
             out.write(b"dup ");
