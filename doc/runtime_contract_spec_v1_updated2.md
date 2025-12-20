@@ -281,9 +281,9 @@ If channels are supported, the sysroot should expose a module like:
 - `platform.channel`
 
 Recommended minimal surface:
-- `platform.channel.create : ( capacity -- Chan(T) )` (or untyped `Chan` with typed wrappers in stdlib)
-- `platform.channel.send   : ( Chan(T) T -- )` (may block or return a status; platform-defined)
-- `platform.channel.recv   : ( Chan(T) -- T )` (may block or return an option/status; platform-defined)
+- `platform.channel.create : ( capacity -- |T| )` (or untyped channel with typed wrappers in stdlib)
+- `platform.channel.send   : ( |T| T -- )` (may block or return a status; platform-defined)
+- `platform.channel.recv   : ( |T| -- T )` (may block or return an option/status; platform-defined)
 
 The language’s `<|` / `|>` operators lower to these calls (or stdlib wrappers).
 
