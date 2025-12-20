@@ -48,6 +48,8 @@ pub enum TokenKind {
     PunctDashDash,  // --
     PunctLessPipe,  // <|
     PunctPipeGreater, // |>
+    PunctPipe,     // |
+    PunctApostrophe, // '
 
     PunctAmp,       // &
     PunctAmpBang,   // &!
