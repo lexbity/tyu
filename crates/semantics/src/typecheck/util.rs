@@ -291,7 +291,7 @@ fn array_size_bytes(ty_bytes: &[u8], nominals: &NominalDb, depth: u8) -> Option<
     None
 }
 
-fn field_align(size: u32) -> u32 {
+pub fn field_align(size: u32) -> u32 {
     if size >= 8 {
         8
     } else if size >= 4 {
@@ -303,7 +303,7 @@ fn field_align(size: u32) -> u32 {
     }
 }
 
-fn align_up(value: u32, align: u32) -> u32 {
+pub fn align_up(value: u32, align: u32) -> u32 {
     if align == 0 {
         return value;
     }
@@ -405,7 +405,7 @@ pub fn write_sig(out: &mut impl Output, sig: &WordSig) {
         if i != 0 {
             out.write(b" ");
         }
-        out.write(sig.inputs[i].as_bytes());
+        write_type(out, sig.inputs[i], 4);
     }
     out.write(b" --");
     if sig.out_len > 0 {
@@ -415,9 +415,52 @@ pub fn write_sig(out: &mut impl Output, sig: &WordSig) {
         if i != 0 {
             out.write(b" ");
         }
-        out.write(sig.outputs[i].as_bytes());
+        write_type(out, sig.outputs[i], 4);
     }
     out.write(b" )");
+}
+
+fn write_type(out: &mut impl Output, ty: TypeAtom, depth: u8) {
+    if depth == 0 {
+        out.write(ty.as_bytes());
+        return;
+    }
+    let bytes = ty.as_bytes();
+    if bytes.starts_with(b"Chan(") && bytes.ends_with(b")") {
+        let inner = &bytes[b"Chan(".len()..bytes.len() - 1];
+        out.write(b"|");
+        if let Some(atom) = TypeAtom::new(inner) {
+            write_type(out, atom, depth - 1);
+        } else {
+            out.write(inner);
+        }
+        out.write(b"|");
+        return;
+    }
+    if bytes.starts_with(b"Array(") && bytes.ends_with(b")") {
+        let inner = &bytes[b"Array(".len()..bytes.len() - 1];
+        let mut depth_paren = 0u32;
+        for (i, &c) in inner.iter().enumerate() {
+            match c {
+                b'(' => depth_paren = depth_paren.wrapping_add(1),
+                b')' => depth_paren = depth_paren.wrapping_sub(1),
+                b',' if depth_paren == 0 => {
+                    let elem = &inner[..i];
+                    let len = &inner[i + 1..];
+                    if let Some(atom) = TypeAtom::new(elem) {
+                        write_type(out, atom, depth - 1);
+                    } else {
+                        out.write(elem);
+                    }
+                    out.write(b"'");
+                    out.write(len);
+                    return;
+                }
+                _ => {}
+            }
+        }
+    }
+    out.write(bytes);
 }
 
 pub fn write_stack(out: &mut impl Output, stack: &[Value; 256], sp: usize) {
