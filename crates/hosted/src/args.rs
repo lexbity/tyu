@@ -40,7 +40,6 @@ impl RawArgs {
 pub struct RawArgsIter<'a> {
     args: RawArgs,
     index: usize,
-    #[allow(dead_code)]
     _marker: core::marker::PhantomData<&'a ()>,
 }
 
