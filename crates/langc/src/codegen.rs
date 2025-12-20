@@ -23,11 +23,16 @@ pub struct IrAsmGen<'a> {
     pub label_id: u32,
     pub uses_channels: bool,
     pub uses_mmio: bool,
+    pub uses_regions: bool,
+    pub uses_tasks: bool,
     pub str_len: usize,
     pub str_spans: [Span; 128],
     pub str_ids: [u32; 128],
     pub debug_trap_loc: bool,
     pub cur_word_id: u32,
+    pub scoped_base: u32,
+    pub scoped_slots: u32,
+    pub scoped_next: u32,
 }
 
 impl<'a> IrAsmGen<'a> {
@@ -40,11 +45,16 @@ impl<'a> IrAsmGen<'a> {
             label_id: 0,
             uses_channels: false,
             uses_mmio: false,
+            uses_regions: false,
+            uses_tasks: false,
             str_len: 0,
             str_spans: [Span::new(0, 0); 128],
             str_ids: [0u32; 128],
             debug_trap_loc,
             cur_word_id: 0,
+            scoped_base: 0,
+            scoped_slots: 0,
+            scoped_next: 0,
         }
     }
 
@@ -108,9 +118,30 @@ impl<'a> IrAsmGen<'a> {
                 self.out.write(b"extrn __stack_overflow\n");
                 self.out.write(b"extrn __mmio_mem\n");
                 self.out.write(b"extrn __chan_next\n");
+                self.out.write(b"extrn __chan_inuse\n");
                 self.out.write(b"extrn __chan_head\n");
                 self.out.write(b"extrn __chan_tail\n");
                 self.out.write(b"extrn __chan_buf\n");
+                self.out.write(b"extrn __chan_wait_recv_head\n");
+                self.out.write(b"extrn __chan_wait_recv_tail\n");
+                self.out.write(b"extrn __chan_wait_recv_buf\n");
+                self.out.write(b"extrn __chan_wait_send_head\n");
+                self.out.write(b"extrn __chan_wait_send_tail\n");
+                self.out.write(b"extrn __chan_wait_send_buf\n");
+                self.out.write(b"extrn __task_current\n");
+                self.out.write(b"extrn __task_state\n");
+                self.out.write(b"extrn __task_g_head\n");
+                self.out.write(b"extrn __task_g_tail\n");
+                self.out.write(b"extrn __task_g_buf\n");
+                self.out.write(b"extrn __region_next\n");
+                self.out.write(b"extrn __region_base\n");
+                self.out.write(b"extrn __region_size\n");
+                self.out.write(b"extrn __region_off\n");
+                self.out.write(b"extrn __task_spawn\n");
+                self.out.write(b"extrn __task_join\n");
+                self.out.write(b"extrn __task_yield\n");
+                self.out.write(b"extrn __task_sleep_ms\n");
+                self.out.write(b"extrn __task_sleep_us\n");
                 self.out.write(b"\n");
                 Ok(())
             }
@@ -151,15 +182,56 @@ impl<'a> IrAsmGen<'a> {
                     self.out.write(b"\n");
                 }
 
+                if self.uses_tasks {
+                    emit_task_runtime(self.out);
+                }
+
                 self.out.write(b"\nsegment readable writeable\n");
                 if self.uses_channels {
                     // Hosted channels (Milestone 16): fixed-size per-channel ring buffers.
                     self.out.write(b"__chan_next dq 0\n");
+                    self.out.write(b"__chan_inuse rq 16\n");
                     self.out.write(b"__chan_head rq 16\n");
                     self.out.write(b"__chan_tail rq 16\n");
                     self.out.write(b"__chan_buf rq ");
                     write_u32(self.out, 16 * 64);
                     self.out.write(b"\n");
+                    self.out.write(b"__chan_wait_recv_head rq 16\n");
+                    self.out.write(b"__chan_wait_recv_tail rq 16\n");
+                    self.out.write(b"__chan_wait_recv_buf rq ");
+                    write_u32(self.out, 16 * 8);
+                    self.out.write(b"\n");
+                    self.out.write(b"__chan_wait_send_head rq 16\n");
+                    self.out.write(b"__chan_wait_send_tail rq 16\n");
+                    self.out.write(b"__chan_wait_send_buf rq ");
+                    write_u32(self.out, 16 * 8);
+                    self.out.write(b"\n");
+                }
+                if self.uses_regions {
+                    // Hosted regions (Milestone 5): fixed-size region table.
+                    self.out.write(b"__region_next dq 0\n");
+                    self.out.write(b"__region_base rq 16\n");
+                    self.out.write(b"__region_size rq 16\n");
+                    self.out.write(b"__region_off rq 16\n");
+                }
+                if self.uses_tasks {
+                    self.out.write(b"__task_current dq 0\n");
+                    self.out.write(b"__task_worker dq 0\n");
+                    self.out.write(b"__task_state rq 16\n");
+                    self.out.write(b"__task_rsp rq 16\n");
+                    self.out.write(b"__task_r15 rq 16\n");
+                    self.out.write(b"__task_r14 rq 16\n");
+                    self.out.write(b"__task_entry rq 16\n");
+                    self.out.write(b"__task_w_head rq 4\n");
+                    self.out.write(b"__task_w_tail rq 4\n");
+                    self.out.write(b"__task_w_buf rq ");
+                    write_u32(self.out, 4 * 8);
+                    self.out.write(b"\n");
+                    self.out.write(b"__task_g_head dq 0\n");
+                    self.out.write(b"__task_g_tail dq 0\n");
+                    self.out.write(b"__task_g_buf rq 16\n");
+                    self.out.write(b"__task_ds_mem rb 1048576\n");
+                    self.out.write(b"__task_cs_mem rb 1048576\n");
                 }
                 if self.uses_mmio {
                     // Hosted MMIO (Milestone 6): fixed-size simulated MMIO region.
@@ -238,7 +310,15 @@ impl<'a> IrAsmGen<'a> {
         let base = self.fresh_label();
 
         let slots = max_local_slot_ir(w).map(|m| (m as u32) + 1).unwrap_or(0);
-        let frame_bytes = locals_bytes_ir(slots);
+        let locals_bytes = locals_bytes_ir(slots);
+        let scoped_slots = count_scoped_slices(w);
+        let mut frame_bytes = locals_bytes + (scoped_slots * 16);
+        if frame_bytes % 16 != 0 {
+            frame_bytes += 8;
+        }
+        self.scoped_base = locals_bytes;
+        self.scoped_slots = scoped_slots;
+        self.scoped_next = 0;
         if frame_bytes > 0 {
             self.out.write(b"  sub rsp, ");
             write_u32(self.out, frame_bytes);
@@ -306,7 +386,50 @@ impl<'a> IrAsmGen<'a> {
                 Ok(())
             }
 
-            lir::OpKind::ScopedEnter { .. } => Ok(()),
+            lir::OpKind::ScopedEnter { ty, len } => {
+                let ty_name = w
+                    .types
+                    .get(ty.0 as usize)
+                    .map(|a| a.as_bytes())
+                    .unwrap_or(b"");
+                if ty_name.starts_with(b"Slice(") || ty_name.starts_with(b"SliceMut(") {
+                    if self.scoped_next >= self.scoped_slots {
+                        return Err(7123);
+                    }
+                    let slot = self.scoped_next;
+                    self.scoped_next = self.scoped_next.wrapping_add(1);
+                    let offset = self.scoped_base + (slot * 16);
+                    // Hosted baseline: treat Array value as a pointer to contiguous data.
+                    self.out.write(b"  mov rax, [r15-8]\n");
+                    self.out.write(b"  mov [rsp+");
+                    write_u32(self.out, offset);
+                    self.out.write(b"], rax\n");
+                    self.out.write(b"  mov qword [rsp+");
+                    write_u32(self.out, offset + 8);
+                    self.out.write(b"], ");
+                    write_u64_hex(self.out, len as u64);
+                    self.out.write(b"\n");
+                    self.out.write(b"  lea rax, [rsp+");
+                    write_u32(self.out, offset);
+                    self.out.write(b"]\n");
+                    emit_push_rax(self.out);
+                    return Ok(());
+                }
+                if ty_name == b"RegionRef" || ty_name == b"RegionRefMut" {
+                    emit_dup(self.out);
+                    return Ok(());
+                }
+                Ok(())
+            }
+            lir::OpKind::TaskSpawn { name, .. } => {
+                self.uses_tasks = true;
+                self.out.write(b"  mov rdi, ");
+                write_label(self.out, name.as_bytes());
+                self.out.write(b"\n");
+                self.out.write(b"  call __task_spawn\n");
+                emit_push_rax(self.out);
+                Ok(())
+            }
 
             lir::OpKind::Dup { .. } => {
                 emit_dup(self.out);
@@ -397,7 +520,7 @@ impl<'a> IrAsmGen<'a> {
             }
             lir::OpKind::Bitcast { .. } => Ok(()),
 
-            lir::OpKind::Call { name, .. } => {
+            lir::OpKind::Call { name, sig, .. } => {
                 let n = name.as_bytes();
                 if n == b"platform.io.log" {
                     // Stack: `( str -- )` where `str` is `*const { ptr:u64, len:u64 }`.
@@ -413,33 +536,93 @@ impl<'a> IrAsmGen<'a> {
                 if n == b"platform.channel.make" {
                     // Stack: `( -- Chan(T) )` (hosted: returns small integer handle).
                     self.uses_channels = true;
+                    self.uses_tasks = true;
                     let ok = self.fresh_label();
+                    let scan = self.fresh_label();
+                    let found = self.fresh_label();
                     self.out.write(b"  mov rax, [__chan_next]\n");
-                    self.out.write(b"  cmp rax, 16\n");
-                    self.out.write(b"  jb .chan_make_ok_");
-                    write_u32(self.out, ok);
+                    self.out.write(b"  xor rcx, rcx\n");
+                    self.out.write(b".chan_make_scan_");
+                    write_u32(self.out, scan);
+                    self.out.write(b":\n");
+                    self.out.write(b"  cmp rcx, 16\n");
+                    self.out.write(b"  jb .chan_make_check_");
+                    write_u32(self.out, scan);
                     self.out.write(b"\n");
                     self.out.write(b"  mov rdi, ");
                     write_u32(self.out, lir::trap_code_u32(lir::TrapCode::Unreachable));
                     self.out.write(b"\n");
                     self.out.write(b"  jmp __lang_trap\n");
+                    self.out.write(b".chan_make_check_");
+                    write_u32(self.out, scan);
+                    self.out.write(b":\n");
+                    self.out.write(b"  mov rdx, [__chan_inuse + rax*8]\n");
+                    self.out.write(b"  cmp rdx, 0\n");
+                    self.out.write(b"  je .chan_make_found_");
+                    write_u32(self.out, found);
+                    self.out.write(b"\n");
+                    self.out.write(b"  add rax, 1\n");
+                    self.out.write(b"  cmp rax, 16\n");
+                    self.out.write(b"  jb .chan_make_next_");
+                    write_u32(self.out, scan);
+                    self.out.write(b"\n");
+                    self.out.write(b"  xor rax, rax\n");
+                    self.out.write(b".chan_make_next_");
+                    write_u32(self.out, scan);
+                    self.out.write(b":\n");
+                    self.out.write(b"  add rcx, 1\n");
+                    self.out.write(b"  jmp .chan_make_scan_");
+                    write_u32(self.out, scan);
+                    self.out.write(b"\n");
+                    self.out.write(b".chan_make_found_");
+                    write_u32(self.out, found);
+                    self.out.write(b":\n");
+                    self.out.write(b"  mov qword [__chan_inuse + rax*8], 1\n");
+                    self.out.write(b"  mov qword [__chan_head + rax*8], 0\n");
+                    self.out.write(b"  mov qword [__chan_tail + rax*8], 0\n");
+                    self.out.write(b"  mov rdx, rax\n");
+                    self.out.write(b"  add rax, 1\n");
+                    self.out.write(b"  cmp rax, 16\n");
+                    self.out.write(b"  jb .chan_make_ok_");
+                    write_u32(self.out, ok);
+                    self.out.write(b"\n");
+                    self.out.write(b"  xor rax, rax\n");
                     self.out.write(b".chan_make_ok_");
                     write_u32(self.out, ok);
                     self.out.write(b":\n");
-                    self.out.write(b"  mov rcx, rax\n");
-                    self.out.write(b"  add rax, 1\n");
                     self.out.write(b"  mov [__chan_next], rax\n");
-                    self.out.write(b"  mov rax, rcx\n");
+                    self.out.write(b"  mov rax, rdx\n");
                     emit_push_rax(self.out);
                     return Ok(())
                 }
                 if n == b"platform.channel.send" {
                     // Stack: `( Chan(T) T -- )` (hosted: enqueue 64-bit payload).
                     self.uses_channels = true;
+                    self.uses_tasks = true;
+                    let payload_ty = sig.inputs[1];
                     let ok = self.fresh_label();
                     let space = self.fresh_label();
+                    let live = self.fresh_label();
+                    let retry = self.fresh_label();
+                    let wake = self.fresh_label();
+                    let gfull = self.fresh_label();
+                    let wfull = self.fresh_label();
                     self.out.write(b"  sub r15, 8\n");
                     self.out.write(b"  mov rdx, [r15]\n"); // payload
+                    match channel_payload_kind(w, payload_ty) {
+                        Some(ChannelPayloadKind::Primitive { bits, signed, is_bool }) => {
+                            emit_channel_canon_prim(self.out, b"rdx", b"edx", b"dl", bits, signed, is_bool);
+                        }
+                        Some(ChannelPayloadKind::BoxCopy { bytes }) => {
+                            let ok_box = self.fresh_label();
+                            emit_channel_box_array(self.out, bytes, b"rdx", ok_box);
+                        }
+                        Some(ChannelPayloadKind::Word) => {}
+                        None => {
+                            self.emit_trap_with_loc(lir::trap_code_u32(lir::TrapCode::Unreachable), op.span);
+                            return Ok(());
+                        }
+                    }
                     self.out.write(b"  sub r15, 8\n");
                     self.out.write(b"  mov rax, [r15]\n"); // chan
                     self.out.write(b"  cmp rax, 16\n");
@@ -453,6 +636,21 @@ impl<'a> IrAsmGen<'a> {
                     self.out.write(b".chan_send_ok_");
                     write_u32(self.out, ok);
                     self.out.write(b":\n");
+                    self.out.write(b"  mov rcx, [__chan_inuse + rax*8]\n");
+                    self.out.write(b"  cmp rcx, 1\n");
+                    self.out.write(b"  je .chan_send_live_");
+                    write_u32(self.out, live);
+                    self.out.write(b"\n");
+                    self.out.write(b"  mov rdi, ");
+                    write_u32(self.out, lir::trap_code_u32(lir::TrapCode::Unreachable));
+                    self.out.write(b"\n");
+                    self.out.write(b"  jmp __lang_trap\n");
+                    self.out.write(b".chan_send_live_");
+                    write_u32(self.out, live);
+                    self.out.write(b":\n");
+                    self.out.write(b".chan_send_retry_");
+                    write_u32(self.out, retry);
+                    self.out.write(b":\n");
                     self.out.write(b"  mov rcx, [__chan_tail + rax*8]\n");
                     self.out.write(b"  mov r8, [__chan_head + rax*8]\n");
                     self.out.write(b"  sub rcx, r8\n");
@@ -460,10 +658,39 @@ impl<'a> IrAsmGen<'a> {
                     self.out.write(b"  jb .chan_send_space_");
                     write_u32(self.out, space);
                     self.out.write(b"\n");
+                    self.out.write(b"  mov r12, rax\n");
+                    self.out.write(b"  mov r13, rdx\n");
+                    self.out.write(b"  mov rdx, [__task_current]\n");
+                    self.out.write(b"  mov r8, [__chan_wait_send_tail + r12*8]\n");
+                    self.out.write(b"  mov r9, [__chan_wait_send_head + r12*8]\n");
+                    self.out.write(b"  mov r10, r8\n");
+                    self.out.write(b"  sub r10, r9\n");
+                    self.out.write(b"  cmp r10, 8\n");
+                    self.out.write(b"  jb .chan_send_wait_space_");
+                    write_u32(self.out, wfull);
+                    self.out.write(b"\n");
                     self.out.write(b"  mov rdi, ");
                     write_u32(self.out, lir::trap_code_u32(lir::TrapCode::Unreachable));
                     self.out.write(b"\n");
                     self.out.write(b"  jmp __lang_trap\n");
+                    self.out.write(b".chan_send_wait_space_");
+                    write_u32(self.out, wfull);
+                    self.out.write(b":\n");
+                    self.out.write(b"  mov r10, r8\n");
+                    self.out.write(b"  and r10, 7\n");
+                    self.out.write(b"  mov r9, r12\n");
+                    self.out.write(b"  shl r9, 3\n");
+                    self.out.write(b"  add r9, r10\n");
+                    self.out.write(b"  mov [__chan_wait_send_buf + r9*8], rdx\n");
+                    self.out.write(b"  add r8, 1\n");
+                    self.out.write(b"  mov [__chan_wait_send_tail + r12*8], r8\n");
+                    self.out.write(b"  mov qword [__task_state + rdx*8], 4\n");
+                    self.out.write(b"  call __task_yield\n");
+                    self.out.write(b"  mov rax, r12\n");
+                    self.out.write(b"  mov rdx, r13\n");
+                    self.out.write(b"  jmp .chan_send_retry_");
+                    write_u32(self.out, retry);
+                    self.out.write(b"\n");
                     self.out.write(b".chan_send_space_");
                     write_u32(self.out, space);
                     self.out.write(b":\n");
@@ -476,13 +703,58 @@ impl<'a> IrAsmGen<'a> {
                     self.out.write(b"  mov [__chan_buf + r9*8], rdx\n");
                     self.out.write(b"  add rcx, 1\n");
                     self.out.write(b"  mov [__chan_tail + rax*8], rcx\n");
+                    self.out.write(b"  mov r8, [__chan_wait_recv_head + rax*8]\n");
+                    self.out.write(b"  mov r9, [__chan_wait_recv_tail + rax*8]\n");
+                    self.out.write(b"  cmp r8, r9\n");
+                    self.out.write(b"  je .chan_send_wake_done_");
+                    write_u32(self.out, wake);
+                    self.out.write(b"\n");
+                    self.out.write(b"  mov r10, r8\n");
+                    self.out.write(b"  and r10, 7\n");
+                    self.out.write(b"  mov r11, rax\n");
+                    self.out.write(b"  shl r11, 3\n");
+                    self.out.write(b"  add r11, r10\n");
+                    self.out.write(b"  mov r10, [__chan_wait_recv_buf + r11*8]\n");
+                    self.out.write(b"  add r8, 1\n");
+                    self.out.write(b"  mov [__chan_wait_recv_head + rax*8], r8\n");
+                    self.out.write(b"  mov qword [__task_state + r10*8], 1\n");
+                    self.out.write(b"  mov r8, [__task_g_tail]\n");
+                    self.out.write(b"  mov r9, [__task_g_head]\n");
+                    self.out.write(b"  mov r11, r8\n");
+                    self.out.write(b"  sub r11, r9\n");
+                    self.out.write(b"  cmp r11, 16\n");
+                    self.out.write(b"  jb .chan_send_wake_space_");
+                    write_u32(self.out, gfull);
+                    self.out.write(b"\n");
+                    self.out.write(b"  mov rdi, ");
+                    write_u32(self.out, lir::trap_code_u32(lir::TrapCode::Unreachable));
+                    self.out.write(b"\n");
+                    self.out.write(b"  jmp __lang_trap\n");
+                    self.out.write(b".chan_send_wake_space_");
+                    write_u32(self.out, gfull);
+                    self.out.write(b":\n");
+                    self.out.write(b"  mov r11, r8\n");
+                    self.out.write(b"  and r11, 15\n");
+                    self.out.write(b"  mov [__task_g_buf + r11*8], r10\n");
+                    self.out.write(b"  add r8, 1\n");
+                    self.out.write(b"  mov [__task_g_tail], r8\n");
+                    self.out.write(b".chan_send_wake_done_");
+                    write_u32(self.out, wake);
+                    self.out.write(b":\n");
                     return Ok(())
                 }
                 if n == b"platform.channel.recv" {
                     // Stack: `( Chan(T) -- T )` (hosted: dequeue 64-bit payload).
                     self.uses_channels = true;
+                    self.uses_tasks = true;
+                    let out_ty = sig.outputs[0];
                     let ok = self.fresh_label();
                     let has = self.fresh_label();
+                    let live = self.fresh_label();
+                    let retry = self.fresh_label();
+                    let wake = self.fresh_label();
+                    let gfull = self.fresh_label();
+                    let wfull = self.fresh_label();
                     self.out.write(b"  sub r15, 8\n");
                     self.out.write(b"  mov r11, [r15]\n"); // chan
                     self.out.write(b"  cmp r11, 16\n");
@@ -496,16 +768,58 @@ impl<'a> IrAsmGen<'a> {
                     self.out.write(b".chan_recv_ok_");
                     write_u32(self.out, ok);
                     self.out.write(b":\n");
+                    self.out.write(b"  mov rcx, [__chan_inuse + r11*8]\n");
+                    self.out.write(b"  cmp rcx, 1\n");
+                    self.out.write(b"  je .chan_recv_live_");
+                    write_u32(self.out, live);
+                    self.out.write(b"\n");
+                    self.out.write(b"  mov rdi, ");
+                    write_u32(self.out, lir::trap_code_u32(lir::TrapCode::Unreachable));
+                    self.out.write(b"\n");
+                    self.out.write(b"  jmp __lang_trap\n");
+                    self.out.write(b".chan_recv_live_");
+                    write_u32(self.out, live);
+                    self.out.write(b":\n");
+                    self.out.write(b".chan_recv_retry_");
+                    write_u32(self.out, retry);
+                    self.out.write(b":\n");
                     self.out.write(b"  mov rcx, [__chan_head + r11*8]\n");
                     self.out.write(b"  mov r8, [__chan_tail + r11*8]\n");
                     self.out.write(b"  cmp rcx, r8\n");
                     self.out.write(b"  jne .chan_recv_has_");
                     write_u32(self.out, has);
                     self.out.write(b"\n");
+                    self.out.write(b"  mov r12, r11\n");
+                    self.out.write(b"  mov rdx, [__task_current]\n");
+                    self.out.write(b"  mov r8, [__chan_wait_recv_tail + r11*8]\n");
+                    self.out.write(b"  mov r9, [__chan_wait_recv_head + r11*8]\n");
+                    self.out.write(b"  mov r10, r8\n");
+                    self.out.write(b"  sub r10, r9\n");
+                    self.out.write(b"  cmp r10, 8\n");
+                    self.out.write(b"  jb .chan_recv_wait_space_");
+                    write_u32(self.out, wfull);
+                    self.out.write(b"\n");
                     self.out.write(b"  mov rdi, ");
                     write_u32(self.out, lir::trap_code_u32(lir::TrapCode::Unreachable));
                     self.out.write(b"\n");
                     self.out.write(b"  jmp __lang_trap\n");
+                    self.out.write(b".chan_recv_wait_space_");
+                    write_u32(self.out, wfull);
+                    self.out.write(b":\n");
+                    self.out.write(b"  mov r10, r8\n");
+                    self.out.write(b"  and r10, 7\n");
+                    self.out.write(b"  mov r9, r11\n");
+                    self.out.write(b"  shl r9, 3\n");
+                    self.out.write(b"  add r9, r10\n");
+                    self.out.write(b"  mov [__chan_wait_recv_buf + r9*8], rdx\n");
+                    self.out.write(b"  add r8, 1\n");
+                    self.out.write(b"  mov [__chan_wait_recv_tail + r11*8], r8\n");
+                    self.out.write(b"  mov qword [__task_state + rdx*8], 4\n");
+                    self.out.write(b"  call __task_yield\n");
+                    self.out.write(b"  mov r11, r12\n");
+                    self.out.write(b"  jmp .chan_recv_retry_");
+                    write_u32(self.out, retry);
+                    self.out.write(b"\n");
                     self.out.write(b".chan_recv_has_");
                     write_u32(self.out, has);
                     self.out.write(b":\n");
@@ -515,9 +829,277 @@ impl<'a> IrAsmGen<'a> {
                     self.out.write(b"  shl r10, 6\n");
                     self.out.write(b"  add r10, r9\n");
                     self.out.write(b"  mov rax, [__chan_buf + r10*8]\n");
+                    match channel_payload_kind(w, out_ty) {
+                        Some(ChannelPayloadKind::Primitive { bits, signed, is_bool }) => {
+                            emit_channel_canon_prim(self.out, b"rax", b"eax", b"al", bits, signed, is_bool);
+                        }
+                        Some(ChannelPayloadKind::BoxCopy { .. }) => {
+                            // Return pointer to heap-backed payload.
+                        }
+                        Some(ChannelPayloadKind::Word) => {}
+                        None => {
+                            self.emit_trap_with_loc(lir::trap_code_u32(lir::TrapCode::Unreachable), op.span);
+                            return Ok(());
+                        }
+                    }
                     self.out.write(b"  add rcx, 1\n");
                     self.out.write(b"  mov [__chan_head + r11*8], rcx\n");
+                    self.out.write(b"  mov r8, [__chan_wait_send_head + r11*8]\n");
+                    self.out.write(b"  mov r9, [__chan_wait_send_tail + r11*8]\n");
+                    self.out.write(b"  cmp r8, r9\n");
+                    self.out.write(b"  je .chan_recv_wake_done_");
+                    write_u32(self.out, wake);
+                    self.out.write(b"\n");
+                    self.out.write(b"  mov r10, r8\n");
+                    self.out.write(b"  and r10, 7\n");
+                    self.out.write(b"  mov rdx, r11\n");
+                    self.out.write(b"  shl rdx, 3\n");
+                    self.out.write(b"  add rdx, r10\n");
+                    self.out.write(b"  mov r10, [__chan_wait_send_buf + rdx*8]\n");
+                    self.out.write(b"  add r8, 1\n");
+                    self.out.write(b"  mov [__chan_wait_send_head + r11*8], r8\n");
+                    self.out.write(b"  mov qword [__task_state + r10*8], 1\n");
+                    self.out.write(b"  mov r8, [__task_g_tail]\n");
+                    self.out.write(b"  mov r9, [__task_g_head]\n");
+                    self.out.write(b"  mov rdx, r8\n");
+                    self.out.write(b"  sub rdx, r9\n");
+                    self.out.write(b"  cmp rdx, 16\n");
+                    self.out.write(b"  jb .chan_recv_wake_space_");
+                    write_u32(self.out, gfull);
+                    self.out.write(b"\n");
+                    self.out.write(b"  mov rdi, ");
+                    write_u32(self.out, lir::trap_code_u32(lir::TrapCode::Unreachable));
+                    self.out.write(b"\n");
+                    self.out.write(b"  jmp __lang_trap\n");
+                    self.out.write(b".chan_recv_wake_space_");
+                    write_u32(self.out, gfull);
+                    self.out.write(b":\n");
+                    self.out.write(b"  mov rdx, r8\n");
+                    self.out.write(b"  and rdx, 15\n");
+                    self.out.write(b"  mov [__task_g_buf + rdx*8], r10\n");
+                    self.out.write(b"  add r8, 1\n");
+                    self.out.write(b"  mov [__task_g_tail], r8\n");
+                    self.out.write(b".chan_recv_wake_done_");
+                    write_u32(self.out, wake);
+                    self.out.write(b":\n");
                     emit_push_rax(self.out);
+                    return Ok(())
+                }
+                if n == b"platform.mem.region-create" {
+                    // Stack: `( usize -- Region )` (hosted: returns small integer handle).
+                    self.uses_regions = true;
+                    let ok = self.fresh_label();
+                    let size_ok = self.fresh_label();
+                    let mmap_ok = self.fresh_label();
+                    self.out.write(b"  sub r15, 8\n");
+                    self.out.write(b"  mov rsi, [r15]\n"); // size
+                    self.out.write(b"  cmp rsi, 0\n");
+                    self.out.write(b"  jne .region_size_ok_");
+                    write_u32(self.out, size_ok);
+                    self.out.write(b"\n");
+                    self.out.write(b"  mov rdi, ");
+                    write_u32(self.out, lir::trap_code_u32(lir::TrapCode::Unreachable));
+                    self.out.write(b"\n");
+                    self.out.write(b"  jmp __lang_trap\n");
+                    self.out.write(b".region_size_ok_");
+                    write_u32(self.out, size_ok);
+                    self.out.write(b":\n");
+                    self.out.write(b"  mov rax, [__region_next]\n");
+                    self.out.write(b"  cmp rax, 16\n");
+                    self.out.write(b"  jb .region_make_ok_");
+                    write_u32(self.out, ok);
+                    self.out.write(b"\n");
+                    self.out.write(b"  mov rdi, ");
+                    write_u32(self.out, lir::trap_code_u32(lir::TrapCode::Unreachable));
+                    self.out.write(b"\n");
+                    self.out.write(b"  jmp __lang_trap\n");
+                    self.out.write(b".region_make_ok_");
+                    write_u32(self.out, ok);
+                    self.out.write(b":\n");
+                    self.out.write(b"  mov rcx, rax\n");
+                    self.out.write(b"  mov rax, rsi\n");
+                    self.out.write(b"  add rax, 7\n");
+                    self.out.write(b"  and rax, -8\n");
+                    self.out.write(b"  mov rsi, rax\n");
+                    self.out.write(b"  xor rdi, rdi\n");
+                    self.out.write(b"  mov rdx, 3\n");
+                    self.out.write(b"  mov r10, 0x22\n");
+                    self.out.write(b"  mov r8, -1\n");
+                    self.out.write(b"  xor r9, r9\n");
+                    self.out.write(b"  mov rax, 9\n");
+                    self.out.write(b"  syscall\n");
+                    self.out.write(b"  test rax, rax\n");
+                    self.out.write(b"  jns .region_mmap_ok_");
+                    write_u32(self.out, mmap_ok);
+                    self.out.write(b"\n");
+                    self.out.write(b"  mov rdi, ");
+                    write_u32(self.out, lir::trap_code_u32(lir::TrapCode::Unreachable));
+                    self.out.write(b"\n");
+                    self.out.write(b"  jmp __lang_trap\n");
+                    self.out.write(b".region_mmap_ok_");
+                    write_u32(self.out, mmap_ok);
+                    self.out.write(b":\n");
+                    self.out.write(b"  mov rdx, rcx\n");
+                    self.out.write(b"  add rdx, 1\n");
+                    self.out.write(b"  mov [__region_next], rdx\n");
+                    self.out.write(b"  mov [__region_base + rcx*8], rax\n");
+                    self.out.write(b"  mov [__region_size + rcx*8], rsi\n");
+                    self.out.write(b"  mov qword [__region_off + rcx*8], 0\n");
+                    self.out.write(b"  mov rax, rcx\n");
+                    emit_push_rax(self.out);
+                    return Ok(())
+                }
+                if n == b"platform.mem.region-alloc" {
+                    // Stack: `( Region usize -- ptr_mut )`.
+                    self.uses_regions = true;
+                    let ok = self.fresh_label();
+                    let size_ok = self.fresh_label();
+                    let live_ok = self.fresh_label();
+                    let space_ok = self.fresh_label();
+                    self.out.write(b"  sub r15, 8\n");
+                    self.out.write(b"  mov rdx, [r15]\n"); // size
+                    self.out.write(b"  sub r15, 8\n");
+                    self.out.write(b"  mov rax, [r15]\n"); // region handle
+                    self.out.write(b"  cmp rax, 16\n");
+                    self.out.write(b"  jb .region_alloc_ok_");
+                    write_u32(self.out, ok);
+                    self.out.write(b"\n");
+                    self.out.write(b"  mov rdi, ");
+                    write_u32(self.out, lir::trap_code_u32(lir::TrapCode::Unreachable));
+                    self.out.write(b"\n");
+                    self.out.write(b"  jmp __lang_trap\n");
+                    self.out.write(b".region_alloc_ok_");
+                    write_u32(self.out, ok);
+                    self.out.write(b":\n");
+                    self.out.write(b"  cmp rdx, 0\n");
+                    self.out.write(b"  jne .region_alloc_size_ok_");
+                    write_u32(self.out, size_ok);
+                    self.out.write(b"\n");
+                    self.out.write(b"  mov rdi, ");
+                    write_u32(self.out, lir::trap_code_u32(lir::TrapCode::Unreachable));
+                    self.out.write(b"\n");
+                    self.out.write(b"  jmp __lang_trap\n");
+                    self.out.write(b".region_alloc_size_ok_");
+                    write_u32(self.out, size_ok);
+                    self.out.write(b":\n");
+                    self.out.write(b"  mov rcx, [__region_size + rax*8]\n");
+                    self.out.write(b"  cmp rcx, 0\n");
+                    self.out.write(b"  jne .region_alloc_live_");
+                    write_u32(self.out, live_ok);
+                    self.out.write(b"\n");
+                    self.out.write(b"  mov rdi, ");
+                    write_u32(self.out, lir::trap_code_u32(lir::TrapCode::Unreachable));
+                    self.out.write(b"\n");
+                    self.out.write(b"  jmp __lang_trap\n");
+                    self.out.write(b".region_alloc_live_");
+                    write_u32(self.out, live_ok);
+                    self.out.write(b":\n");
+                    self.out.write(b"  mov r8, [__region_off + rax*8]\n");
+                    self.out.write(b"  add rdx, 7\n");
+                    self.out.write(b"  and rdx, -8\n");
+                    self.out.write(b"  mov r9, r8\n");
+                    self.out.write(b"  add r9, rdx\n");
+                    self.out.write(b"  cmp r9, rcx\n");
+                    self.out.write(b"  jbe .region_alloc_space_");
+                    write_u32(self.out, space_ok);
+                    self.out.write(b"\n");
+                    self.out.write(b"  mov rdi, ");
+                    write_u32(self.out, lir::trap_code_u32(lir::TrapCode::Unreachable));
+                    self.out.write(b"\n");
+                    self.out.write(b"  jmp __lang_trap\n");
+                    self.out.write(b".region_alloc_space_");
+                    write_u32(self.out, space_ok);
+                    self.out.write(b":\n");
+                    self.out.write(b"  mov [__region_off + rax*8], r9\n");
+                    self.out.write(b"  mov rcx, [__region_base + rax*8]\n");
+                    self.out.write(b"  add rcx, r8\n");
+                    self.out.write(b"  mov rax, rcx\n");
+                    emit_push_rax(self.out);
+                    return Ok(())
+                }
+                if n == b"platform.mem.region-reset" {
+                    // Stack: `( Region -- )`.
+                    self.uses_regions = true;
+                    let ok = self.fresh_label();
+                    let live = self.fresh_label();
+                    self.out.write(b"  sub r15, 8\n");
+                    self.out.write(b"  mov rax, [r15]\n");
+                    self.out.write(b"  cmp rax, 16\n");
+                    self.out.write(b"  jb .region_reset_ok_");
+                    write_u32(self.out, ok);
+                    self.out.write(b"\n");
+                    self.out.write(b"  mov rdi, ");
+                    write_u32(self.out, lir::trap_code_u32(lir::TrapCode::Unreachable));
+                    self.out.write(b"\n");
+                    self.out.write(b"  jmp __lang_trap\n");
+                    self.out.write(b".region_reset_ok_");
+                    write_u32(self.out, ok);
+                    self.out.write(b":\n");
+                    self.out.write(b"  mov rcx, [__region_size + rax*8]\n");
+                    self.out.write(b"  cmp rcx, 0\n");
+                    self.out.write(b"  jne .region_reset_live_");
+                    write_u32(self.out, live);
+                    self.out.write(b"\n");
+                    self.out.write(b"  mov rdi, ");
+                    write_u32(self.out, lir::trap_code_u32(lir::TrapCode::Unreachable));
+                    self.out.write(b"\n");
+                    self.out.write(b"  jmp __lang_trap\n");
+                    self.out.write(b".region_reset_live_");
+                    write_u32(self.out, live);
+                    self.out.write(b":\n");
+                    self.out.write(b"  mov qword [__region_off + rax*8], 0\n");
+                    return Ok(())
+                }
+                if n == b"platform.mem.region-destroy" {
+                    // Stack: `( Region -- )`.
+                    self.uses_regions = true;
+                    let ok = self.fresh_label();
+                    let live = self.fresh_label();
+                    let munmap_ok = self.fresh_label();
+                    self.out.write(b"  sub r15, 8\n");
+                    self.out.write(b"  mov rax, [r15]\n");
+                    self.out.write(b"  mov r11, rax\n");
+                    self.out.write(b"  cmp rax, 16\n");
+                    self.out.write(b"  jb .region_destroy_ok_");
+                    write_u32(self.out, ok);
+                    self.out.write(b"\n");
+                    self.out.write(b"  mov rdi, ");
+                    write_u32(self.out, lir::trap_code_u32(lir::TrapCode::Unreachable));
+                    self.out.write(b"\n");
+                    self.out.write(b"  jmp __lang_trap\n");
+                    self.out.write(b".region_destroy_ok_");
+                    write_u32(self.out, ok);
+                    self.out.write(b":\n");
+                    self.out.write(b"  mov rcx, [__region_size + r11*8]\n");
+                    self.out.write(b"  cmp rcx, 0\n");
+                    self.out.write(b"  jne .region_destroy_live_");
+                    write_u32(self.out, live);
+                    self.out.write(b"\n");
+                    self.out.write(b"  mov rdi, ");
+                    write_u32(self.out, lir::trap_code_u32(lir::TrapCode::Unreachable));
+                    self.out.write(b"\n");
+                    self.out.write(b"  jmp __lang_trap\n");
+                    self.out.write(b".region_destroy_live_");
+                    write_u32(self.out, live);
+                    self.out.write(b":\n");
+                    self.out.write(b"  mov rdi, [__region_base + r11*8]\n");
+                    self.out.write(b"  mov rsi, rcx\n");
+                    self.out.write(b"  mov rax, 11\n");
+                    self.out.write(b"  syscall\n");
+                    self.out.write(b"  test rax, rax\n");
+                    self.out.write(b"  jns .region_destroy_munmap_ok_");
+                    write_u32(self.out, munmap_ok);
+                    self.out.write(b"\n");
+                    self.out.write(b"  mov rdi, ");
+                    write_u32(self.out, lir::trap_code_u32(lir::TrapCode::Unreachable));
+                    self.out.write(b"\n");
+                    self.out.write(b"  jmp __lang_trap\n");
+                    self.out.write(b".region_destroy_munmap_ok_");
+                    write_u32(self.out, munmap_ok);
+                    self.out.write(b":\n");
+                    self.out.write(b"  mov qword [__region_base + r11*8], 0\n");
+                    self.out.write(b"  mov qword [__region_size + r11*8], 0\n");
+                    self.out.write(b"  mov qword [__region_off + r11*8], 0\n");
                     return Ok(())
                 }
                 if n == b"platform.time.now_ms" {
@@ -540,9 +1122,33 @@ impl<'a> IrAsmGen<'a> {
                     return Ok(())
                 }
                 if n == b"platform.task.yield" {
-                    // Hosted baseline: `sched_yield` syscall (Linux x86_64: 24).
-                    self.out.write(b"  mov rax, 24\n");
-                    self.out.write(b"  syscall\n");
+                    // Hosted baseline: cooperative task yield.
+                    self.uses_tasks = true;
+                    self.out.write(b"  call __task_yield\n");
+                    return Ok(())
+                }
+                if n == b"platform.task.join" {
+                    // Stack: `( Task -- )`.
+                    self.uses_tasks = true;
+                    self.out.write(b"  sub r15, 8\n");
+                    self.out.write(b"  mov rdi, [r15]\n");
+                    self.out.write(b"  call __task_join\n");
+                    return Ok(())
+                }
+                if n == b"platform.task.sleep-ms" {
+                    // Stack: `( usize -- )`.
+                    self.uses_tasks = true;
+                    self.out.write(b"  sub r15, 8\n");
+                    self.out.write(b"  mov rdi, [r15]\n");
+                    self.out.write(b"  call __task_sleep_ms\n");
+                    return Ok(())
+                }
+                if n == b"platform.task.sleep-us" {
+                    // Stack: `( usize -- )`.
+                    self.uses_tasks = true;
+                    self.out.write(b"  sub r15, 8\n");
+                    self.out.write(b"  mov rdi, [r15]\n");
+                    self.out.write(b"  call __task_sleep_us\n");
                     return Ok(())
                 }
                 if n == b"platform.critical.enter" || n == b"platform.critical.exit" {
@@ -555,8 +1161,41 @@ impl<'a> IrAsmGen<'a> {
                 Ok(())
             }
 
-            lir::OpKind::Load { .. } => Err(7103),
-            lir::OpKind::Store { .. } => Err(7104),
+            lir::OpKind::Load { ty } => {
+                let (bits, signed) = prim_ty_bits_signed(w, ty).ok_or(7103u32)?;
+                let width = core::cmp::max(1u32, (bits as u32) / 8);
+                self.out.write(b"  sub r15, 8\n");
+                self.out.write(b"  mov rax, [r15]\n");
+                match (width, signed) {
+                    (1, true) => self.out.write(b"  movsx rax, byte [rax]\n"),
+                    (1, false) => self.out.write(b"  movzx rax, byte [rax]\n"),
+                    (2, true) => self.out.write(b"  movsx rax, word [rax]\n"),
+                    (2, false) => self.out.write(b"  movzx rax, word [rax]\n"),
+                    (4, true) => self.out.write(b"  movsxd rax, dword [rax]\n"),
+                    (4, false) => self.out.write(b"  mov eax, dword [rax]\n"),
+                    (8, _) => self.out.write(b"  mov rax, qword [rax]\n"),
+                    _ => return Err(7103),
+                }
+                self.out.write(b"  mov [r15], rax\n");
+                self.out.write(b"  add r15, 8\n");
+                Ok(())
+            }
+            lir::OpKind::Store { ty } => {
+                let (bits, _signed) = prim_ty_bits_signed(w, ty).ok_or(7104u32)?;
+                let width = core::cmp::max(1u32, (bits as u32) / 8);
+                self.out.write(b"  sub r15, 8\n");
+                self.out.write(b"  mov rcx, [r15]\n");
+                self.out.write(b"  sub r15, 8\n");
+                self.out.write(b"  mov rax, [r15]\n");
+                match width {
+                    1 => self.out.write(b"  mov byte [rax], cl\n"),
+                    2 => self.out.write(b"  mov word [rax], cx\n"),
+                    4 => self.out.write(b"  mov dword [rax], ecx\n"),
+                    8 => self.out.write(b"  mov qword [rax], rcx\n"),
+                    _ => return Err(7104),
+                }
+                Ok(())
+            }
 
             lir::OpKind::MmioVolLoad { ty, .. } => {
                 self.uses_mmio = true;
@@ -772,6 +1411,124 @@ fn prim_ty_bits_signed(w: &lir::Word, ty: lir::TypeId) -> Option<(u16, bool)> {
     prim_bits_signed(b)
 }
 
+enum ChannelPayloadKind {
+    Primitive { bits: u16, signed: bool, is_bool: bool },
+    BoxCopy { bytes: u32 },
+    Word,
+}
+
+fn channel_payload_kind(w: &lir::Word, ty: lir::TypeId) -> Option<ChannelPayloadKind> {
+    let ty_bytes = w.types.get(ty.0 as usize).map(|a| a.as_bytes())?;
+    if let Some((bits, signed)) = prim_ty_bits_signed(w, ty) {
+        let is_bool = ty_bytes == b"bool";
+        return Some(ChannelPayloadKind::Primitive { bits, signed, is_bool });
+    }
+    if ty_bytes.starts_with(b"Slice(") || ty_bytes.starts_with(b"SliceMut(") {
+        return None;
+    }
+    let size = type_size_bytes(w, ty)?;
+    if size > 8 {
+        return Some(ChannelPayloadKind::BoxCopy { bytes: size });
+    }
+    Some(ChannelPayloadKind::Word)
+}
+
+fn type_size_bytes(w: &lir::Word, ty: lir::TypeId) -> Option<u32> {
+    let size = *w.type_sizes.get(ty.0 as usize)?;
+    if size == 0 {
+        None
+    } else {
+        Some(size)
+    }
+}
+
+fn emit_channel_canon_prim(
+    out: &mut dyn Output,
+    reg: &[u8],
+    reg32: &[u8],
+    reg8: &[u8],
+    bits: u16,
+    signed: bool,
+    is_bool: bool,
+) {
+    if bits < 64 {
+        if bits <= 32 {
+            out.write(b"  and ");
+            out.write(reg32);
+            out.write(b", ");
+            write_u64_hex(out, mask_for_bits(bits));
+            out.write(b"\n");
+        } else {
+            out.write(b"  and ");
+            out.write(reg);
+            out.write(b", ");
+            write_u64_hex(out, mask_for_bits(bits));
+            out.write(b"\n");
+        }
+        if signed {
+            let sh = 64u32 - (bits as u32);
+            out.write(b"  shl ");
+            out.write(reg);
+            out.write(b", ");
+            write_u32(out, sh);
+            out.write(b"\n");
+            out.write(b"  sar ");
+            out.write(reg);
+            out.write(b", ");
+            write_u32(out, sh);
+            out.write(b"\n");
+        }
+    }
+
+    if is_bool {
+        out.write(b"  cmp ");
+        out.write(reg);
+        out.write(b", 0\n");
+        out.write(b"  setne ");
+        out.write(reg8);
+        out.write(b"\n");
+        out.write(b"  movzx ");
+        out.write(reg);
+        out.write(b", ");
+        out.write(reg8);
+        out.write(b"\n");
+    }
+}
+
+fn emit_channel_box_array(out: &mut dyn Output, bytes: u32, src_reg: &[u8], ok: u32) {
+    out.write(b"  mov r12, ");
+    out.write(src_reg);
+    out.write(b"\n");
+    out.write(b"  xor rdi, rdi\n");
+    out.write(b"  mov rsi, ");
+    write_u32(out, bytes);
+    out.write(b"\n");
+    out.write(b"  mov rdx, 3\n");
+    out.write(b"  mov r10, 0x22\n");
+    out.write(b"  mov r8, -1\n");
+    out.write(b"  xor r9, r9\n");
+    out.write(b"  mov rax, 9\n");
+    out.write(b"  syscall\n");
+    out.write(b"  cmp rax, 0\n");
+    out.write(b"  jns .chan_box_ok_");
+    write_u32(out, ok);
+    out.write(b"\n");
+    out.write(b"  mov rdi, 23\n");
+    out.write(b"  jmp __lang_trap\n");
+    out.write(b".chan_box_ok_");
+    write_u32(out, ok);
+    out.write(b":\n");
+    out.write(b"  mov rdi, rax\n");
+    out.write(b"  mov rsi, r12\n");
+    out.write(b"  mov rcx, ");
+    write_u32(out, bytes);
+    out.write(b"\n");
+    out.write(b"  rep movsb\n");
+    out.write(b"  mov ");
+    out.write(src_reg);
+    out.write(b", rdi\n");
+}
+
 fn emit_mmio_bounds_check(gen: &mut IrAsmGen<'_>, width: u32, span: Span) {
     const MMIO_SIZE: u32 = 65536;
     let ok = gen.fresh_label();
@@ -956,6 +1713,21 @@ fn max_local_slot_ir(w: &lir::Word) -> Option<u16> {
         }
     }
     max
+}
+
+fn count_scoped_slices(w: &lir::Word) -> u32 {
+    let mut count = 0u32;
+    for b in w.blocks.iter() {
+        for op in b.ops.iter() {
+            if let lir::OpKind::ScopedEnter { ty, .. } = op.kind {
+                let name = w.types.get(ty.0 as usize).map(|a| a.as_bytes()).unwrap_or(b"");
+                if name.starts_with(b"Slice(") || name.starts_with(b"SliceMut(") {
+                    count = count.wrapping_add(1);
+                }
+            }
+        }
+    }
+    count
 }
 
 fn locals_bytes_ir(slots: u32) -> u32 {
@@ -1146,4 +1918,288 @@ fn emit_stack_overflow(out: &mut dyn Output) {
     write_u32(out, lir::trap_code_u32(lir::TrapCode::StackOverflow));
     out.write(b"\n");
     out.write(b"  jmp __lang_trap\n");
+}
+
+fn emit_task_runtime(out: &mut dyn Output) {
+    out.write(b"\n__task_spawn:\n");
+    out.write(b"  push rbx\n");
+    out.write(b"  push r12\n");
+    out.write(b"  push r13\n");
+    out.write(b"  mov rbx, 1\n");
+    out.write(b".task_spawn_find:\n");
+    out.write(b"  cmp rbx, 16\n");
+    out.write(b"  je .task_spawn_fail\n");
+    out.write(b"  mov r12, [__task_state + rbx*8]\n");
+    out.write(b"  cmp r12, 0\n");
+    out.write(b"  je .task_spawn_found\n");
+    out.write(b"  inc rbx\n");
+    out.write(b"  jmp .task_spawn_find\n");
+    out.write(b".task_spawn_found:\n");
+    out.write(b"  mov qword [__task_state + rbx*8], 1\n");
+    out.write(b"  mov [__task_entry + rbx*8], rdi\n");
+    out.write(b"  mov rax, __task_ds_mem\n");
+    out.write(b"  mov rcx, rbx\n");
+    out.write(b"  shl rcx, 16\n");
+    out.write(b"  add rax, rcx\n");
+    out.write(b"  mov [__task_r15 + rbx*8], rax\n");
+    out.write(b"  mov rdx, rax\n");
+    out.write(b"  add rdx, 65536\n");
+    out.write(b"  mov [__task_r14 + rbx*8], rdx\n");
+    out.write(b"  mov rax, __task_cs_mem\n");
+    out.write(b"  mov rcx, rbx\n");
+    out.write(b"  shl rcx, 16\n");
+    out.write(b"  add rax, rcx\n");
+    out.write(b"  add rax, 65536\n");
+    out.write(b"  sub rax, 8\n");
+    out.write(b"  mov qword [rax], __task_entry_tramp\n");
+    out.write(b"  sub rax, 8\n");
+    out.write(b"  mov qword [rax], 0\n");
+    out.write(b"  sub rax, 8\n");
+    out.write(b"  mov qword [rax], 0\n");
+    out.write(b"  sub rax, 8\n");
+    out.write(b"  mov qword [rax], 0\n");
+    out.write(b"  mov [__task_rsp + rbx*8], rax\n");
+    out.write(b"  mov r13, rbx\n");
+    out.write(b"  mov rbx, [__task_worker]\n");
+    out.write(b"  mov rsi, rbx\n");
+    out.write(b"  shl rsi, 6\n");
+    out.write(b"  add rsi, __task_w_buf\n");
+    out.write(b"  mov rax, [__task_w_tail + rbx*8]\n");
+    out.write(b"  mov rcx, [__task_w_head + rbx*8]\n");
+    out.write(b"  mov rdx, rax\n");
+    out.write(b"  sub rdx, rcx\n");
+    out.write(b"  cmp rdx, 8\n");
+    out.write(b"  jae .task_spawn_global\n");
+    out.write(b"  mov rdx, rax\n");
+    out.write(b"  and rdx, 7\n");
+    out.write(b"  mov [rsi + rdx*8], r13\n");
+    out.write(b"  inc rax\n");
+    out.write(b"  mov [__task_w_tail + rbx*8], rax\n");
+    out.write(b"  jmp .task_spawn_done\n");
+    out.write(b".task_spawn_global:\n");
+    out.write(b"  mov rax, [__task_g_tail]\n");
+    out.write(b"  mov rcx, [__task_g_head]\n");
+    out.write(b"  mov rdx, rax\n");
+    out.write(b"  sub rdx, rcx\n");
+    out.write(b"  cmp rdx, 16\n");
+    out.write(b"  jae .task_spawn_fail\n");
+    out.write(b"  mov rdx, rax\n");
+    out.write(b"  and rdx, 15\n");
+    out.write(b"  mov [__task_g_buf + rdx*8], r13\n");
+    out.write(b"  inc rax\n");
+    out.write(b"  mov [__task_g_tail], rax\n");
+    out.write(b".task_spawn_done:\n");
+    out.write(b"  mov rax, r13\n");
+    out.write(b"  pop r13\n");
+    out.write(b"  pop r12\n");
+    out.write(b"  pop rbx\n");
+    out.write(b"  ret\n");
+    out.write(b".task_spawn_fail:\n");
+    out.write(b"  pop r13\n");
+    out.write(b"  pop r12\n");
+    out.write(b"  pop rbx\n");
+    out.write(b"  mov rdi, ");
+    write_u32(out, lir::trap_code_u32(lir::TrapCode::Unreachable));
+    out.write(b"\n");
+    out.write(b"  jmp __lang_trap\n");
+
+    out.write(b"\n__task_entry_tramp:\n");
+    out.write(b"  mov rcx, [__task_current]\n");
+    out.write(b"  mov rax, [__task_entry + rcx*8]\n");
+    out.write(b"  call rax\n");
+    out.write(b"  call __task_exit\n");
+
+    out.write(b"\n__task_exit:\n");
+    out.write(b"  mov rcx, [__task_current]\n");
+    out.write(b"  mov qword [__task_state + rcx*8], 3\n");
+    out.write(b"  call __task_yield\n");
+    out.write(b"  mov rdi, 0\n");
+    out.write(b"  mov rax, 60\n");
+    out.write(b"  syscall\n");
+
+    out.write(b"\n__task_yield:\n");
+    out.write(b"  push rbx\n");
+    out.write(b"  push r12\n");
+    out.write(b"  push r13\n");
+    out.write(b"  mov rbx, [__task_current]\n");
+    out.write(b"  mov [__task_rsp + rbx*8], rsp\n");
+    out.write(b"  mov [__task_r15 + rbx*8], r15\n");
+    out.write(b"  mov [__task_r14 + rbx*8], r14\n");
+    out.write(b"  mov r12, [__task_state + rbx*8]\n");
+    out.write(b"  cmp r12, 0\n");
+    out.write(b"  jne .task_yield_state_ok\n");
+    out.write(b"  mov qword [__task_state + rbx*8], 2\n");
+    out.write(b"  mov r12, 2\n");
+    out.write(b".task_yield_state_ok:\n");
+    out.write(b"  cmp r12, 2\n");
+    out.write(b"  jne .task_yield_no_enqueue\n");
+    out.write(b"  mov qword [__task_state + rbx*8], 1\n");
+    out.write(b"  mov r13, [__task_worker]\n");
+    out.write(b"  mov rsi, r13\n");
+    out.write(b"  shl rsi, 6\n");
+    out.write(b"  add rsi, __task_w_buf\n");
+    out.write(b"  mov rax, [__task_w_tail + r13*8]\n");
+    out.write(b"  mov rcx, [__task_w_head + r13*8]\n");
+    out.write(b"  mov rdx, rax\n");
+    out.write(b"  sub rdx, rcx\n");
+    out.write(b"  cmp rdx, 8\n");
+    out.write(b"  jae .task_yield_enqueue_global\n");
+    out.write(b"  mov rdx, rax\n");
+    out.write(b"  and rdx, 7\n");
+    out.write(b"  mov [rsi + rdx*8], rbx\n");
+    out.write(b"  inc rax\n");
+    out.write(b"  mov [__task_w_tail + r13*8], rax\n");
+    out.write(b"  jmp .task_yield_no_enqueue\n");
+    out.write(b".task_yield_enqueue_global:\n");
+    out.write(b"  mov rax, [__task_g_tail]\n");
+    out.write(b"  mov rcx, [__task_g_head]\n");
+    out.write(b"  mov rdx, rax\n");
+    out.write(b"  sub rdx, rcx\n");
+    out.write(b"  cmp rdx, 16\n");
+    out.write(b"  jae .task_yield_no_enqueue\n");
+    out.write(b"  mov rdx, rax\n");
+    out.write(b"  and rdx, 15\n");
+    out.write(b"  mov [__task_g_buf + rdx*8], rbx\n");
+    out.write(b"  inc rax\n");
+    out.write(b"  mov [__task_g_tail], rax\n");
+    out.write(b".task_yield_no_enqueue:\n");
+    out.write(b"  mov r13, [__task_worker]\n");
+    out.write(b"  mov rsi, r13\n");
+    out.write(b"  shl rsi, 6\n");
+    out.write(b"  add rsi, __task_w_buf\n");
+    out.write(b"  mov rax, [__task_w_head + r13*8]\n");
+    out.write(b"  mov rcx, [__task_w_tail + r13*8]\n");
+    out.write(b"  cmp rax, rcx\n");
+    out.write(b"  je .task_yield_try_global\n");
+    out.write(b"  mov rdx, rax\n");
+    out.write(b"  and rdx, 7\n");
+    out.write(b"  mov rbx, [rsi + rdx*8]\n");
+    out.write(b"  inc rax\n");
+    out.write(b"  mov [__task_w_head + r13*8], rax\n");
+    out.write(b"  mov r10, r13\n");
+    out.write(b"  jmp .task_yield_switch\n");
+    out.write(b".task_yield_try_global:\n");
+    out.write(b"  mov rax, [__task_g_head]\n");
+    out.write(b"  mov rcx, [__task_g_tail]\n");
+    out.write(b"  cmp rax, rcx\n");
+    out.write(b"  je .task_yield_steal\n");
+    out.write(b"  mov rdx, rax\n");
+    out.write(b"  and rdx, 15\n");
+    out.write(b"  mov rbx, [__task_g_buf + rdx*8]\n");
+    out.write(b"  inc rax\n");
+    out.write(b"  mov [__task_g_head], rax\n");
+    out.write(b"  mov r10, r13\n");
+    out.write(b"  jmp .task_yield_switch\n");
+    out.write(b".task_yield_steal:\n");
+    out.write(b"  mov r11, 1\n");
+    out.write(b".task_yield_steal_loop:\n");
+    out.write(b"  cmp r11, 4\n");
+    out.write(b"  jae .task_yield_no_ready\n");
+    out.write(b"  mov r10, r13\n");
+    out.write(b"  add r10, r11\n");
+    out.write(b"  cmp r10, 4\n");
+    out.write(b"  jb .task_yield_steal_check\n");
+    out.write(b"  sub r10, 4\n");
+    out.write(b".task_yield_steal_check:\n");
+    out.write(b"  mov rsi, r10\n");
+    out.write(b"  shl rsi, 6\n");
+    out.write(b"  add rsi, __task_w_buf\n");
+    out.write(b"  mov rax, [__task_w_head + r10*8]\n");
+    out.write(b"  mov rcx, [__task_w_tail + r10*8]\n");
+    out.write(b"  cmp rax, rcx\n");
+    out.write(b"  je .task_yield_steal_next\n");
+    out.write(b"  mov rdx, rax\n");
+    out.write(b"  and rdx, 7\n");
+    out.write(b"  mov rbx, [rsi + rdx*8]\n");
+    out.write(b"  inc rax\n");
+    out.write(b"  mov [__task_w_head + r10*8], rax\n");
+    out.write(b"  jmp .task_yield_switch\n");
+    out.write(b".task_yield_steal_next:\n");
+    out.write(b"  inc r11\n");
+    out.write(b"  jmp .task_yield_steal_loop\n");
+    out.write(b".task_yield_no_ready:\n");
+    out.write(b"  cmp r12, 2\n");
+    out.write(b"  je .task_yield_no_ready_active\n");
+    out.write(b"  cmp r12, 4\n");
+    out.write(b"  jne .task_yield_return\n");
+    out.write(b"  mov rdi, ");
+    write_u32(out, lir::trap_code_u32(lir::TrapCode::Unreachable));
+    out.write(b"\n");
+    out.write(b"  jmp __lang_trap\n");
+    out.write(b".task_yield_no_ready_active:\n");
+    out.write(b"  mov qword [__task_state + rbx*8], 2\n");
+    out.write(b".task_yield_return:\n");
+    out.write(b"  pop r13\n");
+    out.write(b"  pop r12\n");
+    out.write(b"  pop rbx\n");
+    out.write(b"  ret\n");
+    out.write(b".task_yield_switch:\n");
+    out.write(b"  mov qword [__task_state + rbx*8], 2\n");
+    out.write(b"  mov [__task_current], rbx\n");
+    out.write(b"  mov [__task_worker], r10\n");
+    out.write(b"  mov rsp, [__task_rsp + rbx*8]\n");
+    out.write(b"  mov r15, [__task_r15 + rbx*8]\n");
+    out.write(b"  mov r14, [__task_r14 + rbx*8]\n");
+    out.write(b"  pop r13\n");
+    out.write(b"  pop r12\n");
+    out.write(b"  pop rbx\n");
+    out.write(b"  ret\n");
+
+    out.write(b"\n__task_join:\n");
+    out.write(b"  push rbx\n");
+    out.write(b"  mov rbx, rdi\n");
+    out.write(b"  cmp rbx, 16\n");
+    out.write(b"  jb .task_join_loop\n");
+    out.write(b"  mov rdi, ");
+    write_u32(out, lir::trap_code_u32(lir::TrapCode::Unreachable));
+    out.write(b"\n");
+    out.write(b"  jmp __lang_trap\n");
+    out.write(b".task_join_loop:\n");
+    out.write(b"  mov rax, [__task_state + rbx*8]\n");
+    out.write(b"  cmp rax, 3\n");
+    out.write(b"  je .task_join_done\n");
+    out.write(b"  call __task_yield\n");
+    out.write(b"  jmp .task_join_loop\n");
+    out.write(b".task_join_done:\n");
+    out.write(b"  mov qword [__task_state + rbx*8], 0\n");
+    out.write(b"  pop rbx\n");
+    out.write(b"  ret\n");
+
+    out.write(b"\n__task_sleep_ms:\n");
+    out.write(b"  sub rsp, 16\n");
+    out.write(b"  mov rax, rdi\n");
+    out.write(b"  xor rdx, rdx\n");
+    out.write(b"  mov rcx, 1000\n");
+    out.write(b"  div rcx\n");
+    out.write(b"  mov [rsp], rax\n");
+    out.write(b"  mov rax, rdx\n");
+    out.write(b"  mov rcx, 1000000\n");
+    out.write(b"  imul rax, rcx\n");
+    out.write(b"  mov [rsp+8], rax\n");
+    out.write(b"  mov rdi, rsp\n");
+    out.write(b"  xor rsi, rsi\n");
+    out.write(b"  mov rax, 35\n");
+    out.write(b"  syscall\n");
+    out.write(b"  add rsp, 16\n");
+    out.write(b"  call __task_yield\n");
+    out.write(b"  ret\n");
+
+    out.write(b"\n__task_sleep_us:\n");
+    out.write(b"  sub rsp, 16\n");
+    out.write(b"  mov rax, rdi\n");
+    out.write(b"  xor rdx, rdx\n");
+    out.write(b"  mov rcx, 1000000\n");
+    out.write(b"  div rcx\n");
+    out.write(b"  mov [rsp], rax\n");
+    out.write(b"  mov rax, rdx\n");
+    out.write(b"  mov rcx, 1000\n");
+    out.write(b"  imul rax, rcx\n");
+    out.write(b"  mov [rsp+8], rax\n");
+    out.write(b"  mov rdi, rsp\n");
+    out.write(b"  xor rsi, rsi\n");
+    out.write(b"  mov rax, 35\n");
+    out.write(b"  syscall\n");
+    out.write(b"  add rsp, 16\n");
+    out.write(b"  call __task_yield\n");
+    out.write(b"  ret\n");
 }
