@@ -1,4 +1,6 @@
 module platform/linux;
+type Task;
+
 : platform.io.log ( str -- )
   drop
 ;
@@ -17,8 +19,24 @@ module platform/linux;
   # compiler handler: runs the quotation with suspend allowed
 ;
 
+: platform.task.spawn ( quot -- Task )
+  # hosted: runtime-provided task spawn
+;
+
+: platform.task.join ( Task -- ) !{suspend}
+  # hosted: runtime-provided task join
+;
+
 : platform.task.yield ( -- ) !{suspend}
   # hosted: `sched_yield` syscall (cooperative yield)
+;
+
+: platform.task.sleep-ms ( usize -- ) !{suspend}
+  # hosted: runtime-provided sleep (milliseconds)
+;
+
+: platform.task.sleep-us ( usize -- ) !{suspend}
+  # hosted: runtime-provided sleep (microseconds)
 ;
 
 end;
