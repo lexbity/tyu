@@ -62,6 +62,7 @@ pub struct MmioResolvedReg {
     pub access: AccessMode,
     pub volatile: bool,
     pub addr: u64,
+    pub array_len: Option<u32>,
     // The original source span of the whole place (e.g. `gpio.OUT_SET`).
     pub place_span: Span,
 }
@@ -75,6 +76,7 @@ pub struct MmioResolvedField {
     pub field: MmioFieldInfo,
     pub volatile: bool,
     pub addr: u64,
+    pub array_len: Option<u32>,
     pub place_span: Span,
 }
 
@@ -270,6 +272,17 @@ fn parse_name_array(token: &[u8]) -> (&[u8], Option<u32>) {
     // NAME[40]
     let mut i = 0usize;
     while i < token.len() {
+        if token[i] == b'\'' {
+            let base = &token[..i];
+            let mut j = i + 1;
+            while j < token.len() && token[j] != b'.' {
+                j += 1;
+            }
+            if j > i + 1 {
+                return (base, parse_u32_any(&token[i + 1..j]));
+            }
+            return (token, None);
+        }
         if token[i] == b'[' {
             let base = &token[..i];
             let mut j = i + 1;
@@ -522,11 +535,10 @@ pub fn resolve_mmio_place(db: &MmioDb, src: &[u8], name: &[u8], place_span: Span
     };
 
     if let Some(n) = reg_info.array_len {
-        let Some(idx) = reg_idx else {
-            return Err(TcError { code: 3605, span: place_span });
-        };
-        if idx >= n {
-            return Err(TcError { code: 3604, span: place_span });
+        if let Some(idx) = reg_idx {
+            if idx >= n {
+                return Err(TcError { code: 3604, span: place_span });
+            }
         }
     } else if reg_idx.is_some() {
         return Err(TcError { code: 3606, span: place_span });
@@ -544,6 +556,7 @@ pub fn resolve_mmio_place(db: &MmioDb, src: &[u8], name: &[u8], place_span: Span
             field,
             volatile: reg_info.volatile,
             addr,
+            array_len: reg_info.array_len,
             place_span,
         })))
     } else {
@@ -557,6 +570,7 @@ pub fn resolve_mmio_place(db: &MmioDb, src: &[u8], name: &[u8], place_span: Span
             access: reg_info.access,
             volatile: reg_info.volatile,
             addr,
+            array_len: reg_info.array_len,
             place_span,
         })))
     }
