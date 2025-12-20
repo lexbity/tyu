@@ -6,7 +6,10 @@ use crate::typecheck::mmio::{MmioDb, resolve_mmio_place, MmioResolved, access_ca
 use crate::typecheck::util::{
     apply_sig, array_elem_type, array_len, chan_elem_type, check_no_scoped_live, find_local, find_subtype, lookup,
     parse_i64_token, push, pop, region_ref_type, slice_span, slice_type_of_elem, type_compatible, type_size_bytes,
+    field_align, align_up,
 };
+use crate::typecheck::mmio::mmio_type_width_bytes;
+use crate::typecheck::util::parse_u32_any;
 use crate::typecheck::parse::{parse_place, read_qualified_name, capture_balanced, capture_scoped_block};
 use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
@@ -70,6 +73,19 @@ struct QuoteSig {
     sig: WordSig,
     may_suspend: bool,
     body: Span,
+}
+
+struct DestructBind {
+    name: TypeAtom,
+    borrow: bool,
+    mutable: bool,
+    span: Span,
+}
+
+enum IndexOut {
+    Value,
+    Ptr(bool),
+    Mmio,
 }
 
 struct IrWordGen<'a, 'w> {
@@ -423,15 +439,23 @@ impl<'a, 'w> IrWordGen<'a, 'w> {
 
     fn resolve_place_pointee_ty(&self, place_bytes: &[u8], place_abs: Span) -> Result<Option<TypeAtom>, TcError> {
         // Split `a.b.c` into atoms.
-        let mut segs: FixedVec<TypeAtom, 8> = FixedVec::new();
+        let mut segs: FixedVec<(TypeAtom, bool), 8> = FixedVec::new();
         let mut start = 0usize;
         for i in 0..=place_bytes.len() {
             if i == place_bytes.len() || place_bytes[i] == b'.' {
                 if i == start {
                     return Err(TcError { code: 3715, span: place_abs });
                 }
-                let atom = TypeAtom::new(&place_bytes[start..i]).ok_or(TcError { code: 3715, span: place_abs })?;
-                segs.push(atom).map_err(|_| TcError { code: 3715, span: place_abs })?;
+                let seg = &place_bytes[start..i];
+                let mut has_index = false;
+                let (name_bytes, _) = if let Some(pos) = seg.iter().position(|&b| b == b'\'') {
+                    has_index = true;
+                    (&seg[..pos], &seg[pos + 1..])
+                } else {
+                    (seg, &[][..])
+                };
+                let atom = TypeAtom::new(name_bytes).ok_or(TcError { code: 3715, span: place_abs })?;
+                segs.push((atom, has_index)).map_err(|_| TcError { code: 3715, span: place_abs })?;
                 start = i + 1;
             }
         }
@@ -439,7 +463,7 @@ impl<'a, 'w> IrWordGen<'a, 'w> {
             return Ok(None);
         }
 
-        let root = *segs.get(0).unwrap();
+        let (root, root_index) = *segs.get(0).unwrap();
         let mut ty = if let Some(rty) = resource_ty(self.resources, root) {
             rty
         } else if let Some(idx) = find_local(&self.locals, self.local_len, root) {
@@ -447,12 +471,24 @@ impl<'a, 'w> IrWordGen<'a, 'w> {
         } else {
             return Ok(None);
         };
-
-        for i in 1..segs.len() {
-            let field = *segs.get(i).unwrap();
-            let Some(next) = struct_field_ty(self.nominals, ty, field) else {
+        if root_index {
+            let Some(elem) = array_elem_type(ty) else {
                 return Err(TcError { code: 3716, span: place_abs });
             };
+            ty = elem;
+        }
+
+        for i in 1..segs.len() {
+            let (field, has_index) = *segs.get(i).unwrap();
+            let Some(mut next) = struct_field_ty(self.nominals, ty, field) else {
+                return Err(TcError { code: 3716, span: place_abs });
+            };
+            if has_index {
+                let Some(elem) = array_elem_type(next) else {
+                    return Err(TcError { code: 3716, span: place_abs });
+                };
+                next = elem;
+            }
             ty = next;
         }
 
@@ -789,52 +825,321 @@ impl<'a, 'w> IrWordGen<'a, 'w> {
                     if !allow_locals {
                         return Err(TcError { code: 3281, span });
                     }
-                    let name = lex.next();
-                    if name.kind != TokenKind::Ident {
-                        return Err(TcError { code: 3201, span: Span::new(span.start + name.span.start, span.start + name.span.end) });
+                    let next = lex.next();
+                    if next.kind == TokenKind::PunctLBrace {
+                        let mut binds: FixedVec<DestructBind, 32> = FixedVec::new();
+                        let mut saw_borrow = false;
+                        loop {
+                            let b = lex.next();
+                            match b.kind {
+                                TokenKind::PunctRBrace => break,
+                                TokenKind::PunctComma => continue,
+                                TokenKind::PunctAmp | TokenKind::PunctAmpBang => {
+                                    saw_borrow = true;
+                                    let name_tok = lex.next();
+                                    if name_tok.kind != TokenKind::Ident {
+                                        return Err(TcError { code: 3201, span: Span::new(span.start + name_tok.span.start, span.start + name_tok.span.end) });
+                                    }
+                                    let lname = TypeAtom::new(&slice[name_tok.span.start..name_tok.span.end]).ok_or(TcError {
+                                        code: 3203,
+                                        span: Span::new(span.start + name_tok.span.start, span.start + name_tok.span.end),
+                                    })?;
+                                    binds
+                                        .push(DestructBind {
+                                            name: lname,
+                                            borrow: true,
+                                            mutable: b.kind == TokenKind::PunctAmpBang,
+                                            span: Span::new(span.start + name_tok.span.start, span.start + name_tok.span.end),
+                                        })
+                                        .map_err(|_| TcError { code: 3205, span })?;
+                                }
+                                TokenKind::Ident => {
+                                    if saw_borrow {
+                                        return Err(TcError { code: 3701, span: Span::new(span.start + b.span.start, span.start + b.span.end) });
+                                    }
+                                    let lname = TypeAtom::new(&slice[b.span.start..b.span.end]).ok_or(TcError {
+                                        code: 3203,
+                                        span: Span::new(span.start + b.span.start, span.start + b.span.end),
+                                    })?;
+                                    binds
+                                        .push(DestructBind {
+                                            name: lname,
+                                            borrow: false,
+                                            mutable: false,
+                                            span: Span::new(span.start + b.span.start, span.start + b.span.end),
+                                        })
+                                        .map_err(|_| TcError { code: 3205, span })?;
+                                }
+                                _ => {
+                                    return Err(TcError { code: 3702, span: Span::new(span.start + b.span.start, span.start + b.span.end) });
+                                }
+                            }
+                        }
+                        if binds.len() == 0 {
+                            return Err(TcError { code: 3703, span });
+                        }
+                        let base = *stack.get(*sp - 1).ok_or(TcError { code: 3202, span })?;
+                        let has_borrow = binds.iter().any(|b| b.borrow);
+                        let (struct_ty, base_mut, _base_is_value) = match base {
+                            Value::Ptr { ty, mutable } => (ty, mutable, false),
+                            Value::Plain(t) if !has_borrow => (t, false, true),
+                            _ => return Err(TcError { code: 3704, span }),
+                        };
+                        let Some(sinfo) = self.nominals.structs.iter().find(|s| s.name == struct_ty) else {
+                            return Err(TcError { code: 3716, span });
+                        };
+                        if binds.len() != sinfo.fields.len() {
+                            return Err(TcError { code: 3705, span });
+                        }
+                        let base_tid = if base_mut { lir::TY_PTR_MUT } else { lir::TY_PTR };
+                        let tmp = self.temp_base_slot();
+                        self.emit_op(cur, lir::OpKind::LocalSet { slot: tmp, ty: base_tid }, Span::new(span.start + tok.span.start, span.start + tok.span.end))?;
+                        let _ = pop(stack, sp);
+
+                        let mut offset: u32 = 0;
+                        for (idx, field) in sinfo.fields.iter().enumerate() {
+                            let bind = binds.get(idx).unwrap();
+                            if bind.borrow && bind.mutable && !base_mut {
+                                return Err(TcError { code: 3501, span: bind.span });
+                            }
+                            let fsize = type_size_bytes(field.ty, self.nominals).ok_or(TcError { code: 3718, span: bind.span })?;
+                            let falign = field_align(fsize);
+                            offset = align_up(offset, falign);
+                            let field_offset = offset;
+                            offset = offset.checked_add(fsize).ok_or(TcError { code: 3718, span: bind.span })?;
+
+                            self.emit_op(cur, lir::OpKind::LocalGet { slot: tmp, ty: base_tid }, bind.span)?;
+                            push(stack, sp, Value::Ptr { ty: struct_ty, mutable: base_mut })?;
+                            self.emit_op(cur, lir::OpKind::PtrAddConst { ty: base_tid, offset: field_offset }, bind.span)?;
+
+                            if bind.borrow {
+                                let ptr_ty = if bind.mutable { TypeAtom::new(b"ptr_mut").unwrap() } else { TypeAtom::new(b"ptr").unwrap() };
+                                if find_local(&self.locals, self.local_len, bind.name).is_some() {
+                                    return Err(TcError { code: 3204, span: bind.span });
+                                }
+                                let slot = self.local_slot(self.local_len);
+                                self.locals[self.local_len] = bind.name;
+                                self.local_tys[self.local_len] = ptr_ty;
+                                self.local_live[self.local_len] = true;
+                                self.local_scoped[self.local_len] = 0u16;
+                                self.local_len += 1;
+                                let tid = if bind.mutable { lir::TY_PTR_MUT } else { lir::TY_PTR };
+                                let _ = pop(stack, sp);
+                                self.emit_op(cur, lir::OpKind::LocalSet { slot, ty: tid }, bind.span)?;
+                            } else {
+                                let tid = self.ty_id_of_type(field.ty, bind.span)?;
+                                self.emit_op(cur, lir::OpKind::Load { ty: tid }, bind.span)?;
+                                let _ = pop(stack, sp);
+                                push(stack, sp, Value::Plain(field.ty))?;
+                                if find_local(&self.locals, self.local_len, bind.name).is_some() {
+                                    return Err(TcError { code: 3204, span: bind.span });
+                                }
+                                let slot = self.local_slot(self.local_len);
+                                self.locals[self.local_len] = bind.name;
+                                self.local_tys[self.local_len] = field.ty;
+                                self.local_live[self.local_len] = true;
+                                self.local_scoped[self.local_len] = 0u16;
+                                self.local_len += 1;
+                                let _ = pop(stack, sp);
+                                self.emit_op(cur, lir::OpKind::LocalSet { slot, ty: tid }, bind.span)?;
+                            }
+                        }
+                    } else {
+                        let name = next;
+                        if name.kind != TokenKind::Ident {
+                            return Err(TcError { code: 3201, span: Span::new(span.start + name.span.start, span.start + name.span.end) });
+                        }
+                        let v = pop(stack, sp).ok_or(TcError { code: 3202, span: Span::new(span.start + tok.span.start, span.start + tok.span.end) })?;
+                        if v == Value::Plain(TypeAtom::new(b"scoped").unwrap()) {
+                            return Err(TcError { code: 3504, span });
+                        }
+	                        let ty = match v {
+	                            Value::Plain(t) => t,
+	                            Value::Scoped { ty, .. } => ty,
+	                            Value::Resource(_) => TypeAtom::new(b"resource").unwrap(),
+	                            Value::Quot(_) => TypeAtom::new(b"quot").unwrap(),
+	                            Value::MmioPlace(_) => TypeAtom::new(b"mmio").unwrap(),
+	                            Value::Ptr { mutable: false, .. } => TypeAtom::new(b"ptr").unwrap(),
+	                            Value::Ptr { mutable: true, .. } => TypeAtom::new(b"ptr_mut").unwrap(),
+	                            Value::MmioPtr { mutable: false, .. } => TypeAtom::new(b"ptr").unwrap(),
+	                            Value::MmioPtr { mutable: true, .. } => TypeAtom::new(b"ptr_mut").unwrap(),
+	                        };
+                        let lname = TypeAtom::new(&slice[name.span.start..name.span.end]).ok_or(TcError {
+                            code: 3203,
+                            span: Span::new(span.start + name.span.start, span.start + name.span.end),
+                        })?;
+                        if find_local(&self.locals, self.local_len, lname).is_some() {
+                            return Err(TcError { code: 3204, span: Span::new(span.start + name.span.start, span.start + name.span.end) });
+                        }
+                        if self.local_len >= self.locals.len() {
+                            return Err(TcError { code: 3205, span });
+                        }
+                        let slot = self.local_slot(self.local_len);
+                        self.locals[self.local_len] = lname;
+                        self.local_tys[self.local_len] = ty;
+                        self.local_live[self.local_len] = true;
+                        self.local_scoped[self.local_len] = match v {
+                            Value::Scoped { scope, .. } => scope,
+                            _ => 0u16,
+                        };
+                        self.local_len += 1;
+                        let tid = self.ty_id_of_type(ty, span)?;
+                        self.emit_op(cur, lir::OpKind::LocalSet { slot, ty: tid }, Span::new(span.start + tok.span.start, span.start + tok.span.end))?;
                     }
-                    let v = pop(stack, sp).ok_or(TcError { code: 3202, span: Span::new(span.start + tok.span.start, span.start + tok.span.end) })?;
-                    if v == Value::Plain(TypeAtom::new(b"scoped").unwrap()) {
-                        return Err(TcError { code: 3504, span });
-                    }
-	                    let ty = match v {
-	                        Value::Plain(t) => t,
-	                        Value::Scoped { ty, .. } => ty,
-	                        Value::Resource(_) => TypeAtom::new(b"resource").unwrap(),
-	                        Value::Quot(_) => TypeAtom::new(b"quot").unwrap(),
-	                        Value::MmioPlace(_) => TypeAtom::new(b"mmio").unwrap(),
-	                        Value::Ptr { mutable: false, .. } => TypeAtom::new(b"ptr").unwrap(),
-	                        Value::Ptr { mutable: true, .. } => TypeAtom::new(b"ptr_mut").unwrap(),
-	                        Value::MmioPtr { mutable: false, .. } => TypeAtom::new(b"ptr").unwrap(),
-	                        Value::MmioPtr { mutable: true, .. } => TypeAtom::new(b"ptr_mut").unwrap(),
-	                    };
-                    let lname = TypeAtom::new(&slice[name.span.start..name.span.end]).ok_or(TcError {
-                        code: 3203,
-                        span: Span::new(span.start + name.span.start, span.start + name.span.end),
-                    })?;
-                    if find_local(&self.locals, self.local_len, lname).is_some() {
-                        return Err(TcError { code: 3204, span: Span::new(span.start + name.span.start, span.start + name.span.end) });
-                    }
-                    if self.local_len >= self.locals.len() {
-                        return Err(TcError { code: 3205, span });
-                    }
-                    let slot = self.local_slot(self.local_len);
-                    self.locals[self.local_len] = lname;
-                    self.local_tys[self.local_len] = ty;
-                    self.local_live[self.local_len] = true;
-                    self.local_scoped[self.local_len] = match v {
-                        Value::Scoped { scope, .. } => scope,
-                        _ => 0u16,
-                    };
-                    self.local_len += 1;
-                    let tid = self.ty_id_of_type(ty, span)?;
-                    self.emit_op(cur, lir::OpKind::LocalSet { slot, ty: tid }, Span::new(span.start + tok.span.start, span.start + tok.span.end))?;
                 }
                 TokenKind::PunctLBracket => {
                     let q = capture_balanced(&mut lex, slice, TokenKind::PunctLBracket, TokenKind::PunctRBracket, tok.span.start)
                         .map_err(|code| TcError { code, span: Span::new(span.start + tok.span.start, span.start + tok.span.end) })?;
                     let q_span = Span::new(span.start + q.start, span.start + q.end);
                     push(stack, sp, Value::Quot(q_span))?;
+                }
+                TokenKind::PunctArrow => {
+                    let op_span = Span::new(span.start + tok.span.start, span.start + tok.span.end);
+                    let field_tok = lex.next();
+                    if field_tok.kind != TokenKind::Ident {
+                        return Err(TcError { code: 3716, span: op_span });
+                    }
+                    let field_atom = TypeAtom::new(&slice[field_tok.span.start..field_tok.span.end])
+                        .ok_or(TcError { code: 3716, span: op_span })?;
+                    let base = *stack.get(*sp - 1).ok_or(TcError { code: 3202, span: op_span })?;
+                    let (struct_ty, mutable) = match base {
+                        Value::Ptr { ty, mutable } => (ty, mutable),
+                        _ => return Err(TcError { code: 3716, span: op_span }),
+                    };
+                    let Some(sinfo) = self.nominals.structs.iter().find(|s| s.name == struct_ty) else {
+                        return Err(TcError { code: 3716, span: op_span });
+                    };
+                    let mut offset: u32 = 0;
+                    let mut found: Option<TypeAtom> = None;
+                    for field in sinfo.fields.iter() {
+                        let fsize = type_size_bytes(field.ty, self.nominals).ok_or(TcError { code: 3718, span: op_span })?;
+                        let falign = field_align(fsize);
+                        offset = align_up(offset, falign);
+                        if field.name == field_atom {
+                            found = Some(field.ty);
+                            break;
+                        }
+                        offset = offset.checked_add(fsize).ok_or(TcError { code: 3718, span: op_span })?;
+                    }
+                    let Some(field_ty) = found else {
+                        return Err(TcError { code: 3716, span: op_span });
+                    };
+                    let base_tid = if mutable { lir::TY_PTR_MUT } else { lir::TY_PTR };
+                    self.emit_op(cur, lir::OpKind::PtrAddConst { ty: base_tid, offset }, op_span)?;
+                    stack[*sp - 1] = Value::Ptr { ty: field_ty, mutable };
+                }
+                TokenKind::PunctApostrophe => {
+                    let op_span = Span::new(span.start + tok.span.start, span.start + tok.span.end);
+                    let mut const_idx: Option<u32> = None;
+                    let mut is_dynamic = false;
+
+                    let next = lex.next();
+                    match next.kind {
+                        TokenKind::Number => {
+                            const_idx = parse_u32_any(&slice[next.span.start..next.span.end]);
+                            if const_idx.is_none() {
+                                return Err(TcError { code: 3519, span: op_span });
+                            }
+                        }
+                        TokenKind::PunctLParen => {
+                            let par = capture_balanced(&mut lex, slice, TokenKind::PunctLParen, TokenKind::PunctRParen, next.span.start)
+                                .map_err(|code| TcError { code, span: op_span })?;
+                            let inner = Span::new(span.start + par.start + 1, span.start + par.end - 1);
+                            cur = self.compile_span(cur, stack, sp, inner, allow_suspend, allow_locals)?;
+                            is_dynamic = true;
+                        }
+                        _ => {
+                            return Err(TcError { code: 3519, span: op_span });
+                        }
+                    }
+
+                    if is_dynamic {
+                        if *sp == 0 {
+                            return Err(TcError { code: 3519, span: op_span });
+                        }
+                        if stack[*sp - 1] != Value::Plain(TypeAtom::new(b"i64").unwrap()) {
+                            return Err(TcError { code: 3519, span: op_span });
+                        }
+                    }
+
+                    let base_pos = if is_dynamic { *sp - 2 } else { *sp - 1 };
+                    if base_pos >= *sp {
+                        return Err(TcError { code: 3519, span: op_span });
+                    }
+
+                    let base = stack[base_pos];
+                    let (elem_ty, scale, out_kind, base_tid) = match base {
+                        Value::Plain(t) => {
+                            let Some(elem) = array_elem_type(t) else {
+                                return Err(TcError { code: 3519, span: op_span });
+                            };
+                            let len = array_len(t).ok_or(TcError { code: 3519, span: op_span })?;
+                            if let Some(idx) = const_idx {
+                                if idx >= len {
+                                    return Err(TcError { code: 3518, span: op_span });
+                                }
+                            }
+                            let size = type_size_bytes(elem, self.nominals).ok_or(TcError { code: 3519, span: op_span })?;
+                            (elem, size, IndexOut::Value, lir::TY_PTR)
+                        }
+                        Value::Ptr { ty, mutable } => {
+                            let Some(elem) = array_elem_type(ty) else {
+                                return Err(TcError { code: 3519, span: op_span });
+                            };
+                            let len = array_len(ty).ok_or(TcError { code: 3519, span: op_span })?;
+                            if let Some(idx) = const_idx {
+                                if idx >= len {
+                                    return Err(TcError { code: 3518, span: op_span });
+                                }
+                            }
+                            let size = type_size_bytes(elem, self.nominals).ok_or(TcError { code: 3519, span: op_span })?;
+                            let tid = if mutable { lir::TY_PTR_MUT } else { lir::TY_PTR };
+                            (elem, size, IndexOut::Ptr(mutable), tid)
+                        }
+                        Value::MmioPlace(MmioResolved::Reg(reg)) => {
+                            let Some(width) = mmio_type_width_bytes(reg.reg_ty.as_bytes()) else {
+                                return Err(TcError { code: 3519, span: op_span });
+                            };
+                            if let Some(idx) = const_idx {
+                                if let Some(len) = reg.array_len {
+                                    if idx >= len {
+                                        return Err(TcError { code: 3604, span: op_span });
+                                    }
+                                }
+                            }
+                            (reg.reg_ty, width, IndexOut::Mmio, lir::TY_MMIO)
+                        }
+                        Value::MmioPlace(MmioResolved::Field(_)) => {
+                            return Err(TcError { code: 3519, span: op_span });
+                        }
+                        _ => return Err(TcError { code: 3519, span: op_span }),
+                    };
+
+                    match out_kind {
+                        IndexOut::Value => {
+                            stack[base_pos] = Value::Ptr { ty: elem_ty, mutable: false };
+                        }
+                        IndexOut::Ptr(mutable) => {
+                            stack[base_pos] = Value::Ptr { ty: elem_ty, mutable };
+                        }
+                        IndexOut::Mmio => {
+                            // Keep MMIO metadata; address arithmetic happens on stack.
+                        }
+                    }
+
+                    if is_dynamic {
+                        self.emit_op(cur, lir::OpKind::PtrAddIndex { ty: base_tid, scale }, op_span)?;
+                        *sp = (*sp).saturating_sub(1);
+                    } else {
+                        let offset = const_idx.unwrap().saturating_mul(scale);
+                        self.emit_op(cur, lir::OpKind::PtrAddConst { ty: base_tid, offset }, op_span)?;
+                    }
+
+                    if matches!(out_kind, IndexOut::Value) {
+                        let tid = self.ty_id_of_type(elem_ty, op_span)?;
+                        self.emit_op(cur, lir::OpKind::Load { ty: tid }, op_span)?;
+                        stack[base_pos] = Value::Plain(elem_ty);
+                    }
                 }
 	                TokenKind::PunctAmp | TokenKind::PunctAmpBang => {
 	                    let mut_tok = tok.kind == TokenKind::PunctAmpBang;
@@ -1411,26 +1716,15 @@ impl<'a, 'w> IrWordGen<'a, 'w> {
                         continue;
                     }
 
-	                    if name == b"as" || name == b"as?" || name == b"bitcast" {
-	                        let first = lex.next();
-	                        if first.kind != TokenKind::Ident {
-	                            return Err(TcError { code: 3295, span: Span::new(span.start + first.span.start, span.start + first.span.end) });
-	                        }
-		                        let mut end = first.span.end;
-		                        let mut probe = lex;
-		                        let lparen = probe.next();
-		                        if lparen.kind == TokenKind::PunctLParen {
-		                            lex = probe; // consume '('
-		                            let par = capture_balanced(&mut lex, slice, TokenKind::PunctLParen, TokenKind::PunctRParen, lparen.span.start)
-		                                .map_err(|code| TcError { code, span: Span::new(span.start + lparen.span.start, span.start + lparen.span.end) })?;
-		                            end = par.end;
-		                        }
-	                        let to_span = Span::new(first.span.start, end);
-	                        let to_ty = TypeAtom::new(&slice[to_span.start..to_span.end]).ok_or(TcError {
-	                            code: 3296,
-	                            span: Span::new(span.start + to_span.start, span.start + to_span.end),
-	                        })?;
-	                        let v = pop(stack, sp).ok_or(TcError { code: 3297, span })?;
+                    if name == b"as" || name == b"as?" || name == b"bitcast" {
+                        let first = lex.next();
+                        let start = first.span.start;
+                        let (to_ty, next) = crate::typecheck::parse::parse_type_expr(slice, start).ok_or(TcError {
+                            code: 3295,
+                            span: Span::new(span.start + first.span.start, span.start + first.span.end),
+                        })?;
+                        lex.set_pos(next);
+                        let v = pop(stack, sp).ok_or(TcError { code: 3297, span })?;
 		                        let from_ty = match v {
 	                            Value::Plain(t) => t,
 	                            Value::Scoped { ty, .. } => ty,
@@ -1570,6 +1864,15 @@ impl<'a, 'w> IrWordGen<'a, 'w> {
                         continue;
                     }
                     if name == b"lock" {
+                        let mut probe = lex;
+                        let next = probe.next();
+                        if next.kind == TokenKind::PunctLBracket {
+                            lex = probe;
+                            let _block = capture_scoped_block(&mut lex, slice, next.span)
+                                .map_err(|code| TcError { code, span: name_abs })?;
+                            let full_span = Span::new(span.start + next.span.start, span.start + lex.pos());
+                            push(stack, sp, Value::Quot(full_span))?;
+                        }
                         cur = self.compile_lock(cur, stack, sp, name_abs)?;
                         continue;
                     }
@@ -1912,7 +2215,7 @@ impl<'a, 'w> IrWordGen<'a, 'w> {
         self.locked_resource = locked;
         let base_stack = *stack;
         let base_sp = *sp;
-        let end = self.compile_quote_span(cur, stack, sp, body_span, false, false)?;
+        let end = self.compile_quote_span(cur, stack, sp, body_span, false, true)?;
         if *sp != base_sp {
             return Err(TcError { code: 3272, span });
         }
