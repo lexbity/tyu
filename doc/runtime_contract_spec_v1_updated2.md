@@ -171,6 +171,14 @@ Region allocator support (if platform allows allocation):
 If a platform forbids allocation:
 - `platform.mem` is absent or its symbols are unavailable, causing link failure if referenced.
 
+ABI notes (v1.3 baseline):
+- `Region` is an opaque handle (size: one machine word).
+- `RegionRef` / `RegionRefMut` are non-owning borrowed handles (also one word).
+- `Slice(T)` / `SliceMut(T)` are ABI structs:
+  - `ptr : ^T` (u64 on 64-bit targets)
+  - `len : usize`
+  - total size: two machine words
+
 ### 6.5 `platform.time` (optional)
 - monotonic clock
 - sleep/delay helpers
@@ -188,6 +196,9 @@ If provided, exposes cooperative and/or preemptive tasks:
 - `join` (optional)
 - `sleep_*` (optional)
 - `run` (optional handler/driver for `{suspend}` quotations)
+
+ABI notes (v1.3 baseline):
+- `Task` is an opaque handle (size: one machine word).
 
 ### 6.8 `platform.channel` (optional)
 If provided, exposes message passing primitives used by `<|` / `|>`:
@@ -394,4 +405,3 @@ Optional:
 - channels (`platform.channel`)
 - suspension handler/driver (`platform.task.run`) if `{suspend}` is used
 - trace hooks and/or GDB stub
-
