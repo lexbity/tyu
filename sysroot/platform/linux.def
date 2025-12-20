@@ -1,9 +1,15 @@
 module platform/linux;
+type Task;
+
 : platform.io.log ( str -- ) ;
 : platform.time.now_ms ( -- i64 ) ;
 : platform.critical.enter ( -- ) ;
 : platform.critical.exit ( -- ) ;
 : platform.task.run ( quot -- ) ;
+: platform.task.spawn ( quot -- Task ) ;
+: platform.task.join ( Task -- ) !{suspend} ;
 : platform.task.yield ( -- ) !{suspend} ;
+: platform.task.sleep-ms ( usize -- ) !{suspend} ;
+: platform.task.sleep-us ( usize -- ) !{suspend} ;
 
 end;
