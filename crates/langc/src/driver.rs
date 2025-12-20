@@ -4,7 +4,7 @@ use frontend::{
 use hosted::{diag, fs, process};
 use semantics::types::{TypeAtom, WordEntry, WordSig};
 use semantics::typecheck::{self, ChecksMode, SubtypeInfo};
-use crate::codegen::{IrAsmGen, AsmMode};
+use crate::codegen::{CodegenBackend, X86_64HostedBackend, AsmMode};
 use crate::util::{
     Stdout, MemOut, slice_span, join_path, try_load_module_file,
 };
@@ -143,7 +143,8 @@ pub fn emit_asm_driver(
         return 2;
     }
 
-    let mut gen = IrAsmGen::new(module, src, out, debug_trap_loc, AsmMode::Executable);
+    let mut gen_backend = X86_64HostedBackend::new(module, src, out, debug_trap_loc, AsmMode::Executable);
+    let gen: &mut dyn CodegenBackend = &mut gen_backend;
     if let Err(code) = gen.emit_prelude() {
         let _ = diag::error_simple(code, b"asm emission error");
         return 2;
@@ -344,7 +345,8 @@ pub fn emit_obj_driver(
         }
     };
 
-    let mut gen = IrAsmGen::new(module, src, &mut mem, debug_trap_loc, AsmMode::Object);
+    let mut gen_backend = X86_64HostedBackend::new(module, src, &mut mem, debug_trap_loc, AsmMode::Object);
+    let gen: &mut dyn CodegenBackend = &mut gen_backend;
     if let Err(code) = gen.emit_prelude() {
         let _ = diag::error_simple(code, b"asm emission error");
         return 2;
