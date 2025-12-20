@@ -107,6 +107,7 @@ pub fn emit_stackcheck(
     out: &mut impl Output,
 ) -> Result<(), TcError> {
     let mmio = build_mmio_db(module, src)?;
+    let nominals = build_nominal_db(module, src)?;
     for decl in module.decls.iter() {
         if decl.kind != DeclKind::Word {
             continue;
@@ -123,7 +124,7 @@ pub fn emit_stackcheck(
         out.write(b" ");
         write_sig(out, &sig);
         out.write(b"\n");
-        typecheck_word_body(out, src, body_span, &sig, env, subtypes, &mmio, checks, true)?;
+        typecheck_word_body(out, src, body_span, &sig, env, subtypes, &mmio, &nominals, checks, true)?;
     }
     Ok(())
 }
