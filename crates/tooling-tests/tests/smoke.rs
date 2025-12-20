@@ -870,6 +870,42 @@ end;\n",
 }
 
 #[test]
+fn opcode_asm_coverage_basic_ops() {
+    build_tools();
+    let dir = fresh_dir("opcode_asm_coverage_basic_ops");
+
+    std::fs::write(
+        dir.join("Main.mod"),
+        b"module Main;\n\
+: main ( -- i64 )\n\
+  1 dup swap drop drop\n\
+  2 3 + 4 - 5 * drop\n\
+  true false and true or not drop\n\
+  0 as usize as ptr_mut 42 !i64\n\
+  0 as usize as ptr @i64 drop\n\
+  1 1 == [ 0 ] [ 1 ] if\n\
+;\n\
+end;\n",
+    )
+    .unwrap();
+
+    let out = Command::new(exe("langc"))
+        .current_dir(&dir)
+        .args(["--emit=asm", "--allow-raw-casts", "Main.mod"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    std::fs::write(dir.join("Main.asm"), &out.stdout).unwrap();
+
+    let status = Command::new(exe("lang-assemble"))
+        .current_dir(&dir)
+        .args(["--out=prog", "Main.asm"])
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+#[test]
 fn milestone6_mmio_volatile_ops_in_ir() {
     build_tools();
     let dir = fresh_dir("milestone6_mmio_volatile_ops_in_ir");
@@ -1003,7 +1039,7 @@ register-map GPIO\n\
 end;\n\
 const gpio = GPIO @ 0x1000;\n\
 : bad ( -- u32 )\n\
-  &gpio.PINCFG[2] @u32\n\
+  &gpio.PINCFG'2 @u32\n\
 ;\n\
 end;\n",
     )
@@ -1644,7 +1680,7 @@ fn milestone13_array_type_and_scoped_slice_typechecks() {
     std::fs::write(
         dir.join("Main.mod"),
         b"module Main;\n\
-: f ( Array(i64,4) -- Array(i64,4) )\n\
+: f ( i64'4 -- i64'4 )\n\
   &[\n\
     drop\n\
   ]\n\
@@ -1660,9 +1696,43 @@ end;\n",
         .unwrap();
     assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("Array(i64,4)"));
+    assert!(stdout.contains("i64'4"));
     assert!(stdout.contains("Slice(i64)"));
     assert!(stdout.contains("scoped_enter"));
+}
+
+#[test]
+fn milestone13_borrow_destructuring_emits_ptr_offsets() {
+    build_tools();
+    let dir = fresh_dir("milestone13_borrow_destructuring_emits_ptr_offsets");
+
+    std::fs::write(
+        dir.join("Main.mod"),
+        b"module Main;\n\
+struct Point\n\
+  x : i64\n\
+  y : i64\n\
+end;\n\
+resource r : Point;\n\
+: f ( -- )\n\
+  r lock [\n\
+    &r => { &x &y }\n\
+    x drop\n\
+    y drop\n\
+  ]\n\
+;\n\
+end;\n",
+    )
+    .unwrap();
+
+    let out = Command::new(exe("langc"))
+        .current_dir(&dir)
+        .args(["--emit=ir", "Main.mod"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("ptr_add_const"), "stdout: {stdout}");
 }
 
 #[test]
@@ -1673,7 +1743,7 @@ fn milestone13_borrowed_slice_cannot_escape_via_return() {
     std::fs::write(
         dir.join("Main.mod"),
         b"module Main;\n\
-: f ( Array(i64,4) -- Slice(i64) )\n\
+: f ( i64'4 -- Slice(i64) )\n\
   &[\n\
     swap drop\n\
     return\n\
@@ -1701,7 +1771,7 @@ fn milestone13_borrowed_slice_live_in_local_blocks_yield() {
     std::fs::write(
         dir.join("Main.mod"),
         b"module Main;\n\
-: f ( Array(i64,4) -- Array(i64,4) ) !{suspend}\n\
+: f ( i64'4 -- i64'4 ) !{suspend}\n\
   &[\n\
     => s\n\
     platform.task.yield\n\
@@ -1877,6 +1947,36 @@ end;\n",
         .output()
         .unwrap();
     assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+}
+
+#[test]
+fn milestone15_struct_ptr_field_access_emits_ptr_add_const() {
+    build_tools();
+    let dir = fresh_dir("milestone15_struct_ptr_field_access_emits_ptr_add_const");
+
+    std::fs::write(
+        dir.join("Main.mod"),
+        b"module Main;\n\
+struct Point\n\
+  x : i32\n\
+  y : i32\n\
+end;\n\
+: getx ( Point -- i32 )\n\
+  => p\n\
+  &p ->x @i32\n\
+;\n\
+end;\n",
+    )
+    .unwrap();
+
+    let out = Command::new(exe("langc"))
+        .current_dir(&dir)
+        .args(["--emit=ir", "Main.mod"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("ptr_add_const"), "stdout: {stdout}");
 }
 
 #[test]
@@ -2079,7 +2179,7 @@ fn milestone16_channel_send_type_mismatch_fails() {
     std::fs::write(
         dir.join("Main.mod"),
         b"module Main;\n\
-: bad ( Chan(i64) -- )\n\
+: bad ( |i64| -- )\n\
   => ch\n\
   ch true |>\n\
 ;\n\
@@ -2111,8 +2211,8 @@ import platform/linux { platform.task.spawn, platform.task.join };\n\
 : main ( -- i64 ) !{suspend}\n\
   platform.channel.make drop\n\
   [ ( -- ) ] platform.task.spawn => t\n\
-  0 bitcast Chan(Task) t |>\n\
-  0 bitcast Chan(Task) <| platform.task.join\n\
+  0 bitcast |Task| t |>\n\
+  0 bitcast |Task| <| platform.task.join\n\
   0\n\
 ;\n\
 end;\n",
@@ -2156,20 +2256,20 @@ end;\n\
 const gpio = GPIO @ 0x0;\n\
 : main ( -- i64 ) !{suspend}\n\
   platform.channel.make drop\n\
-  0 as u32 &!gpio.DATA[0] swap !u32\n\
-  0 as u32 &!gpio.DATA[1] swap !u32\n\
+  0 as u32 &!gpio.DATA'0 swap !u32\n\
+  0 as u32 &!gpio.DATA'1 swap !u32\n\
   0\n\
   [ dup 64 < ]\n\
-  [ dup 0 bitcast Chan(i64) swap |> 1 + ] while\n\
+  [ dup 0 bitcast |i64| swap |> 1 + ] while\n\
   drop\n\
   [ ( -- )\n\
-    &!gpio.DATA[0] @u32 as i64 1 == [ 1 as u32 &!gpio.DATA[1] swap !u32 ] [ ] if\n\
-    0 bitcast Chan(i64) <| drop\n\
+    &!gpio.DATA'0 @u32 as i64 1 == [ 1 as u32 &!gpio.DATA'1 swap !u32 ] [ ] if\n\
+    0 bitcast |i64| <| drop\n\
   ] platform.task.spawn\n\
-  0 bitcast Chan(i64) 99 |>\n\
-  1 as u32 &!gpio.DATA[0] swap !u32\n\
+  0 bitcast |i64| 99 |>\n\
+  1 as u32 &!gpio.DATA'0 swap !u32\n\
   platform.task.join\n\
-  &gpio.DATA[1] @u32 as i64\n\
+  &gpio.DATA'1 @u32 as i64\n\
 ;\n\
 end;\n",
     )
@@ -2196,6 +2296,67 @@ end;\n",
 }
 
 #[test]
+fn mmio_array_const_index_emits_ptr_add_const() {
+    build_tools();
+    let dir = fresh_dir("mmio_array_const_index_emits_ptr_add_const");
+
+    std::fs::write(
+        dir.join("Main.mod"),
+        b"module Main;\n\
+register-map GPIO\n\
+  0x00 DATA[4] u32 rw\n\
+end;\n\
+const gpio = GPIO @ 0x0;\n\
+: main ( -- i64 )\n\
+  gpio.DATA'2 @u32 drop\n\
+  0\n\
+;\n\
+end;\n",
+    )
+    .unwrap();
+
+    let out = Command::new(exe("langc"))
+        .current_dir(&dir)
+        .args(["--emit=ir", "Main.mod"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("ptr_add_const"), "stdout: {stdout}");
+}
+
+#[test]
+fn mmio_array_dynamic_index_emits_ptr_add_index() {
+    build_tools();
+    let dir = fresh_dir("mmio_array_dynamic_index_emits_ptr_add_index");
+
+    std::fs::write(
+        dir.join("Main.mod"),
+        b"module Main;\n\
+register-map GPIO\n\
+  0x00 DATA[4] u32 rw\n\
+end;\n\
+const gpio = GPIO @ 0x0;\n\
+: main ( -- i64 )\n\
+  1 => idx\n\
+  gpio.DATA'(idx) @u32 drop\n\
+  0\n\
+;\n\
+end;\n",
+    )
+    .unwrap();
+
+    let out = Command::new(exe("langc"))
+        .current_dir(&dir)
+        .args(["--emit=ir", "Main.mod"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("ptr_add_index"), "stdout: {stdout}");
+}
+
+#[test]
 fn milestone16_channel_recv_blocks_on_empty() {
     build_tools();
     let dir = fresh_dir("milestone16_channel_recv_blocks_on_empty");
@@ -2212,16 +2373,16 @@ end;\n\
 const gpio = GPIO @ 0x0;\n\
 : main ( -- i64 ) !{suspend}\n\
   platform.channel.make drop\n\
-  0 as u32 &!gpio.DATA[0] swap !u32\n\
-  0 as u32 &!gpio.DATA[1] swap !u32\n\
+  0 as u32 &!gpio.DATA'0 swap !u32\n\
+  0 as u32 &!gpio.DATA'1 swap !u32\n\
   [ ( -- )\n\
-    &!gpio.DATA[0] @u32 as i64 1 == [ 1 as u32 &!gpio.DATA[1] swap !u32 ] [ ] if\n\
-    0 bitcast Chan(i64) 123 |>\n\
+    &!gpio.DATA'0 @u32 as i64 1 == [ 1 as u32 &!gpio.DATA'1 swap !u32 ] [ ] if\n\
+    0 bitcast |i64| 123 |>\n\
   ] platform.task.spawn\n\
-  0 bitcast Chan(i64) <| drop\n\
-  1 as u32 &!gpio.DATA[0] swap !u32\n\
+  0 bitcast |i64| <| drop\n\
+  1 as u32 &!gpio.DATA'0 swap !u32\n\
   platform.task.join\n\
-  &gpio.DATA[1] @u32 as i64\n\
+  &gpio.DATA'1 @u32 as i64\n\
 ;\n\
 end;\n",
     )
@@ -2259,7 +2420,7 @@ fn milestone16_channel_deadlock_traps_exit_code() {
 import platform/channel { };\n\
 : main ( -- i64 )\n\
   platform.channel.make drop\n\
-  0 bitcast Chan(i64) <| drop\n\
+  0 bitcast |i64| <| drop\n\
   0\n\
 ;\n\
 end;\n",
@@ -2577,14 +2738,14 @@ register-map GPIO\n\
 end;\n\
 const gpio = GPIO @ 0x0;\n\
 : main ( -- i64 ) !{suspend}\n\
-  [ ( -- ) !{suspend} platform.task.yield 1 as u32 &!gpio.DATA[0] swap !u32 ] platform.task.spawn\n\
-  [ ( -- ) !{suspend} platform.task.yield 2 as u32 &!gpio.DATA[1] swap !u32 ] platform.task.spawn\n\
-  [ ( -- ) !{suspend} platform.task.yield 3 as u32 &!gpio.DATA[2] swap !u32 ] platform.task.spawn\n\
-  [ ( -- ) !{suspend} platform.task.yield 4 as u32 &!gpio.DATA[3] swap !u32 ] platform.task.spawn\n\
-  [ ( -- ) !{suspend} platform.task.yield 5 as u32 &!gpio.DATA[4] swap !u32 ] platform.task.spawn\n\
-  [ ( -- ) !{suspend} platform.task.yield 6 as u32 &!gpio.DATA[5] swap !u32 ] platform.task.spawn\n\
-  [ ( -- ) !{suspend} platform.task.yield 7 as u32 &!gpio.DATA[6] swap !u32 ] platform.task.spawn\n\
-  [ ( -- ) !{suspend} platform.task.yield 8 as u32 &!gpio.DATA[7] swap !u32 ] platform.task.spawn\n\
+  [ ( -- ) !{suspend} platform.task.yield 1 as u32 &!gpio.DATA'0 swap !u32 ] platform.task.spawn\n\
+  [ ( -- ) !{suspend} platform.task.yield 2 as u32 &!gpio.DATA'1 swap !u32 ] platform.task.spawn\n\
+  [ ( -- ) !{suspend} platform.task.yield 3 as u32 &!gpio.DATA'2 swap !u32 ] platform.task.spawn\n\
+  [ ( -- ) !{suspend} platform.task.yield 4 as u32 &!gpio.DATA'3 swap !u32 ] platform.task.spawn\n\
+  [ ( -- ) !{suspend} platform.task.yield 5 as u32 &!gpio.DATA'4 swap !u32 ] platform.task.spawn\n\
+  [ ( -- ) !{suspend} platform.task.yield 6 as u32 &!gpio.DATA'5 swap !u32 ] platform.task.spawn\n\
+  [ ( -- ) !{suspend} platform.task.yield 7 as u32 &!gpio.DATA'6 swap !u32 ] platform.task.spawn\n\
+  [ ( -- ) !{suspend} platform.task.yield 8 as u32 &!gpio.DATA'7 swap !u32 ] platform.task.spawn\n\
   platform.task.join\n\
   platform.task.join\n\
   platform.task.join\n\
@@ -2593,14 +2754,14 @@ const gpio = GPIO @ 0x0;\n\
   platform.task.join\n\
   platform.task.join\n\
   platform.task.join\n\
-  &gpio.DATA[0] @u32 as i64\n\
-  &gpio.DATA[1] @u32 as i64 +\n\
-  &gpio.DATA[2] @u32 as i64 +\n\
-  &gpio.DATA[3] @u32 as i64 +\n\
-  &gpio.DATA[4] @u32 as i64 +\n\
-  &gpio.DATA[5] @u32 as i64 +\n\
-  &gpio.DATA[6] @u32 as i64 +\n\
-  &gpio.DATA[7] @u32 as i64 +\n\
+  &gpio.DATA'0 @u32 as i64\n\
+  &gpio.DATA'1 @u32 as i64 +\n\
+  &gpio.DATA'2 @u32 as i64 +\n\
+  &gpio.DATA'3 @u32 as i64 +\n\
+  &gpio.DATA'4 @u32 as i64 +\n\
+  &gpio.DATA'5 @u32 as i64 +\n\
+  &gpio.DATA'6 @u32 as i64 +\n\
+  &gpio.DATA'7 @u32 as i64 +\n\
 ;\n\
 end;\n",
     )
@@ -2637,7 +2798,7 @@ fn milestone8_typed_channel_u32_roundtrip_exit_code() {
         b"module Main;\n\
 import platform/channel { };\n\
 : main ( -- i64 )\n\
-  platform.channel.make bitcast Chan(u32) => ch\n\
+  platform.channel.make bitcast |u32| => ch\n\
   ch 42 as u32 |>\n\
   ch <| as i64\n\
 ;\n\
@@ -2687,8 +2848,8 @@ fn milestone16_typed_channel_i8_roundtrip_exit_code() {
 import platform/channel { };\n\
 : main ( -- i64 )\n\
   platform.channel.make drop\n\
-  0 bitcast Chan(i8) -1 as i8 |>\n\
-  0 bitcast Chan(i8) <| as i64 -1 == [ 0 ] [ 1 ] if\n\
+  0 bitcast |i8| -1 as i8 |>\n\
+  0 bitcast |i8| <| as i64 -1 == [ 0 ] [ 1 ] if\n\
 ;\n\
 end;\n",
     )
@@ -2864,7 +3025,7 @@ fn milestone5_scoped_borrow_must_be_consumed() {
 
     std::fs::write(
         dir.join("Main.mod"),
-        b"module Main;\n: f ( Array(i64,1) -- Array(i64,1) )\n  &[\n  ]\n;\nend;\n",
+        b"module Main;\n: f ( i64'1 -- i64'1 )\n  &[\n  ]\n;\nend;\n",
     )
     .unwrap();
 
@@ -2885,7 +3046,7 @@ fn milestone5_rejects_suspend_with_scoped_live() {
 
     std::fs::write(
         dir.join("Main.mod"),
-        b"module Main;\n: f ( Array(i64,1) -- Array(i64,1) ) !{suspend}\n  &[\n    platform.task.yield drop\n  ]\n;\nend;\n",
+        b"module Main;\n: f ( i64'1 -- i64'1 ) !{suspend}\n  &[\n    platform.task.yield drop\n  ]\n;\nend;\n",
     )
     .unwrap();
 
@@ -2906,7 +3067,7 @@ fn milestone5_rejects_suspend_inside_mut_scoped_block() {
 
     std::fs::write(
         dir.join("Main.mod"),
-        b"module Main;\n: f ( Array(i64,1) -- Array(i64,1) )\n  &![\n    drop platform.task.yield\n  ]\n;\nend;\n",
+        b"module Main;\n: f ( i64'1 -- i64'1 )\n  &![\n    drop platform.task.yield\n  ]\n;\nend;\n",
     )
     .unwrap();
 
@@ -2948,7 +3109,7 @@ fn milestone5_allows_drop_before_yield() {
 
     std::fs::write(
         dir.join("Main.mod"),
-        b"module Main;\n: f ( Array(i64,1) -- Array(i64,1) ) !{suspend}\n  &[\n    drop\n  ]\n  platform.task.yield\n;\nend;\n",
+        b"module Main;\n: f ( i64'1 -- i64'1 ) !{suspend}\n  &[\n    drop\n  ]\n  platform.task.yield\n;\nend;\n",
     )
     .unwrap();
 
