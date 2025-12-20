@@ -6,7 +6,6 @@ pub const HELP: &[u8] = b"langc (tyu_lang) v0.1.0\n\nUSAGE:\n  langc [options] <
 pub struct Config<'a> {
     pub emit_ast: bool,
     pub emit_ir: bool,
-    pub emit_asm: bool,
     pub emit_obj: bool,
     pub emit_tc: bool,
     pub debug_trap_loc: bool,
@@ -165,7 +164,6 @@ pub unsafe fn parse_args<'a>(argc: isize, argv: *const *const hosted::c::c_char)
     ParseResult::Ok(Config {
         emit_ast,
         emit_ir,
-        emit_asm,
         emit_obj,
         emit_tc,
         debug_trap_loc,
