@@ -1,12 +1,12 @@
 module platform/channel;
 
-: platform.channel.make ( -- Chan(i64) )
+: platform.channel.make ( -- |i64| )
   # implemented as hosted intrinsic in asm backend
 ;
-: platform.channel.send ( Chan(i64) i64 -- )
+: platform.channel.send ( |i64| i64 -- )
   # implemented as hosted intrinsic in asm backend
 ;
-: platform.channel.recv ( Chan(i64) -- i64 )
+: platform.channel.recv ( |i64| -- i64 )
   # implemented as hosted intrinsic in asm backend
 ;
 
