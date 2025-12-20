@@ -19,6 +19,18 @@ fn baseline_types() -> FixedVec<Atom, 64> {
     types
 }
 
+fn baseline_type_sizes() -> FixedVec<u32, 64> {
+    let mut sizes = FixedVec::new();
+    sizes.push(0).unwrap(); // ""
+    sizes.push(8).unwrap(); // i64
+    sizes.push(1).unwrap(); // bool
+    sizes.push(8).unwrap(); // str (pointer)
+    sizes.push(8).unwrap(); // ptr
+    sizes.push(8).unwrap(); // ptr_mut
+    sizes.push(8).unwrap(); // mmio
+    sizes
+}
+
 fn sig0_1(out0: TypeId) -> Sig {
     let mut sig = Sig::empty();
     sig.in_len = 0;
@@ -51,6 +63,7 @@ fn word_with_single_block(sig: Sig, block_ops: &[OpKind]) -> Word {
         sig,
         entry: BlockId(0),
         types: baseline_types(),
+        type_sizes: baseline_type_sizes(),
         blocks,
     }
 }
@@ -123,6 +136,7 @@ fn verifier_rejects_branch_stack_mismatch() {
         sig,
         entry: BlockId(0),
         types: baseline_types(),
+        type_sizes: baseline_type_sizes(),
         blocks,
     };
 
@@ -140,4 +154,3 @@ fn verifier_type_pool_baseline_indices_match_constants() {
     assert_eq!(types.get(TY_PTR.0 as usize).unwrap().as_bytes(), b"ptr");
     assert_eq!(types.get(TY_PTR_MUT.0 as usize).unwrap().as_bytes(), b"ptr_mut");
 }
-
