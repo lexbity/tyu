@@ -1,11 +1,15 @@
 #![no_std]
 
+use hosted::c;
+#[cfg(not(test))]
 use core::panic::PanicInfo;
-use hosted::{c, io};
+#[cfg(not(test))]
+use hosted::io;
 
 #[no_mangle]
 pub extern "C" fn rust_eh_personality() {}
 
+#[cfg(not(test))]
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
     let _ = io::stderr(b"error: panic\n");
