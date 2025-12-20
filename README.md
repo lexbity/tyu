@@ -4,7 +4,7 @@
 A small **concatenative, stack-based** systems language for embedded + simulation:
 - no GC
 - explicit allocation via **regions**
-- **fixed arrays** are core (`Array(T,N)`)
+- **fixed arrays** are core (`T'N`)
 - higher-level collections/algorithms live in the **stdlib**
 - Ada/SPARK-ish safety tools: **subtypes** + **contracts**
 - strong MMIO/representation support
