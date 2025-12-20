@@ -91,7 +91,8 @@ pub enum OpKind {
 
     AddrOf { place: Atom, mutable: bool, const_addr: Option<u64> },
     MmioPlace { place: Atom, addr: u64 },
-    ScopedEnter { ty: TypeId },
+    ScopedEnter { ty: TypeId, len: u32 },
+    TaskSpawn { name: Atom, task_ty: TypeId },
 
     Dup { ty: TypeId },
     Drop { ty: TypeId },
@@ -158,6 +159,7 @@ pub struct Word {
     pub sig: Sig,
     pub entry: BlockId,
     pub types: FixedVec<Atom, 64>,
+    pub type_sizes: FixedVec<u32, 64>,
     pub blocks: FixedVec<Block, 16>,
 }
 
@@ -258,8 +260,11 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
             OpKind::MmioPlace { .. } => {
                 push(&mut stack, &mut sp, TY_MMIO, op.span)?;
             }
-            OpKind::ScopedEnter { ty } => {
+            OpKind::ScopedEnter { ty, .. } => {
                 push(&mut stack, &mut sp, ty, op.span)?;
+            }
+            OpKind::TaskSpawn { task_ty, .. } => {
+                push(&mut stack, &mut sp, task_ty, op.span)?;
             }
             OpKind::Dup { ty } => {
                 let top = pop(&mut stack, &mut sp, op.span)?;
@@ -570,9 +575,13 @@ fn write_op(out: &mut impl Output, w: &Word, op: &Op) {
             out.write(b" addr=0x");
             write_u64_hex(out, addr);
         }
-        OpKind::ScopedEnter { ty } => {
+        OpKind::ScopedEnter { ty, .. } => {
             out.write(b"scoped_enter ");
             out.write(type_atom(w, ty).as_bytes());
+        }
+        OpKind::TaskSpawn { name, .. } => {
+            out.write(b"task_spawn ");
+            out.write(name.as_bytes());
         }
         OpKind::Dup { ty } => {
             out.write(b"dup ");
