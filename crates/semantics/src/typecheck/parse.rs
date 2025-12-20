@@ -65,10 +65,61 @@ pub fn parse_type_expr(slice: &[u8], mut i: usize) -> Option<(TypeAtom, usize)> 
     if i >= slice.len() {
         return None;
     }
+    // Pointer prefixes: ^T / ^!T
+    if slice[i] == b'^' {
+        let mut j = i + 1;
+        let mut mutable = false;
+        if j < slice.len() && slice[j] == b'!' {
+            mutable = true;
+            j += 1;
+        }
+        let (_, next) = parse_type_expr(slice, j)?;
+        let atom = if mutable { TypeAtom::new(b"ptr_mut")? } else { TypeAtom::new(b"ptr")? };
+        return Some((atom, next));
+    }
+
+    // Channel type: |T|
+    if slice[i] == b'|' {
+        let (inner, mut j) = parse_type_expr(slice, i + 1)?;
+        while j < slice.len() && matches!(slice[j], b' ' | b'\n' | b'\r' | b'\t') {
+            j += 1;
+        }
+        if j >= slice.len() || slice[j] != b'|' {
+            return None;
+        }
+        j += 1;
+        let mut buf = [0u8; 32];
+        let mut k = 0usize;
+        k = push_bytes(&mut buf, k, b"Chan(")?;
+        k = push_bytes(&mut buf, k, inner.as_bytes())?;
+        k = push_bytes(&mut buf, k, b")")?;
+        let atom = TypeAtom::new(&buf[..k])?;
+        if let Some((arr, next)) = parse_array_suffix(slice, atom, j) {
+            return Some((arr, next));
+        }
+        return Some((atom, j));
+    }
+
+    // Grouped type: (T)
+    if slice[i] == b'(' {
+        let (inner, mut j) = parse_type_expr(slice, i + 1)?;
+        while j < slice.len() && matches!(slice[j], b' ' | b'\n' | b'\r' | b'\t') {
+            j += 1;
+        }
+        if j >= slice.len() || slice[j] != b')' {
+            return None;
+        }
+        j += 1;
+        if let Some((arr, next)) = parse_array_suffix(slice, inner, j) {
+            return Some((arr, next));
+        }
+        return Some((inner, j));
+    }
+
     let ident_start = i;
     while i < slice.len() {
         let b = slice[i];
-        if matches!(b, b'(' | b')' | b',' | b' ' | b'\n' | b'\r' | b'\t') {
+        if matches!(b, b'(' | b')' | b',' | b'\'' | b'|' | b' ' | b'\n' | b'\r' | b'\t') {
             break;
         }
         i += 1;
@@ -89,37 +140,6 @@ pub fn parse_type_expr(slice: &[u8], mut i: usize) -> Option<(TypeAtom, usize)> 
         while j < slice.len() && matches!(slice[j], b' ' | b'\n' | b'\r' | b'\t') {
             j += 1;
         }
-        if name == b"Array" {
-            if j >= slice.len() || slice[j] != b',' {
-                return None;
-            }
-            j += 1;
-            while j < slice.len() && matches!(slice[j], b' ' | b'\n' | b'\r' | b'\t') {
-                j += 1;
-            }
-            let num_start = j;
-            while j < slice.len() && !matches!(slice[j], b')' | b' ' | b'\n' | b'\r' | b'\t') {
-                j += 1;
-            }
-            let n_bytes = &slice[num_start..j];
-            let n = parse_u32_any(n_bytes)?;
-            while j < slice.len() && matches!(slice[j], b' ' | b'\n' | b'\r' | b'\t') {
-                j += 1;
-            }
-            if j >= slice.len() || slice[j] != b')' {
-                return None;
-            }
-            j += 1;
-            let mut buf = [0u8; 32];
-            let mut k = 0usize;
-            k = push_bytes(&mut buf, k, b"Array(")?;
-            k = push_bytes(&mut buf, k, inner.as_bytes())?;
-            k = push_bytes(&mut buf, k, b",")?;
-            k = push_u32_dec(&mut buf, k, n)?;
-            k = push_bytes(&mut buf, k, b")")?;
-            let atom = TypeAtom::new(&buf[..k])?;
-            return Some((atom, j));
-        }
         if name == b"Slice" || name == b"SliceMut" {
             while j < slice.len() && matches!(slice[j], b' ' | b'\n' | b'\r' | b'\t') {
                 j += 1;
@@ -137,27 +157,45 @@ pub fn parse_type_expr(slice: &[u8], mut i: usize) -> Option<(TypeAtom, usize)> 
             let atom = TypeAtom::new(&buf[..k])?;
             return Some((atom, j));
         }
-        if name == b"Chan" {
-            while j < slice.len() && matches!(slice[j], b' ' | b'\n' | b'\r' | b'\t') {
-                j += 1;
-            }
-            if j >= slice.len() || slice[j] != b')' {
-                return None;
-            }
-            j += 1;
-            let mut buf = [0u8; 32];
-            let mut k = 0usize;
-            k = push_bytes(&mut buf, k, b"Chan(")?;
-            k = push_bytes(&mut buf, k, inner.as_bytes())?;
-            k = push_bytes(&mut buf, k, b")")?;
-            let atom = TypeAtom::new(&buf[..k])?;
-            return Some((atom, j));
-        }
-        None
-    } else {
-        let atom = TypeAtom::new(name)?;
-        Some((atom, i))
+        return None;
     }
+
+    let atom = TypeAtom::new(name)?;
+    if let Some((arr, next)) = parse_array_suffix(slice, atom, i) {
+        return Some((arr, next));
+    }
+    Some((atom, i))
+}
+
+fn parse_array_suffix(slice: &[u8], base: TypeAtom, mut i: usize) -> Option<(TypeAtom, usize)> {
+    while i < slice.len() && matches!(slice[i], b' ' | b'\n' | b'\r' | b'\t') {
+        i += 1;
+    }
+    if i >= slice.len() || slice[i] != b'\'' {
+        return None;
+    }
+    i += 1;
+    while i < slice.len() && matches!(slice[i], b' ' | b'\n' | b'\r' | b'\t') {
+        i += 1;
+    }
+    let num_start = i;
+    while i < slice.len() && matches!(slice[i], b'0'..=b'9' | b'_') {
+        i += 1;
+    }
+    if num_start == i {
+        return None;
+    }
+    let n_bytes = &slice[num_start..i];
+    let n = parse_u32_any(n_bytes)?;
+    let mut buf = [0u8; 32];
+    let mut k = 0usize;
+    k = push_bytes(&mut buf, k, b"Array(")?;
+    k = push_bytes(&mut buf, k, base.as_bytes())?;
+    k = push_bytes(&mut buf, k, b",")?;
+    k = push_u32_dec(&mut buf, k, n)?;
+    k = push_bytes(&mut buf, k, b")")?;
+    let atom = TypeAtom::new(&buf[..k])?;
+    Some((atom, i))
 }
 
 pub fn read_qualified_name(
@@ -281,7 +319,7 @@ impl PlaceSpans {
     }
 }
 
-pub fn parse_place(lex: &mut Lexer<'_>, _slice: &[u8]) -> Option<PlaceSpans> {
+pub fn parse_place(lex: &mut Lexer<'_>, slice: &[u8]) -> Option<PlaceSpans> {
     let mut probe = *lex;
     let first = probe.next();
     if first.kind != TokenKind::Ident {
@@ -291,16 +329,27 @@ pub fn parse_place(lex: &mut Lexer<'_>, _slice: &[u8]) -> Option<PlaceSpans> {
     let mut end = first.span.end;
     loop {
         let mut probe2 = probe;
-        let dot = probe2.next();
-        if dot.kind != TokenKind::PunctDot {
-            break;
+        let next = probe2.next();
+        if next.kind == TokenKind::PunctDot {
+            let seg = probe2.next();
+            if seg.kind != TokenKind::Ident {
+                return None;
+            }
+            end = seg.span.end;
+            probe = probe2;
+            continue;
         }
-        let seg = probe2.next();
-        if seg.kind != TokenKind::Ident {
-            return None;
+        if next.kind == TokenKind::PunctApostrophe {
+            let num = probe2.next();
+            if num.kind != TokenKind::Number {
+                return None;
+            }
+            end = num.span.end;
+            probe = probe2;
+            continue;
         }
-        end = seg.span.end;
-        probe = probe2;
+        let _ = slice;
+        break;
     }
     *lex = probe;
     let full = Span::new(root.start, end);
