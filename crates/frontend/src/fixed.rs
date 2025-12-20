@@ -51,6 +51,10 @@ impl<T, const N: usize> FixedVec<T, N> {
     pub fn iter_mut(&mut self) -> IterMut<'_, T, N> {
         IterMut { v: self, i: 0 }
     }
+
+    pub fn into_iter(self) -> IntoIter<T, N> {
+        IntoIter { v: self, i: 0 }
+    }
 }
 
 impl<T, const N: usize> Drop for FixedVec<T, N> {
@@ -79,6 +83,34 @@ impl<'a, T, const N: usize> Iterator for Iter<'a, T, N> {
 pub struct IterMut<'a, T, const N: usize> {
     v: &'a mut FixedVec<T, N>,
     i: usize,
+}
+
+pub struct IntoIter<T, const N: usize> {
+    v: FixedVec<T, N>,
+    i: usize,
+}
+
+impl<T, const N: usize> Iterator for IntoIter<T, N> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.i >= self.v.len {
+            return None;
+        }
+        let idx = self.i;
+        self.i += 1;
+        Some(unsafe { self.v.data[idx].assume_init_read() })
+    }
+}
+
+impl<T, const N: usize> Drop for IntoIter<T, N> {
+    fn drop(&mut self) {
+        while self.i < self.v.len {
+            unsafe { self.v.data[self.i].assume_init_drop() };
+            self.i += 1;
+        }
+        self.v.len = 0;
+    }
 }
 
 impl<'a, T, const N: usize> Iterator for IterMut<'a, T, N> {
