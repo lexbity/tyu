@@ -11,12 +11,12 @@ pub mod irgen;
 pub use crate::typecheck::error::{TcError, ChecksMode, Output};
 pub use crate::typecheck::db::SubtypeInfo;
 pub use crate::typecheck::parse::parse_word_sig;
+pub use crate::typecheck::stackcheck::typecheck_word_body;
 
 use crate::types::WordEntry;
 use crate::typecheck::db::{build_resource_db, build_nominal_db, build_iso_db};
 use crate::typecheck::mmio::build_mmio_db;
 use crate::typecheck::irgen::{build_ir_word, lir_atom};
-use crate::typecheck::stackcheck::typecheck_word_body;
 use crate::typecheck::util::{slice_span, write_sig};
 use frontend::parse::{DeclKind, ModuleAst};
 use ir as lir;
