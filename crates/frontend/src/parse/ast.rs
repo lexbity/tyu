@@ -45,6 +45,8 @@ pub enum ParseError {
     ExpectedConstName { span: Span },
     ExpectedRegisterName { span: Span },
     ExpectedSemiSkip { span: Span },
+    /// Too many items of a given kind; the parser's static capacity was exceeded.
+    TooManyItems { span: Span },
 }
 
 impl ParseError {
@@ -88,6 +90,7 @@ impl ParseError {
             Self::ExpectedConstName { .. } => 2180,
             Self::ExpectedRegisterName { .. } => 2186,
             Self::ExpectedSemiSkip { .. } => 2199,
+            Self::TooManyItems { .. } => 2198,
         }
     }
 
@@ -130,7 +133,8 @@ impl ParseError {
             | Self::ExpectedSemiSubtype { span }
             | Self::ExpectedConstName { span }
             | Self::ExpectedRegisterName { span }
-            | Self::ExpectedSemiSkip { span } => *span,
+            | Self::ExpectedSemiSkip { span }
+            | Self::TooManyItems { span } => *span,
         }
     }
 }

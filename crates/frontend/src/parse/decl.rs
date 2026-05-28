@@ -102,10 +102,10 @@ impl<'a> Parser<'a> {
                 self.bump();
             }
 
-            let _ = fields.push(StructFieldAst {
+            fields.push(StructFieldAst {
                 name: field_name.span,
                 ty: Span::new(start, end),
-            });
+            }).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
         }
 
         self.expect(TokenKind::KwEnd, ParseError::ExpectedEnd { span: self.look.span })?;
@@ -178,10 +178,10 @@ impl<'a> Parser<'a> {
             let vnum = self.expect(TokenKind::Number, ParseError::ExpectedNumber { span: self.look.span })?;
             let val = parse_i64(self.slice(vnum.span)).ok_or(ParseError::InvalidInteger { span: vnum.span })?;
             self.bump();
-            let _ = variants.push(EnumVariantAst {
+            variants.push(EnumVariantAst {
                 name: vname.span,
                 value: val,
-            });
+            }).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
         }
 
         self.expect(TokenKind::KwEnd, ParseError::ExpectedEnd { span: self.look.span })?;

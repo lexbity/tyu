@@ -79,11 +79,12 @@ pub fn emit_ir(
         }
 
         let mut null_obs = NullObserver;
+        arena.reset();
         let out_words = build_ir_word(decl, src, env, subtypes, &mmio, &resources, &nominals, &iso, checks, allow_raw_casts, &sig, &mut arena, &mut null_obs)?;
-        lir::verify_word(out_words.word).map_err(|e| TcError::Internal { span: e.span() })?;
+        lir::verify_word(out_words.word).map_err(|e| TcError::InternalError { code: e.code(), span: e.span() })?;
         lir::write_word(out, out_words.word);
         for w in out_words.extra_words.iter() {
-            lir::verify_word(w).map_err(|e| TcError::Internal { span: e.span() })?;
+            lir::verify_word(w).map_err(|e| TcError::InternalError { code: e.code(), span: e.span() })?;
             lir::write_word(out, w);
         }
     }
@@ -121,9 +122,11 @@ pub fn emit_stackcheck(
         out.write(b" ");
         write_sig(out, &sig);
         out.write(b"\n");
-            {
+        {
             let mut obs = irgen::StackcheckObserver { out: &mut *out };
-            let _ = build_ir_word(decl, src, env, subtypes, &mmio, &resources, &nominals, &iso, checks, allow_raw_casts, &sig, &mut arena, &mut obs)?;
+            arena.reset();
+            let _ = build_ir_word(decl, src, env, subtypes, &mmio, &resources, &nominals, &iso, checks, allow_raw_casts, &sig, &mut arena, &mut obs)
+                .map_err(|e| TcError::InternalError { code: e.code(), span: e.span() })?;
         }
     }
     Ok(())
@@ -150,33 +153,34 @@ where
     let resources = build_resource_db(module, src).map_err(ForEachIrError::Type)?;
     let nominals = build_nominal_db(module, src).map_err(ForEachIrError::Type)?;
     let iso = build_iso_db(module, src).map_err(ForEachIrError::Type)?;
-    let mut arena = irgen::arena::ArenaAllocator::new();
+        let mut arena = irgen::arena::ArenaAllocator::new();
 
-    for decl in module.decls.iter() {
-        if decl.kind != DeclKind::Word {
-            continue;
-        }
-        if decl.body.is_none() {
-            continue;
-        }
-        let Some(sig_span) = decl.sig else {
-            return Err(ForEachIrError::Type(TcError::NoSig { span: decl.name }));
-        };
-        let sig = parse_word_sig(src, sig_span).map_err(|_| TcError::TypeParseFailed { span: sig_span }).map_err(ForEachIrError::Type)?;
-        let mut null_obs = NullObserver;
-        let out_words =
-            build_ir_word(decl, src, env, subtypes, &mmio, &resources, &nominals, &iso, checks, allow_raw_casts, &sig, &mut arena, &mut null_obs)
+        for decl in module.decls.iter() {
+            if decl.kind != DeclKind::Word {
+                continue;
+            }
+            if decl.body.is_none() {
+                continue;
+            }
+            arena.reset();
+            let Some(sig_span) = decl.sig else {
+                return Err(ForEachIrError::Type(TcError::NoSig { span: decl.name }));
+            };
+            let sig = parse_word_sig(src, sig_span).map_err(|e| TcError::InternalError { code: e.code, span: e.span }).map_err(ForEachIrError::Type)?;
+            let mut null_obs = NullObserver;
+            let out_words =
+                build_ir_word(decl, src, env, subtypes, &mmio, &resources, &nominals, &iso, checks, allow_raw_casts, &sig, &mut arena, &mut null_obs)
+                    .map_err(ForEachIrError::Type)?;
+            lir::verify_word(out_words.word)
+                .map_err(|e| TcError::InternalError { code: e.code(), span: e.span() })
                 .map_err(ForEachIrError::Type)?;
-        lir::verify_word(out_words.word)
-            .map_err(|e| TcError::Internal { span: e.span() })
-            .map_err(ForEachIrError::Type)?;
-        f(out_words.word).map_err(ForEachIrError::Consumer)?;
-        for w in out_words.extra_words.iter() {
-            lir::verify_word(w)
-                .map_err(|e| TcError::Internal { span: e.span() })
-                .map_err(ForEachIrError::Type)?;
-            f(w).map_err(ForEachIrError::Consumer)?;
-        }
+            f(out_words.word).map_err(ForEachIrError::Consumer)?;
+            for w in out_words.extra_words.iter() {
+                lir::verify_word(w)
+                    .map_err(|e| TcError::InternalError { code: e.code(), span: e.span() })
+                    .map_err(ForEachIrError::Type)?;
+                f(w).map_err(ForEachIrError::Consumer)?;
+            }
     }
     Ok(())
 }

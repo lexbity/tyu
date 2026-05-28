@@ -167,6 +167,8 @@ pub enum TcError {
 
     // 3900-3907: Capacity/Internal
     AtomTooLong { span: Span },
+    /// Catch-all for errors converted from other error types (e.g., VerifyError).
+    InternalError { code: u32, span: Span },
     TypeTableFull { span: Span },
     BlockTableFull { span: Span },
     BlockNotFound { span: Span },
@@ -316,6 +318,7 @@ impl TcError {
             TcError::CallPopQuot { .. } => 3758,
             TcError::QuoteSyntax { .. } => 3760,
             TcError::AtomTooLong { .. } => 3901,
+            TcError::InternalError { code, .. } => code,
             TcError::TypeTableFull { .. } => 3902,
             TcError::BlockTableFull { .. } => 3903,
             TcError::BlockNotFound { .. } => 3904,
@@ -465,6 +468,7 @@ impl TcError {
             | TcError::CallPopQuot { span }
             | TcError::QuoteSyntax { span }
             | TcError::AtomTooLong { span }
+            | TcError::InternalError { span, .. }
             | TcError::TypeTableFull { span }
             | TcError::BlockTableFull { span }
             | TcError::BlockNotFound { span }

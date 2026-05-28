@@ -25,6 +25,15 @@ impl ArenaAllocator {
         self.len += 1;
         Ok(&*slot)
     }
+
+    /// Reset the arena, dropping all allocated words and resetting the length to zero.
+    /// This allows the same arena to be reused across multiple `build_ir_word` calls.
+    pub fn reset(&mut self) {
+        for i in 0..self.len {
+            unsafe { self.words[i].assume_init_drop() };
+        }
+        self.len = 0;
+    }
 }
 
 impl Default for ArenaAllocator {

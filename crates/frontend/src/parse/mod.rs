@@ -75,7 +75,7 @@ impl<'a> Parser<'a> {
 
         while self.look.kind != TokenKind::KwEnd && self.look.kind != TokenKind::Eof {
             if self.look.kind == TokenKind::Ident && self.slice(self.look.span).starts_with(b"@") {
-                let _ = pending_attrs.push(self.look.span);
+                pending_attrs.push(self.look.span).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
                 self.bump();
                 continue;
             }
@@ -83,58 +83,58 @@ impl<'a> Parser<'a> {
             match self.look.kind {
                 TokenKind::KwImport => {
                     let imp = self.parse_import_ast()?;
-                    let _ = ast.imports.push(imp);
+                    ast.imports.push(imp).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
                 }
                 TokenKind::KwExport => {
                     self.parse_export_ast(&mut ast)?;
                 }
                 TokenKind::PunctColon => {
                     let decl = self.parse_word_ast(&mut pending_attrs)?;
-                    let _ = ast.decls.push(decl);
+                    ast.decls.push(decl).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
                 }
                 TokenKind::KwStruct => {
                     let (decl, sdecl) = self.parse_struct_decl_ast(&mut pending_attrs)?;
-                    let _ = ast.decls.push(decl);
-                    let _ = ast.structs.push(sdecl);
+                    ast.decls.push(decl).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
+                    ast.structs.push(sdecl).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
                 }
                 TokenKind::KwEnum => {
                     let (decl, edecl) = self.parse_enum_decl_ast(&mut pending_attrs)?;
-                    let _ = ast.decls.push(decl);
-                    let _ = ast.enums.push(edecl);
+                    ast.decls.push(decl).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
+                    ast.enums.push(edecl).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
                 }
                 TokenKind::KwRegisterMap => {
                     let decl = self.parse_register_map_decl_ast(&mut pending_attrs)?;
-                    let _ = ast.decls.push(decl);
+                    ast.decls.push(decl).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
                 }
                 TokenKind::KwType => {
                     let decl = self.parse_semi_decl_ast(DeclKind::Type, &mut pending_attrs)?;
-                    let _ = ast.decls.push(decl);
+                    ast.decls.push(decl).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
                 }
                 TokenKind::KwSubtype => {
                     let (decl, st) = self.parse_subtype_decl_ast(&mut pending_attrs)?;
-                    let _ = ast.decls.push(decl);
+                    ast.decls.push(decl).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
                     if let Some(st) = st {
-                        let _ = ast.subtypes.push(st);
+                        ast.subtypes.push(st).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
                     }
                 }
                 TokenKind::KwConst => {
                     let (decl, inst) = self.parse_const_decl_ast(&mut pending_attrs)?;
-                    let _ = ast.decls.push(decl);
+                    ast.decls.push(decl).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
                     if let Some(inst) = inst {
-                        let _ = ast.instances.push(inst);
+                        ast.instances.push(inst).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
                     }
                 }
                 TokenKind::KwResource => {
                     let decl = self.parse_resource_decl_ast(&mut pending_attrs)?;
-                    let _ = ast.decls.push(decl);
+                    ast.decls.push(decl).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
                 }
                 TokenKind::KwOwned => {
                     let decl = self.parse_semi_decl_ast(DeclKind::Owned, &mut pending_attrs)?;
-                    let _ = ast.decls.push(decl);
+                    ast.decls.push(decl).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
                 }
                 TokenKind::KwIso => {
                     let decl = self.parse_semi_decl_ast(DeclKind::Iso, &mut pending_attrs)?;
-                    let _ = ast.decls.push(decl);
+                    ast.decls.push(decl).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
                 }
                 _ => {
                     // recovery: skip token and reset pending attrs (attributes only apply to decls)
@@ -182,7 +182,7 @@ impl<'a> Parser<'a> {
             while self.look.kind != TokenKind::PunctRBrace && self.look.kind != TokenKind::Eof {
                 if self.look.kind == TokenKind::Ident {
                     let q = self.capture_qualified_name(ParseError::ExpectedQualIdent { span: self.look.span })?;
-                    let _ = names.push(q);
+                    names.push(q).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
                     continue;
                 }
                 if self.look.kind == TokenKind::PunctComma {
@@ -212,7 +212,7 @@ impl<'a> Parser<'a> {
             while self.look.kind != TokenKind::PunctRBrace && self.look.kind != TokenKind::Eof {
                 if self.look.kind == TokenKind::Ident {
                     let q = self.capture_qualified_name(ParseError::ExpectedExportName { span: self.look.span })?;
-                    let _ = ast.exports.push(q);
+                    ast.exports.push(q).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
                     continue;
                 }
                 if self.look.kind == TokenKind::PunctComma {
@@ -225,7 +225,7 @@ impl<'a> Parser<'a> {
             self.bump();
         } else if self.look.kind == TokenKind::Ident {
             let q = self.capture_qualified_name(ParseError::ExpectedExportName { span: self.look.span })?;
-            let _ = ast.exports.push(q);
+            ast.exports.push(q).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
         }
 
         if self.look.kind == TokenKind::PunctSemi {
