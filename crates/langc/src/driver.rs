@@ -35,18 +35,12 @@ fn init_env(
     let mut st_len = 0usize;
     for s in module.subtypes.iter() {
         if st_len >= st_buf.len() {
-            break;
+            return Err(2020u32); // too many subtypes (max 64)
         }
         let name = slice_span(src, s.name);
         let base = slice_span(src, s.base);
-        let name = match TypeAtom::new(name) {
-            Some(n) => n,
-            None => continue,
-        };
-        let base = match TypeAtom::new(base) {
-            Some(n) => n,
-            None => continue,
-        };
+        let name = TypeAtom::new(name).ok_or(2021u32)?; // subtype name too long
+        let base = TypeAtom::new(base).ok_or(2022u32)?; // base type name too long
         st_buf[st_len] = SubtypeInfo {
             name,
             base,
@@ -551,15 +545,16 @@ fn load_import_sigs(
             };
             let sig = typecheck::parse_word_sig(def_src.as_slice(), sig_span)
                 .map_err(|_| 2205u32)?;
-            if *env_len < env.len() {
-                let name_atom = TypeAtom::new(name).ok_or(2206u32)?;
-                env[*env_len] = WordEntry {
-                    name: name_atom,
-                    sig,
-                    may_suspend: d.effect_suspend,
-                };
-                *env_len += 1;
+            if *env_len >= env.len() {
+                return Err(2207u32); // too many imported words (max 256 total)
             }
+            let name_atom = TypeAtom::new(name).ok_or(2206u32)?;
+            env[*env_len] = WordEntry {
+                name: name_atom,
+                sig,
+                may_suspend: d.effect_suspend,
+            };
+            *env_len += 1;
         }
     }
     Ok(())
@@ -580,15 +575,16 @@ fn load_local_sigs(
             continue;
         };
         let sig = typecheck::parse_word_sig(src, sig_span).map_err(|_| 2219u32)?;
-        if *env_len < env.len() {
-            let name_atom = TypeAtom::new(name).ok_or(2220u32)?;
+        if *env_len >= env.len() {
+            return Err(2223u32); // too many words in module (max 256)
+        }
+        let name_atom = TypeAtom::new(name).ok_or(2220u32)?;
         env[*env_len] = WordEntry {
             name: name_atom,
             sig,
             may_suspend: d.effect_suspend,
         };
         *env_len += 1;
-    }
     }
     Ok(())
 }

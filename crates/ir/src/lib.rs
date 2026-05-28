@@ -208,20 +208,20 @@ pub fn verify_word(w: &Word) -> Result<(), VerifyError> {
     let Some(entry_block) = entry else {
         return Err(VerifyError {
             code: 9001,
-            span: Span::new(0, 0),
+            span: Span::UNKNOWN,
         });
     };
     if entry_block.entry_stack.len() != w.sig.in_len as usize {
         return Err(VerifyError {
             code: 9002,
-            span: Span::new(0, 0),
+            span: Span::UNKNOWN,
         });
     }
     for i in 0..(w.sig.in_len as usize) {
         if *entry_block.entry_stack.get(i).expect("verified entry stack len") != w.sig.inputs[i] {
             return Err(VerifyError {
                 code: 9003,
-                span: Span::new(0, 0),
+                span: Span::UNKNOWN,
             });
         }
     }
@@ -485,7 +485,7 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
         }
     }
     if !terminated {
-        return Err(VerifyError { code: 9035, span: Span::new(0, 0) });
+        return Err(VerifyError { code: 9035, span: Span::UNKNOWN });
     }
     Ok(())
 }
@@ -537,7 +537,7 @@ pub fn write_word(out: &mut impl Output, w: &Word) {
 }
 
 fn type_atom(w: &Word, id: TypeId) -> &Atom {
-    w.types.get(id.0 as usize).expect("type id verified by verifier")
+    w.types.get(id.0 as usize).unwrap_or(&AT_EMPTY)
 }
 
 fn write_sig(out: &mut impl Output, w: &Word, sig: &Sig) {

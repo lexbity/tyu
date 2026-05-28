@@ -44,7 +44,7 @@ fn word_with_single_block(sig: Sig, block_ops: &[OpKind]) -> Word {
     for &kind in block_ops {
         ops.push(Op {
             kind,
-            span: Span::new(0, 0),
+            span: Span::UNKNOWN,
         })
         .unwrap();
     }
@@ -96,12 +96,12 @@ fn verifier_rejects_branch_stack_mismatch() {
     let mut b0_ops: FixedVec<Op, 96> = FixedVec::new();
     b0_ops.push(Op {
         kind: OpKind::ConstI64(1),
-        span: Span::new(0, 0),
+        span: Span::UNKNOWN,
     })
     .unwrap();
     b0_ops.push(Op {
         kind: OpKind::Br { target: BlockId(1) },
-        span: Span::new(0, 0),
+        span: Span::UNKNOWN,
     })
     .unwrap();
     blocks
@@ -116,7 +116,7 @@ fn verifier_rejects_branch_stack_mismatch() {
     let mut b1_ops: FixedVec<Op, 96> = FixedVec::new();
     b1_ops.push(Op {
         kind: OpKind::Ret,
-        span: Span::new(0, 0),
+        span: Span::UNKNOWN,
     })
     .unwrap();
     blocks

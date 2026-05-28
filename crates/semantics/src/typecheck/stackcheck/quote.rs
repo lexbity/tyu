@@ -267,7 +267,7 @@ pub(super) fn typecheck_quote_body(
                 let q = capture_balanced(&mut lex, slice, TokenKind::PunctLBracket, TokenKind::PunctRBracket, tok.span.start)
                     .map_err(|code| TcError { code, span: quot_span })?;
                 let _ = q;
-                push(stack, sp, Value::Quot(Span::new(0, 0)))?;
+                push(stack, sp, Value::Quot(Span::UNKNOWN))?;
             }
             _ => {} // ignore other punctuation in MVP
         }

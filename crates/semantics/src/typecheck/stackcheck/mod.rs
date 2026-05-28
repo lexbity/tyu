@@ -117,17 +117,7 @@ pub fn typecheck_word_body(
                 if v == Value::Plain(TypeAtom::SCOPED) {
                     return Err(TcError { code: 3504, span: body_span });
                 }
-	                let ty = match v {
-	                    Value::Plain(t) => t,
-	                    Value::Scoped { ty, .. } => ty,
-	                    Value::Resource(_) => TypeAtom::RESOURCE,
-	                    Value::Quot(_) => TypeAtom::QUOT,
-	                    Value::MmioPlace(_) => TypeAtom::MMIO,
-	                    Value::Ptr { mutable: false, .. } => TypeAtom::PTR,
-	                    Value::Ptr { mutable: true, .. } => TypeAtom::PTR_MUT,
-	                    Value::MmioPtr { mutable: false, .. } => TypeAtom::PTR,
-	                    Value::MmioPtr { mutable: true, .. } => TypeAtom::PTR_MUT,
-	                };
+	                let ty = v.to_type_atom();
                 let lname = TypeAtom::new(&slice[name.span.start..name.span.end]).ok_or(TcError {
                     code: 3203,
                     span: Span::new(body_span.start + name.span.start, body_span.start + name.span.end),
@@ -283,17 +273,7 @@ pub fn typecheck_word_body(
                 if sp == 0 {
                     return Err(TcError { code: 3505, span: body_span });
                 }
-                let top_ty = match stack[sp - 1] {
-                    Value::Plain(t) => t,
-                    Value::Scoped { ty, .. } => ty,
-                    Value::Resource(_) => TypeAtom::RESOURCE,
-                    Value::Quot(_) => TypeAtom::QUOT,
-                    Value::MmioPlace(_) => TypeAtom::MMIO,
-                    Value::Ptr { mutable: false, .. } => TypeAtom::PTR,
-                    Value::Ptr { mutable: true, .. } => TypeAtom::PTR_MUT,
-                    Value::MmioPtr { mutable: false, .. } => TypeAtom::PTR,
-                    Value::MmioPtr { mutable: true, .. } => TypeAtom::PTR_MUT,
-                };
+                let top_ty = stack[sp - 1].to_type_atom();
                 if array_elem_type(top_ty).is_none() && top_ty != TypeAtom::new(b"Region").unwrap() {
                     return Err(TcError { code: 3515, span: body_span });
                 }
@@ -596,18 +576,8 @@ pub fn typecheck_word_body(
                     if name == b"as?" {
                         // ( base -- subtype ok ) for subtypes; for MVP treat others as identity + ok
                         let v = pop(&stack, &mut sp).ok_or(TcError { code: 3297, span: body_span })?;
-	                        let got = match v {
-	                            Value::Plain(t) => t,
-	                            Value::Scoped { ty, .. } => ty,
-	                            Value::Resource(_) => TypeAtom::RESOURCE,
-	                            Value::Quot(_) => TypeAtom::QUOT,
-	                            Value::MmioPlace(_) => TypeAtom::MMIO,
-	                            Value::Ptr { mutable: false, .. } => TypeAtom::PTR,
-	                            Value::Ptr { mutable: true, .. } => TypeAtom::PTR_MUT,
-	                            Value::MmioPtr { mutable: false, .. } => TypeAtom::PTR,
-	                            Value::MmioPtr { mutable: true, .. } => TypeAtom::PTR_MUT,
-	                        };
-                        if let Some(st) = find_subtype(subtypes, ty_atom) {
+	                        let got = v.to_type_atom();
+                         if let Some(st) = find_subtype(subtypes, ty_atom) {
                             if !type_compatible(got, st.base, subtypes) {
                                 return Err(TcError { code: 3298, span: body_span });
                             }
@@ -629,18 +599,8 @@ pub fn typecheck_word_body(
                     }
                     if name == b"as" {
                         let v = pop(&stack, &mut sp).ok_or(TcError { code: 3299, span: body_span })?;
-	                        let got = match v {
-	                            Value::Plain(t) => t,
-	                            Value::Scoped { ty, .. } => ty,
-	                            Value::Resource(_) => TypeAtom::RESOURCE,
-	                            Value::Quot(_) => TypeAtom::QUOT,
-	                            Value::MmioPlace(_) => TypeAtom::MMIO,
-	                            Value::Ptr { mutable: false, .. } => TypeAtom::PTR,
-	                            Value::Ptr { mutable: true, .. } => TypeAtom::PTR_MUT,
-	                            Value::MmioPtr { mutable: false, .. } => TypeAtom::PTR,
-	                            Value::MmioPtr { mutable: true, .. } => TypeAtom::PTR_MUT,
-	                        };
-                        if let Some(st) = find_subtype(subtypes, ty_atom) {
+	                        let got = v.to_type_atom();
+                         if let Some(st) = find_subtype(subtypes, ty_atom) {
                             if !type_compatible(got, st.base, subtypes) {
                                 return Err(TcError { code: 3300, span: body_span });
                             }

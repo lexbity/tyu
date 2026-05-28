@@ -6,7 +6,7 @@ use frontend::span::Span;
 
 pub fn push(stack: &mut [Value; 256], sp: &mut usize, v: Value) -> Result<(), TcError> {
     if *sp >= stack.len() {
-        return Err(TcError { code: 3206, span: Span::new(0, 0) });
+        return Err(TcError { code: 3206, span: Span::UNKNOWN });
     }
     stack[*sp] = v;
     *sp += 1;
@@ -365,17 +365,7 @@ pub fn apply_sig(
     // Check types from top.
 	    for i in 0..need {
 	        let got = stack[*sp - need + i];
-	        let got = match got {
-	            Value::Plain(t) => t,
-	            Value::Scoped { ty, .. } => ty,
-            Value::Resource(_) => TypeAtom::new(b"resource").unwrap(),
-                    Value::Quot(_) => TypeAtom::new(b"quot").unwrap(),
-                    Value::MmioPlace(_) => TypeAtom::new(b"mmio").unwrap(),
-                    Value::Ptr { mutable: false, .. } => TypeAtom::new(b"ptr").unwrap(),
-                    Value::Ptr { mutable: true, .. } => TypeAtom::new(b"ptr_mut").unwrap(),
-                    Value::MmioPtr { mutable: false, .. } => TypeAtom::new(b"ptr").unwrap(),
-                    Value::MmioPtr { mutable: true, .. } => TypeAtom::new(b"ptr_mut").unwrap(),
-	        };
+	        let got = got.to_type_atom();
         if !type_compatible(got, sig.inputs[i], subtypes) {
             return Err(TcError { code: 3212, span });
         }

@@ -58,7 +58,7 @@ impl<'a> X86_64HostedBackend<'a> {
             uses_regions: false,
             uses_tasks: false,
             str_len: 0,
-            str_spans: [Span::new(0, 0); 128],
+            str_spans: [Span::UNKNOWN; 128],
             str_ids: [0u32; 128],
             debug_trap_loc,
             cur_word_id: 0,
