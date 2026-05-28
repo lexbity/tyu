@@ -181,13 +181,142 @@ pub fn find_word_decl<'a>(m: &'a ModuleAst, src: &[u8], name: &[u8]) -> Option<&
     None
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use frontend::fixed::FixedVec;
+    use frontend::span::Span;
+    use frontend::parse::Parser;
+
+    fn parse(src: &str) -> ModuleAst {
+        Parser::new(src.as_bytes()).parse_module_ast().unwrap()
+    }
+
+    fn make_attrs(spans: &[Span]) -> FixedVec<Span, 16> {
+        let mut v = FixedVec::new();
+        for &s in spans { v.push(s).unwrap(); }
+        v
+    }
+
+    // -- sig_eq --
+
+    #[test]
+    fn test_sig_eq_identical() {
+        assert!(sig_eq(b"( i64 -- i64 )", b"( i64 -- i64 )"));
+    }
+
+    #[test]
+    fn test_sig_eq_different_inputs() {
+        assert!(!sig_eq(b"( i64 -- bool )", b"( bool -- bool )"));
+    }
+
+    #[test]
+    fn test_sig_eq_empty() {
+        assert!(sig_eq(b"( -- )", b"( -- )"));
+    }
+
+    // -- attrs_eq --
+
+    #[test]
+    fn test_attrs_eq_identical() {
+        let def = make_attrs(&[Span::new(0, 3), Span::new(5, 8)]);
+        let mo = make_attrs(&[Span::new(0, 3), Span::new(5, 8)]);
+        assert!(attrs_eq(b"foobar", &def, b"foobar", &mo));
+    }
+
+    #[test]
+    fn test_attrs_eq_different() {
+        let def = make_attrs(&[Span::new(0, 3)]);
+        let mo = make_attrs(&[Span::new(0, 4)]);
+        assert!(!attrs_eq(b"foobar", &def, b"foobar", &mo));
+    }
+
+    // -- is_exported --
+
+    #[test]
+    fn test_is_exported_with_export_stmt() {
+        let src = b"module m; export { foo } ; : bar ; : foo ; end;";
+        let ast = parse(core::str::from_utf8(src).unwrap());
+        assert!(is_exported(&ast, src, b"foo"));
+        assert!(!is_exported(&ast, src, b"bar"));
+    }
+
+    #[test]
+    fn test_is_exported_decls_only() {
+        let src = b"module m; : foo ; : bar ; end;";
+        let ast = parse(core::str::from_utf8(src).unwrap());
+        assert!(is_exported(&ast, src, b"foo"));
+        assert!(is_exported(&ast, src, b"bar"));
+    }
+
+    // -- find_decl --
+
+    #[test]
+    fn test_find_decl_found() {
+        let src = b"module m; : foo ; end;";
+        let ast = parse(core::str::from_utf8(src).unwrap());
+        assert!(find_decl(&ast, src, b"foo").is_some());
+    }
+
+    #[test]
+    fn test_find_decl_not_found() {
+        let src = b"module m; : foo ; end;";
+        let ast = parse(core::str::from_utf8(src).unwrap());
+        assert!(find_decl(&ast, src, b"bar").is_none());
+    }
+
+    // -- export_iter --
+
+    #[test]
+    fn test_export_iter_with_export_stmt() {
+        let src = b"module m; export { foo, bar } ; : baz ; end;";
+        let ast = parse(core::str::from_utf8(src).unwrap());
+        let names: Vec<&[u8]> = export_iter(&ast, src).collect();
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&b"foo"));
+    }
+
+    #[test]
+    fn test_export_iter_no_export_stmt() {
+        let src = b"module m; : foo ; : bar ; end;";
+        let ast = parse(core::str::from_utf8(src).unwrap());
+        let names: Vec<&[u8]> = export_iter(&ast, src).collect();
+        assert_eq!(names.len(), 2);
+    }
+
+    // -- iface_error_message --
+
+    #[test]
+    fn test_error_messages_all_codes() {
+        let codes: &[u32] = &[
+            2020, 2021, 2022, 2201, 2202, 2203, 2204, 2205, 2207,
+            2210, 2211, 2212, 2213, 2214, 2215, 2216, 2217, 2218, 2219,
+            2220, 2223, 2300,
+        ];
+        for &code in codes {
+            assert!(!iface_error_message(code).is_empty(), "code {code} has empty message");
+        }
+    }
+
+    #[test]
+    fn test_error_message_unknown() {
+        assert_eq!(iface_error_message(9999), b"interface/import error");
+    }
+}
+
 pub fn iface_error_message(code: u32) -> &'static [u8] {
     match code {
-        // `check_program` import/interface errors (stable codes).
+        // Module and subtype errors (from driver.rs)
+        2020 => b"too many subtypes (max 64)",
+        2021 => b"subtype name too long",
+        2022 => b"base type name too long",
+        // `check_program` import/interface errors.
         2201 => b"import interface file (.def) not found",
         2202 => b"failed to parse imported interface (.def)",
         2203 => b"imported symbol not exported by interface",
         2204 => b"failed to parse imported implementation (.mod)",
+        2205 => b"failed to parse signature in imported interface",
+        2207 => b"too many imported words (max 256 total)",
         2210 => b"implementation missing exported symbol from interface",
         2211 => b"implementation exports symbol not present in interface",
         2212 => b"interface export refers to missing declaration",
@@ -198,6 +327,8 @@ pub fn iface_error_message(code: u32) -> &'static [u8] {
         2217 => b"implementation exported word missing signature",
         2218 => b"interface/implementation word signature mismatch",
         2219 => b"interface/implementation word effect mismatch",
+        2220 => b"local word name too long",
+        2223 => b"too many words in module (max 256)",
         2300 => b"failed to parse module interface (.def) for current module",
         _ => b"interface/import error",
     }
