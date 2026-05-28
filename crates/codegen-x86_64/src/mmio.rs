@@ -41,19 +41,60 @@ pub fn emit_mmio_load(gen: &mut X86_64HostedBackend<'_>, width: u32, signed: boo
     gen.out.write(b"  add r15, 8\n");
 }
 
-pub fn emit_mmio_store(gen: &mut X86_64HostedBackend<'_>, width: u32, span: Span) {
+pub fn emit_mmio_store(gen: &mut X86_64HostedBackend<'_>, width: u32, access: lir::MmioAccess, span: Span) {
     gen.out.write(b"  sub r15, 8\n");
-    gen.out.write(b"  mov rcx, [r15]\n");
+    gen.out.write(b"  mov rcx, [r15]\n"); // value to store
     gen.out.write(b"  sub r15, 8\n");
-    gen.out.write(b"  mov rax, [r15]\n");
+    gen.out.write(b"  mov rax, [r15]\n"); // address
     emit_mmio_bounds_check(gen, width, span);
-    match width {
-        1 => gen.out.write(b"  mov byte [__mmio_mem + rax], cl\n"),
-        2 => gen.out.write(b"  mov word [__mmio_mem + rax], cx\n"),
-        4 => gen.out.write(b"  mov dword [__mmio_mem + rax], ecx\n"),
-        8 => gen.out.write(b"  mov qword [__mmio_mem + rax], rcx\n"),
-        _ => {
-            gen.emit_trap_with_loc(lir::trap_code_u32(lir::TrapCode::Unreachable), span);
+
+    match access {
+        lir::MmioAccess::Rw => {
+            // Plain write: mov [mem+rax], value
+            match width {
+                1 => gen.out.write(b"  mov byte [__mmio_mem + rax], cl\n"),
+                2 => gen.out.write(b"  mov word [__mmio_mem + rax], cx\n"),
+                4 => gen.out.write(b"  mov dword [__mmio_mem + rax], ecx\n"),
+                8 => gen.out.write(b"  mov qword [__mmio_mem + rax], rcx\n"),
+                _ => gen.emit_trap_with_loc(lir::trap_code_u32(lir::TrapCode::Unreachable), span),
+            }
+        }
+        lir::MmioAccess::W1c => {
+            // Write-1-to-clear: *reg = *reg & ~value
+            match width {
+                1 => gen.out.write(b"  movzx rdx, byte [__mmio_mem + rax]\n"),
+                2 => gen.out.write(b"  movzx rdx, word [__mmio_mem + rax]\n"),
+                4 => gen.out.write(b"  mov edx, dword [__mmio_mem + rax]\n"),
+                8 => gen.out.write(b"  mov rdx, qword [__mmio_mem + rax]\n"),
+                _ => { gen.emit_trap_with_loc(lir::trap_code_u32(lir::TrapCode::Unreachable), span); return; }
+            }
+            gen.out.write(b"  not rcx\n");
+            gen.out.write(b"  and rdx, rcx\n");
+            match width {
+                1 => gen.out.write(b"  mov byte [__mmio_mem + rax], dl\n"),
+                2 => gen.out.write(b"  mov word [__mmio_mem + rax], dx\n"),
+                4 => gen.out.write(b"  mov dword [__mmio_mem + rax], edx\n"),
+                8 => gen.out.write(b"  mov qword [__mmio_mem + rax], rdx\n"),
+                _ => {}
+            }
+        }
+        lir::MmioAccess::W1s => {
+            // Write-1-to-set: *reg = *reg | value
+            match width {
+                1 => gen.out.write(b"  movzx rdx, byte [__mmio_mem + rax]\n"),
+                2 => gen.out.write(b"  movzx rdx, word [__mmio_mem + rax]\n"),
+                4 => gen.out.write(b"  mov edx, dword [__mmio_mem + rax]\n"),
+                8 => gen.out.write(b"  mov rdx, qword [__mmio_mem + rax]\n"),
+                _ => { gen.emit_trap_with_loc(lir::trap_code_u32(lir::TrapCode::Unreachable), span); return; }
+            }
+            gen.out.write(b"  or rdx, rcx\n");
+            match width {
+                1 => gen.out.write(b"  mov byte [__mmio_mem + rax], dl\n"),
+                2 => gen.out.write(b"  mov word [__mmio_mem + rax], dx\n"),
+                4 => gen.out.write(b"  mov dword [__mmio_mem + rax], edx\n"),
+                8 => gen.out.write(b"  mov qword [__mmio_mem + rax], rdx\n"),
+                _ => {}
+            }
         }
     }
 }

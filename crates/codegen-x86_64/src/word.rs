@@ -396,11 +396,11 @@ impl<'a> X86_64HostedBackend<'a> {
                 mmio::emit_mmio_load(self, width, signed, op.span);
                 Ok(())
             }
-            lir::OpKind::MmioVolStore { ty, .. } => {
+            lir::OpKind::MmioVolStore { ty, access, .. } => {
                 self.uses_mmio = true;
                 let (bits, _signed) = prim_ty_bits_signed(w, ty).ok_or(CodegenError::UnknownTypeProperties { type_id: ty })?;
                 let width = core::cmp::max(1u32, (bits as u32) / 8);
-                mmio::emit_mmio_store(self, width, op.span);
+                mmio::emit_mmio_store(self, width, access, op.span);
                 Ok(())
             }
             lir::OpKind::MmioVolLoadField { reg_ty, field_ty, mask, shift, .. } => {

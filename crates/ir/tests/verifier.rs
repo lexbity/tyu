@@ -1,6 +1,6 @@
 use frontend::{fixed::FixedVec, span::Span};
 
-use ir::{Atom, Block, BlockId, Op, OpKind, Sig, TypeId, Word, TY_BOOL, TY_EMPTY, TY_I64, TY_MMIO, TY_PTR, TY_PTR_MUT, TY_STR};
+use ir::{Atom, Block, BlockId, MmioAccess, Op, OpKind, Sig, TypeId, Word, TY_BOOL, TY_EMPTY, TY_I64, TY_MMIO, TY_PTR, TY_PTR_MUT, TY_STR};
 
 fn atom(bytes: &[u8]) -> Atom {
     Atom::new(bytes).unwrap()
@@ -895,7 +895,7 @@ fn verify_accepts_mmio_store() {
         &[
             OpKind::MmioPlace { place: atom(b"r"), addr: 0x1000 },
             OpKind::ConstI64(0),
-            OpKind::MmioVolStore { ty: TY_I64, place: atom(b"r") },
+            OpKind::MmioVolStore { ty: TY_I64, place: atom(b"r"), access: ir::MmioAccess::Rw },
             OpKind::ConstI64(0),
             OpKind::Ret,
         ],

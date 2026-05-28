@@ -134,7 +134,7 @@ pub enum OpKind {
     Store { ty: TypeId },
 
     MmioVolLoad { ty: TypeId, place: Atom },
-    MmioVolStore { ty: TypeId, place: Atom },
+    MmioVolStore { ty: TypeId, place: Atom, access: MmioAccess },
     MmioVolLoadField { reg_ty: TypeId, field_ty: TypeId, place: Atom, mask: u64, shift: u8 },
     MmioVolStoreField { reg_ty: TypeId, field_ty: TypeId, place: Atom, mask: u64, shift: u8 },
 
@@ -156,6 +156,20 @@ pub enum CmpKind {
     Ge,
     Eq,
     Ne,
+}
+
+/// MMIO register access mode, describing how reads and writes behave.
+/// This is a subset of the full `AccessMode` from the semantics crate,
+/// defined here so the IR and codegen can make code-generation decisions
+/// without depending on the semantics crate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MmioAccess {
+    /// Read-write: plain load/store.
+    Rw,
+    /// Write-1-to-clear: writing 1 clears the bit; writing 0 has no effect.
+    W1c,
+    /// Write-1-to-set: writing 1 sets the bit; writing 0 has no effect.
+    W1s,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -813,11 +827,16 @@ fn write_op(out: &mut impl Output, w: &Word, op: &Op) {
             out.write(b" ");
             out.write(place.as_bytes());
         }
-        OpKind::MmioVolStore { ty, place } => {
+        OpKind::MmioVolStore { ty, place, access } => {
             out.write(b"vol_store ");
             out.write(type_atom(w, ty).as_bytes());
             out.write(b" ");
             out.write(place.as_bytes());
+            out.write(match access {
+                MmioAccess::W1c => b" w1c",
+                MmioAccess::W1s => b" w1s",
+                MmioAccess::Rw => b"",
+            });
         }
         OpKind::MmioVolLoadField { reg_ty, field_ty, place, mask, shift } => {
             out.write(b"vol_load_field ");

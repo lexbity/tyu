@@ -1041,11 +1041,17 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                         return Err(TcError::ReturnTypeMismatch { span: name_abs });
                     }
                     let tid = self.ty_id_of_type(reg.reg_ty, name_abs)?;
+                    let access = match reg.access {
+                        crate::typecheck::mmio::AccessMode::W1c => lir::MmioAccess::W1c,
+                        crate::typecheck::mmio::AccessMode::W1s => lir::MmioAccess::W1s,
+                        _ => lir::MmioAccess::Rw,
+                    };
                     self.emit_op(
                         cur,
                         lir::OpKind::MmioVolStore {
                             ty: tid,
                             place: lir_atom(slice_span(self.src, reg.place_span))?,
+                            access,
                         },
                         name_abs,
                     )?;
@@ -1064,11 +1070,17 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                         return Err(TcError::ReturnTypeMismatch { span: name_abs });
                     }
                     let tid = self.ty_id_of_type(reg.reg_ty, name_abs)?;
+                    let access = match reg.access {
+                        crate::typecheck::mmio::AccessMode::W1c => lir::MmioAccess::W1c,
+                        crate::typecheck::mmio::AccessMode::W1s => lir::MmioAccess::W1s,
+                        _ => lir::MmioAccess::Rw,
+                    };
                     self.emit_op(
                         cur,
                         lir::OpKind::MmioVolStore {
                             ty: tid,
                             place: lir_atom(slice_span(self.src, reg.place_span))?,
+                            access,
                         },
                         name_abs,
                     )?;
