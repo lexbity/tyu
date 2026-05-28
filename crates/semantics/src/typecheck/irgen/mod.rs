@@ -16,7 +16,7 @@ use frontend::fixed::FixedVec;
 use frontend::lex::Lexer;
 use frontend::parse::DeclAst;
 use frontend::span::Span;
-use frontend::token::TokenKind;
+use frontend::token::{Token, TokenKind};
 use ir as lir;
 
 pub mod arena;
