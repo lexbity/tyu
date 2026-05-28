@@ -81,6 +81,7 @@ pub enum TrapCode {
     SubtypeFail,
     AssertFail,
     StackOverflow,
+    TaskQueueOverflow,
     Unreachable,
 }
 
@@ -90,6 +91,7 @@ pub const fn trap_code_u32(code: TrapCode) -> u32 {
         TrapCode::SubtypeFail => 21,
         TrapCode::AssertFail => 22,
         TrapCode::Unreachable => 23,
+        TrapCode::TaskQueueOverflow => 24,
         TrapCode::StackOverflow => 10,
     }
 }
@@ -873,6 +875,7 @@ fn write_op(out: &mut impl Output, w: &Word, op: &Op) {
                 TrapCode::SubtypeFail => b"SUBTYPE_FAIL",
                 TrapCode::AssertFail => b"ASSERT_FAIL",
                 TrapCode::StackOverflow => b"STACK_OVERFLOW",
+                TrapCode::TaskQueueOverflow => b"TASK_QUEUE_OVERFLOW",
                 TrapCode::Unreachable => b"UNREACHABLE",
             });
         }

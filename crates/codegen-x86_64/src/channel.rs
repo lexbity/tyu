@@ -214,7 +214,7 @@ pub fn emit_chan_send(gen: &mut X86_64HostedBackend<'_>, w: &lir::Word, op: &lir
     write_u32(gen.out, gfull);
     gen.out.write(b"\n");
     gen.out.write(b"  mov rdi, ");
-    write_u32(gen.out, lir::trap_code_u32(lir::TrapCode::Unreachable));
+    write_u32(gen.out, lir::trap_code_u32(lir::TrapCode::TaskQueueOverflow));
     gen.out.write(b"\n");
     gen.out.write(b"  jmp __lang_trap\n");
     gen.out.write(b".chan_send_wake_space_");
@@ -350,7 +350,7 @@ pub fn emit_chan_recv(gen: &mut X86_64HostedBackend<'_>, w: &lir::Word, op: &lir
     write_u32(gen.out, gfull);
     gen.out.write(b"\n");
     gen.out.write(b"  mov rdi, ");
-    write_u32(gen.out, lir::trap_code_u32(lir::TrapCode::Unreachable));
+    write_u32(gen.out, lir::trap_code_u32(lir::TrapCode::TaskQueueOverflow));
     gen.out.write(b"\n");
     gen.out.write(b"  jmp __lang_trap\n");
     gen.out.write(b".chan_recv_wake_space_");
