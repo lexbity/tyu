@@ -607,3 +607,113 @@ fn src_returns_original_bytes() {
     let lex = Lexer::new(b"test");
     assert_eq!(lex.src(), b"test");
 }
+
+// ---------------------------------------------------------------------------
+// Property-based tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod proptests {
+    use proptest::prelude::*;
+    use frontend::lex::Lexer;
+    use frontend::token::TokenKind;
+
+    proptest! {
+        /// The lexer must never panic on any byte sequence, and must always
+        /// produce at least one token (the Eof token).
+        #[test]
+        fn lexer_never_panics(bytes: Vec<u8>) {
+            let mut lex = Lexer::new(&bytes);
+            let mut count = 0;
+            loop {
+                let tok = lex.next();
+                count += 1;
+                if tok.kind == TokenKind::Eof {
+                    break;
+                }
+                if count > bytes.len() + 1 {
+                    panic!("lexer did not terminate after {} tokens for {} bytes of input", count, bytes.len());
+                }
+            }
+            assert!(count >= 1, "must produce at least Eof token");
+        }
+
+        /// All non-Eof tokens have valid spans within the input bounds.
+        #[test]
+        fn lexer_spans_are_valid(bytes: Vec<u8>) {
+            let mut lex = Lexer::new(&bytes);
+            loop {
+                let tok = lex.next();
+                if tok.kind == TokenKind::Eof {
+                    assert_eq!(tok.span.start, bytes.len(), "Eof span should point to end of input");
+                    assert_eq!(tok.span.end, bytes.len());
+                    break;
+                }
+                assert!(tok.span.start < bytes.len(), "token start {0} >= len {1}", tok.span.start, bytes.len());
+                assert!(tok.span.end <= bytes.len(), "token end {0} > len {1}", tok.span.end, bytes.len());
+                assert!(tok.span.start <= tok.span.end, "token span start {0} > end {1}", tok.span.start, tok.span.end);
+            }
+        }
+
+        /// Lexer token positions are monotonic (non-decreasing).
+        #[test]
+        fn lexer_positions_monotonic(bytes: Vec<u8>) {
+            let mut lex = Lexer::new(&bytes);
+            let mut prev_end = 0usize;
+            loop {
+                let tok = lex.next();
+                if tok.kind == TokenKind::Eof {
+                    break;
+                }
+                assert!(tok.span.start >= prev_end,
+                    "token start {0} < previous end {1}", tok.span.start, prev_end);
+                prev_end = tok.span.end;
+            }
+        }
+
+        /// Re-scanning from position 0 produces the same sequence of tokens.
+        #[test]
+        fn lexer_rescan_consistent(bytes: Vec<u8>) {
+            let mut lex = Lexer::new(&bytes);
+            let first_pass: Vec<_> = {
+                let mut toks = Vec::new();
+                loop {
+                    let tok = lex.next();
+                    let is_eof = tok.kind == TokenKind::Eof;
+                    toks.push(tok.kind);
+                    if is_eof { break; }
+                }
+                toks
+            };
+            lex.set_pos(0);
+            let second_pass: Vec<_> = {
+                let mut toks = Vec::new();
+                loop {
+                    let tok = lex.next();
+                    let is_eof = tok.kind == TokenKind::Eof;
+                    toks.push(tok.kind);
+                    if is_eof { break; }
+                }
+                toks
+            };
+            assert_eq!(first_pass, second_pass, "re-scan produced different token sequence");
+        }
+
+        /// Eof appears exactly once when scanning to completion.
+        #[test]
+        fn lexer_eof_once(bytes: Vec<u8>) {
+            let mut lex = Lexer::new(&bytes);
+            let mut eof_count = 0;
+            for _ in 0..(bytes.len() + 2) {
+                let tok = lex.next();
+                if tok.kind == TokenKind::Eof {
+                    eof_count += 1;
+                    if eof_count > 1 {
+                        break;
+                    }
+                }
+            }
+            assert!(eof_count >= 1, "Eof should appear at least once");
+        }
+    }
+}

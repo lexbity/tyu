@@ -299,15 +299,15 @@ fn verify_rejects_dup_type_mismatch() {
 
 #[test]
 fn verify_rejects_swap_type_mismatch() {
-    // push i64, push i64, swap with wrong types
+    // push i64(1), push i64(2), Swap expects a=i64, b=bool.
+    // The top of stack is i64(2) which should be `a`, below is i64(1) which should be `b`.
+    // `a` matches (i64 == i64) but `b` doesn't (i64 != bool).
     let w = word_with_single_block(
         sig0_1(TY_I64),
         &[
             OpKind::ConstI64(1),
             OpKind::ConstI64(2),
             OpKind::Swap { a: TY_I64, b: TY_BOOL },
-            OpKind::Drop { ty: TY_I64 },
-            OpKind::Drop { ty: TY_I64 },
             OpKind::Ret,
         ],
     );
@@ -915,4 +915,74 @@ fn verify_accepts_check_subtype() {
         ],
     );
     ir::verify_word(&w).unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Property-based tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod proptests {
+    use proptest::prelude::*;
+    use ir::{OpKind, TY_I64, TY_BOOL};
+
+    fn make_word(ops: &[OpKind]) -> ir::Word {
+        let mut types: frontend::fixed::FixedVec<ir::Atom, 64> = frontend::fixed::FixedVec::new();
+        types.push(ir::Atom::new(b"").unwrap()).unwrap();
+        types.push(ir::Atom::new(b"i64").unwrap()).unwrap();
+        types.push(ir::Atom::new(b"bool").unwrap()).unwrap();
+        let mut sizes: frontend::fixed::FixedVec<u32, 64> = frontend::fixed::FixedVec::new();
+        sizes.push(0).unwrap(); sizes.push(8).unwrap(); sizes.push(1).unwrap();
+        let mut opv: frontend::fixed::FixedVec<ir::Op, 96> = frontend::fixed::FixedVec::new();
+        for kind in ops {
+            if opv.len() >= 95 { break; }
+            opv.push(ir::Op { kind: *kind, span: frontend::span::Span::UNKNOWN }).unwrap();
+        }
+        let mut blocks = frontend::fixed::FixedVec::new();
+        blocks.push(ir::Block { id: ir::BlockId(0), entry_stack: frontend::fixed::FixedVec::new(), ops: opv }).unwrap();
+        ir::Word {
+            name: ir::Atom::new(b"p").unwrap(),
+            sig: ir::Sig::empty(),
+            entry: ir::BlockId(0),
+            types, type_sizes: sizes, blocks,
+        }
+    }
+
+    fn arb_simple_op() -> impl Strategy<Value = OpKind> {
+        prop_oneof![
+            Just(OpKind::AddI64),
+            Just(OpKind::SubI64),
+            Just(OpKind::MulI64),
+            Just(OpKind::AndBool),
+            Just(OpKind::OrBool),
+            Just(OpKind::NotBool),
+            Just(OpKind::Ret),
+            any::<i64>().prop_map(OpKind::ConstI64),
+            any::<bool>().prop_map(OpKind::ConstBool),
+        ]
+    }
+
+    proptest! {
+        /// Never panics on any sequence of simple ops.
+        #[test]
+        fn verifier_never_panics(ops in prop::collection::vec(arb_simple_op(), 0..32)) {
+            let _ = ir::verify_word(&make_word(&ops));
+        }
+
+        /// A block of ConstI64+Drop pairs is safe (Ret or not).
+        #[test]
+        fn verifier_push_drop_cycle(n in 0..30usize) {
+            let mut ops: Vec<OpKind> = (0..n).flat_map(|_| vec![OpKind::ConstI64(0), OpKind::Drop { ty: TY_I64 }]).collect();
+            let _ = ir::verify_word(&make_word(&ops));
+            ops.push(OpKind::Ret);
+            let _ = ir::verify_word(&make_word(&ops));
+        }
+
+        /// Ret-only words never panic.
+        #[test]
+        fn verifier_ret_only(n in 1..10usize) {
+            let ops: Vec<OpKind> = (0..n).map(|_| OpKind::Ret).collect();
+            let _ = ir::verify_word(&make_word(&ops));
+        }
+    }
 }

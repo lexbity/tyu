@@ -10,3 +10,6 @@ doctest = false
 [dependencies]
 frontend = { path = "../frontend" }
 
+[dev-dependencies]
+proptest = "1"
+
