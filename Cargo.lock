@@ -3,6 +3,31 @@
 version = 4
 
 [[package]]
+name = "codegen-core"
+version = "0.1.0"
+dependencies = [
+ "frontend",
+ "ir",
+]
+
+[[package]]
+name = "codegen-x86_64"
+version = "0.1.0"
+dependencies = [
+ "codegen-core",
+ "frontend",
+ "ir",
+ "semantics",
+]
+
+[[package]]
+name = "execution-tests"
+version = "0.1.0"
+dependencies = [
+ "codegen-core",
+]
+
+[[package]]
 name = "frontend"
 version = "0.1.0"
 
@@ -28,6 +53,7 @@ dependencies = [
 name = "lang-assemble"
 version = "0.1.0"
 dependencies = [
+ "codegen-core",
  "hosted",
  "hosted-rt",
 ]
@@ -36,6 +62,8 @@ dependencies = [
 name = "langc"
 version = "0.1.0"
 dependencies = [
+ "codegen-core",
+ "codegen-x86_64",
  "frontend",
  "hosted",
  "hosted-rt",

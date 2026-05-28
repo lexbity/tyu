@@ -72,12 +72,18 @@ pub fn read_file(path: &[u8]) -> Result<ByteBuf, Errno> {
         if n < buf.len() {
             let err = unsafe { c::ferror(f) };
             let eof = unsafe { c::feof(f) };
-            let _ = unsafe { c::fclose(f) };
+            let rc = unsafe { c::fclose(f) };
             if err != 0 {
                 return Err(Errno::last());
             }
             if eof != 0 {
+                if rc != 0 {
+                    return Err(Errno::last());
+                }
                 return Ok(out);
+            }
+            if rc != 0 {
+                return Err(Errno::last());
             }
             return Err(Errno(5));
         }
@@ -98,8 +104,11 @@ pub fn write_file(path: &[u8], bytes: &[u8]) -> Result<(), Errno> {
         let n = unsafe { c::fwrite(bytes[off..].as_ptr() as *const c_void, 1, bytes.len() - off, f) };
         if n == 0 {
             let err = unsafe { c::ferror(f) };
-            let _ = unsafe { c::fclose(f) };
+            let rc = unsafe { c::fclose(f) };
             if err != 0 {
+                return Err(Errno::last());
+            }
+            if rc != 0 {
                 return Err(Errno::last());
             }
             return Err(Errno(5));

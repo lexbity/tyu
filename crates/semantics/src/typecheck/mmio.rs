@@ -232,7 +232,7 @@ fn validate_regmap_body(src: &[u8], body: Span) -> Result<(), TcError> {
                             lex = probe3;
                         }
                         let hi = hi.max(lo);
-                        let bit_limit = (width * 8) as u32;
+                        let bit_limit = width * 8;
                         if hi >= bit_limit {
                             return Err(TcError { code: 3617, span: Span::new(body.start + lo_tok.span.start, body.start + lo_tok.span.end) });
                         }

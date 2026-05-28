@@ -7,6 +7,10 @@ pub struct RawArgs {
 }
 
 impl RawArgs {
+    /// # Safety
+    ///
+    /// `argv` must be a valid pointer to a null-terminated array of strings
+    /// with at least `argc` elements.
     pub const unsafe fn new(argc: isize, argv: *const *const c::c_char) -> Self {
         Self { argc, argv }
     }
@@ -19,6 +23,10 @@ impl RawArgs {
         } else {
             self.argc as usize
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     pub fn get(&self, index: usize) -> Option<*const c::c_char> {

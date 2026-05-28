@@ -20,7 +20,7 @@ pub fn run(prog: &[u8], args: &[&[u8]]) -> Result<ExitStatus, Errno> {
 
     let mut argv: [*const c::c_char; MAX_ARGS + 2] = [core::ptr::null(); MAX_ARGS + 2];
     argv[0] = prog_c.as_ptr_i8();
-    for i in 0..args.len() {
+    for (i, _a) in args.iter().enumerate() {
         let p = unsafe { arg_bufs[i].assume_init_ref() }.as_ptr_i8();
         argv[i + 1] = p;
     }
@@ -28,9 +28,10 @@ pub fn run(prog: &[u8], args: &[&[u8]]) -> Result<ExitStatus, Errno> {
 
     let pid = unsafe { c::fork() };
     if pid < 0 {
-        for i in 0..args.len() {
-            unsafe { arg_bufs[i].assume_init_drop() };
+        for buf in arg_bufs[..args.len()].iter_mut() {
+            unsafe { buf.assume_init_drop() };
         }
+        drop(prog_c);
         return Err(Errno::last());
     }
 
@@ -44,9 +45,10 @@ pub fn run(prog: &[u8], args: &[&[u8]]) -> Result<ExitStatus, Errno> {
     let mut status: i32 = 0;
     let waited = unsafe { c::waitpid(pid, &mut status as *mut i32, 0) };
     if waited < 0 {
-        for i in 0..args.len() {
-            unsafe { arg_bufs[i].assume_init_drop() };
+        for buf in arg_bufs[..args.len()].iter_mut() {
+            unsafe { buf.assume_init_drop() };
         }
+        drop(prog_c);
         return Err(Errno::last());
     }
 
@@ -56,8 +58,9 @@ pub fn run(prog: &[u8], args: &[&[u8]]) -> Result<ExitStatus, Errno> {
         (status >> 8) & 0xff
     };
 
-    for i in 0..args.len() {
-        unsafe { arg_bufs[i].assume_init_drop() };
+    for buf in arg_bufs[..args.len()].iter_mut() {
+        unsafe { buf.assume_init_drop() };
     }
+    drop(prog_c);
     Ok(ExitStatus { code })
 }

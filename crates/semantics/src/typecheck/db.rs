@@ -62,7 +62,7 @@ pub fn build_iso_db(module: &ModuleAst, src: &[u8]) -> Result<IsoDb, TcError> {
             continue;
         }
         let name = TypeAtom::new(slice_span(src, d.name)).ok_or(TcError { code: 3740, span: d.name })?;
-        let _ = types.push(name).map_err(|_| TcError { code: 3741, span: d.name })?;
+        types.push(name).map_err(|_| TcError { code: 3741, span: d.name })?;
     }
     Ok(IsoDb { types })
 }
@@ -86,9 +86,9 @@ pub fn build_resource_db(module: &ModuleAst, src: &[u8]) -> Result<ResourceDb, T
         let ty = if let Some(s) = d.sig {
             parse_type_atom_from_span(src, s).ok_or(TcError { code: 3521, span: s })?
         } else {
-            TypeAtom::new(b"i64").unwrap()
+            TypeAtom::I64
         };
-        let _ = items.push(ResourceInfo { name, ty }).map_err(|_| TcError { code: 3522, span: d.name })?;
+        items.push(ResourceInfo { name, ty }).map_err(|_| TcError { code: 3522, span: d.name })?;
     }
     Ok(ResourceDb { items })
 }
@@ -108,7 +108,7 @@ pub fn build_nominal_db(module: &ModuleAst, src: &[u8]) -> Result<NominalDb, TcE
                 }
             }
             let fty = parse_type_atom_from_span(src, f.ty).ok_or(TcError { code: 3713, span: f.ty })?;
-            let _ = fields
+            fields
                 .push(StructFieldInfo { name: fname, ty: fty })
                 .map_err(|_| TcError { code: 3714, span: f.name })?;
         }
@@ -120,7 +120,7 @@ pub fn build_nominal_db(module: &ModuleAst, src: &[u8]) -> Result<NominalDb, TcE
         let base = if let Some(s) = edecl.base {
             parse_type_atom_from_span(src, s).ok_or(TcError { code: 3721, span: s })?
         } else {
-            TypeAtom::new(b"i64").unwrap()
+            TypeAtom::I64
         };
         let mut variants: FixedVec<EnumVariantInfo, 64> = FixedVec::new();
         for v in edecl.variants.iter() {
@@ -130,7 +130,7 @@ pub fn build_nominal_db(module: &ModuleAst, src: &[u8]) -> Result<NominalDb, TcE
                     return Err(TcError { code: 3723, span: v.name });
                 }
             }
-            let _ = variants
+            variants
                 .push(EnumVariantInfo { name: vname, value: v.value })
                 .map_err(|_| TcError { code: 3724, span: v.name })?;
         }

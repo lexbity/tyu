@@ -66,6 +66,104 @@ fn lang_assemble_help() {
 }
 
 #[test]
+fn langc_unknown_target_triple_fails() {
+    build_tools();
+    let dir = fresh_dir("langc_unknown_target_triple_fails");
+    std::fs::write(
+        dir.join("Main.mod"),
+        b"module Main;\n: main ( -- i64 ) 0 ;\nend;\n",
+    )
+    .unwrap();
+    let out = Command::new(exe("langc"))
+        .current_dir(&dir)
+        .args(["--emit=ir", "--target=not-a-real-target", "Main.mod"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("E1019"), "expected E1019 in stderr: {stderr}");
+}
+
+#[test]
+fn langc_obj_without_target_fails() {
+    build_tools();
+    let dir = fresh_dir("langc_obj_without_target_fails");
+    std::fs::write(
+        dir.join("Main.mod"),
+        b"module Main;\n: main ( -- i64 ) 0 ;\nend;\n",
+    )
+    .unwrap();
+    let out = Command::new(exe("langc"))
+        .current_dir(&dir)
+        .args(["--emit=obj", "Main.mod"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("E1020"), "expected E1020 in stderr: {stderr}");
+}
+
+#[test]
+fn lang_assemble_unknown_target_triple_fails() {
+    build_tools();
+    let dir = fresh_dir("lang_assemble_unknown_target_triple_fails");
+    std::fs::write(dir.join("foo.asm"), b"; dummy\n").unwrap();
+    let out = Command::new(exe("lang-assemble"))
+        .current_dir(&dir)
+        .args(["--target=not-a-real-target", "foo.asm"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("E2004"), "expected E2004 in stderr: {stderr}");
+}
+
+#[test]
+fn sysroot_two_level_layout_resolves_target_platform_modules() {
+    // Regression test for the two-level sysroot restructure:
+    //   sysroot/                                    ← root (target-agnostic)
+    //   sysroot/x86_64-unknown-linux-gnu/platform/  ← target-specific modules
+    //
+    // `import platform/myplatform` must resolve through the target subdir.
+    build_tools();
+    let dir = fresh_dir("sysroot_two_level_layout");
+
+    let platform_dir = dir
+        .join("sysroot")
+        .join("x86_64-unknown-linux-gnu")
+        .join("platform");
+    std::fs::create_dir_all(&platform_dir).unwrap();
+
+    // Minimal interface: one word with a known signature.
+    std::fs::write(
+        platform_dir.join("myplatform.def"),
+        b"module platform/myplatform;\nexport { myfn };\n: myfn ( -- i64 ) ;\nend;\n",
+    )
+    .unwrap();
+
+    std::fs::write(
+        dir.join("Main.mod"),
+        b"module Main;\nimport platform/myplatform { myfn };\n: main ( -- i64 ) myfn ;\nend;\n",
+    )
+    .unwrap();
+
+    let out = Command::new(exe("langc"))
+        .current_dir(&dir)
+        .args([
+            "--emit=ir",
+            &format!("--sysroot={}", dir.join("sysroot").to_string_lossy()),
+            "Main.mod",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
 fn hosted_read_file_roundtrip() {
     let dir = fresh_dir("hosted_read_file_roundtrip");
     let path = dir.join("hosted_read_file_roundtrip.txt");
@@ -1183,7 +1281,7 @@ fn milestone7_emit_obj_link_run_exit_code() {
         .current_dir(&dir)
         .args([
             "--emit=obj",
-            "--target=linux-x86_64-hosted",
+            "--target=x86_64-unknown-linux-gnu",
             "--out-dir=.",
             "Main.mod",
         ])
@@ -1228,7 +1326,7 @@ fn milestone7_emit_obj_link_trap_exit_code() {
         .args([
             "--emit=obj",
             "--checks=all",
-            "--target=linux-x86_64-hosted",
+            "--target=x86_64-unknown-linux-gnu",
             "--out-dir=.",
             "Main.mod",
         ])
@@ -1644,7 +1742,7 @@ end;\n",
 
     let status = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=obj", "--target=linux-x86_64-hosted", "--out-dir=."])
+        .args(["--emit=obj", "--target=x86_64-unknown-linux-gnu", "--out-dir=."])
         .arg(&sysroot_arg)
         .arg("Main.mod")
         .status()
@@ -2570,7 +2668,7 @@ end;\n",
 
     let status = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=obj", "--target=linux-x86_64-hosted", "--out-dir=."])
+        .args(["--emit=obj", "--target=x86_64-unknown-linux-gnu", "--out-dir=."])
         .arg(&sysroot_arg)
         .arg("Main.mod")
         .status()
@@ -2618,7 +2716,7 @@ end;\n",
 
     let status = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=obj", "--target=linux-x86_64-hosted", "--out-dir=."])
+        .args(["--emit=obj", "--target=x86_64-unknown-linux-gnu", "--out-dir=."])
         .arg(&sysroot_arg)
         .arg("Main.mod")
         .status()
@@ -2808,7 +2906,7 @@ end;\n",
 
     let status = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=obj", "--target=linux-x86_64-hosted", "--out-dir=."])
+        .args(["--emit=obj", "--target=x86_64-unknown-linux-gnu", "--out-dir=."])
         .arg(&sysroot_arg)
         .arg("Main.mod")
         .status()
@@ -2857,7 +2955,7 @@ end;\n",
 
     let status = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=obj", "--target=linux-x86_64-hosted", "--out-dir=."])
+        .args(["--emit=obj", "--target=x86_64-unknown-linux-gnu", "--out-dir=."])
         .arg(&sysroot_arg)
         .arg("Main.mod")
         .status()
@@ -3119,4 +3217,25 @@ fn milestone5_allows_drop_before_yield() {
         .output()
         .unwrap();
     assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+}
+
+#[test]
+fn langc_x86_64_unknown_none_target_recognized() {
+    build_tools();
+    let dir = fresh_dir("langc_x86_64_none_target");
+    std::fs::write(
+        dir.join("Main.mod"),
+        b"module Main;\n: main ( -- i64 ) 0 ;\nend;\n",
+    )
+    .unwrap();
+    let out = Command::new(exe("langc"))
+        .current_dir(&dir)
+        .args(["--emit=ir", "--target=x86_64-unknown-none", "Main.mod"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }

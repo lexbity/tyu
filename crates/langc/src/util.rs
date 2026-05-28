@@ -67,7 +67,7 @@ pub fn write_u32_stderr(mut v: u32) {
     let _ = io::stderr(&buf[..n]);
 }
 
-pub fn slice_span<'a>(src: &'a [u8], span: Span) -> &'a [u8] {
+pub fn slice_span(src: &[u8], span: Span) -> &[u8] {
     &src[span.start..span.end]
 }
 
@@ -149,39 +149,3 @@ pub fn line_col(src: &[u8], offset: usize) -> (u32, u32) {
     (line, col)
 }
 
-pub fn write_u32(out: &mut dyn Output, mut v: u32) {
-    let mut buf = [0u8; 10];
-    let mut n = 0usize;
-    if v == 0 {
-        buf[0] = b'0';
-        n = 1;
-    } else {
-        while v > 0 && n < buf.len() {
-            buf[n] = b'0' + (v % 10) as u8;
-            n += 1;
-            v /= 10;
-        }
-        buf[..n].reverse();
-    }
-    out.write(&buf[..n]);
-}
-
-pub fn write_u64_hex(out: &mut dyn Output, v: u64) {
-    // Minimal hex writer for assembler immediates: 0x....
-    out.write(b"0x");
-    let mut buf = [0u8; 16];
-    for i in 0..16 {
-        let shift = (15 - i) * 4;
-        let nib = ((v >> shift) & 0xF) as u8;
-        buf[i] = match nib {
-            0..=9 => b'0' + nib,
-            _ => b'a' + (nib - 10),
-        };
-    }
-    // Trim leading zeros.
-    let mut start = 0usize;
-    while start + 1 < buf.len() && buf[start] == b'0' {
-        start += 1;
-    }
-    out.write(&buf[start..]);
-}

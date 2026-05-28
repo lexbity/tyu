@@ -1,0 +1,4 @@
+module StackOps;
+export { stack-ops-run };
+: stack-ops-run ( -- ) ;
+end;

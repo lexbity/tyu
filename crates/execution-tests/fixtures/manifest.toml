@@ -1,0 +1,19 @@
+[[fixture]]
+name = "arithmetic"
+file = "arithmetic.mod"
+requires = []
+
+[[fixture]]
+name = "stack_ops"
+file = "stack_ops.mod"
+requires = []
+
+[[fixture]]
+name = "channels"
+file = "channels.mod"
+requires = ["Channels"]
+
+[[fixture]]
+name = "tasks"
+file = "tasks.mod"
+requires = ["TaskScheduler"]

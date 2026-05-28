@@ -1,8 +1,15 @@
+use core::marker::PhantomData;
 use core::mem::MaybeUninit;
 
 pub struct FixedVec<T, const N: usize> {
     len: usize,
     data: [MaybeUninit<T>; N],
+}
+
+impl<T, const N: usize> Default for FixedVec<T, N> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<T, const N: usize> FixedVec<T, N> {
@@ -21,6 +28,7 @@ impl<T, const N: usize> FixedVec<T, N> {
         self.len == 0
     }
 
+    #[allow(clippy::result_unit_err)]
     pub fn push(&mut self, value: T) -> Result<(), ()> {
         if self.len >= N {
             return Err(());
@@ -49,9 +57,15 @@ impl<T, const N: usize> FixedVec<T, N> {
     }
 
     pub fn iter_mut(&mut self) -> IterMut<'_, T, N> {
-        IterMut { v: self, i: 0 }
+        IterMut {
+            ptr: self.data.as_mut_ptr(),
+            len: self.len,
+            i: 0,
+            _marker: PhantomData,
+        }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn into_iter(self) -> IntoIter<T, N> {
         IntoIter { v: self, i: 0 }
     }
@@ -81,8 +95,10 @@ impl<'a, T, const N: usize> Iterator for Iter<'a, T, N> {
 }
 
 pub struct IterMut<'a, T, const N: usize> {
-    v: &'a mut FixedVec<T, N>,
+    ptr: *mut MaybeUninit<T>,
+    len: usize,
     i: usize,
+    _marker: PhantomData<&'a mut T>,
 }
 
 pub struct IntoIter<T, const N: usize> {
@@ -117,13 +133,13 @@ impl<'a, T, const N: usize> Iterator for IterMut<'a, T, N> {
     type Item = &'a mut T;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.i >= self.v.len {
+        if self.i >= self.len {
             return None;
         }
-        // Safety: `self.i < len` and this iterator yields each index once.
         let idx = self.i;
         self.i += 1;
-        let ptr = self.v.data[idx].as_mut_ptr();
-        Some(unsafe { &mut *ptr })
+        // Safety: `idx < len` and the slot at `idx` has been written.
+        // Each index is yielded exactly once, so the returned `&mut T` does not alias.
+        Some(unsafe { &mut *self.ptr.add(idx).as_mut().unwrap_unchecked().as_mut_ptr() })
     }
 }

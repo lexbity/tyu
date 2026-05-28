@@ -13,3 +13,4 @@ doctest = false
 [dependencies]
 hosted = { path = "../hosted" }
 hosted-rt = { path = "../hosted-rt" }
+codegen-core = { path = "../codegen-core" }

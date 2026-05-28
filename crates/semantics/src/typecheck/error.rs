@@ -1,8 +1,6 @@
 use frontend::span::Span;
 
-pub trait Output {
-    fn write(&mut self, bytes: &[u8]);
-}
+pub use frontend::parse::Output;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TcError {

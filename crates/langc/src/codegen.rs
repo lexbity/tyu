@@ -1,14 +1,8 @@
 pub mod backend;
 pub mod stub;
-pub mod x86_64_hosted;
 
-pub use backend::CodegenBackend;
+pub use backend::{CodegenBackend, CodegenError};
+pub use codegen_core::AsmMode;
 #[allow(unused_imports)]
 pub use stub::StubBackend;
-pub use x86_64_hosted::X86_64HostedBackend;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AsmMode {
-    Executable,
-    Object,
-}
+pub use codegen_x86_64::X86_64HostedBackend;

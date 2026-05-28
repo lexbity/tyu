@@ -117,8 +117,8 @@ pub fn attrs_eq(
         return false;
     }
     for i in 0..def_attrs.len() {
-        let da = *def_attrs.get(i).unwrap();
-        let ma = *mod_attrs.get(i).unwrap();
+        let da = *def_attrs.get(i).expect("len checked above");
+        let ma = *mod_attrs.get(i).expect("len checked above");
         if slice_span(def_src, da) != slice_span(mod_src, ma) {
             return false;
         }
@@ -166,12 +166,7 @@ pub fn is_exported(ast: &ModuleAst, src: &[u8], name: &[u8]) -> bool {
 }
 
 pub fn find_decl<'a>(ast: &'a ModuleAst, src: &'a [u8], name: &[u8]) -> Option<&'a DeclAst> {
-    for d in ast.decls.iter() {
-        if slice_span(src, d.name) == name {
-            return Some(d);
-        }
-    }
-    None
+    ast.decls.iter().find(|d| slice_span(src, d.name) == name)
 }
 
 pub fn find_word_decl<'a>(m: &'a ModuleAst, src: &[u8], name: &[u8]) -> Option<&'a DeclAst> {

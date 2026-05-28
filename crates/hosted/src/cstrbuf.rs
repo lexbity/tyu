@@ -8,7 +8,7 @@ pub struct CStrBuf {
 
 impl CStrBuf {
     pub fn new(bytes: &[u8]) -> Result<Self, Errno> {
-        if bytes.iter().any(|&b| b == 0) {
+        if bytes.contains(&0) {
             return Err(Errno(22));
         }
         let alloc = mem::malloc(bytes.len() + 1)?;
@@ -29,6 +29,10 @@ impl CStrBuf {
 
     pub fn len(&self) -> usize {
         self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
     }
 }
 

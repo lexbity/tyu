@@ -145,6 +145,21 @@ fn verifier_rejects_branch_stack_mismatch() {
 }
 
 #[test]
+fn verifier_rejects_unterminated_block() {
+    // Block ends without Ret, Br, or BrIf — must fail with E9035.
+    let w = word_with_single_block(sig0_1(TY_I64), &[OpKind::ConstI64(42)]);
+    let err = ir::verify_word(&w).unwrap_err();
+    assert_eq!(err.code, 9035);
+}
+
+#[test]
+fn verifier_accepts_terminated_block() {
+    // Sanity check: a block that pushes the right value and Rets must pass.
+    let w = word_with_single_block(sig0_1(TY_I64), &[OpKind::ConstI64(1), OpKind::Ret]);
+    ir::verify_word(&w).unwrap();
+}
+
+#[test]
 fn verifier_type_pool_baseline_indices_match_constants() {
     let types = baseline_types();
     assert_eq!(types.get(TY_EMPTY.0 as usize).unwrap().as_bytes(), b"");

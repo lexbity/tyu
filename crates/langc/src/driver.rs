@@ -1,26 +1,34 @@
 use frontend::{
-    parse::{DeclKind, ModuleAst, Output, Parser},
+    parse::{DeclKind, ModuleAst, Parser},
 };
 use hosted::{diag, fs, process};
 use semantics::types::{TypeAtom, WordEntry, WordSig};
 use semantics::typecheck::{self, ChecksMode, SubtypeInfo};
+use codegen_core::Target;
 use crate::codegen::{CodegenBackend, X86_64HostedBackend, AsmMode};
 use crate::util::{
     Stdout, MemOut, slice_span, join_path, try_load_module_file,
 };
 use crate::iface::{find_decl, export_iter, find_word_decl};
 
-pub fn emit_ir_driver(
+struct DriverEnv {
+    st_buf: [SubtypeInfo; 64],
+    st_len: usize,
+    env: [WordEntry; 256],
+    env_len: usize,
+    builtin_env_end: usize,
+    import_env_end: usize,
+}
+
+fn init_env(
     module: &ModuleAst,
     src: &[u8],
     search_dirs: &[&[u8]],
-    checks: ChecksMode,
-    allow_raw_casts: bool,
-    out: &mut Stdout,
-) -> i32 {
+    target: Target,
+) -> Result<DriverEnv, u32> {
     let mut st_buf: [SubtypeInfo; 64] = [SubtypeInfo {
-        name: TypeAtom::new(b"").unwrap(),
-        base: TypeAtom::new(b"").unwrap(),
+        name: TypeAtom::EMPTY,
+        base: TypeAtom::EMPTY,
         min: 0,
         max: 0,
     }; 64];
@@ -49,36 +57,52 @@ pub fn emit_ir_driver(
     }
 
     let mut env: [WordEntry; 256] = [WordEntry {
-        name: TypeAtom::new(b"").unwrap(),
+        name: TypeAtom::EMPTY,
         sig: WordSig::empty(),
         may_suspend: false,
     }; 256];
     let mut env_len = 0usize;
-    add_builtins(&mut env, &mut env_len);
-    if let Err(code) = load_import_sigs(module, src, search_dirs, &mut env, &mut env_len) {
-        let _ = diag::error_simple(code, b"failed to load import signatures");
-        return 2;
-    }
-    if let Err(code) = load_local_sigs(module, src, &mut env, &mut env_len) {
-        let _ = diag::error_simple(code, b"invalid local signature");
-        return 2;
-    }
+    add_builtins(&mut env, &mut env_len, target.spec());
+    let builtin_env_end = env_len;
+    load_import_sigs(module, src, search_dirs, &mut env, &mut env_len)?;
+    let import_env_end = env_len;
+    load_local_sigs(module, src, &mut env, &mut env_len)?;
 
-    struct SemOut<'a>(&'a mut Stdout);
-    impl<'a> semantics::typecheck::Output for SemOut<'a> {
-        fn write(&mut self, bytes: &[u8]) {
-            self.0.write(bytes)
+    Ok(DriverEnv {
+        st_buf,
+        st_len,
+        env,
+        env_len,
+        builtin_env_end,
+        import_env_end,
+    })
+}
+
+pub fn emit_ir_driver(
+    module: &ModuleAst,
+    src: &[u8],
+    search_dirs: &[&[u8]],
+    checks: ChecksMode,
+    allow_raw_casts: bool,
+    target: Target,
+    out: &mut Stdout,
+) -> i32 {
+    let es = match init_env(module, src, search_dirs, target) {
+        Ok(e) => e,
+        Err(code) => {
+            let _ = diag::error_simple(code, b"environment init failed");
+            return 2;
         }
-    }
-    let mut sem_out = SemOut(out);
+    };
+
     match semantics::typecheck::emit_ir(
         module,
         src,
-        &env[..env_len],
-        &st_buf[..st_len],
+        &es.env[..es.env_len],
+        &es.st_buf[..es.st_len],
         checks,
         allow_raw_casts,
-        &mut sem_out,
+        out,
     ) {
         Ok(()) => 0,
         Err(e) => {
@@ -88,6 +112,7 @@ pub fn emit_ir_driver(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn emit_asm_driver(
     module: &ModuleAst,
     src: &[u8],
@@ -95,76 +120,39 @@ pub fn emit_asm_driver(
     checks: ChecksMode,
     allow_raw_casts: bool,
     debug_trap_loc: bool,
+    target: Target,
     out: &mut Stdout,
 ) -> i32 {
-    let mut st_buf: [SubtypeInfo; 64] = [SubtypeInfo {
-        name: TypeAtom::new(b"").unwrap(),
-        base: TypeAtom::new(b"").unwrap(),
-        min: 0,
-        max: 0,
-    }; 64];
-    let mut st_len = 0usize;
-    for s in module.subtypes.iter() {
-        if st_len >= st_buf.len() {
-            break;
+    let es = match init_env(module, src, search_dirs, target) {
+        Ok(e) => e,
+        Err(code) => {
+            let _ = diag::error_simple(code, b"environment init failed");
+            return 2;
         }
-        let name = slice_span(src, s.name);
-        let base = slice_span(src, s.base);
-        let name = match TypeAtom::new(name) {
-            Some(n) => n,
-            None => continue,
-        };
-        let base = match TypeAtom::new(base) {
-            Some(n) => n,
-            None => continue,
-        };
-        st_buf[st_len] = SubtypeInfo {
-            name,
-            base,
-            min: s.min,
-            max: s.max,
-        };
-        st_len += 1;
-    }
-
-    let mut env: [WordEntry; 256] = [WordEntry {
-        name: TypeAtom::new(b"").unwrap(),
-        sig: WordSig::empty(),
-        may_suspend: false,
-    }; 256];
-    let mut env_len = 0usize;
-    add_builtins(&mut env, &mut env_len);
-    if let Err(code) = load_import_sigs(module, src, search_dirs, &mut env, &mut env_len) {
-        let _ = diag::error_simple(code, b"failed to load import signatures");
-        return 2;
-    }
-    if let Err(code) = load_local_sigs(module, src, &mut env, &mut env_len) {
-        let _ = diag::error_simple(code, b"invalid local signature");
-        return 2;
-    }
+    };
 
     let mut gen_backend = X86_64HostedBackend::new(module, src, out, debug_trap_loc, AsmMode::Executable);
     let gen: &mut dyn CodegenBackend = &mut gen_backend;
-    if let Err(code) = gen.emit_prelude() {
-        let _ = diag::error_simple(code, b"asm emission error");
+    if let Err(e) = gen.emit_prelude() {
+        let _ = diag::error_simple(e.code(), b"asm emission error");
         return 2;
     }
 
-    match semantics::typecheck::for_each_ir_word(module, src, &env[..env_len], &st_buf[..st_len], checks, allow_raw_casts, |w| gen.emit_word(w))
+    match semantics::typecheck::for_each_ir_word(module, src, &es.env[..es.env_len], &es.st_buf[..es.st_len], checks, allow_raw_casts, |w| gen.emit_word(w))
     {
         Ok(()) => {}
         Err(semantics::typecheck::ForEachIrError::Type(e)) => {
             let _ = diag::error_simple(e.code, b"typecheck error");
             return 2;
         }
-        Err(semantics::typecheck::ForEachIrError::Consumer(code)) => {
-            let _ = diag::error_simple(code, b"asm emission error");
+        Err(semantics::typecheck::ForEachIrError::Consumer(e)) => {
+            let _ = diag::error_simple(e.code(), b"asm emission error");
             return 2;
         }
     }
 
-    if let Err(code) = gen.emit_postlude() {
-        let _ = diag::error_simple(code, b"asm emission error");
+    if let Err(e) = gen.emit_postlude() {
+        let _ = diag::error_simple(e.code(), b"asm emission error");
         return 2;
     }
     0
@@ -176,62 +164,18 @@ pub fn emit_tc_driver(
     search_dirs: &[&[u8]],
     checks: ChecksMode,
     allow_raw_casts: bool,
+    target: Target,
     out: &mut Stdout,
 ) -> i32 {
-    let mut st_buf: [SubtypeInfo; 64] = [SubtypeInfo {
-        name: TypeAtom::new(b"").unwrap(),
-        base: TypeAtom::new(b"").unwrap(),
-        min: 0,
-        max: 0,
-    }; 64];
-    let mut st_len = 0usize;
-    for s in module.subtypes.iter() {
-        if st_len >= st_buf.len() {
-            break;
+    let es = match init_env(module, src, search_dirs, target) {
+        Ok(e) => e,
+        Err(code) => {
+            let _ = diag::error_simple(code, b"environment init failed");
+            return 2;
         }
-        let name = slice_span(src, s.name);
-        let base = slice_span(src, s.base);
-        let name = match TypeAtom::new(name) {
-            Some(n) => n,
-            None => continue,
-        };
-        let base = match TypeAtom::new(base) {
-            Some(n) => n,
-            None => continue,
-        };
-        st_buf[st_len] = SubtypeInfo {
-            name,
-            base,
-            min: s.min,
-            max: s.max,
-        };
-        st_len += 1;
-    }
+    };
 
-    let mut env: [WordEntry; 256] = [WordEntry {
-        name: TypeAtom::new(b"").unwrap(),
-        sig: WordSig::empty(),
-        may_suspend: false,
-    }; 256];
-    let mut env_len = 0usize;
-    add_builtins(&mut env, &mut env_len);
-    if let Err(code) = load_import_sigs(module, src, search_dirs, &mut env, &mut env_len) {
-        let _ = diag::error_simple(code, b"failed to load import signatures");
-        return 2;
-    }
-    if let Err(code) = load_local_sigs(module, src, &mut env, &mut env_len) {
-        let _ = diag::error_simple(code, b"invalid local signature");
-        return 2;
-    }
-
-    struct SemOut<'a>(&'a mut Stdout);
-    impl<'a> semantics::typecheck::Output for SemOut<'a> {
-        fn write(&mut self, bytes: &[u8]) {
-            self.0.write(bytes)
-        }
-    }
-    let mut sem_out = SemOut(out);
-    match semantics::typecheck::emit_stackcheck(module, src, &env[..env_len], &st_buf[..st_len], checks, &mut sem_out) {
+    match semantics::typecheck::emit_stackcheck(module, src, &es.env[..es.env_len], &es.st_buf[..es.st_len], checks, out) {
         Ok(()) => 0,
         Err(e) => {
             let _ = allow_raw_casts; // keep signature stable vs other drivers
@@ -241,6 +185,7 @@ pub fn emit_tc_driver(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn emit_obj_driver(
     module: &ModuleAst,
     src: &[u8],
@@ -249,28 +194,32 @@ pub fn emit_obj_driver(
     allow_raw_casts: bool,
     debug_trap_loc: bool,
     out_dir: &[u8],
-    target: &[u8],
+    target: Target,
+    is_lib: bool,
 ) -> i32 {
-    if target != b"linux-x86_64-hosted" {
-        let _ = diag::error_simple(1012, b"unsupported --target (expected linux-x86_64-hosted)");
-        return 2;
+    // Dispatch on Target enum. Each arm selects the appropriate backend.
+    // Adding a new target means adding a new arm here and a new backend crate.
+    match target {
+        Target::X86_64UnknownLinuxGnu | Target::X86_64UnknownNone => {}
     }
 
-    // Hosted runtime currently assumes `main` returns an exit code (i64).
-    let main_decl = match find_word_decl(module, src, b"main") {
-        Some(d) => d,
-        None => {
-            let _ = diag::error_simple(7001, b"missing word: main");
+    // Library modules have no entry point; only executables require `main`.
+    if !is_lib {
+        let main_decl = match find_word_decl(module, src, b"main") {
+            Some(d) => d,
+            None => {
+                let _ = diag::error_simple(7001, b"missing word: main");
+                return 2;
+            }
+        };
+        let main_sig = main_decl
+            .sig
+            .and_then(|s| semantics::typecheck::parse_word_sig(src, s).ok())
+            .unwrap_or(WordSig::empty());
+        if main_sig.out_len != 1 {
+            let _ = diag::error_simple(1018, b"for --emit=obj, main must return exactly one value (exit code)");
             return 2;
         }
-    };
-    let main_sig = main_decl
-        .sig
-        .and_then(|s| semantics::typecheck::parse_word_sig(src, s).ok())
-        .unwrap_or(WordSig::empty());
-    if main_sig.out_len != 1 {
-        let _ = diag::error_simple(1018, b"for --emit=obj, main must return exactly one value (exit code)");
-        return 2;
     }
 
     let module_name = slice_span(src, module.name);
@@ -291,51 +240,15 @@ pub fn emit_obj_driver(
         }
     };
 
-    let mut st_buf: [SubtypeInfo; 64] = [SubtypeInfo {
-        name: TypeAtom::new(b"").unwrap(),
-        base: TypeAtom::new(b"").unwrap(),
-        min: 0,
-        max: 0,
-    }; 64];
-    let mut st_len = 0usize;
-    for s in module.subtypes.iter() {
-        if st_len >= st_buf.len() {
-            break;
+    let es = match init_env(module, src, search_dirs, target) {
+        Ok(e) => e,
+        Err(code) => {
+            let _ = diag::error_simple(code, b"environment init failed");
+            return 2;
         }
-        let name = slice_span(src, s.name);
-        let base = slice_span(src, s.base);
-        let name = match TypeAtom::new(name) {
-            Some(n) => n,
-            None => continue,
-        };
-        let base = match TypeAtom::new(base) {
-            Some(n) => n,
-            None => continue,
-        };
-        st_buf[st_len] = SubtypeInfo {
-            name,
-            base,
-            min: s.min,
-            max: s.max,
-        };
-        st_len += 1;
-    }
-
-    let mut env: [WordEntry; 256] = [WordEntry {
-        name: TypeAtom::new(b"").unwrap(),
-        sig: WordSig::empty(),
-        may_suspend: false,
-    }; 256];
-    let mut env_len = 0usize;
-    add_builtins(&mut env, &mut env_len);
-    if let Err(code) = load_import_sigs(module, src, search_dirs, &mut env, &mut env_len) {
-        let _ = diag::error_simple(code, b"failed to load import signatures");
-        return 2;
-    }
-    if let Err(code) = load_local_sigs(module, src, &mut env, &mut env_len) {
-        let _ = diag::error_simple(code, b"invalid local signature");
-        return 2;
-    }
+    };
+    let builtin_env_end = es.builtin_env_end;
+    let import_env_end = es.import_env_end;
 
     let mut mem = match MemOut::new() {
         Ok(m) => m,
@@ -347,26 +260,35 @@ pub fn emit_obj_driver(
 
     let mut gen_backend = X86_64HostedBackend::new(module, src, &mut mem, debug_trap_loc, AsmMode::Object);
     let gen: &mut dyn CodegenBackend = &mut gen_backend;
-    if let Err(code) = gen.emit_prelude() {
-        let _ = diag::error_simple(code, b"asm emission error");
+    if let Err(e) = gen.emit_prelude() {
+        let _ = diag::error_simple(e.code(), b"asm emission error");
         return 2;
     }
 
-    match semantics::typecheck::for_each_ir_word(module, src, &env[..env_len], &st_buf[..st_len], checks, allow_raw_casts, |w| gen.emit_word(w))
+    // Emit extrn declarations for all imported word symbols so the assembler
+    // can resolve cross-module calls at link time.
+    for i in builtin_env_end..import_env_end {
+        if let Err(e) = gen.emit_extern_word(es.env[i].name.as_bytes()) {
+            let _ = diag::error_simple(e.code(), b"asm emission error");
+            return 2;
+        }
+    }
+
+    match semantics::typecheck::for_each_ir_word(module, src, &es.env[..es.env_len], &es.st_buf[..es.st_len], checks, allow_raw_casts, |w| gen.emit_word(w))
     {
         Ok(()) => {}
         Err(semantics::typecheck::ForEachIrError::Type(e)) => {
             let _ = diag::error_simple(e.code, b"typecheck error");
             return 2;
         }
-        Err(semantics::typecheck::ForEachIrError::Consumer(code)) => {
-            let _ = diag::error_simple(code, b"asm emission error");
+        Err(semantics::typecheck::ForEachIrError::Consumer(e)) => {
+            let _ = diag::error_simple(e.code(), b"asm emission error");
             return 2;
         }
     }
 
-    if let Err(code) = gen.emit_postlude() {
-        let _ = diag::error_simple(code, b"asm emission error");
+    if let Err(e) = gen.emit_postlude() {
+        let _ = diag::error_simple(e.code(), b"asm emission error");
         return 2;
     }
     if mem.err.is_some() {
@@ -379,24 +301,30 @@ pub fn emit_obj_driver(
         return 2;
     }
 
-    let status = process::run(b"fasm", &[asm_path, obj_path]).map_err(|_| diag::error_simple(1016, b"failed to run fasm"));
+    let assembler_bin: &[u8] = match target.spec().assembler {
+        codegen_core::AssemblerKind::Fasm     => b"fasm",
+        codegen_core::AssemblerKind::GasArm   => b"arm-none-eabi-as",
+        codegen_core::AssemblerKind::GasRiscV => b"riscv32-unknown-elf-as",
+    };
+    let status = process::run(assembler_bin, &[asm_path, obj_path]).map_err(|_| diag::error_simple(1016, b"failed to run assembler"));
     let status = match status {
         Ok(s) => s,
         Err(_) => return 2,
     };
     if status.code != 0 {
-        let _ = diag::error_simple(1017, b"fasm failed");
+        let _ = diag::error_simple(1017, b"assembler failed");
         return 2;
     }
 
     0
 }
 
-fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize) {
-    let i64t = TypeAtom::new(b"i64").unwrap();
-    let boolt = TypeAtom::new(b"bool").unwrap();
-    let quot = TypeAtom::new(b"quot").unwrap();
-    let empty = TypeAtom::new(b"").unwrap();
+fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize, spec: &codegen_core::TargetSpec) {
+    // Native integer type for this target (e.g. i64 on 64-bit, i32 on 32-bit).
+    let intt  = TypeAtom::new(spec.native_int_ty).unwrap();
+    let boolt = TypeAtom::BOOL;
+    let quot  = TypeAtom::QUOT;
+    let empty = TypeAtom::EMPTY;
 
     fn push(env: &mut [WordEntry; 256], len: &mut usize, name: &[u8], sig: WordSig, may_suspend: bool) {
         if *len >= env.len() {
@@ -419,8 +347,8 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize) {
         WordSig {
             in_len: 1,
             out_len: 2,
-            inputs: [i64t, empty, empty, empty, empty, empty, empty, empty],
-            outputs: [i64t, i64t, empty, empty, empty, empty, empty, empty],
+            inputs: [intt, empty, empty, empty, empty, empty, empty, empty],
+            outputs: [intt, intt, empty, empty, empty, empty, empty, empty],
         },
         false,
     );
@@ -431,7 +359,7 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize) {
         WordSig {
             in_len: 1,
             out_len: 0,
-            inputs: [i64t, empty, empty, empty, empty, empty, empty, empty],
+            inputs: [intt, empty, empty, empty, empty, empty, empty, empty],
             outputs: [empty, empty, empty, empty, empty, empty, empty, empty],
         },
         false,
@@ -443,22 +371,22 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize) {
         WordSig {
             in_len: 2,
             out_len: 2,
-            inputs: [i64t, i64t, empty, empty, empty, empty, empty, empty],
-            outputs: [i64t, i64t, empty, empty, empty, empty, empty, empty],
+            inputs: [intt, intt, empty, empty, empty, empty, empty, empty],
+            outputs: [intt, intt, empty, empty, empty, empty, empty, empty],
         },
         false,
     );
 
-    // Arithmetic/comparisons (MVP: i64 only)
-    let bin_i64 = WordSig {
+    // Arithmetic/comparisons — uses native integer type from TargetSpec
+    let bin_int = WordSig {
         in_len: 2,
         out_len: 1,
-        inputs: [i64t, i64t, empty, empty, empty, empty, empty, empty],
-        outputs: [i64t, empty, empty, empty, empty, empty, empty, empty],
+        inputs: [intt, intt, empty, empty, empty, empty, empty, empty],
+        outputs: [intt, empty, empty, empty, empty, empty, empty, empty],
     };
-    push(env, len, b"+", bin_i64, false);
-    push(env, len, b"-", bin_i64, false);
-    push(env, len, b"*", bin_i64, false);
+    push(env, len, b"+", bin_int, false);
+    push(env, len, b"-", bin_int, false);
+    push(env, len, b"*", bin_int, false);
 
     push(
         env,
@@ -467,7 +395,7 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize) {
         WordSig {
             in_len: 2,
             out_len: 1,
-            inputs: [i64t, i64t, empty, empty, empty, empty, empty, empty],
+            inputs: [intt, intt, empty, empty, empty, empty, empty, empty],
             outputs: [boolt, empty, empty, empty, empty, empty, empty, empty],
         },
         false,
@@ -479,7 +407,7 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize) {
         WordSig {
             in_len: 2,
             out_len: 1,
-            inputs: [i64t, i64t, empty, empty, empty, empty, empty, empty],
+            inputs: [intt, intt, empty, empty, empty, empty, empty, empty],
             outputs: [boolt, empty, empty, empty, empty, empty, empty, empty],
         },
         false,
@@ -491,7 +419,7 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize) {
         WordSig {
             in_len: 2,
             out_len: 1,
-            inputs: [i64t, i64t, empty, empty, empty, empty, empty, empty],
+            inputs: [intt, intt, empty, empty, empty, empty, empty, empty],
             outputs: [boolt, empty, empty, empty, empty, empty, empty, empty],
         },
         false,
@@ -503,7 +431,7 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize) {
         WordSig {
             in_len: 2,
             out_len: 1,
-            inputs: [i64t, i64t, empty, empty, empty, empty, empty, empty],
+            inputs: [intt, intt, empty, empty, empty, empty, empty, empty],
             outputs: [boolt, empty, empty, empty, empty, empty, empty, empty],
         },
         false,
@@ -515,7 +443,7 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize) {
         WordSig {
             in_len: 2,
             out_len: 1,
-            inputs: [i64t, i64t, empty, empty, empty, empty, empty, empty],
+            inputs: [intt, intt, empty, empty, empty, empty, empty, empty],
             outputs: [boolt, empty, empty, empty, empty, empty, empty, empty],
         },
         false,
@@ -527,7 +455,7 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize) {
         WordSig {
             in_len: 2,
             out_len: 1,
-            inputs: [i64t, i64t, empty, empty, empty, empty, empty, empty],
+            inputs: [intt, intt, empty, empty, empty, empty, empty, empty],
             outputs: [boolt, empty, empty, empty, empty, empty, empty, empty],
         },
         false,

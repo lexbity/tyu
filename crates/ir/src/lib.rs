@@ -1,6 +1,7 @@
 #![no_std]
+#![deny(unsafe_op_in_unsafe_fn)]
 
-use frontend::{fixed::FixedVec, span::Span};
+use frontend::{fixed::FixedVec, span::Span, parse::Output};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Atom {
@@ -29,6 +30,19 @@ impl Atom {
         &self.bytes[..self.len as usize]
     }
 }
+
+// Static Atom constants for built-in types.
+// These are used throughout the compiler pipeline to avoid repeated
+// Atom::new(b"...").expect() calls. All fit in the 32-byte limit.
+pub const AT_EMPTY: Atom = match Atom::new(b"") { Some(a) => a, None => unreachable!() };
+pub const AT_I64: Atom = match Atom::new(b"i64") { Some(a) => a, None => unreachable!() };
+pub const AT_BOOL: Atom = match Atom::new(b"bool") { Some(a) => a, None => unreachable!() };
+pub const AT_STR: Atom = match Atom::new(b"str") { Some(a) => a, None => unreachable!() };
+pub const AT_PTR: Atom = match Atom::new(b"ptr") { Some(a) => a, None => unreachable!() };
+pub const AT_PTR_MUT: Atom = match Atom::new(b"ptr_mut") { Some(a) => a, None => unreachable!() };
+pub const AT_MMIO: Atom = match Atom::new(b"mmio") { Some(a) => a, None => unreachable!() };
+pub const AT_QUOT: Atom = match Atom::new(b"quot") { Some(a) => a, None => unreachable!() };
+pub const AT_RESOURCE: Atom = match Atom::new(b"resource") { Some(a) => a, None => unreachable!() };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TypeId(pub u8);
@@ -204,7 +218,7 @@ pub fn verify_word(w: &Word) -> Result<(), VerifyError> {
         });
     }
     for i in 0..(w.sig.in_len as usize) {
-        if *entry_block.entry_stack.get(i).unwrap() != w.sig.inputs[i] {
+        if *entry_block.entry_stack.get(i).expect("verified entry stack len") != w.sig.inputs[i] {
             return Err(VerifyError {
                 code: 9003,
                 span: Span::new(0, 0),
@@ -218,13 +232,8 @@ pub fn verify_word(w: &Word) -> Result<(), VerifyError> {
     Ok(())
 }
 
-fn find_block<'a>(w: &'a Word, id: BlockId) -> Option<&'a Block> {
-    for b in w.blocks.iter() {
-        if b.id == id {
-            return Some(b);
-        }
-    }
-    None
+fn find_block(w: &Word, id: BlockId) -> Option<&Block> {
+    w.blocks.iter().find(|b| b.id == id)
 }
 
 fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
@@ -435,8 +444,8 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
                 if t.entry_stack.len() != sp {
                     return Err(VerifyError { code: 9027, span: op.span });
                 }
-                for i in 0..sp {
-                    if *t.entry_stack.get(i).unwrap() != stack[i] {
+                for (i, item) in stack.iter().enumerate().take(sp) {
+                    if *t.entry_stack.get(i).expect("verified length matches sp") != *item {
                         return Err(VerifyError { code: 9028, span: op.span });
                     }
                 }
@@ -454,8 +463,8 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
                     if t.entry_stack.len() != sp {
                         return Err(VerifyError { code: 9031, span: op.span });
                     }
-                    for i in 0..sp {
-                        if *t.entry_stack.get(i).unwrap() != stack[i] {
+                    for (i, item) in stack.iter().enumerate().take(sp) {
+                        if *t.entry_stack.get(i).expect("verified length matches sp") != *item {
                             return Err(VerifyError { code: 9032, span: op.span });
                         }
                     }
@@ -466,14 +475,17 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
                 if sp != w.sig.out_len as usize {
                     return Err(VerifyError { code: 9033, span: op.span });
                 }
-                for i in 0..sp {
-                    if stack[i] != w.sig.outputs[i] {
+                for (i, item) in stack.iter().enumerate().take(sp) {
+                    if *item != w.sig.outputs[i] {
                         return Err(VerifyError { code: 9034, span: op.span });
                     }
                 }
                 terminated = true;
             }
         }
+    }
+    if !terminated {
+        return Err(VerifyError { code: 9035, span: Span::new(0, 0) });
     }
     Ok(())
 }
@@ -493,10 +505,6 @@ fn pop(stack: &mut [TypeId; 64], sp: &mut usize, span: Span) -> Result<TypeId, V
     }
     *sp -= 1;
     Ok(stack[*sp])
-}
-
-pub trait Output {
-    fn write(&mut self, bytes: &[u8]);
 }
 
 pub fn write_module(out: &mut impl Output, m: &Module) {
@@ -528,8 +536,8 @@ pub fn write_word(out: &mut impl Output, w: &Word) {
     }
 }
 
-fn type_atom<'a>(w: &'a Word, id: TypeId) -> &'a Atom {
-    w.types.get(id.0 as usize).unwrap()
+fn type_atom(w: &Word, id: TypeId) -> &Atom {
+    w.types.get(id.0 as usize).expect("type id verified by verifier")
 }
 
 fn write_sig(out: &mut impl Output, w: &Word, sig: &Sig) {

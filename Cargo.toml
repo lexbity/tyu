@@ -5,17 +5,22 @@ members = [
   "crates/hosted-rt",
   "crates/frontend",
   "crates/ir",
+  "crates/codegen-core",
+  "crates/codegen-x86_64",
   "crates/lang-assemble",
   "crates/langc",
   "crates/semantics",
   "crates/tooling-tests",
+  "crates/execution-tests",
 ]
 
+# Panic=abort is intentional: the hosted-rt crate provides a custom panic handler
+# and the compiler pipeline uses manual Drop (assume_init_drop) in several places.
+# A panic that unwinds could double-free or leave memory in an inconsistent state.
+# The test profile inherits from dev (panic=abort) but Cargo ignores this setting
+# for test targets; tests run with panic=unwind regardless.
 [profile.dev]
 panic = "abort"
 
 [profile.release]
-panic = "abort"
-
-[profile.test]
 panic = "abort"

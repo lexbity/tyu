@@ -16,5 +16,7 @@ hosted-rt = { path = "../hosted-rt" }
 frontend = { path = "../frontend" }
 semantics = { path = "../semantics" }
 ir = { path = "../ir" }
+codegen-core  = { path = "../codegen-core" }
+codegen-x86_64 = { path = "../codegen-x86_64" }
 
 [dev-dependencies]

@@ -22,7 +22,7 @@ pub fn pop(stack: &[Value; 256], sp: &mut usize) -> Option<Value> {
 }
 
 pub fn check_no_scoped_live(stack: &[Value; 256], sp: usize) -> bool {
-    let scoped = Value::Plain(TypeAtom::new(b"scoped").unwrap());
+    let scoped = Value::Plain(TypeAtom::SCOPED);
     let mut i = 0usize;
     while i < sp {
         if stack[i] == scoped {
@@ -37,12 +37,7 @@ pub fn check_no_scoped_live(stack: &[Value; 256], sp: usize) -> bool {
 }
 
 pub fn lookup<'a>(env: &'a [WordEntry], name: &[u8]) -> Option<&'a WordEntry> {
-    for e in env {
-        if e.name.as_bytes() == name {
-            return Some(e);
-        }
-    }
-    None
+    env.iter().find(|e| e.name.as_bytes() == name)
 }
 
 pub fn find_local(locals: &[TypeAtom; 64], len: usize, name: TypeAtom) -> Option<usize> {
@@ -57,12 +52,7 @@ pub fn find_local(locals: &[TypeAtom; 64], len: usize, name: TypeAtom) -> Option
 }
 
 pub fn find_subtype(subtypes: &[SubtypeInfo], name: TypeAtom) -> Option<SubtypeInfo> {
-    for &s in subtypes {
-        if s.name == name {
-            return Some(s);
-        }
-    }
-    None
+    subtypes.iter().find(|s| s.name == name).copied()
 }
 
 pub fn type_compatible(got: TypeAtom, want: TypeAtom, subtypes: &[SubtypeInfo]) -> bool {
@@ -78,7 +68,7 @@ pub fn type_compatible(got: TypeAtom, want: TypeAtom, subtypes: &[SubtypeInfo]) 
     false
 }
 
-pub fn slice_span<'a>(src: &'a [u8], span: Span) -> &'a [u8] {
+pub fn slice_span(src: &[u8], span: Span) -> &[u8] {
     &src[span.start..span.end]
 }
 
@@ -363,10 +353,8 @@ pub fn apply_sig(
     span: Span,
     subtypes: &[SubtypeInfo],
 ) -> Result<(), TcError> {
-    if entry.may_suspend {
-        if !check_no_scoped_live(stack, *sp) {
-            return Err(TcError { code: 3502, span });
-        }
+    if entry.may_suspend && !check_no_scoped_live(stack, *sp) {
+        return Err(TcError { code: 3502, span });
     }
 
     let sig = &entry.sig;
@@ -380,13 +368,13 @@ pub fn apply_sig(
 	        let got = match got {
 	            Value::Plain(t) => t,
 	            Value::Scoped { ty, .. } => ty,
-	            Value::Resource(_) => TypeAtom::new(b"resource").unwrap(),
-	            Value::Quot(_) => TypeAtom::new(b"quot").unwrap(),
-	            Value::MmioPlace(_) => TypeAtom::new(b"mmio").unwrap(),
-	            Value::Ptr { mutable: false, .. } => TypeAtom::new(b"ptr").unwrap(),
-	            Value::Ptr { mutable: true, .. } => TypeAtom::new(b"ptr_mut").unwrap(),
-	            Value::MmioPtr { mutable: false, .. } => TypeAtom::new(b"ptr").unwrap(),
-	            Value::MmioPtr { mutable: true, .. } => TypeAtom::new(b"ptr_mut").unwrap(),
+            Value::Resource(_) => TypeAtom::new(b"resource").unwrap(),
+                    Value::Quot(_) => TypeAtom::new(b"quot").unwrap(),
+                    Value::MmioPlace(_) => TypeAtom::new(b"mmio").unwrap(),
+                    Value::Ptr { mutable: false, .. } => TypeAtom::new(b"ptr").unwrap(),
+                    Value::Ptr { mutable: true, .. } => TypeAtom::new(b"ptr_mut").unwrap(),
+                    Value::MmioPtr { mutable: false, .. } => TypeAtom::new(b"ptr").unwrap(),
+                    Value::MmioPtr { mutable: true, .. } => TypeAtom::new(b"ptr_mut").unwrap(),
 	        };
         if !type_compatible(got, sig.inputs[i], subtypes) {
             return Err(TcError { code: 3212, span });
@@ -464,11 +452,11 @@ fn write_type(out: &mut impl Output, ty: TypeAtom, depth: u8) {
 }
 
 pub fn write_stack(out: &mut impl Output, stack: &[Value; 256], sp: usize) {
-    for i in 0..sp {
+    for (i, v) in stack.iter().enumerate().take(sp) {
         if i != 0 {
             out.write(b" ");
         }
-	        match stack[i] {
+	        match v {
 	            Value::Plain(t) => out.write(t.as_bytes()),
 	            Value::Scoped { ty, .. } => out.write(ty.as_bytes()),
 	            Value::Resource(name) => out.write(name.as_bytes()),

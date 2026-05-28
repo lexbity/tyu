@@ -13,6 +13,10 @@ use frontend::parse::{DeclKind, ModuleAst};
 use frontend::span::Span;
 use frontend::token::TokenKind;
 
+mod control_flow;
+mod quote;
+use self::control_flow::{do_if, do_while, do_loop, do_lock};
+
 pub fn emit_stackcheck(
     module: &ModuleAst,
     src: &[u8],
@@ -44,6 +48,7 @@ pub fn emit_stackcheck(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn typecheck_word_body(
     out: &mut impl Output,
     src: &[u8],
@@ -59,7 +64,7 @@ pub fn typecheck_word_body(
     let slice = &src[body_span.start..body_span.end];
     let mut lex = Lexer::new(slice);
 
-    let mut stack: [Value; 256] = [Value::Plain(TypeAtom::new(b"").unwrap()); 256];
+    let mut stack: [Value; 256] = [Value::Plain(TypeAtom::EMPTY); 256];
     let mut sp: usize = 0;
 
     // Seed stack with declared inputs.
@@ -68,8 +73,8 @@ pub fn typecheck_word_body(
         sp += 1;
     }
 
-    let mut locals: [TypeAtom; 64] = [TypeAtom::new(b"").unwrap(); 64];
-    let mut local_tys: [TypeAtom; 64] = [TypeAtom::new(b"").unwrap(); 64];
+    let mut locals: [TypeAtom; 64] = [TypeAtom::EMPTY; 64];
+    let mut local_tys: [TypeAtom; 64] = [TypeAtom::EMPTY; 64];
     let mut local_len: usize = 0;
 
     let mut terminated = false;
@@ -84,7 +89,7 @@ pub fn typecheck_word_body(
 
         match tok.kind {
             TokenKind::Number => {
-                push(&mut stack, &mut sp, Value::Plain(TypeAtom::new(b"i64").unwrap()))?;
+                push(&mut stack, &mut sp, Value::Plain(TypeAtom::I64))?;
                 out.write(b"  ");
                 out.write(&slice[tok.span.start..tok.span.end]);
                 out.write(b" | stack: ");
@@ -92,7 +97,7 @@ pub fn typecheck_word_body(
                 out.write(b"\n");
             }
             TokenKind::String => {
-                push(&mut stack, &mut sp, Value::Plain(TypeAtom::new(b"str").unwrap()))?;
+                push(&mut stack, &mut sp, Value::Plain(TypeAtom::STR))?;
                 out.write(b"  <str> | stack: ");
                 write_stack(out, &stack, sp);
                 out.write(b"\n");
@@ -109,19 +114,19 @@ pub fn typecheck_word_body(
                     code: 3202,
                     span: Span::new(body_span.start + tok.span.start, body_span.start + tok.span.end),
                 })?;
-                if v == Value::Plain(TypeAtom::new(b"scoped").unwrap()) {
+                if v == Value::Plain(TypeAtom::SCOPED) {
                     return Err(TcError { code: 3504, span: body_span });
                 }
 	                let ty = match v {
 	                    Value::Plain(t) => t,
 	                    Value::Scoped { ty, .. } => ty,
-	                    Value::Resource(_) => TypeAtom::new(b"resource").unwrap(),
-	                    Value::Quot(_) => TypeAtom::new(b"quot").unwrap(),
-	                    Value::MmioPlace(_) => TypeAtom::new(b"mmio").unwrap(),
-	                    Value::Ptr { mutable: false, .. } => TypeAtom::new(b"ptr").unwrap(),
-	                    Value::Ptr { mutable: true, .. } => TypeAtom::new(b"ptr_mut").unwrap(),
-	                    Value::MmioPtr { mutable: false, .. } => TypeAtom::new(b"ptr").unwrap(),
-	                    Value::MmioPtr { mutable: true, .. } => TypeAtom::new(b"ptr_mut").unwrap(),
+	                    Value::Resource(_) => TypeAtom::RESOURCE,
+	                    Value::Quot(_) => TypeAtom::QUOT,
+	                    Value::MmioPlace(_) => TypeAtom::MMIO,
+	                    Value::Ptr { mutable: false, .. } => TypeAtom::PTR,
+	                    Value::Ptr { mutable: true, .. } => TypeAtom::PTR_MUT,
+	                    Value::MmioPtr { mutable: false, .. } => TypeAtom::PTR,
+	                    Value::MmioPtr { mutable: true, .. } => TypeAtom::PTR_MUT,
 	                };
                 let lname = TypeAtom::new(&slice[name.span.start..name.span.end]).ok_or(TcError {
                     code: 3203,
@@ -195,7 +200,7 @@ pub fn typecheck_word_body(
                 }
 
                 if has_dynamic {
-                    push(&mut stack, &mut sp, Value::Plain(TypeAtom::new(b"i64").unwrap()))?;
+                    push(&mut stack, &mut sp, Value::Plain(TypeAtom::I64))?;
                 }
                 let base_pos = if has_dynamic { sp.saturating_sub(2) } else { sp.saturating_sub(1) };
                 if base_pos >= sp {
@@ -208,12 +213,12 @@ pub fn typecheck_word_body(
                         Value::Plain(elem)
                     }
                     Value::Ptr { mutable, .. } => {
-                        let ty = if mutable { TypeAtom::new(b"ptr_mut").unwrap() } else { TypeAtom::new(b"ptr").unwrap() };
+                        let ty = if mutable { TypeAtom::PTR_MUT } else { TypeAtom::PTR };
                         Value::Plain(ty)
                     }
                     Value::MmioPlace(res) => Value::MmioPlace(res),
                     Value::MmioPtr { mutable, .. } => {
-                        let ty = if mutable { TypeAtom::new(b"ptr_mut").unwrap() } else { TypeAtom::new(b"ptr").unwrap() };
+                        let ty = if mutable { TypeAtom::PTR_MUT } else { TypeAtom::PTR };
                         Value::Plain(ty)
                     }
                     _ => return Err(TcError { code: 3519, span: op_span }),
@@ -263,7 +268,7 @@ pub fn typecheck_word_body(
                             return Err(TcError { code: 3501, span: place.root_abs(body_span.start) });
                         }
                     }
-                    let ty = if mut_tok { TypeAtom::new(b"ptr_mut").unwrap() } else { TypeAtom::new(b"ptr").unwrap() };
+                    let ty = if mut_tok { TypeAtom::PTR_MUT } else { TypeAtom::PTR };
                     push(&mut stack, &mut sp, Value::Plain(ty))?;
                 }
                 out.write(b"  ");
@@ -281,20 +286,20 @@ pub fn typecheck_word_body(
                 let top_ty = match stack[sp - 1] {
                     Value::Plain(t) => t,
                     Value::Scoped { ty, .. } => ty,
-                    Value::Resource(_) => TypeAtom::new(b"resource").unwrap(),
-                    Value::Quot(_) => TypeAtom::new(b"quot").unwrap(),
-                    Value::MmioPlace(_) => TypeAtom::new(b"mmio").unwrap(),
-                    Value::Ptr { mutable: false, .. } => TypeAtom::new(b"ptr").unwrap(),
-                    Value::Ptr { mutable: true, .. } => TypeAtom::new(b"ptr_mut").unwrap(),
-                    Value::MmioPtr { mutable: false, .. } => TypeAtom::new(b"ptr").unwrap(),
-                    Value::MmioPtr { mutable: true, .. } => TypeAtom::new(b"ptr_mut").unwrap(),
+                    Value::Resource(_) => TypeAtom::RESOURCE,
+                    Value::Quot(_) => TypeAtom::QUOT,
+                    Value::MmioPlace(_) => TypeAtom::MMIO,
+                    Value::Ptr { mutable: false, .. } => TypeAtom::PTR,
+                    Value::Ptr { mutable: true, .. } => TypeAtom::PTR_MUT,
+                    Value::MmioPtr { mutable: false, .. } => TypeAtom::PTR,
+                    Value::MmioPtr { mutable: true, .. } => TypeAtom::PTR_MUT,
                 };
                 if array_elem_type(top_ty).is_none() && top_ty != TypeAtom::new(b"Region").unwrap() {
                     return Err(TcError { code: 3515, span: body_span });
                 }
 
                 // Non-IR checker uses the legacy marker to ensure "must be consumed by end of block".
-                let scoped = Value::Plain(TypeAtom::new(b"scoped").unwrap());
+                let scoped = Value::Plain(TypeAtom::SCOPED);
                 push(&mut stack, &mut sp, scoped)?;
 
                 let block = capture_scoped_block(&mut lex, slice, tok.span).map_err(|code| TcError {
@@ -342,7 +347,7 @@ pub fn typecheck_word_body(
                     (&slice[tok.span.start..tok.span.end], tok.span)
                 };
                 if name == b"true" || name == b"false" {
-                    push(&mut stack, &mut sp, Value::Plain(TypeAtom::new(b"bool").unwrap()))?;
+                    push(&mut stack, &mut sp, Value::Plain(TypeAtom::BOOL))?;
                     out.write(b"  ");
                     out.write(name);
                     out.write(b" | stack: ");
@@ -432,10 +437,10 @@ pub fn typecheck_word_body(
                                 if !typed {
                                     return Err(TcError { code: 3614, span: name_abs });
                                 }
-                                if t != TypeAtom::new(b"ptr").unwrap() && t != TypeAtom::new(b"ptr_mut").unwrap() {
+                                if t != TypeAtom::PTR && t != TypeAtom::PTR_MUT {
                                     return Err(TcError { code: 3614, span: name_abs });
                                 }
-                                let want = ty_atom.unwrap();
+                                let want = ty_atom.expect("typed => ty_atom is Some");
                                 push(&mut stack, &mut sp, Value::Plain(want))?;
                                 out.write(b"  ");
                                 out.write(name);
@@ -526,7 +531,7 @@ pub fn typecheck_word_body(
                                 if !typed {
                                     return Err(TcError { code: 3614, span: name_abs });
                                 }
-                                if t != TypeAtom::new(b"ptr_mut").unwrap() {
+                                if t != TypeAtom::PTR_MUT {
                                     return Err(TcError { code: 3614, span: name_abs });
                                 }
                                 out.write(b"  ");
@@ -594,24 +599,24 @@ pub fn typecheck_word_body(
 	                        let got = match v {
 	                            Value::Plain(t) => t,
 	                            Value::Scoped { ty, .. } => ty,
-	                            Value::Resource(_) => TypeAtom::new(b"resource").unwrap(),
-	                            Value::Quot(_) => TypeAtom::new(b"quot").unwrap(),
-	                            Value::MmioPlace(_) => TypeAtom::new(b"mmio").unwrap(),
-	                            Value::Ptr { mutable: false, .. } => TypeAtom::new(b"ptr").unwrap(),
-	                            Value::Ptr { mutable: true, .. } => TypeAtom::new(b"ptr_mut").unwrap(),
-	                            Value::MmioPtr { mutable: false, .. } => TypeAtom::new(b"ptr").unwrap(),
-	                            Value::MmioPtr { mutable: true, .. } => TypeAtom::new(b"ptr_mut").unwrap(),
+	                            Value::Resource(_) => TypeAtom::RESOURCE,
+	                            Value::Quot(_) => TypeAtom::QUOT,
+	                            Value::MmioPlace(_) => TypeAtom::MMIO,
+	                            Value::Ptr { mutable: false, .. } => TypeAtom::PTR,
+	                            Value::Ptr { mutable: true, .. } => TypeAtom::PTR_MUT,
+	                            Value::MmioPtr { mutable: false, .. } => TypeAtom::PTR,
+	                            Value::MmioPtr { mutable: true, .. } => TypeAtom::PTR_MUT,
 	                        };
                         if let Some(st) = find_subtype(subtypes, ty_atom) {
                             if !type_compatible(got, st.base, subtypes) {
                                 return Err(TcError { code: 3298, span: body_span });
                             }
                             push(&mut stack, &mut sp, Value::Plain(ty_atom))?;
-                            push(&mut stack, &mut sp, Value::Plain(TypeAtom::new(b"bool").unwrap()))?;
+                            push(&mut stack, &mut sp, Value::Plain(TypeAtom::BOOL))?;
                         } else {
                             // general: assume it can convert, return ok
                             push(&mut stack, &mut sp, Value::Plain(ty_atom))?;
-                            push(&mut stack, &mut sp, Value::Plain(TypeAtom::new(b"bool").unwrap()))?;
+                            push(&mut stack, &mut sp, Value::Plain(TypeAtom::BOOL))?;
                         }
                         out.write(b"  ");
                         out.write(name);
@@ -627,13 +632,13 @@ pub fn typecheck_word_body(
 	                        let got = match v {
 	                            Value::Plain(t) => t,
 	                            Value::Scoped { ty, .. } => ty,
-	                            Value::Resource(_) => TypeAtom::new(b"resource").unwrap(),
-	                            Value::Quot(_) => TypeAtom::new(b"quot").unwrap(),
-	                            Value::MmioPlace(_) => TypeAtom::new(b"mmio").unwrap(),
-	                            Value::Ptr { mutable: false, .. } => TypeAtom::new(b"ptr").unwrap(),
-	                            Value::Ptr { mutable: true, .. } => TypeAtom::new(b"ptr_mut").unwrap(),
-	                            Value::MmioPtr { mutable: false, .. } => TypeAtom::new(b"ptr").unwrap(),
-	                            Value::MmioPtr { mutable: true, .. } => TypeAtom::new(b"ptr_mut").unwrap(),
+	                            Value::Resource(_) => TypeAtom::RESOURCE,
+	                            Value::Quot(_) => TypeAtom::QUOT,
+	                            Value::MmioPlace(_) => TypeAtom::MMIO,
+	                            Value::Ptr { mutable: false, .. } => TypeAtom::PTR,
+	                            Value::Ptr { mutable: true, .. } => TypeAtom::PTR_MUT,
+	                            Value::MmioPtr { mutable: false, .. } => TypeAtom::PTR,
+	                            Value::MmioPtr { mutable: true, .. } => TypeAtom::PTR_MUT,
 	                        };
                         if let Some(st) = find_subtype(subtypes, ty_atom) {
                             if !type_compatible(got, st.base, subtypes) {
@@ -684,17 +689,17 @@ pub fn typecheck_word_body(
                     if sp != want {
                         return Err(TcError { code: 3230, span: body_span });
                     }
-	                    for i in 0..want {
-	                        let got = match stack[i] {
-	                            Value::Plain(t) => t,
-	                            Value::Scoped { ty, .. } => ty,
-	                            Value::Resource(_) => TypeAtom::new(b"resource").unwrap(),
-	                            Value::Quot(_) => TypeAtom::new(b"quot").unwrap(),
-	                            Value::MmioPlace(_) => TypeAtom::new(b"mmio").unwrap(),
-	                            Value::Ptr { mutable: false, .. } => TypeAtom::new(b"ptr").unwrap(),
-	                            Value::Ptr { mutable: true, .. } => TypeAtom::new(b"ptr_mut").unwrap(),
-	                            Value::MmioPtr { mutable: false, .. } => TypeAtom::new(b"ptr").unwrap(),
-	                            Value::MmioPtr { mutable: true, .. } => TypeAtom::new(b"ptr_mut").unwrap(),
+	                    for (i, v) in stack.iter().enumerate().take(want) {
+	                        let got = match v {
+	                            Value::Plain(t) => *t,
+	                            Value::Scoped { ty, .. } => *ty,
+	                            Value::Resource(_) => TypeAtom::RESOURCE,
+	                            Value::Quot(_) => TypeAtom::QUOT,
+	                            Value::MmioPlace(_) => TypeAtom::MMIO,
+	                            Value::Ptr { mutable: false, .. } => TypeAtom::PTR,
+	                            Value::Ptr { mutable: true, .. } => TypeAtom::PTR_MUT,
+	                            Value::MmioPtr { mutable: false, .. } => TypeAtom::PTR,
+	                            Value::MmioPtr { mutable: true, .. } => TypeAtom::PTR_MUT,
 	                        };
                         if !type_compatible(got, declared.outputs[i], subtypes) {
                             return Err(TcError { code: 3231, span: body_span });
@@ -723,7 +728,7 @@ pub fn typecheck_word_body(
                     continue;
                 }
 
-                if let Some(idx) = find_local(&locals, local_len, TypeAtom::new(name).unwrap_or(TypeAtom::new(b"").unwrap())) {
+                if let Some(idx) = find_local(&locals, local_len, TypeAtom::new(name).unwrap_or(TypeAtom::EMPTY)) {
                     push(&mut stack, &mut sp, Value::Plain(local_tys[idx]))?;
                     out.write(b"  ");
                     out.write(name);
@@ -767,466 +772,22 @@ pub fn typecheck_word_body(
     if sp != declared.out_len as usize {
         return Err(TcError { code: 3220, span: body_span });
     }
-	    for i in 0..(declared.out_len as usize) {
-	        let got = match stack[i] {
-	            Value::Plain(t) => t,
-	            Value::Scoped { ty, .. } => ty,
-	            Value::Resource(_) => TypeAtom::new(b"resource").unwrap(),
-	            Value::Quot(_) => TypeAtom::new(b"quot").unwrap(),
-	            Value::MmioPlace(_) => TypeAtom::new(b"mmio").unwrap(),
-	            Value::Ptr { mutable: false, .. } => TypeAtom::new(b"ptr").unwrap(),
-	            Value::Ptr { mutable: true, .. } => TypeAtom::new(b"ptr_mut").unwrap(),
-	            Value::MmioPtr { mutable: false, .. } => TypeAtom::new(b"ptr").unwrap(),
-	            Value::MmioPtr { mutable: true, .. } => TypeAtom::new(b"ptr_mut").unwrap(),
+	    for (i, v) in stack.iter().enumerate().take(declared.out_len as usize) {
+	        let got = match v {
+	            Value::Plain(t) => *t,
+	            Value::Scoped { ty, .. } => *ty,
+	            Value::Resource(_) => TypeAtom::RESOURCE,
+	            Value::Quot(_) => TypeAtom::QUOT,
+	            Value::MmioPlace(_) => TypeAtom::MMIO,
+	            Value::Ptr { mutable: false, .. } => TypeAtom::PTR,
+	            Value::Ptr { mutable: true, .. } => TypeAtom::PTR_MUT,
+	            Value::MmioPtr { mutable: false, .. } => TypeAtom::PTR,
+	            Value::MmioPtr { mutable: true, .. } => TypeAtom::PTR_MUT,
 	        };
         if !type_compatible(got, declared.outputs[i], subtypes) {
             return Err(TcError { code: 3221, span: body_span });
         }
     }
 
-    Ok(())
-}
-
-fn do_if(
-    stack: &mut [Value; 256],
-    sp: &mut usize,
-    src: &[u8],
-    env: &[WordEntry],
-    subtypes: &[SubtypeInfo],
-    mmio: &MmioDb,
-    nominals: &NominalDb,
-    allow_suspend: bool,
-    out: &mut impl Output,
-) -> Result<(), TcError> {
-    let else_q = pop(stack, sp).ok_or(TcError { code: 3240, span: Span::new(0, 0) })?;
-    let then_q = pop(stack, sp).ok_or(TcError { code: 3241, span: Span::new(0, 0) })?;
-    let cond = pop(stack, sp).ok_or(TcError { code: 3242, span: Span::new(0, 0) })?;
-    if cond != Value::Plain(TypeAtom::new(b"bool").unwrap()) {
-        return Err(TcError { code: 3243, span: Span::new(0, 0) });
-    }
-    let then_span = match then_q {
-        Value::Quot(s) => s,
-        _ => return Err(TcError { code: 3244, span: Span::new(0, 0) }),
-    };
-    let else_span = match else_q {
-        Value::Quot(s) => s,
-        _ => return Err(TcError { code: 3245, span: Span::new(0, 0) }),
-    };
-
-    let base_sp = *sp;
-    let mut then_stack = *stack;
-    let mut then_sp = base_sp;
-    typecheck_quote_body(&mut then_stack, &mut then_sp, src, then_span, env, subtypes, mmio, nominals, allow_suspend, out)?;
-
-    let mut else_stack = *stack;
-    let mut else_sp = base_sp;
-    typecheck_quote_body(&mut else_stack, &mut else_sp, src, else_span, env, subtypes, mmio, nominals, allow_suspend, out)?;
-
-    if then_sp != else_sp {
-        return Err(TcError { code: 3246, span: Span::new(0, 0) });
-    }
-    for i in 0..then_sp {
-        if then_stack[i] != else_stack[i] {
-            return Err(TcError { code: 3247, span: Span::new(0, 0) });
-        }
-    }
-
-    for i in 0..then_sp {
-        stack[i] = then_stack[i];
-    }
-    *sp = then_sp;
-    Ok(())
-}
-
-fn do_while(
-    stack: &mut [Value; 256],
-    sp: &mut usize,
-    src: &[u8],
-    env: &[WordEntry],
-    subtypes: &[SubtypeInfo],
-    mmio: &MmioDb,
-    nominals: &NominalDb,
-    allow_suspend: bool,
-    out: &mut impl Output,
-) -> Result<(), TcError> {
-    let body_q = pop(stack, sp).ok_or(TcError { code: 3250, span: Span::new(0, 0) })?;
-    let cond_q = pop(stack, sp).ok_or(TcError { code: 3251, span: Span::new(0, 0) })?;
-    let body_span = match body_q {
-        Value::Quot(s) => s,
-        _ => return Err(TcError { code: 3252, span: Span::new(0, 0) }),
-    };
-    let cond_span = match cond_q {
-        Value::Quot(s) => s,
-        _ => return Err(TcError { code: 3253, span: Span::new(0, 0) }),
-    };
-
-    let base_sp = *sp;
-    let base_stack = *stack;
-
-    let mut cond_stack = base_stack;
-    let mut cond_sp = base_sp;
-    typecheck_quote_body(&mut cond_stack, &mut cond_sp, src, cond_span, env, subtypes, mmio, nominals, allow_suspend, out)?;
-    if cond_sp != base_sp + 1 {
-        return Err(TcError { code: 3254, span: Span::new(0, 0) });
-    }
-    if cond_stack[cond_sp - 1] != Value::Plain(TypeAtom::new(b"bool").unwrap()) {
-        return Err(TcError { code: 3255, span: Span::new(0, 0) });
-    }
-    // must preserve original stack below bool
-    for i in 0..base_sp {
-        if cond_stack[i] != base_stack[i] {
-            return Err(TcError { code: 3256, span: Span::new(0, 0) });
-        }
-    }
-
-    let mut body_stack = base_stack;
-    let mut body_sp = base_sp;
-    typecheck_quote_body(&mut body_stack, &mut body_sp, src, body_span, env, subtypes, mmio, nominals, allow_suspend, out)?;
-    if body_sp != base_sp {
-        return Err(TcError { code: 3257, span: Span::new(0, 0) });
-    }
-    for i in 0..base_sp {
-        if body_stack[i] != base_stack[i] {
-            return Err(TcError { code: 3258, span: Span::new(0, 0) });
-        }
-    }
-    Ok(())
-}
-
-fn do_loop(
-    stack: &mut [Value; 256],
-    sp: &mut usize,
-    src: &[u8],
-    env: &[WordEntry],
-    subtypes: &[SubtypeInfo],
-    mmio: &MmioDb,
-    nominals: &NominalDb,
-    allow_suspend: bool,
-    out: &mut impl Output,
-) -> Result<(), TcError> {
-    let body_q = pop(stack, sp).ok_or(TcError { code: 3260, span: Span::new(0, 0) })?;
-    let body_span = match body_q {
-        Value::Quot(s) => s,
-        _ => return Err(TcError { code: 3261, span: Span::new(0, 0) }),
-    };
-
-    let base_sp = *sp;
-    let base_stack = *stack;
-    let mut body_stack = base_stack;
-    let mut body_sp = base_sp;
-    typecheck_quote_body(&mut body_stack, &mut body_sp, src, body_span, env, subtypes, mmio, nominals, allow_suspend, out)?;
-    if body_sp != base_sp {
-        return Err(TcError { code: 3262, span: Span::new(0, 0) });
-    }
-    for i in 0..base_sp {
-        if body_stack[i] != base_stack[i] {
-            return Err(TcError { code: 3263, span: Span::new(0, 0) });
-        }
-    }
-    Ok(())
-}
-
-fn do_lock(
-    stack: &mut [Value; 256],
-    sp: &mut usize,
-    src: &[u8],
-    env: &[WordEntry],
-    subtypes: &[SubtypeInfo],
-    mmio: &MmioDb,
-    nominals: &NominalDb,
-    out: &mut impl Output,
-) -> Result<(), TcError> {
-    let body_q = pop(stack, sp).ok_or(TcError { code: 3270, span: Span::new(0, 0) })?;
-    let body_span = match body_q {
-        Value::Quot(s) => s,
-        _ => return Err(TcError { code: 3271, span: Span::new(0, 0) }),
-    };
-    let base_sp = *sp;
-    let base_stack = *stack;
-    let mut body_stack = base_stack;
-    let mut body_sp = base_sp;
-    // lock is non-suspending
-    typecheck_quote_body(&mut body_stack, &mut body_sp, src, body_span, env, subtypes, mmio, nominals, false, out)?;
-    if body_sp != base_sp {
-        return Err(TcError { code: 3272, span: Span::new(0, 0) });
-    }
-    for i in 0..base_sp {
-        if body_stack[i] != base_stack[i] {
-            return Err(TcError { code: 3273, span: Span::new(0, 0) });
-        }
-    }
-    Ok(())
-}
-
-fn typecheck_quote_body(
-    stack: &mut [Value; 256],
-    sp: &mut usize,
-    src: &[u8],
-    quot_span: Span,
-    env: &[WordEntry],
-    subtypes: &[SubtypeInfo],
-    mmio: &MmioDb,
-    nominals: &NominalDb,
-    allow_suspend: bool,
-    out: &mut impl Output,
-) -> Result<(), TcError> {
-    // Expect brackets at ends; just slice inside.
-    if quot_span.end <= quot_span.start + 2 {
-        return Ok(())
-    }
-    let inner = Span::new(quot_span.start + 1, quot_span.end - 1);
-    let slice = &src[inner.start..inner.end];
-    let mut lex = Lexer::new(slice);
-
-    // Optional leading signature + effect set for escaping quotations: ignore in v1 MVP.
-    if lex.next().kind == TokenKind::PunctLParen {
-        // rewind not possible: manually parse again with balanced skip
-        lex = Lexer::new(slice);
-        let first = lex.next();
-        if first.kind == TokenKind::PunctLParen {
-            let _ = capture_balanced(&mut lex, slice, TokenKind::PunctLParen, TokenKind::PunctRParen, first.span.start);
-            let maybe_eff = lex.next();
-            if maybe_eff.kind != TokenKind::EffectSet {
-                // step back not supported; ok to proceed after consuming one token too far only if it's ws, but lexer skips ws.
-                // So: only treat it as effect-set if it is.
-                // If it isn't, we just continue with it as first term by re-lexing from its start.
-                lex = Lexer::new(&slice[maybe_eff.span.start..]);
-            }
-        }
-    } else {
-        // first token consumed; re-lex from start
-        lex = Lexer::new(slice);
-    }
-
-    loop {
-        let tok = lex.next();
-        if tok.kind == TokenKind::Eof {
-            break;
-        }
-        match tok.kind {
-            TokenKind::Number => push(stack, sp, Value::Plain(TypeAtom::new(b"i64").unwrap()))?,
-            TokenKind::Ident => {
-                let mut qbuf = [0u8; 64];
-                let (len, used, name_span) = read_qualified_name(&mut lex, slice, tok, &mut qbuf);
-                let name = if used {
-                    &qbuf[..len]
-                } else {
-                    &slice[tok.span.start..tok.span.end]
-                };
-                if name == b"true" || name == b"false" {
-                    push(stack, sp, Value::Plain(TypeAtom::new(b"bool").unwrap()))?;
-                    continue;
-                }
-                let abs = Span::new(inner.start + name_span.start, inner.start + name_span.end);
-                if !name.is_empty() && (name[0] == b'@' || name[0] == b'!') {
-                    let is_load = name[0] == b'@';
-                    let typed = name.len() > 1;
-                    let ty_atom = if typed {
-                        Some(TypeAtom::new(&name[1..]).ok_or(TcError { code: 3632, span: abs })?) // Corrected: Added missing '?'
-                    } else {
-                        None
-                    };
-
-                    if is_load {
-                        let addr = pop(stack, sp).ok_or(TcError { code: 3633, span: abs })?;
-                        match addr {
-                            Value::MmioPtr { reg, .. } => {
-                                if !access_can_read(reg.access) {
-                                    return Err(TcError { code: 3610, span: abs });
-                                }
-                                if let Some(want) = ty_atom {
-                                    if want != reg.reg_ty {
-                                        return Err(TcError { code: 3613, span: abs });
-                                    }
-                                }
-                                push(stack, sp, Value::Plain(reg.reg_ty))?;
-                                continue;
-                            }
-                            Value::MmioPlace(MmioResolved::Reg(reg)) => {
-                                if !access_can_read(reg.access) {
-                                    return Err(TcError { code: 3610, span: abs });
-                                }
-                                if let Some(want) = ty_atom {
-                                    if want != reg.reg_ty {
-                                        return Err(TcError { code: 3613, span: abs });
-                                    }
-                                }
-                                push(stack, sp, Value::Plain(reg.reg_ty))?;
-                                continue;
-                            }
-                            Value::MmioPlace(MmioResolved::Field(field)) => {
-                                if !access_can_read(field.reg_access) || !access_can_read(field.field.access) {
-                                    return Err(TcError { code: 3610, span: abs });
-                                }
-                                if typed {
-                                    return Err(TcError { code: 3634, span: abs });
-                                }
-                                push(stack, sp, Value::Plain(field.field.ty))?;
-                                continue;
-                            }
-                            Value::Plain(t) => {
-                                if !typed {
-                                    return Err(TcError { code: 3614, span: abs });
-                                }
-                                if t != TypeAtom::new(b"ptr").unwrap() && t != TypeAtom::new(b"ptr_mut").unwrap() {
-                                    return Err(TcError { code: 3614, span: abs });
-                                }
-                                push(stack, sp, Value::Plain(ty_atom.unwrap()))?;
-                                continue;
-                            }
-                            _ => return Err(TcError { code: 3614, span: abs }),
-                        }
-                    } else {
-                        let val = pop(stack, sp).ok_or(TcError { code: 3633, span: abs })?;
-                        let addr = pop(stack, sp).ok_or(TcError { code: 3633, span: abs })?;
-                        match (addr, val) {
-                            (Value::MmioPtr { reg, mutable }, Value::Plain(vty)) => {
-                                if !mutable || !access_can_write(reg.access) {
-                                    return Err(TcError { code: 3609, span: abs });
-                                }
-                                if let Some(want) = ty_atom {
-                                    if want != reg.reg_ty {
-                                        return Err(TcError { code: 3613, span: abs });
-                                    }
-                                }
-                                if vty != reg.reg_ty {
-                                    return Err(TcError { code: 3231, span: abs });
-                                }
-                                continue;
-                            }
-                            (Value::MmioPlace(MmioResolved::Reg(reg)), Value::Plain(vty)) => {
-                                if !access_can_write(reg.access) {
-                                    return Err(TcError { code: 3609, span: abs });
-                                }
-                                if let Some(want) = ty_atom {
-                                    if want != reg.reg_ty {
-                                        return Err(TcError { code: 3613, span: abs });
-                                    }
-                                }
-                                if vty != reg.reg_ty {
-                                    return Err(TcError { code: 3231, span: abs });
-                                }
-                                continue;
-                            }
-                            (Value::MmioPlace(MmioResolved::Field(field)), Value::Plain(vty)) => {
-                                if !access_can_write(field.reg_access) || !access_can_write(field.field.access) {
-                                    return Err(TcError { code: 3609, span: abs });
-                                }
-                                if typed {
-                                    return Err(TcError { code: 3634, span: abs });
-                                }
-                                if vty != field.field.ty {
-                                    return Err(TcError { code: 3231, span: abs });
-                                }
-                                continue;
-                            }
-                            (Value::Plain(t), Value::Plain(_vty)) => {
-                                if !typed {
-                                    return Err(TcError { code: 3614, span: abs });
-                                }
-                                if t != TypeAtom::new(b"ptr_mut").unwrap() {
-                                    return Err(TcError { code: 3614, span: abs });
-                                }
-                                continue;
-                            }
-                            _ => return Err(TcError { code: 3614, span: abs }),
-                        }
-                    }
-                }
-
-                if let Some(res) = resolve_mmio_place(mmio, src, name, abs)? {
-                    push(stack, sp, Value::MmioPlace(res))?;
-                    continue;
-                }
-                if name == b"dup" {
-                    let top = pop(stack, sp).ok_or(TcError { code: 3282, span: quot_span })?;
-                    push(stack, sp, top)?;
-                    push(stack, sp, top)?;
-                    continue;
-                }
-                if name == b"drop" {
-                    let _ = pop(stack, sp).ok_or(TcError { code: 3282, span: quot_span })?;
-                    continue;
-                }
-                if name == b"swap" {
-                    let b = pop(stack, sp).ok_or(TcError { code: 3282, span: quot_span })?;
-                    let a = pop(stack, sp).ok_or(TcError { code: 3282, span: quot_span })?;
-                    push(stack, sp, b)?;
-                    push(stack, sp, a)?;
-                    continue;
-                }
-                if name == b"if" {
-                    do_if(stack, sp, src, env, subtypes, mmio, nominals, allow_suspend, out)?;
-                    continue;
-                }
-                if name == b"while" {
-                    do_while(stack, sp, src, env, subtypes, mmio, nominals, allow_suspend, out)?;
-                    continue;
-                }
-                if name == b"loop" {
-                    do_loop(stack, sp, src, env, subtypes, mmio, nominals, allow_suspend, out)?;
-                    continue;
-                }
-                if name == b"lock" {
-                    let mut probe = lex;
-                    let next = probe.next();
-                    if next.kind == TokenKind::PunctLBracket {
-                        lex = probe;
-                        let _block = capture_scoped_block(&mut lex, slice, next.span)
-                            .map_err(|code| TcError { code, span: Span::new(quot_span.start + next.span.start, quot_span.start + next.span.end) })?;
-                        let full_span = Span::new(quot_span.start + next.span.start, quot_span.start + lex.pos());
-                        push(stack, sp, Value::Quot(full_span))?;
-                    }
-                    do_lock(stack, sp, src, env, subtypes, mmio, nominals, out)?;
-                    continue;
-                }
-                let entry = lookup(env, name).ok_or(TcError { code: 3280, span: quot_span })?;
-                if entry.may_suspend && !allow_suspend {
-                    return Err(TcError { code: 3503, span: quot_span });
-                }
-                apply_sig(stack, sp, entry, quot_span, subtypes)?;
-            }
-            TokenKind::PunctGe | TokenKind::PunctLe | TokenKind::PunctEqEq | TokenKind::PunctNe => {
-                // treat as word-like operator
-                let name = &slice[tok.span.start..tok.span.end];
-                let entry = lookup(env, name).ok_or(TcError { code: 3280, span: quot_span })?;
-                if entry.may_suspend && !allow_suspend {
-                    return Err(TcError { code: 3503, span: quot_span });
-                }
-                apply_sig(stack, sp, entry, quot_span, subtypes)?;
-            }
-            TokenKind::PunctArrowBind => {
-                // locals not allowed inside quotations in MVP; ignore
-                return Err(TcError { code: 3281, span: quot_span });
-            }
-            TokenKind::PunctArrow => {
-                let op_span = Span::new(quot_span.start + tok.span.start, quot_span.start + tok.span.end);
-                let field_tok = lex.next();
-                if field_tok.kind != TokenKind::Ident {
-                    return Err(TcError { code: 3716, span: op_span });
-                }
-                let field_atom = TypeAtom::new(&slice[field_tok.span.start..field_tok.span.end])
-                    .ok_or(TcError { code: 3716, span: op_span })?;
-                if *sp == 0 {
-                    return Err(TcError { code: 3202, span: op_span });
-                }
-                let base = stack[*sp - 1];
-                let (struct_ty, mutable) = match base {
-                    Value::Ptr { ty, mutable } => (ty, mutable),
-                    _ => return Err(TcError { code: 3716, span: op_span }),
-                };
-                let field_ty = struct_field_ty(nominals, struct_ty, field_atom)
-                    .ok_or(TcError { code: 3716, span: op_span })?;
-                stack[*sp - 1] = Value::Ptr { ty: field_ty, mutable };
-            }
-            TokenKind::PunctLBracket => {
-                let q = capture_balanced(&mut lex, slice, TokenKind::PunctLBracket, TokenKind::PunctRBracket, tok.span.start)
-                    .map_err(|code| TcError { code, span: quot_span })?;
-                let _ = q;
-                push(stack, sp, Value::Quot(Span::new(0, 0)))?;
-            }
-            _ => {} // ignore other punctuation in MVP
-        }
-    }
     Ok(())
 }

@@ -17,9 +17,13 @@ pub fn get(name: &[u8]) -> Option<*const c::c_char> {
     }
 }
 
+/// # Safety
+///
+/// The caller must ensure that no other thread mutates the environment
+/// concurrently, as `getenv` uses global state.
 pub unsafe fn get_str(name: &[u8]) -> Option<&'static [u8]> {
     let ptr = get(name)?;
-    let n = cstr::len(ptr);
-    Some(core::slice::from_raw_parts(ptr as *const u8, n))
+    let n = unsafe { cstr::len(ptr) };
+    Some(unsafe { core::slice::from_raw_parts(ptr as *const u8, n) })
 }
 

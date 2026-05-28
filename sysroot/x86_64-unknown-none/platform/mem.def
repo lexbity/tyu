@@ -1,0 +1,11 @@
+module platform/mem;
+type Region;
+type RegionRef;
+type RegionRefMut;
+
+: platform.mem.region-create ( usize -- Region ) ;
+: platform.mem.region-alloc ( Region usize -- ptr_mut ) ;
+: platform.mem.region-reset ( Region -- ) ;
+: platform.mem.region-destroy ( Region -- ) ;
+
+end;

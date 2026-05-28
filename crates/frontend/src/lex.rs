@@ -26,6 +26,7 @@ impl<'a> Lexer<'a> {
         self.i = core::cmp::min(pos, self.src.len());
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Token {
         self.skip_ws_and_comments();
         if self.i >= self.src.len() {

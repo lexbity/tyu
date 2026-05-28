@@ -1,29 +1,17 @@
 #![no_std]
 #![no_main]
+#![deny(unsafe_op_in_unsafe_fn)]
 
-use hosted::diag;
-
+mod assembler;
 mod config;
 mod driver;
 
 hosted_rt::entry!(assemble_main);
 
 extern "C" fn assemble_main(argc: isize, argv: *const *const hosted::c::c_char) -> i32 {
-    let result = unsafe { config::parse_args(argc, argv) };
-
-    match result {
+    match unsafe { config::parse_args(argc, argv) } {
         config::ParseResult::Ok(cfg) => driver::run(&cfg),
-        config::ParseResult::Help => 0,
-        config::ParseResult::Error(code) => {
-            if code == 2001 {
-                let _ = diag::error_simple(2001, b"missing input .asm file");
-                return 2;
-            }
-            // For code 2 (usage error), help/error was likely already printed or implicit
-            if code == 2 {
-                 return 2;
-            }
-            code
-        }
+        config::ParseResult::Help    => 0,
+        config::ParseResult::Error => 2,
     }
 }

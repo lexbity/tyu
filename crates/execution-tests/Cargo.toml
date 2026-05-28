@@ -1,0 +1,11 @@
+[package]
+name    = "execution-tests"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+codegen-core = { path = "../codegen-core" }
+
+[[test]]
+name    = "x86_64_none"
+harness = true

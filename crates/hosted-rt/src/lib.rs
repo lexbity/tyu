@@ -1,4 +1,5 @@
 #![no_std]
+#![deny(unsafe_op_in_unsafe_fn)]
 
 use hosted::c;
 #[cfg(not(test))]
@@ -16,8 +17,14 @@ fn panic(_info: &PanicInfo) -> ! {
     unsafe { c::_exit(101) }
 }
 
+/// Terminate the process immediately via `_exit` syscall.
+///
+/// # Safety
+///
+/// The caller must ensure that the process is in a state where `_exit` is safe
+/// to call (e.g., no outstanding locks or resources that require cleanup).
 pub unsafe fn exit(code: i32) -> ! {
-    c::_exit(code)
+    unsafe { c::_exit(code) }
 }
 
 #[macro_export]
