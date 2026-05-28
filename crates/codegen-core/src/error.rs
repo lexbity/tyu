@@ -4,12 +4,7 @@ use ir as lir;
 ///
 /// Each variant carries enough context to produce a useful diagnostic without
 /// requiring a string heap. The `code()` method returns a stable numeric code
-/// for tooling compatibility and legacy diagnostic infrastructure.
-///
-/// # Migration note
-/// The `Internal` variant is a shim for backend code that has not yet been
-/// migrated to named variants. New backend code should use named variants
-/// exclusively. The goal is to eliminate `Internal` over time.
+/// for tooling compatibility.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CodegenError {
     /// An IR opcode is not supported by this target backend.
@@ -33,27 +28,40 @@ pub enum CodegenError {
     /// An IR structural invariant was violated (e.g. duplicate block label).
     MalformedIr { detail: u32 },
 
-    /// Migration shim: a legacy numeric code not yet given a named variant.
-    ///
-    /// Prefer adding a new named variant over using this in new code.
-    Internal { code: u32 },
+    /// `AddrOf` without a compile-time constant address (runtime-only).
+    UnsupportedAddrOf,
+
+    /// A type property (bit width / signedness) could not be determined.
+    UnknownTypeProperties { type_id: lir::TypeId },
+
+    /// `CheckSubtype` IR op is not supported by the codegen backend.
+    UnsupportedCheckSubtype,
+
+    /// Exceeded maximum number of string literals per word.
+    StringLiteralCapacityExceeded,
+
+    /// Exceeded available scoped-allocation slots.
+    ScopedAllocationOverflow,
 }
 
 impl CodegenError {
     /// Stable numeric diagnostic code.
     ///
     /// Codes in the 8000–8999 range are owned by `codegen-core`.
-    /// `Internal` passes through whatever code the legacy site provided.
     pub fn code(self) -> u32 {
         match self {
-            Self::UnsupportedOp { .. }     => 8001,
-            Self::MissingEntryPoint { .. } => 8002,
-            Self::OutputCapacityExceeded   => 8003,
-            Self::InvalidCast { .. }       => 8004,
-            Self::UnsupportedEmitMode      => 8005,
-            Self::MalformedStringLiteral   => 8006,
-            Self::MalformedIr { .. }       => 8007,
-            Self::Internal { code }        => code,
+            Self::UnsupportedOp { .. }          => 8001,
+            Self::MissingEntryPoint { .. }      => 8002,
+            Self::OutputCapacityExceeded        => 8003,
+            Self::InvalidCast { .. }            => 8004,
+            Self::UnsupportedEmitMode           => 8005,
+            Self::MalformedStringLiteral        => 8006,
+            Self::MalformedIr { .. }            => 8007,
+            Self::UnsupportedAddrOf             => 8008,
+            Self::UnknownTypeProperties { .. }  => 8009,
+            Self::UnsupportedCheckSubtype       => 8010,
+            Self::StringLiteralCapacityExceeded => 8011,
+            Self::ScopedAllocationOverflow      => 8012,
         }
     }
 }

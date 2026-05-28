@@ -99,7 +99,7 @@ impl<'a> X86_64HostedBackend<'a> {
                 emit_push_u64(self.out, addr);
                 Ok(())
             }
-            lir::OpKind::AddrOf { const_addr: None, .. } => Err(CodegenError::Internal { code: 7101 }),
+            lir::OpKind::AddrOf { const_addr: None, .. } => Err(CodegenError::UnsupportedAddrOf),
             lir::OpKind::MmioPlace { addr, .. } => {
                 self.uses_mmio = true;
                 emit_push_u64(self.out, addr);
@@ -135,7 +135,7 @@ impl<'a> X86_64HostedBackend<'a> {
                     .unwrap_or(b"");
                 if ty_name.starts_with(b"Slice(") || ty_name.starts_with(b"SliceMut(") {
                     if self.scoped_next >= self.scoped_slots {
-                        return Err(CodegenError::Internal { code: 7123 });
+                        return Err(CodegenError::ScopedAllocationOverflow);
                     }
                     let slot = self.scoped_next;
                     self.scoped_next = self.scoped_next.wrapping_add(1);
@@ -354,7 +354,7 @@ impl<'a> X86_64HostedBackend<'a> {
             }
 
             lir::OpKind::Load { ty } => {
-                let (bits, signed) = prim_ty_bits_signed(w, ty).ok_or(CodegenError::Internal { code: 7103 })?;
+                let (bits, signed) = prim_ty_bits_signed(w, ty).ok_or(CodegenError::UnknownTypeProperties { type_id: ty })?;
                 let width = core::cmp::max(1u32, (bits as u32) / 8);
                 self.out.write(b"  sub r15, 8\n");
                 self.out.write(b"  mov rax, [r15]\n");
@@ -366,14 +366,14 @@ impl<'a> X86_64HostedBackend<'a> {
                     (4, true) => self.out.write(b"  movsxd rax, dword [rax]\n"),
                     (4, false) => self.out.write(b"  mov eax, dword [rax]\n"),
                     (8, _) => self.out.write(b"  mov rax, qword [rax]\n"),
-                    _ => return Err(CodegenError::Internal { code: 7103 }),
+                    _ => return Err(CodegenError::UnknownTypeProperties { type_id: ty }),
                 }
                 self.out.write(b"  mov [r15], rax\n");
                 self.out.write(b"  add r15, 8\n");
                 Ok(())
             }
             lir::OpKind::Store { ty } => {
-                let (bits, _signed) = prim_ty_bits_signed(w, ty).ok_or(CodegenError::Internal { code: 7104 })?;
+                let (bits, _signed) = prim_ty_bits_signed(w, ty).ok_or(CodegenError::UnknownTypeProperties { type_id: ty })?;
                 let width = core::cmp::max(1u32, (bits as u32) / 8);
                 self.out.write(b"  sub r15, 8\n");
                 self.out.write(b"  mov rcx, [r15]\n");
@@ -384,42 +384,42 @@ impl<'a> X86_64HostedBackend<'a> {
                     2 => self.out.write(b"  mov word [rax], cx\n"),
                     4 => self.out.write(b"  mov dword [rax], ecx\n"),
                     8 => self.out.write(b"  mov qword [rax], rcx\n"),
-                    _ => return Err(CodegenError::Internal { code: 7104 }),
+                    _ => return Err(CodegenError::UnknownTypeProperties { type_id: ty }),
                 }
                 Ok(())
             }
 
             lir::OpKind::MmioVolLoad { ty, .. } => {
                 self.uses_mmio = true;
-                let (bits, signed) = prim_ty_bits_signed(w, ty).ok_or(CodegenError::Internal { code: 7105 })?;
+                let (bits, signed) = prim_ty_bits_signed(w, ty).ok_or(CodegenError::UnknownTypeProperties { type_id: ty })?;
                 let width = core::cmp::max(1u32, (bits as u32) / 8);
                 mmio::emit_mmio_load(self, width, signed, op.span);
                 Ok(())
             }
             lir::OpKind::MmioVolStore { ty, .. } => {
                 self.uses_mmio = true;
-                let (bits, _signed) = prim_ty_bits_signed(w, ty).ok_or(CodegenError::Internal { code: 7106 })?;
+                let (bits, _signed) = prim_ty_bits_signed(w, ty).ok_or(CodegenError::UnknownTypeProperties { type_id: ty })?;
                 let width = core::cmp::max(1u32, (bits as u32) / 8);
                 mmio::emit_mmio_store(self, width, op.span);
                 Ok(())
             }
             lir::OpKind::MmioVolLoadField { reg_ty, field_ty, mask, shift, .. } => {
                 self.uses_mmio = true;
-                let (reg_bits, _reg_signed) = prim_ty_bits_signed(w, reg_ty).ok_or(CodegenError::Internal { code: 7107 })?;
+                let (reg_bits, _reg_signed) = prim_ty_bits_signed(w, reg_ty).ok_or(CodegenError::UnknownTypeProperties { type_id: reg_ty })?;
                 let reg_width = core::cmp::max(1u32, (reg_bits as u32) / 8);
-                let (field_bits, field_signed) = prim_ty_bits_signed(w, field_ty).ok_or(CodegenError::Internal { code: 7107 })?;
+                let (field_bits, field_signed) = prim_ty_bits_signed(w, field_ty).ok_or(CodegenError::UnknownTypeProperties { type_id: field_ty })?;
                 mmio::emit_mmio_load_field(self, reg_width, field_bits, field_signed, mask, shift, op.span);
                 Ok(())
             }
             lir::OpKind::MmioVolStoreField { reg_ty, mask, shift, .. } => {
                 self.uses_mmio = true;
-                let (reg_bits, _reg_signed) = prim_ty_bits_signed(w, reg_ty).ok_or(CodegenError::Internal { code: 7108 })?;
+                let (reg_bits, _reg_signed) = prim_ty_bits_signed(w, reg_ty).ok_or(CodegenError::UnknownTypeProperties { type_id: reg_ty })?;
                 let reg_width = core::cmp::max(1u32, (reg_bits as u32) / 8);
                 mmio::emit_mmio_store_field(self, reg_width, mask, shift, op.span);
                 Ok(())
             }
 
-            lir::OpKind::CheckSubtype { .. } => Err(CodegenError::Internal { code: 7110 }),
+            lir::OpKind::CheckSubtype { .. } => Err(CodegenError::UnsupportedCheckSubtype),
             lir::OpKind::TrapIfFalse { code } => {
                 let ok = self.fresh_label();
                 self.out.write(b"  sub r15, 8\n");
@@ -568,7 +568,7 @@ impl<'a> X86_64HostedBackend<'a> {
             }
         }
         if self.str_len >= self.str_spans.len() {
-            return Err(CodegenError::Internal { code: 7121 });
+            return Err(CodegenError::StringLiteralCapacityExceeded);
         }
         let id = self.fresh_label();
         self.str_spans[self.str_len] = span;

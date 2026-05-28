@@ -1,4 +1,5 @@
 use codegen_core::{AssemblerKind, CodegenError, EmitMode, Target};
+use ir;
 
 // ---------------------------------------------------------------------------
 // Target::parse
@@ -56,10 +57,19 @@ fn codegen_error_codes_are_stable() {
 }
 
 #[test]
-fn codegen_error_internal_passes_through_code() {
-    assert_eq!(CodegenError::Internal { code: 7001 }.code(), 7001);
-    assert_eq!(CodegenError::Internal { code: 9999 }.code(), 9999);
-    assert_eq!(CodegenError::Internal { code: 0    }.code(), 0);
+fn codegen_error_named_variant_codes() {
+    assert_eq!(CodegenError::UnsupportedOp { op_name: b"x" }.code(), 8001);
+    assert_eq!(CodegenError::MissingEntryPoint { name: b"x" }.code(), 8002);
+    assert_eq!(CodegenError::OutputCapacityExceeded.code(), 8003);
+    assert_eq!(CodegenError::InvalidCast { from: ir::TY_I64, to: ir::TY_BOOL }.code(), 8004);
+    assert_eq!(CodegenError::UnsupportedEmitMode.code(), 8005);
+    assert_eq!(CodegenError::MalformedStringLiteral.code(), 8006);
+    assert_eq!(CodegenError::MalformedIr { detail: 0 }.code(), 8007);
+    assert_eq!(CodegenError::UnsupportedAddrOf.code(), 8008);
+    assert_eq!(CodegenError::UnknownTypeProperties { type_id: ir::TY_I64 }.code(), 8009);
+    assert_eq!(CodegenError::UnsupportedCheckSubtype.code(), 8010);
+    assert_eq!(CodegenError::StringLiteralCapacityExceeded.code(), 8011);
+    assert_eq!(CodegenError::ScopedAllocationOverflow.code(), 8012);
 }
 
 // ---------------------------------------------------------------------------

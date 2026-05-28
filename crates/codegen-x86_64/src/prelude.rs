@@ -18,7 +18,7 @@ impl<'a> X86_64HostedBackend<'a> {
                 self.out.write(b"  mov r15, __lang_ds_base\n");
                 self.out.write(b"  mov r14, __lang_ds_limit\n");
 
-                let main_decl = find_word_decl(self.module, self.src, b"main").ok_or(CodegenError::Internal { code: 7001 })?;
+                let main_decl = find_word_decl(self.module, self.src, b"main").ok_or(CodegenError::MissingEntryPoint { name: b"main" })?;
                 let main_sig = main_decl
                     .sig
                     .and_then(|s| typecheck::parse_word_sig(self.src, s).ok())
