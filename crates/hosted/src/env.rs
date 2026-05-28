@@ -1,7 +1,8 @@
 use crate::{c, cstr};
 
 pub fn get(name: &[u8]) -> Option<*const c::c_char> {
-    let mut buf = [0i8; 128];
+    // Linux PATH_MAX is 4096; environment variable names are typically short.
+    let mut buf = [0i8; 4096];
     if name.len() + 1 > buf.len() {
         return None;
     }

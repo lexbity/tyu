@@ -138,8 +138,11 @@ impl<'a, T, const N: usize> Iterator for IterMut<'a, T, N> {
         }
         let idx = self.i;
         self.i += 1;
-        // Safety: `idx < len` and the slot at `idx` has been written.
-        // Each index is yielded exactly once, so the returned `&mut T` does not alias.
-        Some(unsafe { &mut *self.ptr.add(idx).as_mut().unwrap_unchecked().as_mut_ptr() })
+        // Safety:
+        // - `idx < self.len` (checked above) guarantees the slot is initialized.
+        // - `self.ptr` is derived from `&mut [MaybeUninit<T>; N]` which is never null.
+        // - Each index is yielded exactly once, so the returned `&mut T` does not alias.
+        let slot: *mut MaybeUninit<T> = self.ptr;
+        Some(unsafe { (*slot.add(idx)).assume_init_mut() })
     }
 }
