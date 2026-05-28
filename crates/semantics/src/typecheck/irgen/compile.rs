@@ -10,12 +10,13 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         quot_span: Span,
         allow_suspend: bool,
         allow_locals: bool,
+        observer: &mut dyn TypecheckObserver,
     ) -> Result<lir::BlockId, TcError> {
         if quot_span.end <= quot_span.start + 2 {
             return Ok(cur);
         }
         let inner = Span::new(quot_span.start + 1, quot_span.end - 1);
-        self.compile_span(cur, stack, sp, inner, allow_suspend, allow_locals)
+        self.compile_span(cur, stack, sp, inner, allow_suspend, allow_locals, observer)
     }
 
     pub(super) fn compile_span(
@@ -26,6 +27,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         span: Span,
         allow_suspend: bool,
         allow_locals: bool,
+        observer: &mut dyn TypecheckObserver,
     ) -> Result<lir::BlockId, TcError> {
         let slice = &self.src[span.start..span.end];
         let mut lex = Lexer::new(slice);
@@ -53,7 +55,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                     self.compile_field_access(cur, stack, sp, span, slice, tok, &mut lex)?
                 }
                 TokenKind::PunctApostrophe => {
-                    self.compile_index(cur, stack, sp, span, slice, tok, &mut lex, allow_suspend, allow_locals)?
+                    self.compile_index(cur, stack, sp, span, slice, tok, &mut lex, allow_suspend, allow_locals, observer)?
                 }
                 TokenKind::PunctAmp | TokenKind::PunctAmpBang => {
                     self.compile_addr_of(cur, stack, sp, span, slice, tok, &mut lex)?
@@ -61,7 +63,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 TokenKind::PunctPipeGreater => self.compile_channel_send(cur, stack, sp, span, tok)?,
                 TokenKind::PunctLessPipe => self.compile_channel_recv(cur, stack, sp, span, tok)?,
                 TokenKind::PunctAmpLBracket | TokenKind::PunctAmpBangLBracket => {
-                    self.compile_scoped_block(cur, stack, sp, span, slice, tok, &mut lex, allow_suspend, allow_locals)?
+                    self.compile_scoped_block(cur, stack, sp, span, slice, tok, &mut lex, allow_suspend, allow_locals, observer)?
                 }
                 TokenKind::Ident
                 | TokenKind::PunctGe
@@ -77,10 +79,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                         (&slice[tok.span.start..tok.span.end], tok.span)
                     };
                     let name_abs = Span::new(span.start + name_span.start, span.start + name_span.end);
-                    self.compile_name(cur, stack, sp, span, slice, &mut lex, tok, name, name_abs, allow_suspend, allow_locals, &mut terminated)?
+                    self.compile_name(cur, stack, sp, span, slice, &mut lex, tok, name, name_abs, allow_suspend, allow_locals, &mut terminated, observer)?
                 }
                 _ => cur,
             };
+            observer.on_token(stack, *sp, &slice[tok.span.start..tok.span.end]);
         }
 
         Ok(cur)
@@ -367,6 +370,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         lex: &mut Lexer,
         allow_suspend: bool,
         allow_locals: bool,
+        observer: &mut dyn TypecheckObserver,
     ) -> Result<lir::BlockId, TcError> {
         let op_span = Span::new(span.start + tok.span.start, span.start + tok.span.end);
         let mut const_idx: Option<u32> = None;
@@ -384,7 +388,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 let par = capture_balanced(lex, slice, TokenKind::PunctLParen, TokenKind::PunctRParen, next.span.start)
                     .map_err(|code| TcError { code, span: op_span })?;
                 let inner = Span::new(span.start + par.start + 1, span.start + par.end - 1);
-                cur = self.compile_span(cur, stack, sp, inner, allow_suspend, allow_locals)?;
+                cur = self.compile_span(cur, stack, sp, inner, allow_suspend, allow_locals, observer)?;
                 is_dynamic = true;
             }
             _ => {
@@ -638,6 +642,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         lex: &mut Lexer,
         allow_suspend: bool,
         allow_locals: bool,
+        observer: &mut dyn TypecheckObserver,
     ) -> Result<lir::BlockId, TcError> {
         let mut_scope = tok.kind == TokenKind::PunctAmpBangLBracket;
         if *sp == 0 {
@@ -684,6 +689,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 Span::new(span.start + block.inner_start, span.start + block.inner_end),
                 block_allow_suspend,
                 allow_locals,
+                observer,
             )?;
 
             if self.stack_has_scope(stack, *sp, scope_id) {
@@ -718,6 +724,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 Span::new(span.start + block.inner_start, span.start + block.inner_end),
                 block_allow_suspend,
                 allow_locals,
+                observer,
             )?;
 
             if self.stack_has_scope(stack, *sp, scope_id) {
@@ -745,6 +752,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         allow_suspend: bool,
         _allow_locals: bool,
         terminated: &mut bool,
+        observer: &mut dyn TypecheckObserver,
     ) -> Result<lir::BlockId, TcError> {
         if name == b"true" || name == b"false" {
             self.compile_bool_literal(cur, stack, sp, name, name_abs)?;
@@ -799,15 +807,15 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         }
 
         if name == b"if" {
-            cur = self.compile_if(cur, stack, sp, allow_suspend, name_abs)?;
+            cur = self.compile_if(cur, stack, sp, allow_suspend, name_abs, observer)?;
             return Ok(cur);
         }
         if name == b"while" {
-            cur = self.compile_while(cur, stack, sp, allow_suspend, name_abs)?;
+            cur = self.compile_while(cur, stack, sp, allow_suspend, name_abs, observer)?;
             return Ok(cur);
         }
         if name == b"loop" {
-            cur = self.compile_loop(cur, stack, sp, allow_suspend, name_abs)?;
+            cur = self.compile_loop(cur, stack, sp, allow_suspend, name_abs, observer)?;
             return Ok(cur);
         }
 
@@ -827,20 +835,20 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 let full_span = Span::new(span.start + next.span.start, span.start + lex.pos());
                 push(stack, sp, Value::Quot(full_span))?;
             }
-            cur = self.compile_lock(cur, stack, sp, name_abs)?;
+            cur = self.compile_lock(cur, stack, sp, name_abs, observer)?;
             return Ok(cur);
         }
 
         if name == b"call" {
-            return self.compile_call_quote(cur, stack, sp, name_abs, allow_suspend);
+            return self.compile_call_quote(cur, stack, sp, name_abs, allow_suspend, observer);
         }
 
         if name == b"platform.task.spawn" {
-            return self.compile_task_spawn(cur, stack, sp, name_abs);
+            return self.compile_task_spawn(cur, stack, sp, name_abs, observer);
         }
 
         if name == b"platform.task.run" {
-            return self.compile_task_run(cur, stack, sp, name_abs, allow_suspend, span);
+            return self.compile_task_run(cur, stack, sp, name_abs, allow_suspend, span, observer);
         }
 
         if let Some(idx) = find_local(&self.locals, self.local_len, TypeAtom::new(name).unwrap_or(TypeAtom::EMPTY)) {
@@ -1354,13 +1362,14 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         sp: &mut usize,
         name_abs: Span,
         allow_suspend: bool,
+        observer: &mut dyn TypecheckObserver,
     ) -> Result<lir::BlockId, TcError> {
         let body_q = pop(stack, sp).ok_or(TcError { code: 3758, span: name_abs })?;
         let body_span = match body_q {
             Value::Quot(s) => s,
             _ => return Err(TcError { code: 3758, span: name_abs }),
         };
-        let (qname, qsig, may_suspend) = self.build_quote_word(body_span)?;
+        let (qname, qsig, may_suspend) = self.build_quote_word(body_span, observer)?;
         if may_suspend && !allow_suspend {
             return Err(TcError { code: 3503, span: name_abs });
         }
@@ -1390,13 +1399,14 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         stack: &mut [Value; 256],
         sp: &mut usize,
         name_abs: Span,
+        observer: &mut dyn TypecheckObserver,
     ) -> Result<lir::BlockId, TcError> {
         let body_q = pop(stack, sp).ok_or(TcError { code: 3754, span: name_abs })?;
         let body_span = match body_q {
             Value::Quot(s) => s,
             _ => return Err(TcError { code: 3754, span: name_abs }),
         };
-        let (qname, qsig, _may_suspend) = self.build_quote_word(body_span)?;
+        let (qname, qsig, _may_suspend) = self.build_quote_word(body_span, observer)?;
         if qsig.in_len != 0 || qsig.out_len != 0 {
             return Err(TcError { code: 3756, span: name_abs });
         }
@@ -1423,6 +1433,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         name_abs: Span,
         _allow_suspend: bool,
         _span: Span,
+        observer: &mut dyn TypecheckObserver,
     ) -> Result<lir::BlockId, TcError> {
         if !self.check_no_scoped_live_all(stack, *sp) {
             return Err(TcError { code: 3502, span: name_abs });
@@ -1434,7 +1445,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         };
         let base_stack = *stack;
         let base_sp = *sp;
-        cur = self.compile_quote_span(cur, stack, sp, body_span, true, false)?;
+        cur = self.compile_quote_span(cur, stack, sp, body_span, true, false, observer)?;
         if *sp != base_sp {
             return Err(TcError { code: 3752, span: name_abs });
         }

@@ -87,7 +87,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         lir::Atom::new(&buf[..i]).unwrap_or(lir::AT_QUOT)
     }
 
-    pub(super) fn build_quote_word(&mut self, quot_span: Span) -> Result<(lir::Atom, WordSig, bool), TcError> {
+    pub(super) fn build_quote_word(&mut self, quot_span: Span, observer: &mut dyn TypecheckObserver) -> Result<(lir::Atom, WordSig, bool), TcError> {
         let parsed = self.parse_quote_sig(quot_span)?;
         let name = self.quote_word_name();
         let sig = parsed.sig;
@@ -116,8 +116,8 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 sp += 1;
             }
             let cur = lir::BlockId(0);
-            let cur = qgen.emit_prologue(cur, &mut stack, &mut sp, None)?;
-            let cur = qgen.compile_span(cur, &mut stack, &mut sp, parsed.body, parsed.may_suspend, false)?;
+            let cur = qgen.emit_prologue(cur, &mut stack, &mut sp, None, observer)?;
+            let cur = qgen.compile_span(cur, &mut stack, &mut sp, parsed.body, parsed.may_suspend, false, observer)?;
             if !qgen.check_no_scoped_live(&stack, sp) {
                 return Err(TcError { code: 3504, span: quot_span });
             }

@@ -441,7 +441,7 @@ fn write_type(out: &mut impl Output, ty: TypeAtom, depth: u8) {
     out.write(bytes);
 }
 
-pub fn write_stack(out: &mut impl Output, stack: &[Value; 256], sp: usize) {
+pub fn write_stack(out: &mut dyn Output, stack: &[Value; 256], sp: usize) {
     for (i, v) in stack.iter().enumerate().take(sp) {
         if i != 0 {
             out.write(b" ");

@@ -22,12 +22,14 @@ use ir as lir;
 pub mod arena;
 mod control;
 mod locals;
+mod observer;
 mod quotes;
 mod types;
 mod prologue;
 mod compile;
 
 pub use types::intern_type;
+pub use observer::{TypecheckObserver, NullObserver, StackcheckObserver};
 
 struct QuoteSig {
     sig: WordSig,
@@ -335,6 +337,7 @@ pub fn build_ir_word<'r>(
     allow_raw_casts: bool,
     sig: &WordSig,
     arena: &mut arena::ArenaAllocator,
+    observer: &mut dyn TypecheckObserver,
 ) -> Result<IrWordOutput<'r>, TcError> {
     let name = lir_atom(slice_span(src, decl.name))?;
     let mut gen = IrWordGen::new(
@@ -360,10 +363,10 @@ pub fn build_ir_word<'r>(
     }
 
     let mut cur = lir::BlockId(0);
-    cur = gen.emit_prologue(cur, &mut stack, &mut sp, decl.requires)?;
+    cur = gen.emit_prologue(cur, &mut stack, &mut sp, decl.requires, observer)?;
 
     if let Some(body_span) = decl.body {
-        cur = gen.compile_span(cur, &mut stack, &mut sp, body_span, decl.effect_suspend, true)?;
+        cur = gen.compile_span(cur, &mut stack, &mut sp, body_span, decl.effect_suspend, true, observer)?;
     }
 
     if !gen.check_no_scoped_live(&stack, sp) {
@@ -395,7 +398,7 @@ pub fn build_ir_word<'r>(
         }
     }
 
-    cur = gen.emit_epilogue(cur, &mut stack, &mut sp, decl.ensures)?;
+    cur = gen.emit_epilogue(cur, &mut stack, &mut sp, decl.ensures, observer)?;
     gen.emit_op(cur, lir::OpKind::Ret, decl.body.unwrap_or(decl.name))?;
     let span = decl.body.unwrap_or(decl.name);
     gen.finish(span)

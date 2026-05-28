@@ -8,6 +8,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         sp: &mut usize,
         allow_suspend: bool,
         span: Span,
+        observer: &mut dyn TypecheckObserver,
     ) -> Result<lir::BlockId, TcError> {
         let else_q = pop(stack, sp).ok_or(TcError { code: 3240, span })?;
         let then_q = pop(stack, sp).ok_or(TcError { code: 3241, span })?;
@@ -33,11 +34,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
 
         let mut then_stack = base_stack;
         let mut then_sp = base_sp;
-        let then_end = self.compile_quote_span(then_blk, &mut then_stack, &mut then_sp, then_span, allow_suspend, false)?;
+        let then_end = self.compile_quote_span(then_blk, &mut then_stack, &mut then_sp, then_span, allow_suspend, false, observer)?;
 
         let mut else_stack = base_stack;
         let mut else_sp = base_sp;
-        let else_end = self.compile_quote_span(else_blk, &mut else_stack, &mut else_sp, else_span, allow_suspend, false)?;
+        let else_end = self.compile_quote_span(else_blk, &mut else_stack, &mut else_sp, else_span, allow_suspend, false, observer)?;
 
         if then_sp != else_sp {
             return Err(TcError { code: 3246, span });
@@ -64,6 +65,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         sp: &mut usize,
         allow_suspend: bool,
         span: Span,
+        observer: &mut dyn TypecheckObserver,
     ) -> Result<lir::BlockId, TcError> {
         let body_q = pop(stack, sp).ok_or(TcError { code: 3250, span })?;
         let cond_q = pop(stack, sp).ok_or(TcError { code: 3251, span })?;
@@ -84,7 +86,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
 
         let mut cond_stack = base_stack;
         let mut cond_sp = base_sp;
-        let cond_end = self.compile_quote_span(header, &mut cond_stack, &mut cond_sp, cond_span, allow_suspend, false)?;
+        let cond_end = self.compile_quote_span(header, &mut cond_stack, &mut cond_sp, cond_span, allow_suspend, false, observer)?;
         if cond_sp != base_sp + 1 {
             return Err(TcError { code: 3254, span });
         }
@@ -102,7 +104,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
 
         let mut body_stack = base_stack;
         let mut body_sp = base_sp;
-        let body_end = self.compile_quote_span(body_blk, &mut body_stack, &mut body_sp, body_span, allow_suspend, false)?;
+        let body_end = self.compile_quote_span(body_blk, &mut body_stack, &mut body_sp, body_span, allow_suspend, false, observer)?;
         if body_sp != base_sp {
             return Err(TcError { code: 3257, span });
         }
@@ -125,6 +127,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         sp: &mut usize,
         allow_suspend: bool,
         span: Span,
+        observer: &mut dyn TypecheckObserver,
     ) -> Result<lir::BlockId, TcError> {
         let body_q = pop(stack, sp).ok_or(TcError { code: 3260, span })?;
         let body_span = match body_q {
@@ -145,7 +148,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
 
         let mut body_stack = base_stack;
         let mut body_sp = base_sp;
-        let body_end = self.compile_quote_span(body_blk, &mut body_stack, &mut body_sp, body_span, allow_suspend, false)?;
+        let body_end = self.compile_quote_span(body_blk, &mut body_stack, &mut body_sp, body_span, allow_suspend, false, observer)?;
         if body_sp != base_sp {
             return Err(TcError { code: 3262, span });
         }
@@ -167,6 +170,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         stack: &mut [Value; 256],
         sp: &mut usize,
         span: Span,
+        observer: &mut dyn TypecheckObserver,
     ) -> Result<lir::BlockId, TcError> {
         if self.locked_resource.is_some() {
             return Err(TcError { code: 3517, span });
@@ -190,7 +194,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         self.locked_resource = locked;
         let base_stack = *stack;
         let base_sp = *sp;
-        let end = self.compile_quote_span(cur, stack, sp, body_span, false, true)?;
+        let end = self.compile_quote_span(cur, stack, sp, body_span, false, true, observer)?;
         if *sp != base_sp {
             return Err(TcError { code: 3272, span });
         }

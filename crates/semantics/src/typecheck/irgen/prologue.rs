@@ -7,6 +7,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         stack: &mut [Value; 256],
         sp: &mut usize,
         requires: Option<Span>,
+        observer: &mut dyn TypecheckObserver,
     ) -> Result<lir::BlockId, TcError> {
         let mut cur = cur;
         let n = self.sig.in_len as usize;
@@ -31,7 +32,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                     self.emit_op(cur, lir::OpKind::LocalGet { slot: i as u16, ty: self.word.sig.inputs[i] }, req)?;
                     push(stack, sp, Value::Plain(self.sig.inputs[i]))?;
                 }
-                cur = self.compile_quote_span(cur, stack, sp, req, false, false)?;
+                cur = self.compile_quote_span(cur, stack, sp, req, false, false, observer)?;
                 if *sp != n + 1 {
                     return Err(TcError { code: 3310, span: req });
                 }
@@ -64,6 +65,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         stack: &mut [Value; 256],
         sp: &mut usize,
         ensures: Option<Span>,
+        observer: &mut dyn TypecheckObserver,
     ) -> Result<lir::BlockId, TcError> {
         let mut cur = cur;
 
@@ -71,7 +73,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             if let Some(ens) = ensures {
                 let n = self.sig.out_len as usize;
                 let base_sp = *sp;
-                cur = self.compile_quote_span(cur, stack, sp, ens, false, false)?;
+                cur = self.compile_quote_span(cur, stack, sp, ens, false, false, observer)?;
                 if *sp != base_sp + 1 {
                     return Err(TcError { code: 3320, span: ens });
                 }
