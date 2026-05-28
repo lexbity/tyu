@@ -6,7 +6,7 @@ use frontend::span::Span;
 
 pub fn push(stack: &mut [Value; 256], sp: &mut usize, v: Value) -> Result<(), TcError> {
     if *sp >= stack.len() {
-        return Err(TcError { code: 3206, span: Span::UNKNOWN });
+        return Err(TcError::StackOverflow { span: Span::UNKNOWN });
     }
     stack[*sp] = v;
     *sp += 1;
@@ -354,20 +354,20 @@ pub fn apply_sig(
     subtypes: &[SubtypeInfo],
 ) -> Result<(), TcError> {
     if entry.may_suspend && !check_no_scoped_live(stack, *sp) {
-        return Err(TcError { code: 3502, span });
+        return Err(TcError::ScopedLiveAtSuspend { span });
     }
 
     let sig = &entry.sig;
     let need = sig.in_len as usize;
     if *sp < need {
-        return Err(TcError { code: 3211, span });
+        return Err(TcError::SigStackUnderflow { span });
     }
     // Check types from top.
 	    for i in 0..need {
 	        let got = stack[*sp - need + i];
 	        let got = got.to_type_atom();
         if !type_compatible(got, sig.inputs[i], subtypes) {
-            return Err(TcError { code: 3212, span });
+            return Err(TcError::SigTypeMismatch { span });
         }
     }
     *sp -= need;

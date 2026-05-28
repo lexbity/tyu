@@ -130,7 +130,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         allow_locals: bool,
     ) -> Result<lir::BlockId, TcError> {
         if !allow_locals {
-            return Err(TcError { code: 3281, span });
+            return Err(TcError::BindNotAllowed { span });
         }
         let next = lex.next();
         if next.kind == TokenKind::PunctLBrace {
@@ -145,10 +145,9 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                         saw_borrow = true;
                         let name_tok = lex.next();
                         if name_tok.kind != TokenKind::Ident {
-                            return Err(TcError { code: 3201, span: Span::new(span.start + name_tok.span.start, span.start + name_tok.span.end) });
+                            return Err(TcError::ExpectedIdent { span: Span::new(span.start + name_tok.span.start, span.start + name_tok.span.end) });
                         }
-                        let lname = TypeAtom::new(&slice[name_tok.span.start..name_tok.span.end]).ok_or(TcError {
-                            code: 3203,
+                        let lname = TypeAtom::new(&slice[name_tok.span.start..name_tok.span.end]).ok_or(TcError::TypeParseFailed {
                             span: Span::new(span.start + name_tok.span.start, span.start + name_tok.span.end),
                         })?;
                         binds
@@ -158,14 +157,13 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                                 mutable: b.kind == TokenKind::PunctAmpBang,
                                 span: Span::new(span.start + name_tok.span.start, span.start + name_tok.span.end),
                             })
-                            .map_err(|_| TcError { code: 3205, span })?;
+                            .map_err(|_| TcError::BindingCapacityExceeded { span })?;
                     }
                     TokenKind::Ident => {
                         if saw_borrow {
-                            return Err(TcError { code: 3701, span: Span::new(span.start + b.span.start, span.start + b.span.end) });
+                            return Err(TcError::DestructBorrowMix { span: Span::new(span.start + b.span.start, span.start + b.span.end) });
                         }
-                        let lname = TypeAtom::new(&slice[b.span.start..b.span.end]).ok_or(TcError {
-                            code: 3203,
+                        let lname = TypeAtom::new(&slice[b.span.start..b.span.end]).ok_or(TcError::TypeParseFailed {
                             span: Span::new(span.start + b.span.start, span.start + b.span.end),
                         })?;
                         binds
@@ -175,28 +173,28 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                                 mutable: false,
                                 span: Span::new(span.start + b.span.start, span.start + b.span.end),
                             })
-                            .map_err(|_| TcError { code: 3205, span })?;
+                            .map_err(|_| TcError::BindingCapacityExceeded { span })?;
                     }
                     _ => {
-                        return Err(TcError { code: 3702, span: Span::new(span.start + b.span.start, span.start + b.span.end) });
+                        return Err(TcError::DestructExpectedIdent { span: Span::new(span.start + b.span.start, span.start + b.span.end) });
                     }
                 }
             }
             if binds.is_empty() {
-                return Err(TcError { code: 3703, span });
+                return Err(TcError::DestructEmpty { span });
             }
-            let base = *stack.get(*sp - 1).ok_or(TcError { code: 3202, span })?;
+            let base = *stack.get(*sp - 1).ok_or(TcError::StackUnderflow { span })?;
             let has_borrow = binds.iter().any(|b| b.borrow);
             let (struct_ty, base_mut, _base_is_value) = match base {
                 Value::Ptr { ty, mutable } => (ty, mutable, false),
                 Value::Plain(t) if !has_borrow => (t, false, true),
-                _ => return Err(TcError { code: 3704, span }),
+                _ => return Err(TcError::DestructNotStruct { span }),
             };
             let Some(sinfo) = self.nominals.structs.iter().find(|s| s.name == struct_ty) else {
-                return Err(TcError { code: 3716, span });
+                return Err(TcError::FieldNotFound { span });
             };
             if binds.len() != sinfo.fields.len() {
-                return Err(TcError { code: 3705, span });
+                return Err(TcError::DestructFieldCount { span });
             }
             let base_tid = if base_mut { lir::TY_PTR_MUT } else { lir::TY_PTR };
             let tmp = self.temp_base_slot();
@@ -207,13 +205,13 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             for (idx, field) in sinfo.fields.iter().enumerate() {
                 let bind = binds.get(idx).expect("len verified equal to sinfo.fields.len()");
                 if bind.borrow && bind.mutable && !base_mut {
-                    return Err(TcError { code: 3501, span: bind.span });
+                    return Err(TcError::MutRefToLocal { span: bind.span });
                 }
-                let fsize = type_size_bytes(field.ty, self.nominals).ok_or(TcError { code: 3718, span: bind.span })?;
+                let fsize = type_size_bytes(field.ty, self.nominals).ok_or(TcError::FieldSizeError { span: bind.span })?;
                 let falign = field_align(fsize);
                 offset = align_up(offset, falign);
                 let field_offset = offset;
-                offset = offset.checked_add(fsize).ok_or(TcError { code: 3718, span: bind.span })?;
+                offset = offset.checked_add(fsize).ok_or(TcError::FieldSizeError { span: bind.span })?;
 
                 self.emit_op(cur, lir::OpKind::LocalGet { slot: tmp, ty: base_tid }, bind.span)?;
                 push(stack, sp, Value::Ptr { ty: struct_ty, mutable: base_mut })?;
@@ -222,7 +220,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 if bind.borrow {
                     let ptr_ty = if bind.mutable { TypeAtom::PTR_MUT } else { TypeAtom::PTR };
                     if find_local(&self.locals, self.local_len, bind.name).is_some() {
-                        return Err(TcError { code: 3204, span: bind.span });
+                        return Err(TcError::BindingAlreadyDefined { span: bind.span });
                     }
                     let slot = self.local_slot(self.local_len);
                     self.locals[self.local_len] = bind.name;
@@ -239,7 +237,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                     let _ = pop(stack, sp);
                     push(stack, sp, Value::Plain(field.ty))?;
                     if find_local(&self.locals, self.local_len, bind.name).is_some() {
-                        return Err(TcError { code: 3204, span: bind.span });
+                        return Err(TcError::BindingAlreadyDefined { span: bind.span });
                     }
                     let slot = self.local_slot(self.local_len);
                     self.locals[self.local_len] = bind.name;
@@ -254,11 +252,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         } else {
             let name = next;
             if name.kind != TokenKind::Ident {
-                return Err(TcError { code: 3201, span: Span::new(span.start + name.span.start, span.start + name.span.end) });
+                return Err(TcError::ExpectedIdent { span: Span::new(span.start + name.span.start, span.start + name.span.end) });
             }
-            let v = pop(stack, sp).ok_or(TcError { code: 3202, span: Span::new(span.start + tok.span.start, span.start + tok.span.end) })?;
+            let v = pop(stack, sp).ok_or(TcError::StackUnderflow { span: Span::new(span.start + tok.span.start, span.start + tok.span.end) })?;
             if v == Value::Plain(TypeAtom::SCOPED) {
-                return Err(TcError { code: 3504, span });
+                return Err(TcError::ScopedLeak { span });
             }
             let ty = match v {
                 Value::Plain(t) => t,
@@ -271,15 +269,14 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 Value::MmioPtr { mutable: false, .. } => TypeAtom::PTR,
                 Value::MmioPtr { mutable: true, .. } => TypeAtom::PTR_MUT,
             };
-            let lname = TypeAtom::new(&slice[name.span.start..name.span.end]).ok_or(TcError {
-                code: 3203,
+            let lname = TypeAtom::new(&slice[name.span.start..name.span.end]).ok_or(TcError::TypeParseFailed {
                 span: Span::new(span.start + name.span.start, span.start + name.span.end),
             })?;
             if find_local(&self.locals, self.local_len, lname).is_some() {
-                return Err(TcError { code: 3204, span: Span::new(span.start + name.span.start, span.start + name.span.end) });
+                return Err(TcError::BindingAlreadyDefined { span: Span::new(span.start + name.span.start, span.start + name.span.end) });
             }
             if self.local_len >= self.locals.len() {
-                return Err(TcError { code: 3205, span });
+                return Err(TcError::BindingCapacityExceeded { span });
             }
             let slot = self.local_slot(self.local_len);
             self.locals[self.local_len] = lname;
@@ -307,7 +304,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         lex: &mut Lexer,
     ) -> Result<lir::BlockId, TcError> {
         let q = capture_balanced(lex, slice, TokenKind::PunctLBracket, TokenKind::PunctRBracket, tok.span.start)
-            .map_err(|code| TcError { code, span: Span::new(span.start + tok.span.start, span.start + tok.span.end) })?;
+            .map_err(|_| TcError::TypeParseFailed { span: Span::new(span.start + tok.span.start, span.start + tok.span.end) })?;
         let q_span = Span::new(span.start + q.start, span.start + q.end);
         push(stack, sp, Value::Quot(q_span))?;
         Ok(cur)
@@ -326,32 +323,32 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         let op_span = Span::new(span.start + tok.span.start, span.start + tok.span.end);
         let field_tok = lex.next();
         if field_tok.kind != TokenKind::Ident {
-            return Err(TcError { code: 3716, span: op_span });
+            return Err(TcError::FieldNotFound { span: op_span });
         }
         let field_atom = TypeAtom::new(&slice[field_tok.span.start..field_tok.span.end])
-            .ok_or(TcError { code: 3716, span: op_span })?;
-        let base = *stack.get(*sp - 1).ok_or(TcError { code: 3202, span: op_span })?;
+            .ok_or(TcError::FieldNotFound { span: op_span })?;
+        let base = *stack.get(*sp - 1).ok_or(TcError::StackUnderflow { span: op_span })?;
         let (struct_ty, mutable) = match base {
             Value::Ptr { ty, mutable } => (ty, mutable),
-            _ => return Err(TcError { code: 3716, span: op_span }),
+            _ => return Err(TcError::FieldNotFound { span: op_span }),
         };
         let Some(sinfo) = self.nominals.structs.iter().find(|s| s.name == struct_ty) else {
-            return Err(TcError { code: 3716, span: op_span });
+            return Err(TcError::FieldNotFound { span: op_span });
         };
         let mut offset: u32 = 0;
         let mut found: Option<TypeAtom> = None;
         for field in sinfo.fields.iter() {
-            let fsize = type_size_bytes(field.ty, self.nominals).ok_or(TcError { code: 3718, span: op_span })?;
+            let fsize = type_size_bytes(field.ty, self.nominals).ok_or(TcError::FieldSizeError { span: op_span })?;
             let falign = field_align(fsize);
             offset = align_up(offset, falign);
             if field.name == field_atom {
                 found = Some(field.ty);
                 break;
             }
-            offset = offset.checked_add(fsize).ok_or(TcError { code: 3718, span: op_span })?;
+            offset = offset.checked_add(fsize).ok_or(TcError::FieldSizeError { span: op_span })?;
         }
         let Some(field_ty) = found else {
-            return Err(TcError { code: 3716, span: op_span });
+            return Err(TcError::FieldNotFound { span: op_span });
         };
         let base_tid = if mutable { lir::TY_PTR_MUT } else { lir::TY_PTR };
         self.emit_op(cur, lir::OpKind::PtrAddConst { ty: base_tid, offset }, op_span)?;
@@ -381,81 +378,81 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             TokenKind::Number => {
                 const_idx = parse_u32_any(&slice[next.span.start..next.span.end]);
                 if const_idx.is_none() {
-                    return Err(TcError { code: 3519, span: op_span });
+                    return Err(TcError::IndexError { span: op_span });
                 }
             }
             TokenKind::PunctLParen => {
                 let par = capture_balanced(lex, slice, TokenKind::PunctLParen, TokenKind::PunctRParen, next.span.start)
-                    .map_err(|code| TcError { code, span: op_span })?;
+                    .map_err(|_| TcError::IndexError { span: op_span })?;
                 let inner = Span::new(span.start + par.start + 1, span.start + par.end - 1);
                 cur = self.compile_span(cur, stack, sp, inner, allow_suspend, allow_locals, observer)?;
                 is_dynamic = true;
             }
             _ => {
-                return Err(TcError { code: 3519, span: op_span });
+                return Err(TcError::IndexError { span: op_span });
             }
         }
 
         if is_dynamic {
             if *sp == 0 {
-                return Err(TcError { code: 3519, span: op_span });
+                return Err(TcError::IndexError { span: op_span });
             }
             if stack[*sp - 1] != Value::Plain(TypeAtom::I64) {
-                return Err(TcError { code: 3519, span: op_span });
+                return Err(TcError::IndexError { span: op_span });
             }
         }
 
         let base_pos = if is_dynamic { *sp - 2 } else { *sp - 1 };
         if base_pos >= *sp {
-            return Err(TcError { code: 3519, span: op_span });
+            return Err(TcError::IndexError { span: op_span });
         }
 
         let base = stack[base_pos];
         let (elem_ty, scale, out_kind, base_tid) = match base {
             Value::Plain(t) => {
                 let Some(elem) = array_elem_type(t) else {
-                    return Err(TcError { code: 3519, span: op_span });
+                    return Err(TcError::IndexError { span: op_span });
                 };
-                let len = array_len(t).ok_or(TcError { code: 3519, span: op_span })?;
+                let len = array_len(t).ok_or(TcError::IndexError { span: op_span })?;
                 if let Some(idx) = const_idx {
                     if idx >= len {
-                        return Err(TcError { code: 3518, span: op_span });
+                        return Err(TcError::ArrayIndexOob { span: op_span });
                     }
                 }
-                let size = type_size_bytes(elem, self.nominals).ok_or(TcError { code: 3519, span: op_span })?;
+                let size = type_size_bytes(elem, self.nominals).ok_or(TcError::IndexError { span: op_span })?;
                 (elem, size, IndexOut::Value, lir::TY_PTR)
             }
             Value::Ptr { ty, mutable } => {
                 let Some(elem) = array_elem_type(ty) else {
-                    return Err(TcError { code: 3519, span: op_span });
+                    return Err(TcError::IndexError { span: op_span });
                 };
-                let len = array_len(ty).ok_or(TcError { code: 3519, span: op_span })?;
+                let len = array_len(ty).ok_or(TcError::IndexError { span: op_span })?;
                 if let Some(idx) = const_idx {
                     if idx >= len {
-                        return Err(TcError { code: 3518, span: op_span });
+                        return Err(TcError::ArrayIndexOob { span: op_span });
                     }
                 }
-                let size = type_size_bytes(elem, self.nominals).ok_or(TcError { code: 3519, span: op_span })?;
+                let size = type_size_bytes(elem, self.nominals).ok_or(TcError::IndexError { span: op_span })?;
                 let tid = if mutable { lir::TY_PTR_MUT } else { lir::TY_PTR };
                 (elem, size, IndexOut::Ptr(mutable), tid)
             }
             Value::MmioPlace(MmioResolved::Reg(reg)) => {
                 let Some(width) = mmio_type_width_bytes(reg.reg_ty.as_bytes()) else {
-                    return Err(TcError { code: 3519, span: op_span });
+                    return Err(TcError::IndexError { span: op_span });
                 };
                 if let Some(idx) = const_idx {
                     if let Some(len) = reg.array_len {
                         if idx >= len {
-                            return Err(TcError { code: 3604, span: op_span });
+                            return Err(TcError::MmioArrayIndexOob { span: op_span });
                         }
                     }
                 }
                 (reg.reg_ty, width, IndexOut::Mmio, lir::TY_MMIO)
             }
             Value::MmioPlace(MmioResolved::Field(_)) => {
-                return Err(TcError { code: 3519, span: op_span });
+                return Err(TcError::IndexError { span: op_span });
             }
-            _ => return Err(TcError { code: 3519, span: op_span }),
+            _ => return Err(TcError::IndexError { span: op_span }),
         };
 
         match out_kind {
@@ -496,7 +493,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         lex: &mut Lexer,
     ) -> Result<lir::BlockId, TcError> {
         let mut_tok = tok.kind == TokenKind::PunctAmpBang;
-        let place = parse_place(lex, slice).ok_or(TcError { code: 3500, span: Span::new(span.start + tok.span.start, span.start + tok.span.end) })?;
+        let place = parse_place(lex, slice).ok_or(TcError::PlaceParseFailed { span: Span::new(span.start + tok.span.start, span.start + tok.span.end) })?;
         let place_bytes = &slice[place.full.start..place.full.end];
         let place_abs = Span::new(span.start + place.full.start, span.start + place.full.end);
         let root_atom = TypeAtom::new(&slice[place.root.start..place.root.end]).unwrap_or(TypeAtom::EMPTY);
@@ -506,22 +503,22 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             match res {
                 MmioResolved::Reg(reg) => {
                     if mut_tok && !access_can_write(reg.access) {
-                        return Err(TcError { code: 3609, span: place_abs });
+                        return Err(TcError::MmioAccessViolation { span: place_abs });
                     }
                     const_addr = Some(reg.addr);
                     push(stack, sp, Value::MmioPtr { reg, mutable: mut_tok })?;
                 }
-                MmioResolved::Field(_) => return Err(TcError { code: 3608, span: place_abs }),
+                MmioResolved::Field(_) => return Err(TcError::MmioFieldNotAddressable { span: place_abs }),
             }
         } else {
             if resource_ty(self.resources, root_atom).is_some() {
                 if self.locked_resource != Some(root_atom) {
-                    return Err(TcError { code: 3515, span: place_abs });
+                    return Err(TcError::ScopedTypeMismatch { span: place_abs });
                 }
             } else if mut_tok {
                 let root = TypeAtom::new(&slice[place.root.start..place.root.end]).unwrap();
                 if find_local(&self.locals, self.local_len, root).is_some() {
-                    return Err(TcError { code: 3501, span: place.root_abs(span.start) });
+                    return Err(TcError::MutRefToLocal { span: place.root_abs(span.start) });
                 }
             }
             if let Some(pointee) = self.resolve_place_pointee_ty(place_bytes, place_abs)? {
@@ -553,8 +550,8 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         tok: Token,
     ) -> Result<lir::BlockId, TcError> {
         let op_span = Span::new(span.start + tok.span.start, span.start + tok.span.end);
-        let val = pop(stack, sp).ok_or(TcError { code: 3730, span: op_span })?;
-        let ch = pop(stack, sp).ok_or(TcError { code: 3730, span: op_span })?;
+        let val = pop(stack, sp).ok_or(TcError::ChanSendPop { span: op_span })?;
+        let ch = pop(stack, sp).ok_or(TcError::ChanSendPop { span: op_span })?;
 
         let val_ty = match val {
             Value::Plain(t) => t,
@@ -569,11 +566,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         };
         let ch_ty = match ch {
             Value::Plain(t) => t,
-            _ => return Err(TcError { code: 3731, span: op_span }),
+            _ => return Err(TcError::ChanSendType { span: op_span }),
         };
-        let elem = chan_elem_type(ch_ty).ok_or(TcError { code: 3731, span: op_span })?;
+        let elem = chan_elem_type(ch_ty).ok_or(TcError::ChanSendType { span: op_span })?;
         if !type_compatible(val_ty, elem, self.subtypes) {
-            return Err(TcError { code: 3732, span: op_span });
+            return Err(TcError::ChanSendValueMismatch { span: op_span });
         }
 
         let ch_tid = self.ty_id_of_type(ch_ty, op_span)?;
@@ -604,12 +601,12 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         tok: Token,
     ) -> Result<lir::BlockId, TcError> {
         let op_span = Span::new(span.start + tok.span.start, span.start + tok.span.end);
-        let ch = pop(stack, sp).ok_or(TcError { code: 3733, span: op_span })?;
+        let ch = pop(stack, sp).ok_or(TcError::ChanRecvPop { span: op_span })?;
         let ch_ty = match ch {
             Value::Plain(t) => t,
-            _ => return Err(TcError { code: 3734, span: op_span }),
+            _ => return Err(TcError::ChanRecvType { span: op_span }),
         };
-        let elem = chan_elem_type(ch_ty).ok_or(TcError { code: 3734, span: op_span })?;
+        let elem = chan_elem_type(ch_ty).ok_or(TcError::ChanRecvType { span: op_span })?;
         push(stack, sp, Value::Plain(elem))?;
 
         let ch_tid = self.ty_id_of_type(ch_ty, op_span)?;
@@ -646,7 +643,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
     ) -> Result<lir::BlockId, TcError> {
         let mut_scope = tok.kind == TokenKind::PunctAmpBangLBracket;
         if *sp == 0 {
-            return Err(TcError { code: 3505, span });
+            return Err(TcError::EmptyStackForScoped { span });
         }
         let top = stack[*sp - 1];
         let top_ty = match top {
@@ -662,9 +659,9 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         };
 
         if let Some(elem) = array_elem_type(top_ty) {
-            let scope_id = self.enter_scope().ok_or(TcError { code: 3512, span })?;
-            let slice_ty = slice_type_of_elem(elem, mut_scope).ok_or(TcError { code: 3513, span })?;
-            let len = array_len(top_ty).ok_or(TcError { code: 3513, span })?;
+            let scope_id = self.enter_scope().ok_or(TcError::ScopeDepthExceeded { span })?;
+            let slice_ty = slice_type_of_elem(elem, mut_scope).ok_or(TcError::SliceTypeFailed { span })?;
+            let len = array_len(top_ty).ok_or(TcError::SliceTypeFailed { span })?;
             push(
                 stack,
                 sp,
@@ -680,7 +677,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 Span::new(span.start + tok.span.start, span.start + tok.span.end),
             )?;
 
-            let block = capture_scoped_block(lex, slice, tok.span).map_err(|code| TcError { code, span })?;
+            let block = capture_scoped_block(lex, slice, tok.span).map_err(|_| TcError::TypeParseFailed { span })?;
             let block_allow_suspend = if mut_scope { false } else { allow_suspend };
             cur = self.compile_span(
                 cur,
@@ -693,12 +690,12 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             )?;
 
             if self.stack_has_scope(stack, *sp, scope_id) {
-                return Err(TcError { code: 3506, span });
+                return Err(TcError::ScopedMarkerLeak { span });
             }
             self.invalidate_scope_locals(scope_id);
             self.leave_scope(scope_id);
         } else if top_ty == TypeAtom::new(b"Region").unwrap() {
-            let scope_id = self.enter_scope().ok_or(TcError { code: 3512, span })?;
+            let scope_id = self.enter_scope().ok_or(TcError::ScopeDepthExceeded { span })?;
             let rty = region_ref_type(mut_scope);
             push(
                 stack,
@@ -715,7 +712,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 Span::new(span.start + tok.span.start, span.start + tok.span.end),
             )?;
 
-            let block = capture_scoped_block(lex, slice, tok.span).map_err(|code| TcError { code, span })?;
+            let block = capture_scoped_block(lex, slice, tok.span).map_err(|_| TcError::TypeParseFailed { span })?;
             let block_allow_suspend = if mut_scope { false } else { allow_suspend };
             cur = self.compile_span(
                 cur,
@@ -728,12 +725,12 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             )?;
 
             if self.stack_has_scope(stack, *sp, scope_id) {
-                return Err(TcError { code: 3506, span });
+                return Err(TcError::ScopedMarkerLeak { span });
             }
             self.invalidate_scope_locals(scope_id);
             self.leave_scope(scope_id);
         } else {
-            return Err(TcError { code: 3515, span });
+            return Err(TcError::ScopedTypeMismatch { span });
         }
         Ok(cur)
     }
@@ -831,7 +828,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             if next.kind == TokenKind::PunctLBracket {
                 *lex = probe;
                 let _block = capture_scoped_block(lex, slice, next.span)
-                    .map_err(|code| TcError { code, span: name_abs })?;
+                    .map_err(|_| TcError::TypeParseFailed { span: name_abs })?;
                 let full_span = Span::new(span.start + next.span.start, span.start + lex.pos());
                 push(stack, sp, Value::Quot(full_span))?;
             }
@@ -892,7 +889,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         }
         for e in self.nominals.enums.iter() {
             if e.name == enum_ty {
-                return Err(TcError { code: 3725, span: name_abs });
+                return Err(TcError::EnumVariantNotFound { span: name_abs });
             }
         }
         Ok(false)
@@ -910,21 +907,21 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         let is_load = name[0] == b'@';
         let typed = name.len() > 1;
         let ty_atom = if typed {
-            Some(TypeAtom::new(&name[1..]).ok_or(TcError { code: 3632, span: name_abs })?)
+            Some(TypeAtom::new(&name[1..]).ok_or(TcError::MmioTypedAtomInvalid { span: name_abs })?)
         } else {
             None
         };
 
         if is_load {
-            let addr = pop(stack, sp).ok_or(TcError { code: 3633, span: name_abs })?;
+            let addr = pop(stack, sp).ok_or(TcError::MmioTypedPopAddr { span: name_abs })?;
             match addr {
                 Value::MmioPtr { reg, .. } => {
                     if !access_can_read(reg.access) {
-                        return Err(TcError { code: 3610, span: name_abs });
+                        return Err(TcError::MmioReadNotAllowed { span: name_abs });
                     }
                     if let Some(want) = ty_atom {
                         if want != reg.reg_ty {
-                            return Err(TcError { code: 3613, span: name_abs });
+                            return Err(TcError::MmioTypedTypeMismatch { span: name_abs });
                         }
                     }
                     push(stack, sp, Value::Plain(reg.reg_ty))?;
@@ -941,11 +938,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 }
                 Value::MmioPlace(MmioResolved::Reg(reg)) => {
                     if !access_can_read(reg.access) {
-                        return Err(TcError { code: 3610, span: name_abs });
+                        return Err(TcError::MmioReadNotAllowed { span: name_abs });
                     }
                     if let Some(want) = ty_atom {
                         if want != reg.reg_ty {
-                            return Err(TcError { code: 3613, span: name_abs });
+                            return Err(TcError::MmioTypedTypeMismatch { span: name_abs });
                         }
                     }
                     push(stack, sp, Value::Plain(reg.reg_ty))?;
@@ -962,10 +959,10 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 }
                 Value::MmioPlace(MmioResolved::Field(field)) => {
                     if !access_can_read(field.reg_access) || !access_can_read(field.field.access) {
-                        return Err(TcError { code: 3610, span: name_abs });
+                        return Err(TcError::MmioReadNotAllowed { span: name_abs });
                     }
                     if typed {
-                        return Err(TcError { code: 3634, span: name_abs });
+                        return Err(TcError::MmioTypedMismatch { span: name_abs });
                     }
                     let (mask, shift) = field_mask_shift(&field.field);
                     push(stack, sp, Value::Plain(field.field.ty))?;
@@ -986,11 +983,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 }
                 Value::Ptr { ty, .. } => {
                     if !typed {
-                        return Err(TcError { code: 3614, span: name_abs });
+                        return Err(TcError::MmioTypedNotAllowed { span: name_abs });
                     }
                     let want = ty_atom.expect("typed => ty_atom is Some");
                     if want != ty {
-                        return Err(TcError { code: 3717, span: name_abs });
+                        return Err(TcError::TypedLoadStoreTypeMismatch { span: name_abs });
                     }
                     push(stack, sp, Value::Plain(ty))?;
                     let tid = self.ty_id_of_type(ty, name_abs)?;
@@ -999,10 +996,10 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 }
                 Value::Plain(t) => {
                     if !typed {
-                        return Err(TcError { code: 3614, span: name_abs });
+                        return Err(TcError::MmioTypedNotAllowed { span: name_abs });
                     }
                     if t != TypeAtom::PTR && t != TypeAtom::PTR_MUT {
-                        return Err(TcError { code: 3614, span: name_abs });
+                        return Err(TcError::MmioTypedNotAllowed { span: name_abs });
                     }
                     let ty_atom = ty_atom.expect("typed => ty_atom is Some");
                     push(stack, sp, Value::Plain(ty_atom))?;
@@ -1010,11 +1007,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                     self.emit_op(cur, lir::OpKind::Load { ty: tid }, name_abs)?;
                     Ok(cur)
                 }
-                _ => Err(TcError { code: 3614, span: name_abs }),
+                _ => Err(TcError::MmioTypedNotAllowed { span: name_abs }),
             }
         } else {
-            let v = pop(stack, sp).ok_or(TcError { code: 3230, span: name_abs })?;
-            let addr = pop(stack, sp).ok_or(TcError { code: 3230, span: name_abs })?;
+            let v = pop(stack, sp).ok_or(TcError::ReturnStackDepth { span: name_abs })?;
+            let addr = pop(stack, sp).ok_or(TcError::ReturnStackDepth { span: name_abs })?;
             let vty = match v {
                 Value::Plain(t) => t,
                 Value::Scoped { ty, .. } => ty,
@@ -1029,19 +1026,19 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             match (addr, v) {
                 (Value::MmioPtr { reg, mutable: false }, _) => {
                     let _ = reg;
-                    Err(TcError { code: 3614, span: name_abs })
+                    Err(TcError::MmioTypedNotAllowed { span: name_abs })
                 }
                 (Value::MmioPtr { reg, mutable: true }, Value::Plain(_)) => {
                     if !access_can_write(reg.access) {
-                        return Err(TcError { code: 3609, span: name_abs });
+                        return Err(TcError::MmioAccessViolation { span: name_abs });
                     }
                     if let Some(want) = ty_atom {
                         if want != reg.reg_ty {
-                            return Err(TcError { code: 3613, span: name_abs });
+                            return Err(TcError::MmioTypedTypeMismatch { span: name_abs });
                         }
                     }
                     if vty != reg.reg_ty {
-                        return Err(TcError { code: 3231, span: name_abs });
+                        return Err(TcError::ReturnTypeMismatch { span: name_abs });
                     }
                     let tid = self.ty_id_of_type(reg.reg_ty, name_abs)?;
                     self.emit_op(
@@ -1056,15 +1053,15 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 }
                 (Value::MmioPlace(MmioResolved::Reg(reg)), Value::Plain(_)) => {
                     if !access_can_write(reg.access) {
-                        return Err(TcError { code: 3609, span: name_abs });
+                        return Err(TcError::MmioAccessViolation { span: name_abs });
                     }
                     if let Some(want) = ty_atom {
                         if want != reg.reg_ty {
-                            return Err(TcError { code: 3613, span: name_abs });
+                            return Err(TcError::MmioTypedTypeMismatch { span: name_abs });
                         }
                     }
                     if vty != reg.reg_ty {
-                        return Err(TcError { code: 3231, span: name_abs });
+                        return Err(TcError::ReturnTypeMismatch { span: name_abs });
                     }
                     let tid = self.ty_id_of_type(reg.reg_ty, name_abs)?;
                     self.emit_op(
@@ -1079,13 +1076,13 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 }
                 (Value::MmioPlace(MmioResolved::Field(field)), Value::Plain(_)) => {
                     if !access_can_write(field.reg_access) || !access_can_write(field.field.access) {
-                        return Err(TcError { code: 3609, span: name_abs });
+                        return Err(TcError::MmioAccessViolation { span: name_abs });
                     }
                     if typed {
-                        return Err(TcError { code: 3634, span: name_abs });
+                        return Err(TcError::MmioTypedMismatch { span: name_abs });
                     }
                     if vty != field.field.ty {
-                        return Err(TcError { code: 3231, span: name_abs });
+                        return Err(TcError::ReturnTypeMismatch { span: name_abs });
                     }
                     let (mask, shift) = field_mask_shift(&field.field);
                     let reg_tid = self.ty_id_of_type(field.reg_ty, name_abs)?;
@@ -1105,17 +1102,17 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 }
                 (Value::Ptr { ty, mutable }, Value::Plain(_)) => {
                     if !typed {
-                        return Err(TcError { code: 3614, span: name_abs });
+                        return Err(TcError::MmioTypedNotAllowed { span: name_abs });
                     }
                     if !mutable {
-                        return Err(TcError { code: 3614, span: name_abs });
+                        return Err(TcError::MmioTypedNotAllowed { span: name_abs });
                     }
                     let want = ty_atom.expect("typed => ty_atom is Some");
                     if want != ty {
-                        return Err(TcError { code: 3717, span: name_abs });
+                        return Err(TcError::TypedLoadStoreTypeMismatch { span: name_abs });
                     }
                     if vty != ty {
-                        return Err(TcError { code: 3231, span: name_abs });
+                        return Err(TcError::ReturnTypeMismatch { span: name_abs });
                     }
                     let tid = self.ty_id_of_type(ty, name_abs)?;
                     self.emit_op(cur, lir::OpKind::Store { ty: tid }, name_abs)?;
@@ -1123,20 +1120,20 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 }
                 (Value::Plain(t), Value::Plain(_)) => {
                     if !typed {
-                        return Err(TcError { code: 3614, span: name_abs });
+                        return Err(TcError::MmioTypedNotAllowed { span: name_abs });
                     }
                     if t != TypeAtom::PTR_MUT {
-                        return Err(TcError { code: 3614, span: name_abs });
+                        return Err(TcError::MmioTypedNotAllowed { span: name_abs });
                     }
                     let ty_atom = ty_atom.expect("typed => ty_atom is Some");
                     if vty != ty_atom {
-                        return Err(TcError { code: 3231, span: name_abs });
+                        return Err(TcError::ReturnTypeMismatch { span: name_abs });
                     }
                     let tid = self.ty_id_of_type(ty_atom, name_abs)?;
                     self.emit_op(cur, lir::OpKind::Store { ty: tid }, name_abs)?;
                     Ok(cur)
                 }
-                _ => Err(TcError { code: 3614, span: name_abs }),
+                _ => Err(TcError::MmioTypedNotAllowed { span: name_abs }),
             }
         }
     }
@@ -1151,7 +1148,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         name: &[u8],
     ) -> Result<lir::BlockId, TcError> {
         if name == b"dup" {
-            let top = pop(stack, sp).ok_or(TcError { code: 3202, span })?;
+            let top = pop(stack, sp).ok_or(TcError::StackUnderflow { span })?;
             let top_ty = match top {
                 Value::Plain(t) => t,
                 Value::Scoped { ty, .. } => ty,
@@ -1164,7 +1161,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 Value::MmioPtr { mutable: true, .. } => TypeAtom::PTR_MUT,
             };
             if is_iso_type(self.iso, top_ty) {
-                return Err(TcError { code: 3742, span: name_abs });
+                return Err(TcError::IsoDupForbidden { span: name_abs });
             }
             push(stack, sp, top)?;
             push(stack, sp, top)?;
@@ -1173,7 +1170,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             return Ok(cur);
         }
         if name == b"drop" {
-            let top = pop(stack, sp).ok_or(TcError { code: 3202, span })?;
+            let top = pop(stack, sp).ok_or(TcError::StackUnderflow { span })?;
             let top_ty = match top {
                 Value::Plain(t) => t,
                 Value::Scoped { ty, .. } => ty,
@@ -1186,15 +1183,15 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 Value::MmioPtr { mutable: true, .. } => TypeAtom::PTR_MUT,
             };
             if is_iso_type(self.iso, top_ty) {
-                return Err(TcError { code: 3743, span: name_abs });
+                return Err(TcError::IsoDropForbidden { span: name_abs });
             }
             let tid = self.ty_id_of_value(top, name_abs)?;
             self.emit_op(cur, lir::OpKind::Drop { ty: tid }, name_abs)?;
             return Ok(cur);
         }
         if name == b"swap" {
-            let b = pop(stack, sp).ok_or(TcError { code: 3202, span })?;
-            let a = pop(stack, sp).ok_or(TcError { code: 3202, span })?;
+            let b = pop(stack, sp).ok_or(TcError::StackUnderflow { span })?;
+            let a = pop(stack, sp).ok_or(TcError::StackUnderflow { span })?;
             push(stack, sp, b)?;
             push(stack, sp, a)?;
             let a_id = self.ty_id_of_value(a, name_abs)?;
@@ -1218,12 +1215,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
     ) -> Result<lir::BlockId, TcError> {
         let first = lex.next();
         let start = first.span.start;
-        let (to_ty, next) = crate::typecheck::parse::parse_type_expr(slice, start).ok_or(TcError {
-            code: 3295,
+        let (to_ty, next) = crate::typecheck::parse::parse_type_expr(slice, start).ok_or(TcError::CastParseFailed {
             span: Span::new(span.start + first.span.start, span.start + first.span.end),
         })?;
         lex.set_pos(next);
-        let v = pop(stack, sp).ok_or(TcError { code: 3297, span })?;
+        let v = pop(stack, sp).ok_or(TcError::CastPopValue { span })?;
         let from_ty = match v {
             Value::Plain(t) => t,
             Value::Scoped { ty, .. } => ty,
@@ -1238,29 +1234,29 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         let subtype = find_subtype(self.subtypes, to_ty);
         if let Some(st) = subtype {
             if !type_compatible(from_ty, st.base, self.subtypes) {
-                return Err(TcError { code: if name == b"as?" { 3298 } else { 3300 }, span });
+                return Err(TcError::CastSubtypeMismatch { span });
             }
         }
 
         if name == b"bitcast" {
             if subtype.is_some() {
-                return Err(TcError { code: 3302, span: name_abs });
+                return Err(TcError::BitcastOnSubtype { span: name_abs });
             }
             let Some((from_bits, _)) = self.ty_bits_signed(from_ty) else {
-                return Err(TcError { code: 3303, span: name_abs });
+                return Err(TcError::BitcastWidthUnknown { span: name_abs });
             };
             let Some((to_bits, _)) = self.ty_bits_signed(to_ty) else {
-                return Err(TcError { code: 3303, span: name_abs });
+                return Err(TcError::BitcastWidthUnknown { span: name_abs });
             };
             if from_bits != to_bits {
-                return Err(TcError { code: 3304, span: name_abs });
+                return Err(TcError::BitcastWidthMismatch { span: name_abs });
             }
             if !self.check_raw_cast_allowed(from_ty, to_ty) {
-                return Err(TcError { code: 3305, span: name_abs });
+                return Err(TcError::CastNotAllowed { span: name_abs });
             }
         } else {
             if !self.check_raw_cast_allowed(from_ty, to_ty) {
-                return Err(TcError { code: 3305, span: name_abs });
+                return Err(TcError::CastNotAllowed { span: name_abs });
             }
         }
 
@@ -1330,10 +1326,10 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
     ) -> Result<lir::BlockId, TcError> {
         let want = self.sig.out_len as usize;
         if *sp != want {
-            return Err(TcError { code: 3230, span });
+            return Err(TcError::ReturnStackDepth { span });
         }
         if self.any_scoped_live(stack, *sp) {
-            return Err(TcError { code: 3511, span });
+            return Err(TcError::ReturnWithScoped { span });
         }
         for (i, v) in stack.iter().enumerate().take(want) {
             let got = match v {
@@ -1348,7 +1344,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 Value::MmioPtr { mutable: true, .. } => TypeAtom::PTR_MUT,
             };
             if !type_compatible(got, self.sig.outputs[i], self.subtypes) {
-                return Err(TcError { code: 3231, span });
+                return Err(TcError::ReturnTypeMismatch { span });
             }
         }
         self.emit_op(cur, lir::OpKind::Ret, name_abs)?;
@@ -1364,14 +1360,14 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         allow_suspend: bool,
         observer: &mut dyn TypecheckObserver,
     ) -> Result<lir::BlockId, TcError> {
-        let body_q = pop(stack, sp).ok_or(TcError { code: 3758, span: name_abs })?;
+        let body_q = pop(stack, sp).ok_or(TcError::CallPopQuot { span: name_abs })?;
         let body_span = match body_q {
             Value::Quot(s) => s,
-            _ => return Err(TcError { code: 3758, span: name_abs }),
+            _ => return Err(TcError::CallPopQuot { span: name_abs }),
         };
         let (qname, qsig, may_suspend) = self.build_quote_word(body_span, observer)?;
         if may_suspend && !allow_suspend {
-            return Err(TcError { code: 3503, span: name_abs });
+            return Err(TcError::SuspendingInNonSuspendingContext { span: name_abs });
         }
 
         let entry = WordEntry {
@@ -1401,17 +1397,17 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         name_abs: Span,
         observer: &mut dyn TypecheckObserver,
     ) -> Result<lir::BlockId, TcError> {
-        let body_q = pop(stack, sp).ok_or(TcError { code: 3754, span: name_abs })?;
+        let body_q = pop(stack, sp).ok_or(TcError::TaskSpawnPop { span: name_abs })?;
         let body_span = match body_q {
             Value::Quot(s) => s,
-            _ => return Err(TcError { code: 3754, span: name_abs }),
+            _ => return Err(TcError::TaskSpawnPop { span: name_abs }),
         };
         let (qname, qsig, _may_suspend) = self.build_quote_word(body_span, observer)?;
         if qsig.in_len != 0 || qsig.out_len != 0 {
-            return Err(TcError { code: 3756, span: name_abs });
+            return Err(TcError::TaskSpawnSig { span: name_abs });
         }
 
-        let task_ty = TypeAtom::new(b"Task").ok_or(TcError { code: 3757, span: name_abs })?;
+        let task_ty = TypeAtom::new(b"Task").ok_or(TcError::TaskSpawnType { span: name_abs })?;
         let task_tid = self.ty_id_of_type(task_ty, name_abs)?;
         push(stack, sp, Value::Plain(task_ty))?;
         self.emit_op(
@@ -1436,22 +1432,22 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         observer: &mut dyn TypecheckObserver,
     ) -> Result<lir::BlockId, TcError> {
         if !self.check_no_scoped_live_all(stack, *sp) {
-            return Err(TcError { code: 3502, span: name_abs });
+            return Err(TcError::ScopedLiveAtSuspend { span: name_abs });
         }
-        let body_q = pop(stack, sp).ok_or(TcError { code: 3750, span: name_abs })?;
+        let body_q = pop(stack, sp).ok_or(TcError::TaskRunPop { span: name_abs })?;
         let body_span = match body_q {
             Value::Quot(s) => s,
-            _ => return Err(TcError { code: 3751, span: name_abs }),
+            _ => return Err(TcError::TaskRunNotQuot { span: name_abs }),
         };
         let base_stack = *stack;
         let base_sp = *sp;
         cur = self.compile_quote_span(cur, stack, sp, body_span, true, false, observer)?;
         if *sp != base_sp {
-            return Err(TcError { code: 3752, span: name_abs });
+            return Err(TcError::TaskRunDepth { span: name_abs });
         }
         for i in 0..base_sp {
             if stack[i] != base_stack[i] {
-                return Err(TcError { code: 3753, span: name_abs });
+                return Err(TcError::TaskRunModified { span: name_abs });
             }
         }
         Ok(cur)
@@ -1466,7 +1462,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         idx: usize,
     ) -> Result<lir::BlockId, TcError> {
         if !self.local_live[idx] {
-            return Err(TcError { code: 3514, span: name_abs });
+            return Err(TcError::LocalNotLive { span: name_abs });
         }
         if is_iso_type(self.iso, self.local_tys[idx]) {
             self.local_live[idx] = false;
@@ -1497,12 +1493,12 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         name_abs: Span,
         allow_suspend: bool,
     ) -> Result<(), TcError> {
-        let entry = lookup(self.env, name).ok_or(TcError { code: 3210, span: name_abs })?;
+        let entry = lookup(self.env, name).ok_or(TcError::WordNotFound { span: name_abs })?;
         if entry.may_suspend && !allow_suspend {
-            return Err(TcError { code: 3503, span: name_abs });
+            return Err(TcError::SuspendingInNonSuspendingContext { span: name_abs });
         }
         if entry.may_suspend && !self.check_no_scoped_live_all(stack, *sp) {
-            return Err(TcError { code: 3502, span: name_abs });
+            return Err(TcError::ScopedLiveAtSuspend { span: name_abs });
         }
         apply_sig(stack, sp, entry, name_abs, self.subtypes)?;
 

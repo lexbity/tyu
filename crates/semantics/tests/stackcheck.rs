@@ -59,7 +59,7 @@ fn check_ok(body: &str, inputs: &[&[u8]], outputs: &[&[u8]], env: &[WordEntry]) 
     let subtypes: &[SubtypeInfo] = &[];
     let result = typecheck_word_body(&mut out, src, span, &decl, env, subtypes, &mmio, &nominals, ChecksMode::All, true);
     if let Err(e) = result {
-        panic!("expected OK, got error code {} span={:?}", e.code, e.span);
+        panic!("expected OK, got error code {} span={:?}", e.code(), e.span());
     }
 }
 
@@ -74,7 +74,7 @@ fn check_err(body: &str, inputs: &[&[u8]], outputs: &[&[u8]], env: &[WordEntry],
     let subtypes: &[SubtypeInfo] = &[];
     let err = typecheck_word_body(&mut out, src, span, &decl, env, subtypes, &mmio, &nominals, ChecksMode::All, true)
         .expect_err("expected error");
-    assert_eq!(err.code, expected_code, "error code mismatch for body: {body:?}");
+    assert_eq!(err.code(), expected_code, "error code mismatch for body: {body:?}");
 }
 
 /// Build a minimal environment with common builtins.

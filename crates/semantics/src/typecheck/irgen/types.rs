@@ -100,10 +100,10 @@ pub fn intern_type(
     }
     let idx = types.len();
     if idx > u8::MAX as usize {
-        return Err(TcError { code: 3907, span });
+        return Err(TcError::TooManyTypes { span });
     }
     let size = TypeAtom::new(atom.as_bytes()).and_then(|ty| type_size_bytes(ty, nominals)).unwrap_or(0);
-    types.push(atom).map_err(|_| TcError { code: 3902, span })?;
-    type_sizes.push(size).map_err(|_| TcError { code: 3902, span })?;
+    types.push(atom).map_err(|_| TcError::TypeTableFull { span })?;
+    type_sizes.push(size).map_err(|_| TcError::TypeTableFull { span })?;
     Ok(lir::TypeId(idx as u8))
 }

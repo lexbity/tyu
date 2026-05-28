@@ -10,19 +10,19 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         span: Span,
         observer: &mut dyn TypecheckObserver,
     ) -> Result<lir::BlockId, TcError> {
-        let else_q = pop(stack, sp).ok_or(TcError { code: 3240, span })?;
-        let then_q = pop(stack, sp).ok_or(TcError { code: 3241, span })?;
-        let cond = pop(stack, sp).ok_or(TcError { code: 3242, span })?;
+        let else_q = pop(stack, sp).ok_or(TcError::IfPopElse { span })?;
+        let then_q = pop(stack, sp).ok_or(TcError::IfPopThen { span })?;
+        let cond = pop(stack, sp).ok_or(TcError::IfPopCond { span })?;
         if cond != Value::Plain(TypeAtom::BOOL) {
-            return Err(TcError { code: 3243, span });
+            return Err(TcError::IfCondNotBool { span });
         }
         let then_span = match then_q {
             Value::Quot(s) => s,
-            _ => return Err(TcError { code: 3244, span }),
+            _ => return Err(TcError::IfThenNotQuot { span }),
         };
         let else_span = match else_q {
             Value::Quot(s) => s,
-            _ => return Err(TcError { code: 3245, span }),
+            _ => return Err(TcError::IfElseNotQuot { span }),
         };
 
         let base_stack = *stack;
@@ -41,11 +41,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         let else_end = self.compile_quote_span(else_blk, &mut else_stack, &mut else_sp, else_span, allow_suspend, false, observer)?;
 
         if then_sp != else_sp {
-            return Err(TcError { code: 3246, span });
+            return Err(TcError::IfBranchDepth { span });
         }
         for i in 0..then_sp {
             if then_stack[i] != else_stack[i] {
-                return Err(TcError { code: 3247, span });
+                return Err(TcError::IfBranchContent { span });
             }
         }
 
@@ -67,15 +67,15 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         span: Span,
         observer: &mut dyn TypecheckObserver,
     ) -> Result<lir::BlockId, TcError> {
-        let body_q = pop(stack, sp).ok_or(TcError { code: 3250, span })?;
-        let cond_q = pop(stack, sp).ok_or(TcError { code: 3251, span })?;
+        let body_q = pop(stack, sp).ok_or(TcError::WhilePopBody { span })?;
+        let cond_q = pop(stack, sp).ok_or(TcError::WhilePopCond { span })?;
         let body_span = match body_q {
             Value::Quot(s) => s,
-            _ => return Err(TcError { code: 3252, span }),
+            _ => return Err(TcError::WhileBodyNotQuot { span }),
         };
         let cond_span = match cond_q {
             Value::Quot(s) => s,
-            _ => return Err(TcError { code: 3253, span }),
+            _ => return Err(TcError::WhileCondNotQuot { span }),
         };
 
         let base_stack = *stack;
@@ -88,14 +88,14 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         let mut cond_sp = base_sp;
         let cond_end = self.compile_quote_span(header, &mut cond_stack, &mut cond_sp, cond_span, allow_suspend, false, observer)?;
         if cond_sp != base_sp + 1 {
-            return Err(TcError { code: 3254, span });
+            return Err(TcError::WhileCondDepth { span });
         }
         if cond_stack[cond_sp - 1] != Value::Plain(TypeAtom::BOOL) {
-            return Err(TcError { code: 3255, span });
+            return Err(TcError::WhileCondNotBool { span });
         }
         for i in 0..base_sp {
             if cond_stack[i] != base_stack[i] {
-                return Err(TcError { code: 3256, span });
+                return Err(TcError::WhileCondModifiedStack { span });
             }
         }
         let body_blk = self.new_block(&base_stack, base_sp, span)?;
@@ -106,11 +106,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         let mut body_sp = base_sp;
         let body_end = self.compile_quote_span(body_blk, &mut body_stack, &mut body_sp, body_span, allow_suspend, false, observer)?;
         if body_sp != base_sp {
-            return Err(TcError { code: 3257, span });
+            return Err(TcError::WhileBodyDepth { span });
         }
         for i in 0..base_sp {
             if body_stack[i] != base_stack[i] {
-                return Err(TcError { code: 3258, span });
+                return Err(TcError::WhileBodyModifiedStack { span });
             }
         }
         self.emit_op(body_end, lir::OpKind::Br { target: header }, span)?;
@@ -129,10 +129,10 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         span: Span,
         observer: &mut dyn TypecheckObserver,
     ) -> Result<lir::BlockId, TcError> {
-        let body_q = pop(stack, sp).ok_or(TcError { code: 3260, span })?;
+        let body_q = pop(stack, sp).ok_or(TcError::LoopPopBody { span })?;
         let body_span = match body_q {
             Value::Quot(s) => s,
-            _ => return Err(TcError { code: 3261, span }),
+            _ => return Err(TcError::LoopBodyNotQuot { span }),
         };
 
         let base_stack = *stack;
@@ -150,11 +150,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         let mut body_sp = base_sp;
         let body_end = self.compile_quote_span(body_blk, &mut body_stack, &mut body_sp, body_span, allow_suspend, false, observer)?;
         if body_sp != base_sp {
-            return Err(TcError { code: 3262, span });
+            return Err(TcError::LoopBodyDepth { span });
         }
         for i in 0..base_sp {
             if body_stack[i] != base_stack[i] {
-                return Err(TcError { code: 3263, span });
+                return Err(TcError::LoopBodyModifiedStack { span });
             }
         }
         self.emit_op(body_end, lir::OpKind::Br { target: check_blk }, span)?;
@@ -173,12 +173,12 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         observer: &mut dyn TypecheckObserver,
     ) -> Result<lir::BlockId, TcError> {
         if self.locked_resource.is_some() {
-            return Err(TcError { code: 3517, span });
+            return Err(TcError::LockNested { span });
         }
-        let body_q = pop(stack, sp).ok_or(TcError { code: 3270, span })?;
+        let body_q = pop(stack, sp).ok_or(TcError::LockPopBody { span })?;
         let body_span = match body_q {
             Value::Quot(s) => s,
-            _ => return Err(TcError { code: 3271, span }),
+            _ => return Err(TcError::LockBodyNotQuot { span }),
         };
         let locked = if *sp > 0 {
             match stack[*sp - 1] {
@@ -196,11 +196,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         let base_sp = *sp;
         let end = self.compile_quote_span(cur, stack, sp, body_span, false, true, observer)?;
         if *sp != base_sp {
-            return Err(TcError { code: 3272, span });
+            return Err(TcError::LockBodyDepth { span });
         }
         for i in 0..base_sp {
             if stack[i] != base_stack[i] {
-                return Err(TcError { code: 3273, span });
+                return Err(TcError::LockBodyModifiedStack { span });
             }
         }
         self.locked_resource = None;

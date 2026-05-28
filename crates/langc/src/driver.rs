@@ -100,7 +100,7 @@ pub fn emit_ir_driver(
     ) {
         Ok(()) => 0,
         Err(e) => {
-            let _ = diag::error_simple(e.code, b"typecheck error");
+            let _ = diag::error_simple(e.code(), b"typecheck error");
             2
         }
     }
@@ -136,7 +136,7 @@ pub fn emit_asm_driver(
     {
         Ok(()) => {}
         Err(semantics::typecheck::ForEachIrError::Type(e)) => {
-            let _ = diag::error_simple(e.code, b"typecheck error");
+            let _ = diag::error_simple(e.code(), b"typecheck error");
             return 2;
         }
         Err(semantics::typecheck::ForEachIrError::Consumer(e)) => {
@@ -173,7 +173,7 @@ pub fn emit_tc_driver(
         Ok(()) => 0,
         Err(e) => {
             let _ = allow_raw_casts; // keep signature stable vs other drivers
-            let _ = diag::error_simple(e.code, b"typecheck error");
+            let _ = diag::error_simple(e.code(), b"typecheck error");
             2
         }
     }
@@ -272,7 +272,7 @@ pub fn emit_obj_driver(
     {
         Ok(()) => {}
         Err(semantics::typecheck::ForEachIrError::Type(e)) => {
-            let _ = diag::error_simple(e.code, b"typecheck error");
+            let _ = diag::error_simple(e.code(), b"typecheck error");
             return 2;
         }
         Err(semantics::typecheck::ForEachIrError::Consumer(e)) => {

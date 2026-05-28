@@ -101,20 +101,20 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         let mut types: FixedVec<lir::Atom, 64> = FixedVec::new();
         let mut type_sizes: FixedVec<u32, 64> = FixedVec::new();
         let z = lir::AT_EMPTY;
-        types.push(z).map_err(|_| TcError { code: 3902, span: Span::new(0, 0) })?;
-        type_sizes.push(0).map_err(|_| TcError { code: 3902, span: Span::new(0, 0) })?;
-        types.push(lir::AT_I64).map_err(|_| TcError { code: 3902, span: Span::new(0, 0) })?;
-        type_sizes.push(8).map_err(|_| TcError { code: 3902, span: Span::new(0, 0) })?;
-        types.push(lir::AT_BOOL).map_err(|_| TcError { code: 3902, span: Span::new(0, 0) })?;
-        type_sizes.push(1).map_err(|_| TcError { code: 3902, span: Span::new(0, 0) })?;
-        types.push(lir::AT_STR).map_err(|_| TcError { code: 3902, span: Span::new(0, 0) })?;
-        type_sizes.push(8).map_err(|_| TcError { code: 3902, span: Span::new(0, 0) })?;
-        types.push(lir::AT_PTR).map_err(|_| TcError { code: 3902, span: Span::new(0, 0) })?;
-        type_sizes.push(8).map_err(|_| TcError { code: 3902, span: Span::new(0, 0) })?;
-        types.push(lir::AT_PTR_MUT).map_err(|_| TcError { code: 3902, span: Span::new(0, 0) })?;
-        type_sizes.push(8).map_err(|_| TcError { code: 3902, span: Span::new(0, 0) })?;
-        types.push(lir::AT_MMIO).map_err(|_| TcError { code: 3902, span: Span::new(0, 0) })?;
-        type_sizes.push(8).map_err(|_| TcError { code: 3902, span: Span::new(0, 0) })?;
+        types.push(z).map_err(|_| TcError::TypeTableFull { span: Span::new(0, 0) })?;
+        type_sizes.push(0).map_err(|_| TcError::TypeTableFull { span: Span::new(0, 0) })?;
+        types.push(lir::AT_I64).map_err(|_| TcError::TypeTableFull { span: Span::new(0, 0) })?;
+        type_sizes.push(8).map_err(|_| TcError::TypeTableFull { span: Span::new(0, 0) })?;
+        types.push(lir::AT_BOOL).map_err(|_| TcError::TypeTableFull { span: Span::new(0, 0) })?;
+        type_sizes.push(1).map_err(|_| TcError::TypeTableFull { span: Span::new(0, 0) })?;
+        types.push(lir::AT_STR).map_err(|_| TcError::TypeTableFull { span: Span::new(0, 0) })?;
+        type_sizes.push(8).map_err(|_| TcError::TypeTableFull { span: Span::new(0, 0) })?;
+        types.push(lir::AT_PTR).map_err(|_| TcError::TypeTableFull { span: Span::new(0, 0) })?;
+        type_sizes.push(8).map_err(|_| TcError::TypeTableFull { span: Span::new(0, 0) })?;
+        types.push(lir::AT_PTR_MUT).map_err(|_| TcError::TypeTableFull { span: Span::new(0, 0) })?;
+        type_sizes.push(8).map_err(|_| TcError::TypeTableFull { span: Span::new(0, 0) })?;
+        types.push(lir::AT_MMIO).map_err(|_| TcError::TypeTableFull { span: Span::new(0, 0) })?;
+        type_sizes.push(8).map_err(|_| TcError::TypeTableFull { span: Span::new(0, 0) })?;
 
         let mut lir_sig = lir::Sig::empty();
         lir_sig.in_len = sig.in_len;
@@ -131,10 +131,10 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         let mut blocks: FixedVec<lir::Block, 16> = FixedVec::new();
         let mut entry_stack: FixedVec<lir::TypeId, 32> = FixedVec::new();
         for i in 0..(lir_sig.in_len as usize) {
-            entry_stack.push(lir_sig.inputs[i]).map_err(|_| TcError { code: 3902, span: Span::new(0, 0) })?;
+            entry_stack.push(lir_sig.inputs[i]).map_err(|_| TcError::TypeTableFull { span: Span::new(0, 0) })?;
         }
         let entry_block = lir::Block { id: lir::BlockId(0), entry_stack, ops: FixedVec::new() };
-        blocks.push(entry_block).map_err(|_| TcError { code: 3903, span: Span::new(0, 0) })?;
+        blocks.push(entry_block).map_err(|_| TcError::BlockTableFull { span: Span::new(0, 0) })?;
 
         let extra_words = FixedVec::new();
         let quote_id = 0u32;
@@ -177,7 +177,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         self.word
             .blocks
             .get_mut(id.0 as usize)
-            .ok_or(TcError { code: 3904, span: Span::new(0, 0) })
+            .ok_or(TcError::BlockNotFound { span: Span::new(0, 0) })
     }
 
     fn new_block(&mut self, stack: &[Value; 256], sp: usize, span: Span) -> Result<lir::BlockId, TcError> {
@@ -185,21 +185,21 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         let mut entry_stack: FixedVec<lir::TypeId, 32> = FixedVec::new();
         for (_, v) in stack.iter().enumerate().take(sp) {
             let tid = self.ty_id_of_value(*v, span)?;
-            entry_stack.push(tid).map_err(|_| TcError { code: 3902, span })?;
+            entry_stack.push(tid).map_err(|_| TcError::TypeTableFull { span })?;
         }
         let b = lir::Block {
             id,
             entry_stack,
             ops: FixedVec::new(),
         };
-        self.word.blocks.push(b).map_err(|_| TcError { code: 3903, span })?;
+        self.word.blocks.push(b).map_err(|_| TcError::BlockTableFull { span })?;
         Ok(id)
     }
 
     fn emit_op(&mut self, cur: lir::BlockId, kind: lir::OpKind, span: Span) -> Result<(), TcError> {
         let op = lir::Op { kind, span };
         let b = self.block_mut(cur)?;
-        b.ops.push(op).map_err(|_| TcError { code: 3905, span })?;
+        b.ops.push(op).map_err(|_| TcError::OpTableFull { span })?;
         Ok(())
     }
 
@@ -255,7 +255,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         for i in 0..=place_bytes.len() {
             if i == place_bytes.len() || place_bytes[i] == b'.' {
                 if i == start {
-                    return Err(TcError { code: 3715, span: place_abs });
+                    return Err(TcError::PlaceSegmentEmpty { span: place_abs });
                 }
                 let seg = &place_bytes[start..i];
                 let mut has_index = false;
@@ -265,8 +265,8 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 } else {
                     (seg, &[][..])
                 };
-                let atom = TypeAtom::new(name_bytes).ok_or(TcError { code: 3715, span: place_abs })?;
-                segs.push((atom, has_index)).map_err(|_| TcError { code: 3715, span: place_abs })?;
+                let atom = TypeAtom::new(name_bytes).ok_or(TcError::PlaceSegmentEmpty { span: place_abs })?;
+                segs.push((atom, has_index)).map_err(|_| TcError::PlaceSegmentEmpty { span: place_abs })?;
                 start = i + 1;
             }
         }
@@ -284,7 +284,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         };
         if root_index {
             let Some(elem) = array_elem_type(ty) else {
-                return Err(TcError { code: 3716, span: place_abs });
+                return Err(TcError::FieldNotFound { span: place_abs });
             };
             ty = elem;
         }
@@ -292,11 +292,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         for i in 1..segs.len() {
             let (field, has_index) = *segs.get(i).expect("i < segs.len() by loop guard");
             let Some(mut next) = struct_field_ty(self.nominals, ty, field) else {
-                return Err(TcError { code: 3716, span: place_abs });
+                return Err(TcError::FieldNotFound { span: place_abs });
             };
             if has_index {
                 let Some(elem) = array_elem_type(next) else {
-                    return Err(TcError { code: 3716, span: place_abs });
+                    return Err(TcError::FieldNotFound { span: place_abs });
                 };
                 next = elem;
             }
@@ -370,7 +370,7 @@ pub fn build_ir_word<'r>(
     }
 
     if !gen.check_no_scoped_live(&stack, sp) {
-        return Err(TcError { code: 3504, span: decl.body.unwrap_or(decl.name) });
+        return Err(TcError::ScopedLeak { span: decl.body.unwrap_or(decl.name) });
     }
 
     if gen.terminated {
@@ -379,7 +379,7 @@ pub fn build_ir_word<'r>(
     }
 
     if sp != sig.out_len as usize {
-        return Err(TcError { code: 3220, span: decl.body.unwrap_or(decl.name) });
+        return Err(TcError::OutputCountMismatch { span: decl.body.unwrap_or(decl.name) });
     }
     for (i, v) in stack.iter().enumerate().take(sig.out_len as usize) {
         let got = match v {
@@ -394,7 +394,7 @@ pub fn build_ir_word<'r>(
             Value::MmioPtr { mutable: true, .. } => TypeAtom::PTR_MUT,
         };
         if !type_compatible(got, sig.outputs[i], subtypes) {
-            return Err(TcError { code: 3221, span: decl.body.unwrap_or(decl.name) });
+            return Err(TcError::OutputTypeMismatch { span: decl.body.unwrap_or(decl.name) });
         }
     }
 
@@ -405,5 +405,5 @@ pub fn build_ir_word<'r>(
 }
 
 pub fn lir_atom(bytes: &[u8]) -> Result<lir::Atom, TcError> {
-    lir::Atom::new(bytes).ok_or(TcError { code: 3901, span: Span::new(0, 0) })
+    lir::Atom::new(bytes).ok_or(TcError::AtomTooLong { span: Span::new(0, 0) })
 }

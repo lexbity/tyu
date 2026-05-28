@@ -19,7 +19,7 @@ impl ArenaAllocator {
 
     pub fn alloc(&mut self, word: lir::Word, span: Span) -> Result<&lir::Word, TcError> {
         if self.len >= WORD_ARENA_CAP {
-            return Err(TcError { code: 3906, span });
+            return Err(TcError::ArenaFull { span });
         }
         let slot = self.words[self.len].write(word);
         self.len += 1;

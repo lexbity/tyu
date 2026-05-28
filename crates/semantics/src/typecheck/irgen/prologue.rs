@@ -12,7 +12,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         let mut cur = cur;
         let n = self.sig.in_len as usize;
         for i in (0..n).rev() {
-            let v = pop(stack, sp).ok_or(TcError { code: 3202, span: Span::new(0, 0) })?;
+            let v = pop(stack, sp).ok_or(TcError::StackUnderflow { span: Span::new(0, 0) })?;
             let _ = v;
             self.emit_op(cur, lir::OpKind::LocalSet { slot: i as u16, ty: self.word.sig.inputs[i] }, Span::new(0, 0))?;
         }
@@ -34,14 +34,14 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 }
                 cur = self.compile_quote_span(cur, stack, sp, req, false, false, observer)?;
                 if *sp != n + 1 {
-                    return Err(TcError { code: 3310, span: req });
+                    return Err(TcError::ContractDepth { span: req });
                 }
                 if stack[*sp - 1] != Value::Plain(TypeAtom::BOOL) {
-                    return Err(TcError { code: 3311, span: req });
+                    return Err(TcError::ContractNotBool { span: req });
                 }
                 for (i, v) in stack.iter().enumerate().take(n) {
                     if *v != Value::Plain(self.sig.inputs[i]) {
-                        return Err(TcError { code: 3312, span: req });
+                        return Err(TcError::ContractModifiedInputs { span: req });
                     }
                 }
                 let _ = pop(stack, sp);
@@ -75,14 +75,14 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 let base_sp = *sp;
                 cur = self.compile_quote_span(cur, stack, sp, ens, false, false, observer)?;
                 if *sp != base_sp + 1 {
-                    return Err(TcError { code: 3320, span: ens });
+                    return Err(TcError::ContractDepth { span: ens });
                 }
                 if stack[*sp - 1] != Value::Plain(TypeAtom::BOOL) {
-                    return Err(TcError { code: 3321, span: ens });
+                    return Err(TcError::ContractNotBool { span: ens });
                 }
                 for (i, v) in stack.iter().enumerate().take(n) {
                     if *v != Value::Plain(self.sig.outputs[i]) {
-                        return Err(TcError { code: 3322, span: ens });
+                        return Err(TcError::ContractModifiedInputs { span: ens });
                     }
                 }
                 let _ = pop(stack, sp);
@@ -96,7 +96,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             let base_sp = *sp;
             let tmp_base = self.temp_base_slot();
             for i in (0..n).rev() {
-                let v = pop(stack, sp).ok_or(TcError { code: 3202, span: Span::new(0, 0) })?;
+                let v = pop(stack, sp).ok_or(TcError::StackUnderflow { span: Span::new(0, 0) })?;
                 let _ = v;
                 self.emit_op(cur, lir::OpKind::LocalSet { slot: tmp_base + i as u16, ty: self.word.sig.outputs[i] }, Span::new(0, 0))?;
             }

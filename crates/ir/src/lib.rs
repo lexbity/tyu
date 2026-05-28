@@ -185,9 +185,106 @@ pub struct Module {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct VerifyError {
-    pub code: u32,
-    pub span: Span,
+pub enum VerifyError {
+    EntryBlockNotFound { span: Span },
+    EntryStackLenMismatch { span: Span },
+    EntryStackTypeMismatch { span: Span },
+    CodeAfterTerminator { span: Span },
+    TypeMismatch { span: Span },
+    DropTypeMismatch { span: Span },
+    SwapTypeMismatch { span: Span },
+    LocalTypeMismatch { span: Span },
+    CallStackUnderflow { span: Span },
+    CallInputTypeMismatch { span: Span },
+    LoadAddrNotPtr { span: Span },
+    StoreValueTypeMismatch { span: Span },
+    StoreAddrNotMutPtr { span: Span },
+    MmioFieldAddrNotMmio { span: Span },
+    MmioFieldTypeMismatch { span: Span },
+    CheckSubtypeTypeMismatch { span: Span },
+    TrapIfFalseNotBool { span: Span },
+    BrTargetNotFound { span: Span },
+    BrStackDepthMismatch { span: Span },
+    BrStackContentMismatch { span: Span },
+    BrIfCondNotBool { span: Span },
+    BrIfTargetNotFound { span: Span },
+    BrIfStackDepthMismatch { span: Span },
+    BrIfStackContentMismatch { span: Span },
+    RetStackDepthMismatch { span: Span },
+    RetOutputTypeMismatch { span: Span },
+    NotTerminated { span: Span },
+    PopEmptyStack { span: Span },
+    PushFullStack { span: Span },
+}
+
+impl VerifyError {
+    pub fn code(self) -> u32 {
+        match self {
+            VerifyError::EntryBlockNotFound { .. } => 9001,
+            VerifyError::EntryStackLenMismatch { .. } => 9002,
+            VerifyError::EntryStackTypeMismatch { .. } => 9003,
+            VerifyError::CodeAfterTerminator { .. } => 9010,
+            VerifyError::TypeMismatch { .. } => 9011,
+            VerifyError::DropTypeMismatch { .. } => 9012,
+            VerifyError::SwapTypeMismatch { .. } => 9013,
+            VerifyError::LocalTypeMismatch { .. } => 9016,
+            VerifyError::CallStackUnderflow { .. } => 9017,
+            VerifyError::CallInputTypeMismatch { .. } => 9018,
+            VerifyError::LoadAddrNotPtr { .. } => 9019,
+            VerifyError::StoreValueTypeMismatch { .. } => 9020,
+            VerifyError::StoreAddrNotMutPtr { .. } => 9021,
+            VerifyError::MmioFieldAddrNotMmio { .. } => 9022,
+            VerifyError::MmioFieldTypeMismatch { .. } => 9023,
+            VerifyError::CheckSubtypeTypeMismatch { .. } => 9024,
+            VerifyError::TrapIfFalseNotBool { .. } => 9025,
+            VerifyError::BrTargetNotFound { .. } => 9026,
+            VerifyError::BrStackDepthMismatch { .. } => 9027,
+            VerifyError::BrStackContentMismatch { .. } => 9028,
+            VerifyError::BrIfCondNotBool { .. } => 9029,
+            VerifyError::BrIfTargetNotFound { .. } => 9030,
+            VerifyError::BrIfStackDepthMismatch { .. } => 9031,
+            VerifyError::BrIfStackContentMismatch { .. } => 9032,
+            VerifyError::RetStackDepthMismatch { .. } => 9033,
+            VerifyError::RetOutputTypeMismatch { .. } => 9034,
+            VerifyError::NotTerminated { .. } => 9035,
+            VerifyError::PopEmptyStack { .. } => 9098,
+            VerifyError::PushFullStack { .. } => 9099,
+        }
+    }
+
+    pub fn span(self) -> Span {
+        match self {
+            VerifyError::EntryBlockNotFound { span }
+            | VerifyError::EntryStackLenMismatch { span }
+            | VerifyError::EntryStackTypeMismatch { span }
+            | VerifyError::CodeAfterTerminator { span }
+            | VerifyError::TypeMismatch { span }
+            | VerifyError::DropTypeMismatch { span }
+            | VerifyError::SwapTypeMismatch { span }
+            | VerifyError::LocalTypeMismatch { span }
+            | VerifyError::CallStackUnderflow { span }
+            | VerifyError::CallInputTypeMismatch { span }
+            | VerifyError::LoadAddrNotPtr { span }
+            | VerifyError::StoreValueTypeMismatch { span }
+            | VerifyError::StoreAddrNotMutPtr { span }
+            | VerifyError::MmioFieldAddrNotMmio { span }
+            | VerifyError::MmioFieldTypeMismatch { span }
+            | VerifyError::CheckSubtypeTypeMismatch { span }
+            | VerifyError::TrapIfFalseNotBool { span }
+            | VerifyError::BrTargetNotFound { span }
+            | VerifyError::BrStackDepthMismatch { span }
+            | VerifyError::BrStackContentMismatch { span }
+            | VerifyError::BrIfCondNotBool { span }
+            | VerifyError::BrIfTargetNotFound { span }
+            | VerifyError::BrIfStackDepthMismatch { span }
+            | VerifyError::BrIfStackContentMismatch { span }
+            | VerifyError::RetStackDepthMismatch { span }
+            | VerifyError::RetOutputTypeMismatch { span }
+            | VerifyError::NotTerminated { span }
+            | VerifyError::PopEmptyStack { span }
+            | VerifyError::PushFullStack { span } => span,
+        }
+    }
 }
 
 pub fn verify_module(m: &Module) -> Result<(), VerifyError> {
@@ -206,23 +303,14 @@ pub fn verify_word(w: &Word) -> Result<(), VerifyError> {
         }
     }
     let Some(entry_block) = entry else {
-        return Err(VerifyError {
-            code: 9001,
-            span: Span::UNKNOWN,
-        });
+        return Err(VerifyError::EntryBlockNotFound { span: Span::UNKNOWN });
     };
     if entry_block.entry_stack.len() != w.sig.in_len as usize {
-        return Err(VerifyError {
-            code: 9002,
-            span: Span::UNKNOWN,
-        });
+        return Err(VerifyError::EntryStackLenMismatch { span: Span::UNKNOWN });
     }
     for i in 0..(w.sig.in_len as usize) {
         if *entry_block.entry_stack.get(i).expect("verified entry stack len") != w.sig.inputs[i] {
-            return Err(VerifyError {
-                code: 9003,
-                span: Span::UNKNOWN,
-            });
+            return Err(VerifyError::EntryStackTypeMismatch { span: Span::UNKNOWN });
         }
     }
 
@@ -247,10 +335,7 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
     let mut terminated = false;
     for op in b.ops.iter() {
         if terminated {
-            return Err(VerifyError {
-                code: 9010,
-                span: op.span,
-            });
+            return Err(VerifyError::CodeAfterTerminator { span: op.span });
         }
         match op.kind {
             OpKind::ConstI64(_) => {
@@ -280,25 +365,25 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
             OpKind::PtrAddConst { ty, .. } => {
                 let top = pop(&mut stack, &mut sp, op.span)?;
                 if top != ty {
-                    return Err(VerifyError { code: 9011, span: op.span });
+                    return Err(VerifyError::TypeMismatch { span: op.span });
                 }
                 push(&mut stack, &mut sp, top, op.span)?;
             }
             OpKind::PtrAddIndex { ty, .. } => {
                 let idx = pop(&mut stack, &mut sp, op.span)?;
                 if idx != TY_I64 {
-                    return Err(VerifyError { code: 9018, span: op.span });
+                    return Err(VerifyError::CallInputTypeMismatch { span: op.span });
                 }
                 let top = pop(&mut stack, &mut sp, op.span)?;
                 if top != ty {
-                    return Err(VerifyError { code: 9011, span: op.span });
+                    return Err(VerifyError::TypeMismatch { span: op.span });
                 }
                 push(&mut stack, &mut sp, top, op.span)?;
             }
             OpKind::Dup { ty } => {
                 let top = pop(&mut stack, &mut sp, op.span)?;
                 if top != ty {
-                    return Err(VerifyError { code: 9011, span: op.span });
+                    return Err(VerifyError::TypeMismatch { span: op.span });
                 }
                 push(&mut stack, &mut sp, top, op.span)?;
                 push(&mut stack, &mut sp, top, op.span)?;
@@ -306,14 +391,14 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
             OpKind::Drop { ty } => {
                 let top = pop(&mut stack, &mut sp, op.span)?;
                 if top != ty {
-                    return Err(VerifyError { code: 9012, span: op.span });
+                    return Err(VerifyError::DropTypeMismatch { span: op.span });
                 }
             }
             OpKind::Swap { a, b } => {
                 let top = pop(&mut stack, &mut sp, op.span)?;
                 let below = pop(&mut stack, &mut sp, op.span)?;
                 if top != b || below != a {
-                    return Err(VerifyError { code: 9013, span: op.span });
+                    return Err(VerifyError::SwapTypeMismatch { span: op.span });
                 }
                 push(&mut stack, &mut sp, top, op.span)?;
                 push(&mut stack, &mut sp, below, op.span)?;
@@ -340,7 +425,7 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
             OpKind::LocalSet { ty, .. } => {
                 let v = pop(&mut stack, &mut sp, op.span)?;
                 if v != ty {
-                    return Err(VerifyError { code: 9016, span: op.span });
+                    return Err(VerifyError::LocalTypeMismatch { span: op.span });
                 }
             }
             OpKind::LocalGet { ty, .. } => {
@@ -349,25 +434,25 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
             OpKind::Cast { from, to } => {
                 let v = pop(&mut stack, &mut sp, op.span)?;
                 if v != from {
-                    return Err(VerifyError { code: 9016, span: op.span });
+                    return Err(VerifyError::LocalTypeMismatch { span: op.span });
                 }
                 push(&mut stack, &mut sp, to, op.span)?;
             }
             OpKind::Bitcast { from, to } => {
                 let v = pop(&mut stack, &mut sp, op.span)?;
                 if v != from {
-                    return Err(VerifyError { code: 9016, span: op.span });
+                    return Err(VerifyError::LocalTypeMismatch { span: op.span });
                 }
                 push(&mut stack, &mut sp, to, op.span)?;
             }
             OpKind::Call { sig, .. } => {
                 let need = sig.in_len as usize;
                 if sp < need {
-                    return Err(VerifyError { code: 9017, span: op.span });
+                    return Err(VerifyError::CallStackUnderflow { span: op.span });
                 }
                 for i in 0..need {
                     if stack[sp - need + i] != sig.inputs[i] {
-                        return Err(VerifyError { code: 9018, span: op.span });
+                        return Err(VerifyError::CallInputTypeMismatch { span: op.span });
                     }
                 }
                 sp -= need;
@@ -378,7 +463,7 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
             OpKind::Load { ty } => {
                 let addr = pop(&mut stack, &mut sp, op.span)?;
                 if addr != TY_PTR && addr != TY_PTR_MUT {
-                    return Err(VerifyError { code: 9019, span: op.span });
+                    return Err(VerifyError::LoadAddrNotPtr { span: op.span });
                 }
                 push(&mut stack, &mut sp, ty, op.span)?;
             }
@@ -386,16 +471,16 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
                 let v = pop(&mut stack, &mut sp, op.span)?;
                 let addr = pop(&mut stack, &mut sp, op.span)?;
                 if v != ty {
-                    return Err(VerifyError { code: 9020, span: op.span });
+                    return Err(VerifyError::StoreValueTypeMismatch { span: op.span });
                 }
                 if addr != TY_PTR_MUT {
-                    return Err(VerifyError { code: 9021, span: op.span });
+                    return Err(VerifyError::StoreAddrNotMutPtr { span: op.span });
                 }
             }
             OpKind::MmioVolLoad { ty, .. } => {
                 let addr = pop(&mut stack, &mut sp, op.span)?;
                 if addr != TY_MMIO && addr != TY_PTR && addr != TY_PTR_MUT {
-                    return Err(VerifyError { code: 9019, span: op.span });
+                    return Err(VerifyError::LoadAddrNotPtr { span: op.span });
                 }
                 push(&mut stack, &mut sp, ty, op.span)?;
             }
@@ -403,16 +488,16 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
                 let v = pop(&mut stack, &mut sp, op.span)?;
                 let addr = pop(&mut stack, &mut sp, op.span)?;
                 if v != ty {
-                    return Err(VerifyError { code: 9020, span: op.span });
+                    return Err(VerifyError::StoreValueTypeMismatch { span: op.span });
                 }
                 if addr != TY_MMIO && addr != TY_PTR_MUT {
-                    return Err(VerifyError { code: 9021, span: op.span });
+                    return Err(VerifyError::StoreAddrNotMutPtr { span: op.span });
                 }
             }
             OpKind::MmioVolLoadField { field_ty, .. } => {
                 let place = pop(&mut stack, &mut sp, op.span)?;
                 if place != TY_MMIO {
-                    return Err(VerifyError { code: 9022, span: op.span });
+                    return Err(VerifyError::MmioFieldAddrNotMmio { span: op.span });
                 }
                 push(&mut stack, &mut sp, field_ty, op.span)?;
             }
@@ -420,13 +505,13 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
                 let v = pop(&mut stack, &mut sp, op.span)?;
                 let place = pop(&mut stack, &mut sp, op.span)?;
                 if place != TY_MMIO || v != field_ty {
-                    return Err(VerifyError { code: 9023, span: op.span });
+                    return Err(VerifyError::MmioFieldTypeMismatch { span: op.span });
                 }
             }
             OpKind::CheckSubtype { ty } => {
                 let v = pop(&mut stack, &mut sp, op.span)?;
                 if v != ty {
-                    return Err(VerifyError { code: 9024, span: op.span });
+                    return Err(VerifyError::CheckSubtypeTypeMismatch { span: op.span });
                 }
                 push(&mut stack, &mut sp, ty, op.span)?;
                 push(&mut stack, &mut sp, TY_BOOL, op.span)?;
@@ -434,19 +519,19 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
             OpKind::TrapIfFalse { .. } => {
                 let v = pop(&mut stack, &mut sp, op.span)?;
                 if v != TY_BOOL {
-                    return Err(VerifyError { code: 9025, span: op.span });
+                    return Err(VerifyError::TrapIfFalseNotBool { span: op.span });
                 }
             }
             OpKind::Br { target } => {
                 let Some(t) = find_block(w, target) else {
-                    return Err(VerifyError { code: 9026, span: op.span });
+                    return Err(VerifyError::BrTargetNotFound { span: op.span });
                 };
                 if t.entry_stack.len() != sp {
-                    return Err(VerifyError { code: 9027, span: op.span });
+                    return Err(VerifyError::BrStackDepthMismatch { span: op.span });
                 }
                 for (i, item) in stack.iter().enumerate().take(sp) {
                     if *t.entry_stack.get(i).expect("verified length matches sp") != *item {
-                        return Err(VerifyError { code: 9028, span: op.span });
+                        return Err(VerifyError::BrStackContentMismatch { span: op.span });
                     }
                 }
                 terminated = true;
@@ -454,18 +539,18 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
             OpKind::BrIf { then_tgt, else_tgt } => {
                 let cond = pop(&mut stack, &mut sp, op.span)?;
                 if cond != TY_BOOL {
-                    return Err(VerifyError { code: 9029, span: op.span });
+                    return Err(VerifyError::BrIfCondNotBool { span: op.span });
                 }
                 for &tgt in &[then_tgt, else_tgt] {
                     let Some(t) = find_block(w, tgt) else {
-                        return Err(VerifyError { code: 9030, span: op.span });
+                        return Err(VerifyError::BrIfTargetNotFound { span: op.span });
                     };
                     if t.entry_stack.len() != sp {
-                        return Err(VerifyError { code: 9031, span: op.span });
+                        return Err(VerifyError::BrIfStackDepthMismatch { span: op.span });
                     }
                     for (i, item) in stack.iter().enumerate().take(sp) {
                         if *t.entry_stack.get(i).expect("verified length matches sp") != *item {
-                            return Err(VerifyError { code: 9032, span: op.span });
+                            return Err(VerifyError::BrIfStackContentMismatch { span: op.span });
                         }
                     }
                 }
@@ -473,11 +558,11 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
             }
             OpKind::Ret => {
                 if sp != w.sig.out_len as usize {
-                    return Err(VerifyError { code: 9033, span: op.span });
+                    return Err(VerifyError::RetStackDepthMismatch { span: op.span });
                 }
                 for (i, item) in stack.iter().enumerate().take(sp) {
                     if *item != w.sig.outputs[i] {
-                        return Err(VerifyError { code: 9034, span: op.span });
+                        return Err(VerifyError::RetOutputTypeMismatch { span: op.span });
                     }
                 }
                 terminated = true;
@@ -485,14 +570,14 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
         }
     }
     if !terminated {
-        return Err(VerifyError { code: 9035, span: Span::UNKNOWN });
+        return Err(VerifyError::NotTerminated { span: Span::UNKNOWN });
     }
     Ok(())
 }
 
 fn push(stack: &mut [TypeId; 64], sp: &mut usize, ty: TypeId, span: Span) -> Result<(), VerifyError> {
     if *sp >= stack.len() {
-        return Err(VerifyError { code: 9099, span });
+        return Err(VerifyError::PushFullStack { span });
     }
     stack[*sp] = ty;
     *sp += 1;
@@ -501,7 +586,7 @@ fn push(stack: &mut [TypeId; 64], sp: &mut usize, ty: TypeId, span: Span) -> Res
 
 fn pop(stack: &mut [TypeId; 64], sp: &mut usize, span: Span) -> Result<TypeId, VerifyError> {
     if *sp == 0 {
-        return Err(VerifyError { code: 9098, span });
+        return Err(VerifyError::PopEmptyStack { span });
     }
     *sp -= 1;
     Ok(stack[*sp])

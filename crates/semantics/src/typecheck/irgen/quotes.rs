@@ -24,20 +24,20 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
 
     pub(super) fn parse_quote_sig(&self, quot_span: Span) -> Result<QuoteSig, TcError> {
         if quot_span.end <= quot_span.start + 2 {
-            return Err(TcError { code: 3760, span: quot_span });
+            return Err(TcError::QuoteSyntax { span: quot_span });
         }
         let inner = Span::new(quot_span.start + 1, quot_span.end - 1);
         let slice = &self.src[inner.start..inner.end];
         let mut lex = Lexer::new(slice);
         let first = lex.next();
         if first.kind != TokenKind::PunctLParen {
-            return Err(TcError { code: 3760, span: quot_span });
+            return Err(TcError::QuoteSyntax { span: quot_span });
         }
         let sig = capture_balanced(&mut lex, slice, TokenKind::PunctLParen, TokenKind::PunctRParen, first.span.start)
-            .map_err(|code| TcError { code, span: quot_span })?;
+            .map_err(|_| TcError::Internal { span: quot_span })?;
         let sig_span = Span::new(inner.start + sig.start, inner.start + sig.end);
         let sig = crate::typecheck::parse::parse_word_sig(self.src, sig_span)
-            .map_err(|e| TcError { code: e.code, span: e.span })?;
+            .map_err(|_| TcError::TypeParseFailed { span: sig_span })?;
 
         let mut may_suspend = false;
         let next = lex.next();
@@ -119,11 +119,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             let cur = qgen.emit_prologue(cur, &mut stack, &mut sp, None, observer)?;
             let cur = qgen.compile_span(cur, &mut stack, &mut sp, parsed.body, parsed.may_suspend, false, observer)?;
             if !qgen.check_no_scoped_live(&stack, sp) {
-                return Err(TcError { code: 3504, span: quot_span });
+                return Err(TcError::ScopedLeak { span: quot_span });
             }
             if !qgen.terminated {
                 if sp != sig.out_len as usize {
-                    return Err(TcError { code: 3220, span: quot_span });
+                    return Err(TcError::OutputCountMismatch { span: quot_span });
                 }
                 for (i, v) in stack.iter().enumerate().take(sig.out_len as usize) {
                     let got = match v {
@@ -138,7 +138,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                         Value::MmioPtr { mutable: true, .. } => TypeAtom::PTR_MUT,
                     };
                     if !type_compatible(got, sig.outputs[i], self.subtypes) {
-                        return Err(TcError { code: 3221, span: quot_span });
+                        return Err(TcError::OutputTypeMismatch { span: quot_span });
                     }
                 }
                 qgen.emit_op(cur, lir::OpKind::Ret, quot_span)?;
@@ -153,7 +153,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         };
         let ew: *mut FixedVec<&'r lir::Word, { arena::QUOTE_WORD_CAP }> = &mut self.extra_words;
         unsafe {
-            (*ew).push(word).map_err(|_| TcError { code: 3905, span: quot_span })?;
+            (*ew).push(word).map_err(|_| TcError::OpTableFull { span: quot_span })?;
         }
         Ok((name, sig, parsed.may_suspend))
     }

@@ -78,14 +78,14 @@ fn verifier_accepts_simple_const_ret() {
 fn verifier_rejects_ret_with_wrong_stack_height() {
     let w = word_with_single_block(sig0_1(TY_I64), &[OpKind::Ret]);
     let err = ir::verify_word(&w).unwrap_err();
-    assert_eq!(err.code, 9033);
+    assert_eq!(err.code(), 9033);
 }
 
 #[test]
 fn verifier_rejects_drop_type_mismatch() {
     let w = word_with_single_block(sig0_1(TY_I64), &[OpKind::ConstI64(1), OpKind::Drop { ty: TY_BOOL }, OpKind::Ret]);
     let err = ir::verify_word(&w).unwrap_err();
-    assert_eq!(err.code, 9012);
+    assert_eq!(err.code(), 9012);
 }
 
 #[test]
@@ -141,7 +141,7 @@ fn verifier_rejects_branch_stack_mismatch() {
     };
 
     let err = ir::verify_word(&w).unwrap_err();
-    assert_eq!(err.code, 9027);
+    assert_eq!(err.code(), 9027);
 }
 
 #[test]
@@ -149,7 +149,7 @@ fn verifier_rejects_unterminated_block() {
     // Block ends without Ret, Br, or BrIf — must fail with E9035.
     let w = word_with_single_block(sig0_1(TY_I64), &[OpKind::ConstI64(42)]);
     let err = ir::verify_word(&w).unwrap_err();
-    assert_eq!(err.code, 9035);
+    assert_eq!(err.code(), 9035);
 }
 
 #[test]
@@ -193,7 +193,7 @@ fn verify_word_rejects_missing_entry_block() {
         type_sizes: baseline_type_sizes(),
         blocks,
     };
-    assert_eq!(ir::verify_word(&w).unwrap_err().code, 9001);
+    assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9001);
 }
 
 #[test]
@@ -204,7 +204,7 @@ fn verify_word_rejects_entry_stack_height_mismatch() {
     sig.inputs[0] = TY_I64;
 
     let w = word_with_single_block(sig, &[OpKind::ConstI64(1), OpKind::Ret]);
-    assert_eq!(ir::verify_word(&w).unwrap_err().code, 9002);
+    assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9002);
 }
 
 #[test]
@@ -235,7 +235,7 @@ fn verify_word_rejects_entry_stack_type_mismatch() {
         type_sizes: baseline_type_sizes(),
         blocks,
     };
-    assert_eq!(ir::verify_word(&w).unwrap_err().code, 9003);
+    assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9003);
 }
 
 // ---------------------------------------------------------------------------
@@ -245,7 +245,7 @@ fn verify_word_rejects_entry_stack_type_mismatch() {
 #[test]
 fn verify_block_rejects_ops_after_ret() {
     let w = word_with_single_block(Sig::empty(), &[OpKind::Ret, OpKind::ConstI64(0)]);
-    assert_eq!(ir::verify_word(&w).unwrap_err().code, 9010);
+    assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9010);
 }
 
 #[test]
@@ -277,7 +277,7 @@ fn verify_block_rejects_ops_after_br() {
         type_sizes: baseline_type_sizes(),
         blocks,
     };
-    assert_eq!(ir::verify_word(&w).unwrap_err().code, 9010);
+    assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9010);
 }
 
 // ---------------------------------------------------------------------------
@@ -290,7 +290,7 @@ fn verify_rejects_dup_type_mismatch() {
         sig0_1(TY_I64),
         &[OpKind::ConstI64(1), OpKind::Dup { ty: TY_BOOL }, OpKind::Drop { ty: TY_I64 }, OpKind::Drop { ty: TY_I64 }, OpKind::Ret],
     );
-    assert_eq!(ir::verify_word(&w).unwrap_err().code, 9011);
+    assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9011);
 }
 
 // ---------------------------------------------------------------------------
@@ -311,7 +311,7 @@ fn verify_rejects_swap_type_mismatch() {
             OpKind::Ret,
         ],
     );
-    assert_eq!(ir::verify_word(&w).unwrap_err().code, 9013);
+    assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9013);
 }
 
 // ---------------------------------------------------------------------------
@@ -324,7 +324,7 @@ fn verify_rejects_localset_type_mismatch() {
         sig0_1(TY_I64),
         &[OpKind::ConstI64(1), OpKind::LocalSet { slot: 0, ty: TY_BOOL }, OpKind::ConstI64(1), OpKind::Ret],
     );
-    assert_eq!(ir::verify_word(&w).unwrap_err().code, 9016);
+    assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9016);
 }
 
 #[test]
@@ -333,7 +333,7 @@ fn verify_rejects_cast_type_mismatch() {
         sig0_1(TY_I64),
         &[OpKind::ConstBool(true), OpKind::Cast { from: TY_I64, to: TY_BOOL }, OpKind::Ret],
     );
-    assert_eq!(ir::verify_word(&w).unwrap_err().code, 9016);
+    assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9016);
 }
 
 #[test]
@@ -342,7 +342,7 @@ fn verify_rejects_bitcast_type_mismatch() {
         sig0_1(TY_I64),
         &[OpKind::ConstBool(true), OpKind::Bitcast { from: TY_I64, to: TY_BOOL }, OpKind::Ret],
     );
-    assert_eq!(ir::verify_word(&w).unwrap_err().code, 9016);
+    assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9016);
 }
 
 // ---------------------------------------------------------------------------
@@ -360,7 +360,7 @@ fn verify_rejects_call_stack_underflow() {
         Sig::empty(),
         &[OpKind::Call { name: atom(b"f"), sig: call_sig, may_suspend: false }],
     );
-    assert_eq!(ir::verify_word(&w).unwrap_err().code, 9017);
+    assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9017);
 }
 
 // ---------------------------------------------------------------------------
@@ -381,7 +381,7 @@ fn verify_rejects_call_input_type_mismatch() {
             OpKind::Call { name: atom(b"f"), sig: call_sig, may_suspend: false },
         ],
     );
-    assert_eq!(ir::verify_word(&w).unwrap_err().code, 9018);
+    assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9018);
 }
 
 // ---------------------------------------------------------------------------
@@ -402,7 +402,7 @@ fn verify_rejects_ptr_add_index_wrong_idx_type() {
             OpKind::Ret,
         ],
     );
-    assert_eq!(ir::verify_word(&w).unwrap_err().code, 9018);
+    assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9018);
 }
 
 // ---------------------------------------------------------------------------
@@ -419,7 +419,7 @@ fn verify_rejects_load_from_non_pointer() {
             OpKind::Ret,
         ],
     );
-    assert_eq!(ir::verify_word(&w).unwrap_err().code, 9019);
+    assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9019);
 }
 
 #[test]
@@ -432,7 +432,7 @@ fn verify_rejects_mmio_vol_load_from_non_pointer() {
             OpKind::Ret,
         ],
     );
-    assert_eq!(ir::verify_word(&w).unwrap_err().code, 9019);
+    assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9019);
 }
 
 // ---------------------------------------------------------------------------
@@ -449,7 +449,7 @@ fn verify_rejects_store_value_type_mismatch() {
             OpKind::Store { ty: TY_I64 }, // expects i64
         ],
     );
-    assert_eq!(ir::verify_word(&w).unwrap_err().code, 9020);
+    assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9020);
 }
 
 // ---------------------------------------------------------------------------
@@ -467,7 +467,7 @@ fn verify_rejects_store_immutable_ptr() {
             OpKind::Store { ty: TY_I64 },
         ],
     );
-    assert_eq!(ir::verify_word(&w).unwrap_err().code, 9021);
+    assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9021);
 }
 
 // ---------------------------------------------------------------------------
@@ -484,7 +484,7 @@ fn verify_rejects_mmio_load_field_not_mmio() {
             OpKind::Ret,
         ],
     );
-    assert_eq!(ir::verify_word(&w).unwrap_err().code, 9022);
+    assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9022);
 }
 
 // ---------------------------------------------------------------------------
@@ -502,7 +502,7 @@ fn verify_rejects_mmio_store_field_type_mismatch() {
             OpKind::MmioVolStoreField { reg_ty: TY_I64, field_ty: TY_BOOL, place: atom(b"r"), mask: 0xff, shift: 0 },
         ],
     );
-    assert_eq!(ir::verify_word(&w).unwrap_err().code, 9023);
+    assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9023);
 }
 
 // ---------------------------------------------------------------------------
@@ -521,7 +521,7 @@ fn verify_rejects_check_subtype_wrong_type() {
             OpKind::Ret,
         ],
     );
-    assert_eq!(ir::verify_word(&w).unwrap_err().code, 9024);
+    assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9024);
 }
 
 // ---------------------------------------------------------------------------
@@ -539,7 +539,7 @@ fn verify_rejects_trap_if_false_not_bool() {
             OpKind::Ret,
         ],
     );
-    assert_eq!(ir::verify_word(&w).unwrap_err().code, 9025);
+    assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9025);
 }
 
 // ---------------------------------------------------------------------------
@@ -549,7 +549,7 @@ fn verify_rejects_trap_if_false_not_bool() {
 #[test]
 fn verify_rejects_br_target_not_found() {
     let w = word_with_single_block(Sig::empty(), &[OpKind::Br { target: BlockId(99) }]);
-    assert_eq!(ir::verify_word(&w).unwrap_err().code, 9026);
+    assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9026);
 }
 
 // ---------------------------------------------------------------------------
@@ -596,7 +596,7 @@ fn verify_rejects_br_target_stack_type_mismatch() {
         type_sizes: baseline_type_sizes(),
         blocks,
     };
-    assert_eq!(ir::verify_word(&w).unwrap_err().code, 9028);
+    assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9028);
 }
 
 // ---------------------------------------------------------------------------
@@ -633,7 +633,7 @@ fn verify_rejects_brif_cond_not_bool() {
         type_sizes: baseline_type_sizes(),
         blocks,
     };
-    assert_eq!(ir::verify_word(&w).unwrap_err().code, 9029);
+    assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9029);
 }
 
 // ---------------------------------------------------------------------------
@@ -649,7 +649,7 @@ fn verify_rejects_brif_target_not_found() {
             OpKind::BrIf { then_tgt: BlockId(99), else_tgt: BlockId(99) },
         ],
     );
-    assert_eq!(ir::verify_word(&w).unwrap_err().code, 9030);
+    assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9030);
 }
 
 // ---------------------------------------------------------------------------
@@ -690,7 +690,7 @@ fn verify_rejects_brif_target_stack_depth_mismatch() {
         type_sizes: baseline_type_sizes(),
         blocks,
     };
-    assert_eq!(ir::verify_word(&w).unwrap_err().code, 9031);
+    assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9031);
 }
 
 // ---------------------------------------------------------------------------
@@ -737,7 +737,7 @@ fn verify_rejects_brif_target_stack_type_mismatch() {
         type_sizes: baseline_type_sizes(),
         blocks,
     };
-    assert_eq!(ir::verify_word(&w).unwrap_err().code, 9032);
+    assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9032);
 }
 
 // ---------------------------------------------------------------------------
@@ -748,7 +748,7 @@ fn verify_rejects_brif_target_stack_type_mismatch() {
 fn verify_rejects_ret_output_type_mismatch() {
     // sig says ( -- i64 ) but stack has bool at top
     let w = word_with_single_block(sig0_1(TY_I64), &[OpKind::ConstBool(true), OpKind::Ret]);
-    assert_eq!(ir::verify_word(&w).unwrap_err().code, 9034);
+    assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9034);
 }
 
 // ---------------------------------------------------------------------------
@@ -759,7 +759,7 @@ fn verify_rejects_ret_output_type_mismatch() {
 fn verify_rejects_stack_underflow() {
     // Pop from empty stack
     let w = word_with_single_block(Sig::empty(), &[OpKind::Drop { ty: TY_I64 }]);
-    assert_eq!(ir::verify_word(&w).unwrap_err().code, 9098);
+    assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9098);
 }
 
 #[test]
@@ -787,7 +787,7 @@ fn verify_handles_stack_overflow() {
         blocks,
     };
     // The verifier's stack is [TypeId; 64]; push 65 returns 9099.
-    assert_eq!(ir::verify_word(&w).unwrap_err().code, 9099);
+    assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9099);
 }
 
 // ---------------------------------------------------------------------------
