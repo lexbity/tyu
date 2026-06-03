@@ -17,7 +17,7 @@ use frontend::lex::Lexer;
 use frontend::parse::{DeclKind, ModuleAst};
 use frontend::span::Span;
 use frontend::token::TokenKind;
-use ir::{CapSet, Context, EffectSet, High};
+use ir::{CapSet, Context, EffectSet, High, StackBound};
 
 mod control_flow;
 mod quote;
@@ -98,6 +98,7 @@ pub fn typecheck_word_body(
     let mut local_len: usize = 0;
 
     let mut terminated = false;
+    let mut acc = StackBound::ID;
     loop {
         let tok = lex.next();
         if tok.kind == TokenKind::Eof {
@@ -885,6 +886,7 @@ pub fn typecheck_word_body(
                         ),
                     });
                 }
+                acc = acc.compose(entry.bound);
                 apply_sig(
                     &mut stack,
                     &mut sp,

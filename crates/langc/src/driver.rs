@@ -6,6 +6,7 @@ use frontend::parse::{DeclKind, ModuleAst, Parser};
 use hosted::{diag, fs, process};
 use ir::CapSet;
 use ir::EffectSet;
+use ir::High;
 use ir::StackBound;
 use semantics::typecheck::{self, ChecksMode, SubtypeInfo};
 use semantics::types::{TypeAtom, WordEntry, WordSig};
@@ -370,6 +371,7 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize, spec: &codegen_core
         name: &[u8],
         sig: WordSig,
         performs: EffectSet,
+        bound: StackBound,
     ) {
         if *len >= env.len() {
             return;
@@ -380,10 +382,24 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize, spec: &codegen_core
             sig,
             performs,
             requires: CapSet::empty(),
-            bound: StackBound::ID,
+            bound,
         };
         *len += 1;
     }
+
+    let zero_b = StackBound::ID;
+    let dup_b = StackBound {
+        net: 1,
+        high: High::Slots(1),
+    };
+    let pop_b = StackBound {
+        net: -1,
+        high: High::Slots(0),
+    };
+    let call_b = StackBound {
+        net: 0,
+        high: High::Top,
+    };
 
     // Stack ops
     push(
@@ -397,6 +413,7 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize, spec: &codegen_core
             outputs: [intt, intt, empty, empty, empty, empty, empty, empty],
         },
         EffectSet::empty(),
+        dup_b,
     );
     push(
         env,
@@ -409,6 +426,7 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize, spec: &codegen_core
             outputs: [empty, empty, empty, empty, empty, empty, empty, empty],
         },
         EffectSet::empty(),
+        pop_b,
     );
     push(
         env,
@@ -421,6 +439,7 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize, spec: &codegen_core
             outputs: [intt, intt, empty, empty, empty, empty, empty, empty],
         },
         EffectSet::empty(),
+        zero_b,
     );
 
     // Arithmetic/comparisons — uses native integer type from TargetSpec
@@ -430,9 +449,9 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize, spec: &codegen_core
         inputs: [intt, intt, empty, empty, empty, empty, empty, empty],
         outputs: [intt, empty, empty, empty, empty, empty, empty, empty],
     };
-    push(env, len, b"+", bin_int, EffectSet::empty());
-    push(env, len, b"-", bin_int, EffectSet::empty());
-    push(env, len, b"*", bin_int, EffectSet::empty());
+    push(env, len, b"+", bin_int, EffectSet::empty(), pop_b);
+    push(env, len, b"-", bin_int, EffectSet::empty(), pop_b);
+    push(env, len, b"*", bin_int, EffectSet::empty(), pop_b);
 
     push(
         env,
@@ -445,6 +464,7 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize, spec: &codegen_core
             outputs: [boolt, empty, empty, empty, empty, empty, empty, empty],
         },
         EffectSet::empty(),
+        pop_b,
     );
     push(
         env,
@@ -457,6 +477,7 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize, spec: &codegen_core
             outputs: [boolt, empty, empty, empty, empty, empty, empty, empty],
         },
         EffectSet::empty(),
+        pop_b,
     );
     push(
         env,
@@ -469,6 +490,7 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize, spec: &codegen_core
             outputs: [boolt, empty, empty, empty, empty, empty, empty, empty],
         },
         EffectSet::empty(),
+        pop_b,
     );
     push(
         env,
@@ -481,6 +503,20 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize, spec: &codegen_core
             outputs: [boolt, empty, empty, empty, empty, empty, empty, empty],
         },
         EffectSet::empty(),
+        pop_b,
+    );
+    push(
+        env,
+        len,
+        b">=",
+        WordSig {
+            in_len: 2,
+            out_len: 1,
+            inputs: [intt, intt, empty, empty, empty, empty, empty, empty],
+            outputs: [boolt, empty, empty, empty, empty, empty, empty, empty],
+        },
+        EffectSet::empty(),
+        pop_b,
     );
     push(
         env,
@@ -493,6 +529,7 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize, spec: &codegen_core
             outputs: [boolt, empty, empty, empty, empty, empty, empty, empty],
         },
         EffectSet::empty(),
+        pop_b,
     );
     push(
         env,
@@ -505,6 +542,20 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize, spec: &codegen_core
             outputs: [boolt, empty, empty, empty, empty, empty, empty, empty],
         },
         EffectSet::empty(),
+        pop_b,
+    );
+    push(
+        env,
+        len,
+        b"==",
+        WordSig {
+            in_len: 2,
+            out_len: 1,
+            inputs: [intt, intt, empty, empty, empty, empty, empty, empty],
+            outputs: [boolt, empty, empty, empty, empty, empty, empty, empty],
+        },
+        EffectSet::empty(),
+        pop_b,
     );
     push(
         env,
@@ -517,6 +568,7 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize, spec: &codegen_core
             outputs: [boolt, empty, empty, empty, empty, empty, empty, empty],
         },
         EffectSet::empty(),
+        pop_b,
     );
     push(
         env,
@@ -529,6 +581,7 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize, spec: &codegen_core
             outputs: [boolt, empty, empty, empty, empty, empty, empty, empty],
         },
         EffectSet::empty(),
+        pop_b,
     );
     push(
         env,
@@ -541,6 +594,7 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize, spec: &codegen_core
             outputs: [boolt, empty, empty, empty, empty, empty, empty, empty],
         },
         EffectSet::empty(),
+        zero_b,
     );
 
     // Treat quotations as values for now (for call sites we special-case intrinsics).
@@ -555,6 +609,7 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize, spec: &codegen_core
             outputs: [empty, empty, empty, empty, empty, empty, empty, empty],
         },
         EffectSet::empty(),
+        call_b,
     );
 
     // Suspension points (minimal list)
@@ -569,6 +624,7 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize, spec: &codegen_core
             outputs: [empty, empty, empty, empty, empty, empty, empty, empty],
         },
         EffectSet::from_bits(EffectSet::SUSPEND),
+        zero_b,
     );
 }
 
