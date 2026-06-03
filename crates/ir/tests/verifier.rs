@@ -1,6 +1,9 @@
 use frontend::{fixed::FixedVec, span::Span};
 
-use ir::{Atom, Block, BlockId, MmioAccess, Op, OpKind, Sig, TypeId, Word, TY_BOOL, TY_EMPTY, TY_I64, TY_MMIO, TY_PTR, TY_PTR_MUT, TY_STR};
+use ir::{
+    Atom, Block, BlockId, CapSet, EffectSet, MmioAccess, Op, OpKind, Sig, StackBound, TypeId, Word,
+    TY_BOOL, TY_EMPTY, TY_I64, TY_MMIO, TY_PTR, TY_PTR_MUT, TY_STR,
+};
 
 fn atom(bytes: &[u8]) -> Atom {
     Atom::new(bytes).unwrap()
@@ -61,6 +64,9 @@ fn word_with_single_block(sig: Sig, block_ops: &[OpKind]) -> Word {
     Word {
         name: atom(b"w"),
         sig,
+        performs: EffectSet::empty(),
+        requires: CapSet::empty(),
+        bound: StackBound::ID,
         entry: BlockId(0),
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
@@ -83,7 +89,14 @@ fn verifier_rejects_ret_with_wrong_stack_height() {
 
 #[test]
 fn verifier_rejects_drop_type_mismatch() {
-    let w = word_with_single_block(sig0_1(TY_I64), &[OpKind::ConstI64(1), OpKind::Drop { ty: TY_BOOL }, OpKind::Ret]);
+    let w = word_with_single_block(
+        sig0_1(TY_I64),
+        &[
+            OpKind::ConstI64(1),
+            OpKind::Drop { ty: TY_BOOL },
+            OpKind::Ret,
+        ],
+    );
     let err = ir::verify_word(&w).unwrap_err();
     assert_eq!(err.code(), 9012);
 }
@@ -94,16 +107,18 @@ fn verifier_rejects_branch_stack_mismatch() {
 
     // b0: push i64, br b1 (but b1 expects empty stack)
     let mut b0_ops: FixedVec<Op, 96> = FixedVec::new();
-    b0_ops.push(Op {
-        kind: OpKind::ConstI64(1),
-        span: Span::UNKNOWN,
-    })
-    .unwrap();
-    b0_ops.push(Op {
-        kind: OpKind::Br { target: BlockId(1) },
-        span: Span::UNKNOWN,
-    })
-    .unwrap();
+    b0_ops
+        .push(Op {
+            kind: OpKind::ConstI64(1),
+            span: Span::UNKNOWN,
+        })
+        .unwrap();
+    b0_ops
+        .push(Op {
+            kind: OpKind::Br { target: BlockId(1) },
+            span: Span::UNKNOWN,
+        })
+        .unwrap();
     blocks
         .push(Block {
             id: BlockId(0),
@@ -114,11 +129,12 @@ fn verifier_rejects_branch_stack_mismatch() {
 
     // b1: empty -> ret (expects empty because sig is ( -- ))
     let mut b1_ops: FixedVec<Op, 96> = FixedVec::new();
-    b1_ops.push(Op {
-        kind: OpKind::Ret,
-        span: Span::UNKNOWN,
-    })
-    .unwrap();
+    b1_ops
+        .push(Op {
+            kind: OpKind::Ret,
+            span: Span::UNKNOWN,
+        })
+        .unwrap();
     blocks
         .push(Block {
             id: BlockId(1),
@@ -134,6 +150,9 @@ fn verifier_rejects_branch_stack_mismatch() {
     let w = Word {
         name: atom(b"w"),
         sig,
+        performs: EffectSet::empty(),
+        requires: CapSet::empty(),
+        bound: StackBound::ID,
         entry: BlockId(0),
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
@@ -167,7 +186,10 @@ fn verifier_type_pool_baseline_indices_match_constants() {
     assert_eq!(types.get(TY_BOOL.0 as usize).unwrap().as_bytes(), b"bool");
     assert_eq!(types.get(TY_STR.0 as usize).unwrap().as_bytes(), b"str");
     assert_eq!(types.get(TY_PTR.0 as usize).unwrap().as_bytes(), b"ptr");
-    assert_eq!(types.get(TY_PTR_MUT.0 as usize).unwrap().as_bytes(), b"ptr_mut");
+    assert_eq!(
+        types.get(TY_PTR_MUT.0 as usize).unwrap().as_bytes(),
+        b"ptr_mut"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -188,6 +210,9 @@ fn verify_word_rejects_missing_entry_block() {
     let w = Word {
         name: atom(b"w"),
         sig: Sig::empty(),
+        performs: EffectSet::empty(),
+        requires: CapSet::empty(),
+        bound: StackBound::ID,
         entry: BlockId(0),
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
@@ -217,7 +242,11 @@ fn verify_word_rejects_entry_stack_type_mismatch() {
     let mut entry_stack: FixedVec<TypeId, 32> = FixedVec::new();
     entry_stack.push(TY_I64).unwrap();
     let mut ops: FixedVec<Op, 96> = FixedVec::new();
-    ops.push(Op { kind: OpKind::Ret, span: Span::UNKNOWN }).unwrap();
+    ops.push(Op {
+        kind: OpKind::Ret,
+        span: Span::UNKNOWN,
+    })
+    .unwrap();
 
     let mut blocks: FixedVec<Block, 16> = FixedVec::new();
     blocks
@@ -230,6 +259,9 @@ fn verify_word_rejects_entry_stack_type_mismatch() {
     let w = Word {
         name: atom(b"w"),
         sig,
+        performs: EffectSet::empty(),
+        requires: CapSet::empty(),
+        bound: StackBound::ID,
         entry: BlockId(0),
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
@@ -252,8 +284,18 @@ fn verify_block_rejects_ops_after_ret() {
 fn verify_block_rejects_ops_after_br() {
     let mut blocks: FixedVec<Block, 16> = FixedVec::new();
     let mut b0_ops: FixedVec<Op, 96> = FixedVec::new();
-    b0_ops.push(Op { kind: OpKind::Br { target: BlockId(1) }, span: Span::UNKNOWN }).unwrap();
-    b0_ops.push(Op { kind: OpKind::ConstI64(0), span: Span::UNKNOWN }).unwrap();
+    b0_ops
+        .push(Op {
+            kind: OpKind::Br { target: BlockId(1) },
+            span: Span::UNKNOWN,
+        })
+        .unwrap();
+    b0_ops
+        .push(Op {
+            kind: OpKind::ConstI64(0),
+            span: Span::UNKNOWN,
+        })
+        .unwrap();
     blocks
         .push(Block {
             id: BlockId(0),
@@ -272,6 +314,9 @@ fn verify_block_rejects_ops_after_br() {
     let w = Word {
         name: atom(b"w"),
         sig,
+        performs: EffectSet::empty(),
+        requires: CapSet::empty(),
+        bound: StackBound::ID,
         entry: BlockId(1),
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
@@ -288,7 +333,13 @@ fn verify_block_rejects_ops_after_br() {
 fn verify_rejects_dup_type_mismatch() {
     let w = word_with_single_block(
         sig0_1(TY_I64),
-        &[OpKind::ConstI64(1), OpKind::Dup { ty: TY_BOOL }, OpKind::Drop { ty: TY_I64 }, OpKind::Drop { ty: TY_I64 }, OpKind::Ret],
+        &[
+            OpKind::ConstI64(1),
+            OpKind::Dup { ty: TY_BOOL },
+            OpKind::Drop { ty: TY_I64 },
+            OpKind::Drop { ty: TY_I64 },
+            OpKind::Ret,
+        ],
     );
     assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9011);
 }
@@ -307,7 +358,10 @@ fn verify_rejects_swap_type_mismatch() {
         &[
             OpKind::ConstI64(1),
             OpKind::ConstI64(2),
-            OpKind::Swap { a: TY_I64, b: TY_BOOL },
+            OpKind::Swap {
+                a: TY_I64,
+                b: TY_BOOL,
+            },
             OpKind::Ret,
         ],
     );
@@ -322,7 +376,15 @@ fn verify_rejects_swap_type_mismatch() {
 fn verify_rejects_localset_type_mismatch() {
     let w = word_with_single_block(
         sig0_1(TY_I64),
-        &[OpKind::ConstI64(1), OpKind::LocalSet { slot: 0, ty: TY_BOOL }, OpKind::ConstI64(1), OpKind::Ret],
+        &[
+            OpKind::ConstI64(1),
+            OpKind::LocalSet {
+                slot: 0,
+                ty: TY_BOOL,
+            },
+            OpKind::ConstI64(1),
+            OpKind::Ret,
+        ],
     );
     assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9016);
 }
@@ -331,7 +393,14 @@ fn verify_rejects_localset_type_mismatch() {
 fn verify_rejects_cast_type_mismatch() {
     let w = word_with_single_block(
         sig0_1(TY_I64),
-        &[OpKind::ConstBool(true), OpKind::Cast { from: TY_I64, to: TY_BOOL }, OpKind::Ret],
+        &[
+            OpKind::ConstBool(true),
+            OpKind::Cast {
+                from: TY_I64,
+                to: TY_BOOL,
+            },
+            OpKind::Ret,
+        ],
     );
     assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9016);
 }
@@ -340,7 +409,14 @@ fn verify_rejects_cast_type_mismatch() {
 fn verify_rejects_bitcast_type_mismatch() {
     let w = word_with_single_block(
         sig0_1(TY_I64),
-        &[OpKind::ConstBool(true), OpKind::Bitcast { from: TY_I64, to: TY_BOOL }, OpKind::Ret],
+        &[
+            OpKind::ConstBool(true),
+            OpKind::Bitcast {
+                from: TY_I64,
+                to: TY_BOOL,
+            },
+            OpKind::Ret,
+        ],
     );
     assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9016);
 }
@@ -358,7 +434,13 @@ fn verify_rejects_call_stack_underflow() {
 
     let w = word_with_single_block(
         Sig::empty(),
-        &[OpKind::Call { name: atom(b"f"), sig: call_sig, may_suspend: false }],
+        &[OpKind::Call {
+            name: atom(b"f"),
+            sig: call_sig,
+            performs: EffectSet::empty(),
+            requires: CapSet::empty(),
+            bound: StackBound::ID,
+        }],
     );
     assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9017);
 }
@@ -378,7 +460,13 @@ fn verify_rejects_call_input_type_mismatch() {
         Sig::empty(),
         &[
             OpKind::ConstI64(1),
-            OpKind::Call { name: atom(b"f"), sig: call_sig, may_suspend: false },
+            OpKind::Call {
+                name: atom(b"f"),
+                sig: call_sig,
+                performs: EffectSet::empty(),
+                requires: CapSet::empty(),
+                bound: StackBound::ID,
+            },
         ],
     );
     assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9018);
@@ -396,7 +484,10 @@ fn verify_rejects_ptr_add_index_wrong_idx_type() {
         &[
             OpKind::ConstI64(0),
             OpKind::ConstBool(true), // not i64
-            OpKind::PtrAddIndex { ty: TY_PTR, scale: 8 },
+            OpKind::PtrAddIndex {
+                ty: TY_PTR,
+                scale: 8,
+            },
             OpKind::Drop { ty: TY_PTR },
             OpKind::ConstI64(0),
             OpKind::Ret,
@@ -428,7 +519,10 @@ fn verify_rejects_mmio_vol_load_from_non_pointer() {
         sig0_1(TY_I64),
         &[
             OpKind::ConstBool(true), // not a pointer/mmio
-            OpKind::MmioVolLoad { ty: TY_I64, place: atom(b"r") },
+            OpKind::MmioVolLoad {
+                ty: TY_I64,
+                place: atom(b"r"),
+            },
             OpKind::Ret,
         ],
     );
@@ -445,7 +539,7 @@ fn verify_rejects_store_value_type_mismatch() {
         Sig::empty(),
         &[
             OpKind::ConstI64(0),
-            OpKind::ConstBool(true), // value = bool
+            OpKind::ConstBool(true),      // value = bool
             OpKind::Store { ty: TY_I64 }, // expects i64
         ],
     );
@@ -462,7 +556,11 @@ fn verify_rejects_store_immutable_ptr() {
     let w = word_with_single_block(
         Sig::empty(),
         &[
-            OpKind::AddrOf { place: atom(b"x"), mutable: false, const_addr: None }, // ptr, not ptr_mut
+            OpKind::AddrOf {
+                place: atom(b"x"),
+                mutable: false,
+                const_addr: None,
+            }, // ptr, not ptr_mut
             OpKind::ConstI64(42), // value
             OpKind::Store { ty: TY_I64 },
         ],
@@ -480,7 +578,13 @@ fn verify_rejects_mmio_load_field_not_mmio() {
         sig0_1(TY_I64),
         &[
             OpKind::ConstI64(42), // not an MMIO place
-            OpKind::MmioVolLoadField { reg_ty: TY_I64, field_ty: TY_BOOL, place: atom(b"r"), mask: 0xff, shift: 0 },
+            OpKind::MmioVolLoadField {
+                reg_ty: TY_I64,
+                field_ty: TY_BOOL,
+                place: atom(b"r"),
+                mask: 0xff,
+                shift: 0,
+            },
             OpKind::Ret,
         ],
     );
@@ -497,9 +601,18 @@ fn verify_rejects_mmio_store_field_type_mismatch() {
     let w = word_with_single_block(
         Sig::empty(),
         &[
-            OpKind::MmioPlace { place: atom(b"r"), addr: 0x1000 },
+            OpKind::MmioPlace {
+                place: atom(b"r"),
+                addr: 0x1000,
+            },
             OpKind::ConstI64(42),
-            OpKind::MmioVolStoreField { reg_ty: TY_I64, field_ty: TY_BOOL, place: atom(b"r"), mask: 0xff, shift: 0 },
+            OpKind::MmioVolStoreField {
+                reg_ty: TY_I64,
+                field_ty: TY_BOOL,
+                place: atom(b"r"),
+                mask: 0xff,
+                shift: 0,
+            },
         ],
     );
     assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9023);
@@ -534,7 +647,9 @@ fn verify_rejects_trap_if_false_not_bool() {
         sig0_1(TY_I64),
         &[
             OpKind::ConstI64(42),
-            OpKind::TrapIfFalse { code: ir::TrapCode::AssertFail },
+            OpKind::TrapIfFalse {
+                code: ir::TrapCode::AssertFail,
+            },
             OpKind::Drop { ty: TY_I64 },
             OpKind::Ret,
         ],
@@ -548,7 +663,12 @@ fn verify_rejects_trap_if_false_not_bool() {
 
 #[test]
 fn verify_rejects_br_target_not_found() {
-    let w = word_with_single_block(Sig::empty(), &[OpKind::Br { target: BlockId(99) }]);
+    let w = word_with_single_block(
+        Sig::empty(),
+        &[OpKind::Br {
+            target: BlockId(99),
+        }],
+    );
     assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9026);
 }
 
@@ -563,8 +683,18 @@ fn verify_rejects_br_target_stack_type_mismatch() {
     let mut blocks: FixedVec<Block, 16> = FixedVec::new();
 
     let mut b0_ops: FixedVec<Op, 96> = FixedVec::new();
-    b0_ops.push(Op { kind: OpKind::ConstI64(1), span: Span::UNKNOWN }).unwrap();
-    b0_ops.push(Op { kind: OpKind::Br { target: BlockId(1) }, span: Span::UNKNOWN }).unwrap();
+    b0_ops
+        .push(Op {
+            kind: OpKind::ConstI64(1),
+            span: Span::UNKNOWN,
+        })
+        .unwrap();
+    b0_ops
+        .push(Op {
+            kind: OpKind::Br { target: BlockId(1) },
+            span: Span::UNKNOWN,
+        })
+        .unwrap();
     blocks
         .push(Block {
             id: BlockId(0),
@@ -591,6 +721,9 @@ fn verify_rejects_br_target_stack_type_mismatch() {
     let w = Word {
         name: atom(b"w"),
         sig,
+        performs: EffectSet::empty(),
+        requires: CapSet::empty(),
+        bound: StackBound::ID,
         entry: BlockId(1),
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
@@ -608,8 +741,21 @@ fn verify_rejects_brif_cond_not_bool() {
     let mut blocks: FixedVec<Block, 16> = FixedVec::new();
 
     let mut b0_ops: FixedVec<Op, 96> = FixedVec::new();
-    b0_ops.push(Op { kind: OpKind::ConstI64(42), span: Span::UNKNOWN }).unwrap();
-    b0_ops.push(Op { kind: OpKind::BrIf { then_tgt: BlockId(1), else_tgt: BlockId(1) }, span: Span::UNKNOWN }).unwrap();
+    b0_ops
+        .push(Op {
+            kind: OpKind::ConstI64(42),
+            span: Span::UNKNOWN,
+        })
+        .unwrap();
+    b0_ops
+        .push(Op {
+            kind: OpKind::BrIf {
+                then_tgt: BlockId(1),
+                else_tgt: BlockId(1),
+            },
+            span: Span::UNKNOWN,
+        })
+        .unwrap();
     blocks
         .push(Block {
             id: BlockId(0),
@@ -628,6 +774,9 @@ fn verify_rejects_brif_cond_not_bool() {
     let w = Word {
         name: atom(b"w"),
         sig: Sig::empty(),
+        performs: EffectSet::empty(),
+        requires: CapSet::empty(),
+        bound: StackBound::ID,
         entry: BlockId(1),
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
@@ -646,7 +795,10 @@ fn verify_rejects_brif_target_not_found() {
         Sig::empty(),
         &[
             OpKind::ConstBool(true),
-            OpKind::BrIf { then_tgt: BlockId(99), else_tgt: BlockId(99) },
+            OpKind::BrIf {
+                then_tgt: BlockId(99),
+                else_tgt: BlockId(99),
+            },
         ],
     );
     assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9030);
@@ -664,9 +816,27 @@ fn verify_rejects_brif_target_stack_depth_mismatch() {
     let mut blocks: FixedVec<Block, 16> = FixedVec::new();
 
     let mut b0_ops: FixedVec<Op, 96> = FixedVec::new();
-    b0_ops.push(Op { kind: OpKind::ConstI64(1), span: Span::UNKNOWN }).unwrap(); // extra value BELOW cond
-    b0_ops.push(Op { kind: OpKind::ConstBool(true), span: Span::UNKNOWN }).unwrap(); // cond on TOP
-    b0_ops.push(Op { kind: OpKind::BrIf { then_tgt: BlockId(1), else_tgt: BlockId(1) }, span: Span::UNKNOWN }).unwrap();
+    b0_ops
+        .push(Op {
+            kind: OpKind::ConstI64(1),
+            span: Span::UNKNOWN,
+        })
+        .unwrap(); // extra value BELOW cond
+    b0_ops
+        .push(Op {
+            kind: OpKind::ConstBool(true),
+            span: Span::UNKNOWN,
+        })
+        .unwrap(); // cond on TOP
+    b0_ops
+        .push(Op {
+            kind: OpKind::BrIf {
+                then_tgt: BlockId(1),
+                else_tgt: BlockId(1),
+            },
+            span: Span::UNKNOWN,
+        })
+        .unwrap();
     blocks
         .push(Block {
             id: BlockId(0),
@@ -685,6 +855,9 @@ fn verify_rejects_brif_target_stack_depth_mismatch() {
     let w = Word {
         name: atom(b"w"),
         sig: Sig::empty(),
+        performs: EffectSet::empty(),
+        requires: CapSet::empty(),
+        bound: StackBound::ID,
         entry: BlockId(1),
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
@@ -704,9 +877,27 @@ fn verify_rejects_brif_target_stack_type_mismatch() {
     let mut blocks: FixedVec<Block, 16> = FixedVec::new();
 
     let mut b0_ops: FixedVec<Op, 96> = FixedVec::new();
-    b0_ops.push(Op { kind: OpKind::ConstI64(1), span: Span::UNKNOWN }).unwrap(); // value
-    b0_ops.push(Op { kind: OpKind::ConstBool(true), span: Span::UNKNOWN }).unwrap(); // cond on top
-    b0_ops.push(Op { kind: OpKind::BrIf { then_tgt: BlockId(1), else_tgt: BlockId(1) }, span: Span::UNKNOWN }).unwrap();
+    b0_ops
+        .push(Op {
+            kind: OpKind::ConstI64(1),
+            span: Span::UNKNOWN,
+        })
+        .unwrap(); // value
+    b0_ops
+        .push(Op {
+            kind: OpKind::ConstBool(true),
+            span: Span::UNKNOWN,
+        })
+        .unwrap(); // cond on top
+    b0_ops
+        .push(Op {
+            kind: OpKind::BrIf {
+                then_tgt: BlockId(1),
+                else_tgt: BlockId(1),
+            },
+            span: Span::UNKNOWN,
+        })
+        .unwrap();
     blocks
         .push(Block {
             id: BlockId(0),
@@ -732,6 +923,9 @@ fn verify_rejects_brif_target_stack_type_mismatch() {
     let w = Word {
         name: atom(b"w"),
         sig,
+        performs: EffectSet::empty(),
+        requires: CapSet::empty(),
+        bound: StackBound::ID,
         entry: BlockId(1),
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
@@ -767,9 +961,17 @@ fn verify_handles_stack_overflow() {
     // Exceed the verifier's internal 64-entry stack with 70 pushes.
     let mut ops: FixedVec<Op, 96> = FixedVec::new();
     for _ in 0..70 {
-        ops.push(Op { kind: OpKind::ConstI64(0), span: Span::UNKNOWN }).unwrap();
+        ops.push(Op {
+            kind: OpKind::ConstI64(0),
+            span: Span::UNKNOWN,
+        })
+        .unwrap();
     }
-    ops.push(Op { kind: OpKind::Ret, span: Span::UNKNOWN }).unwrap();
+    ops.push(Op {
+        kind: OpKind::Ret,
+        span: Span::UNKNOWN,
+    })
+    .unwrap();
 
     let b0 = Block {
         id: BlockId(0),
@@ -781,6 +983,9 @@ fn verify_handles_stack_overflow() {
     let w = Word {
         name: atom(b"w"),
         sig: Sig::empty(),
+        performs: EffectSet::empty(),
+        requires: CapSet::empty(),
+        bound: StackBound::ID,
         entry: BlockId(0),
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
@@ -798,7 +1003,14 @@ fn verify_handles_stack_overflow() {
 fn verify_accepts_addr_of() {
     let w = word_with_single_block(
         sig0_1(TY_PTR),
-        &[OpKind::AddrOf { place: atom(b"x"), mutable: false, const_addr: None }, OpKind::Ret],
+        &[
+            OpKind::AddrOf {
+                place: atom(b"x"),
+                mutable: false,
+                const_addr: None,
+            },
+            OpKind::Ret,
+        ],
     );
     ir::verify_word(&w).unwrap();
 }
@@ -807,7 +1019,13 @@ fn verify_accepts_addr_of() {
 fn verify_accepts_mmio_place() {
     let w = word_with_single_block(
         sig0_1(TY_MMIO),
-        &[OpKind::MmioPlace { place: atom(b"r"), addr: 0x1000 }, OpKind::Ret],
+        &[
+            OpKind::MmioPlace {
+                place: atom(b"r"),
+                addr: 0x1000,
+            },
+            OpKind::Ret,
+        ],
     );
     ir::verify_word(&w).unwrap();
 }
@@ -816,7 +1034,15 @@ fn verify_accepts_mmio_place() {
 fn verify_accepts_scoped_enter() {
     let w = word_with_single_block(
         sig0_1(TY_I64),
-        &[OpKind::ScopedEnter { ty: TY_I64, len: 16 }, OpKind::Drop { ty: TY_I64 }, OpKind::ConstI64(0), OpKind::Ret],
+        &[
+            OpKind::ScopedEnter {
+                ty: TY_I64,
+                len: 16,
+            },
+            OpKind::Drop { ty: TY_I64 },
+            OpKind::ConstI64(0),
+            OpKind::Ret,
+        ],
     );
     ir::verify_word(&w).unwrap();
 }
@@ -825,7 +1051,15 @@ fn verify_accepts_scoped_enter() {
 fn verify_accepts_task_spawn() {
     let w = word_with_single_block(
         sig0_1(TY_I64),
-        &[OpKind::TaskSpawn { name: atom(b"t"), task_ty: TY_I64 }, OpKind::Drop { ty: TY_I64 }, OpKind::ConstI64(0), OpKind::Ret],
+        &[
+            OpKind::TaskSpawn {
+                name: atom(b"t"),
+                task_ty: TY_I64,
+            },
+            OpKind::Drop { ty: TY_I64 },
+            OpKind::ConstI64(0),
+            OpKind::Ret,
+        ],
     );
     ir::verify_word(&w).unwrap();
 }
@@ -835,8 +1069,15 @@ fn verify_accepts_ptr_add_const() {
     let w = word_with_single_block(
         sig0_1(TY_PTR),
         &[
-            OpKind::AddrOf { place: atom(b"x"), mutable: false, const_addr: None },
-            OpKind::PtrAddConst { ty: TY_PTR, offset: 8 },
+            OpKind::AddrOf {
+                place: atom(b"x"),
+                mutable: false,
+                const_addr: None,
+            },
+            OpKind::PtrAddConst {
+                ty: TY_PTR,
+                offset: 8,
+            },
             OpKind::Ret,
         ],
     );
@@ -848,9 +1089,16 @@ fn verify_accepts_ptr_add_index() {
     let w = word_with_single_block(
         sig0_1(TY_PTR),
         &[
-            OpKind::AddrOf { place: atom(b"x"), mutable: false, const_addr: None },
+            OpKind::AddrOf {
+                place: atom(b"x"),
+                mutable: false,
+                const_addr: None,
+            },
             OpKind::ConstI64(3),
-            OpKind::PtrAddIndex { ty: TY_PTR, scale: 8 },
+            OpKind::PtrAddIndex {
+                ty: TY_PTR,
+                scale: 8,
+            },
             OpKind::Ret,
         ],
     );
@@ -864,7 +1112,11 @@ fn verify_accepts_load_store() {
     let w = word_with_single_block(
         sig0_1(TY_I64),
         &[
-            OpKind::AddrOf { place: atom(b"x"), mutable: true, const_addr: None },
+            OpKind::AddrOf {
+                place: atom(b"x"),
+                mutable: true,
+                const_addr: None,
+            },
             OpKind::ConstI64(42),
             OpKind::Store { ty: TY_I64 },
             OpKind::ConstI64(0),
@@ -879,8 +1131,14 @@ fn verify_accepts_mmio_load() {
     let w = word_with_single_block(
         sig0_1(TY_I64),
         &[
-            OpKind::MmioPlace { place: atom(b"r"), addr: 0x1000 },
-            OpKind::MmioVolLoad { ty: TY_I64, place: atom(b"r") },
+            OpKind::MmioPlace {
+                place: atom(b"r"),
+                addr: 0x1000,
+            },
+            OpKind::MmioVolLoad {
+                ty: TY_I64,
+                place: atom(b"r"),
+            },
             OpKind::Ret,
         ],
     );
@@ -893,9 +1151,16 @@ fn verify_accepts_mmio_store() {
     let w = word_with_single_block(
         sig0_1(TY_I64),
         &[
-            OpKind::MmioPlace { place: atom(b"r"), addr: 0x1000 },
+            OpKind::MmioPlace {
+                place: atom(b"r"),
+                addr: 0x1000,
+            },
             OpKind::ConstI64(0),
-            OpKind::MmioVolStore { ty: TY_I64, place: atom(b"r"), access: ir::MmioAccess::Rw },
+            OpKind::MmioVolStore {
+                ty: TY_I64,
+                place: atom(b"r"),
+                access: ir::MmioAccess::Rw,
+            },
             OpKind::ConstI64(0),
             OpKind::Ret,
         ],
@@ -923,8 +1188,8 @@ fn verify_accepts_check_subtype() {
 
 #[cfg(test)]
 mod proptests {
+    use ir::{CapSet, EffectSet, OpKind, StackBound, TY_BOOL, TY_I64};
     use proptest::prelude::*;
-    use ir::{OpKind, TY_I64, TY_BOOL};
 
     fn make_word(ops: &[OpKind]) -> ir::Word {
         let mut types: frontend::fixed::FixedVec<ir::Atom, 64> = frontend::fixed::FixedVec::new();
@@ -932,19 +1197,38 @@ mod proptests {
         types.push(ir::Atom::new(b"i64").unwrap()).unwrap();
         types.push(ir::Atom::new(b"bool").unwrap()).unwrap();
         let mut sizes: frontend::fixed::FixedVec<u32, 64> = frontend::fixed::FixedVec::new();
-        sizes.push(0).unwrap(); sizes.push(8).unwrap(); sizes.push(1).unwrap();
+        sizes.push(0).unwrap();
+        sizes.push(8).unwrap();
+        sizes.push(1).unwrap();
         let mut opv: frontend::fixed::FixedVec<ir::Op, 96> = frontend::fixed::FixedVec::new();
         for kind in ops {
-            if opv.len() >= 95 { break; }
-            opv.push(ir::Op { kind: *kind, span: frontend::span::Span::UNKNOWN }).unwrap();
+            if opv.len() >= 95 {
+                break;
+            }
+            opv.push(ir::Op {
+                kind: *kind,
+                span: frontend::span::Span::UNKNOWN,
+            })
+            .unwrap();
         }
         let mut blocks = frontend::fixed::FixedVec::new();
-        blocks.push(ir::Block { id: ir::BlockId(0), entry_stack: frontend::fixed::FixedVec::new(), ops: opv }).unwrap();
+        blocks
+            .push(ir::Block {
+                id: ir::BlockId(0),
+                entry_stack: frontend::fixed::FixedVec::new(),
+                ops: opv,
+            })
+            .unwrap();
         ir::Word {
             name: ir::Atom::new(b"p").unwrap(),
             sig: ir::Sig::empty(),
+            performs: EffectSet::empty(),
+            requires: CapSet::empty(),
+            bound: StackBound::ID,
             entry: ir::BlockId(0),
-            types, type_sizes: sizes, blocks,
+            types,
+            type_sizes: sizes,
+            blocks,
         }
     }
 

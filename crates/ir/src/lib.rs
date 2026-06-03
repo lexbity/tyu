@@ -1,7 +1,11 @@
 #![no_std]
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use frontend::{fixed::FixedVec, span::Span, parse::Output};
+use frontend::{fixed::FixedVec, parse::Output, span::Span};
+
+pub mod contract;
+
+pub use contract::{CapSet, Context, EffectSet, High, StackBound};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Atom {
@@ -34,15 +38,42 @@ impl Atom {
 // Static Atom constants for built-in types.
 // These are used throughout the compiler pipeline to avoid repeated
 // Atom::new(b"...").expect() calls. All fit in the 32-byte limit.
-pub const AT_EMPTY: Atom = match Atom::new(b"") { Some(a) => a, None => unreachable!() };
-pub const AT_I64: Atom = match Atom::new(b"i64") { Some(a) => a, None => unreachable!() };
-pub const AT_BOOL: Atom = match Atom::new(b"bool") { Some(a) => a, None => unreachable!() };
-pub const AT_STR: Atom = match Atom::new(b"str") { Some(a) => a, None => unreachable!() };
-pub const AT_PTR: Atom = match Atom::new(b"ptr") { Some(a) => a, None => unreachable!() };
-pub const AT_PTR_MUT: Atom = match Atom::new(b"ptr_mut") { Some(a) => a, None => unreachable!() };
-pub const AT_MMIO: Atom = match Atom::new(b"mmio") { Some(a) => a, None => unreachable!() };
-pub const AT_QUOT: Atom = match Atom::new(b"quot") { Some(a) => a, None => unreachable!() };
-pub const AT_RESOURCE: Atom = match Atom::new(b"resource") { Some(a) => a, None => unreachable!() };
+pub const AT_EMPTY: Atom = match Atom::new(b"") {
+    Some(a) => a,
+    None => unreachable!(),
+};
+pub const AT_I64: Atom = match Atom::new(b"i64") {
+    Some(a) => a,
+    None => unreachable!(),
+};
+pub const AT_BOOL: Atom = match Atom::new(b"bool") {
+    Some(a) => a,
+    None => unreachable!(),
+};
+pub const AT_STR: Atom = match Atom::new(b"str") {
+    Some(a) => a,
+    None => unreachable!(),
+};
+pub const AT_PTR: Atom = match Atom::new(b"ptr") {
+    Some(a) => a,
+    None => unreachable!(),
+};
+pub const AT_PTR_MUT: Atom = match Atom::new(b"ptr_mut") {
+    Some(a) => a,
+    None => unreachable!(),
+};
+pub const AT_MMIO: Atom = match Atom::new(b"mmio") {
+    Some(a) => a,
+    None => unreachable!(),
+};
+pub const AT_QUOT: Atom = match Atom::new(b"quot") {
+    Some(a) => a,
+    None => unreachable!(),
+};
+pub const AT_RESOURCE: Atom = match Atom::new(b"resource") {
+    Some(a) => a,
+    None => unreachable!(),
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TypeId(pub u8);
@@ -105,48 +136,127 @@ pub enum OpKind {
     ConstBool(bool),
     ConstStr(Span),
 
-    AddrOf { place: Atom, mutable: bool, const_addr: Option<u64> },
-    MmioPlace { place: Atom, addr: u64 },
-    ScopedEnter { ty: TypeId, len: u32 },
-    TaskSpawn { name: Atom, task_ty: TypeId },
-    PtrAddConst { ty: TypeId, offset: u32 },
-    PtrAddIndex { ty: TypeId, scale: u32 },
+    AddrOf {
+        place: Atom,
+        mutable: bool,
+        const_addr: Option<u64>,
+    },
+    MmioPlace {
+        place: Atom,
+        addr: u64,
+    },
+    ScopedEnter {
+        ty: TypeId,
+        len: u32,
+    },
+    TaskSpawn {
+        name: Atom,
+        task_ty: TypeId,
+    },
+    PtrAddConst {
+        ty: TypeId,
+        offset: u32,
+    },
+    PtrAddIndex {
+        ty: TypeId,
+        scale: u32,
+    },
 
-    Dup { ty: TypeId },
-    Drop { ty: TypeId },
-    Swap { a: TypeId, b: TypeId },
+    Dup {
+        ty: TypeId,
+    },
+    Drop {
+        ty: TypeId,
+    },
+    Swap {
+        a: TypeId,
+        b: TypeId,
+    },
 
     AddI64,
     SubI64,
     MulI64,
-    Cmp { out: TypeId, kind: CmpKind },
+    Cmp {
+        out: TypeId,
+        kind: CmpKind,
+    },
     AndBool,
     OrBool,
     NotBool,
 
-    LocalSet { slot: u16, ty: TypeId },
-    LocalGet { slot: u16, ty: TypeId },
+    LocalSet {
+        slot: u16,
+        ty: TypeId,
+    },
+    LocalGet {
+        slot: u16,
+        ty: TypeId,
+    },
 
-    Cast { from: TypeId, to: TypeId },
-    Bitcast { from: TypeId, to: TypeId },
+    Cast {
+        from: TypeId,
+        to: TypeId,
+    },
+    Bitcast {
+        from: TypeId,
+        to: TypeId,
+    },
 
-    Call { name: Atom, sig: Sig, may_suspend: bool },
+    Call {
+        name: Atom,
+        sig: Sig,
+        performs: EffectSet,
+        requires: CapSet,
+        bound: StackBound,
+    },
 
-    Load { ty: TypeId },
-    Store { ty: TypeId },
+    Load {
+        ty: TypeId,
+    },
+    Store {
+        ty: TypeId,
+    },
 
-    MmioVolLoad { ty: TypeId, place: Atom },
-    MmioVolStore { ty: TypeId, place: Atom, access: MmioAccess },
-    MmioVolLoadField { reg_ty: TypeId, field_ty: TypeId, place: Atom, mask: u64, shift: u8 },
-    MmioVolStoreField { reg_ty: TypeId, field_ty: TypeId, place: Atom, mask: u64, shift: u8 },
+    MmioVolLoad {
+        ty: TypeId,
+        place: Atom,
+    },
+    MmioVolStore {
+        ty: TypeId,
+        place: Atom,
+        access: MmioAccess,
+    },
+    MmioVolLoadField {
+        reg_ty: TypeId,
+        field_ty: TypeId,
+        place: Atom,
+        mask: u64,
+        shift: u8,
+    },
+    MmioVolStoreField {
+        reg_ty: TypeId,
+        field_ty: TypeId,
+        place: Atom,
+        mask: u64,
+        shift: u8,
+    },
 
     // Produces `bool` while preserving the value (so `trap_if_false` can consume the bool).
     // Stack effect: `( ty -- ty bool )`
-    CheckSubtype { ty: TypeId },
-    TrapIfFalse { code: TrapCode },
+    CheckSubtype {
+        ty: TypeId,
+    },
+    TrapIfFalse {
+        code: TrapCode,
+    },
 
-    Br { target: BlockId },
-    BrIf { then_tgt: BlockId, else_tgt: BlockId },
+    Br {
+        target: BlockId,
+    },
+    BrIf {
+        then_tgt: BlockId,
+        else_tgt: BlockId,
+    },
     Ret,
 }
 
@@ -189,6 +299,9 @@ pub struct Block {
 pub struct Word {
     pub name: Atom,
     pub sig: Sig,
+    pub performs: EffectSet,
+    pub requires: CapSet,
+    pub bound: StackBound,
     pub entry: BlockId,
     pub types: FixedVec<Atom, 64>,
     pub type_sizes: FixedVec<u32, 64>,
@@ -319,14 +432,25 @@ pub fn verify_word(w: &Word) -> Result<(), VerifyError> {
         }
     }
     let Some(entry_block) = entry else {
-        return Err(VerifyError::EntryBlockNotFound { span: Span::UNKNOWN });
+        return Err(VerifyError::EntryBlockNotFound {
+            span: Span::UNKNOWN,
+        });
     };
     if entry_block.entry_stack.len() != w.sig.in_len as usize {
-        return Err(VerifyError::EntryStackLenMismatch { span: Span::UNKNOWN });
+        return Err(VerifyError::EntryStackLenMismatch {
+            span: Span::UNKNOWN,
+        });
     }
     for i in 0..(w.sig.in_len as usize) {
-        if *entry_block.entry_stack.get(i).expect("verified entry stack len") != w.sig.inputs[i] {
-            return Err(VerifyError::EntryStackTypeMismatch { span: Span::UNKNOWN });
+        if *entry_block
+            .entry_stack
+            .get(i)
+            .expect("verified entry stack len")
+            != w.sig.inputs[i]
+        {
+            return Err(VerifyError::EntryStackTypeMismatch {
+                span: Span::UNKNOWN,
+            });
         }
     }
 
@@ -586,12 +710,19 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
         }
     }
     if !terminated {
-        return Err(VerifyError::NotTerminated { span: Span::UNKNOWN });
+        return Err(VerifyError::NotTerminated {
+            span: Span::UNKNOWN,
+        });
     }
     Ok(())
 }
 
-fn push(stack: &mut [TypeId; 64], sp: &mut usize, ty: TypeId, span: Span) -> Result<(), VerifyError> {
+fn push(
+    stack: &mut [TypeId; 64],
+    sp: &mut usize,
+    ty: TypeId,
+    span: Span,
+) -> Result<(), VerifyError> {
     if *sp >= stack.len() {
         return Err(VerifyError::PushFullStack { span });
     }
@@ -725,7 +856,11 @@ fn write_op(out: &mut impl Output, w: &Word, op: &Op) {
         OpKind::ConstBool(true) => out.write(b"const_bool true"),
         OpKind::ConstBool(false) => out.write(b"const_bool false"),
         OpKind::ConstStr(_) => out.write(b"const_str"),
-        OpKind::AddrOf { place, mutable: false, const_addr } => {
+        OpKind::AddrOf {
+            place,
+            mutable: false,
+            const_addr,
+        } => {
             out.write(b"addr_of ");
             out.write(place.as_bytes());
             if let Some(addr) = const_addr {
@@ -733,7 +868,11 @@ fn write_op(out: &mut impl Output, w: &Word, op: &Op) {
                 write_u64_hex(out, addr);
             }
         }
-        OpKind::AddrOf { place, mutable: true, const_addr } => {
+        OpKind::AddrOf {
+            place,
+            mutable: true,
+            const_addr,
+        } => {
             out.write(b"addr_of_mut ");
             out.write(place.as_bytes());
             if let Some(addr) = const_addr {
@@ -840,7 +979,13 @@ fn write_op(out: &mut impl Output, w: &Word, op: &Op) {
                 MmioAccess::Rw => b"",
             });
         }
-        OpKind::MmioVolLoadField { reg_ty, field_ty, place, mask, shift } => {
+        OpKind::MmioVolLoadField {
+            reg_ty,
+            field_ty,
+            place,
+            mask,
+            shift,
+        } => {
             out.write(b"vol_load_field ");
             out.write(type_atom(w, field_ty).as_bytes());
             out.write(b" ");
@@ -852,7 +997,13 @@ fn write_op(out: &mut impl Output, w: &Word, op: &Op) {
             out.write(b" shift=");
             write_u32(out, shift as u32);
         }
-        OpKind::MmioVolStoreField { reg_ty, field_ty, place, mask, shift } => {
+        OpKind::MmioVolStoreField {
+            reg_ty,
+            field_ty,
+            place,
+            mask,
+            shift,
+        } => {
             out.write(b"vol_store_field ");
             out.write(type_atom(w, field_ty).as_bytes());
             out.write(b" ");
