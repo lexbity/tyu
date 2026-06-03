@@ -657,6 +657,18 @@ fn load_import_sigs(
                 return Err(2207u32); // too many imported words (max 256 total)
             }
             let name_atom = TypeAtom::new(name).ok_or(2206u32)?;
+            let bound = if d.effect_net != 0 || d.effect_high != 0 {
+                StackBound {
+                    net: d.effect_net,
+                    high: if d.effect_high == u32::MAX {
+                        High::Top
+                    } else {
+                        High::Slots(d.effect_high)
+                    },
+                }
+            } else {
+                StackBound::ID
+            };
             env[*env_len] = WordEntry {
                 name: name_atom,
                 sig,
@@ -666,7 +678,7 @@ fn load_import_sigs(
                     EffectSet::empty()
                 },
                 requires: CapSet::empty(),
-                bound: StackBound::ID,
+                bound,
             };
             *env_len += 1;
         }
@@ -693,6 +705,18 @@ fn load_local_sigs(
             return Err(2223u32); // too many words in module (max 256)
         }
         let name_atom = TypeAtom::new(name).ok_or(2220u32)?;
+        let bound = if d.effect_net != 0 || d.effect_high != 0 {
+            StackBound {
+                net: d.effect_net,
+                high: if d.effect_high == u32::MAX {
+                    High::Top
+                } else {
+                    High::Slots(d.effect_high)
+                },
+            }
+        } else {
+            StackBound::ID
+        };
         env[*env_len] = WordEntry {
             name: name_atom,
             sig,
@@ -702,7 +726,7 @@ fn load_local_sigs(
                 EffectSet::empty()
             },
             requires: CapSet::empty(),
-            bound: StackBound::ID,
+            bound,
         };
         *env_len += 1;
     }

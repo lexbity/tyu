@@ -23,8 +23,13 @@ impl<'a> Parser<'a> {
         };
 
         let mut effect_bits = 0u16;
+        let mut effect_net: i16 = 0;
+        let mut effect_high: u32 = 0;
         if self.look.kind == TokenKind::EffectSet {
-            effect_bits = parse_effect_bits(self.slice(self.look.span));
+            let (bits, net, high) = parse_effect_bits(self.slice(self.look.span));
+            effect_bits = bits;
+            effect_net = net;
+            effect_high = high;
             self.bump();
         }
 
@@ -64,6 +69,8 @@ impl<'a> Parser<'a> {
             requires,
             ensures,
             effect_bits,
+            effect_net,
+            effect_high,
         })
     }
 
@@ -163,6 +170,8 @@ impl<'a> Parser<'a> {
             requires: None,
             ensures: None,
             effect_bits: 0,
+            effect_net: 0,
+            effect_high: 0,
         };
         let sdecl = StructDeclAst {
             name: name.span,
@@ -272,6 +281,8 @@ impl<'a> Parser<'a> {
             requires: None,
             ensures: None,
             effect_bits: 0,
+            effect_net: 0,
+            effect_high: 0,
         };
         let edecl = EnumDeclAst {
             name: name.span,
@@ -305,6 +316,8 @@ impl<'a> Parser<'a> {
             requires: None,
             ensures: None,
             effect_bits: 0,
+            effect_net: 0,
+            effect_high: 0,
         })
     }
 
@@ -365,6 +378,8 @@ impl<'a> Parser<'a> {
             requires: None,
             ensures: None,
             effect_bits: 0,
+            effect_net: 0,
+            effect_high: 0,
         })
     }
 
@@ -417,6 +432,8 @@ impl<'a> Parser<'a> {
             requires: None,
             ensures: None,
             effect_bits: 0,
+            effect_net: 0,
+            effect_high: 0,
         };
         Ok((decl, inst))
     }
@@ -479,6 +496,8 @@ impl<'a> Parser<'a> {
             requires: None,
             ensures: None,
             effect_bits: 0,
+            effect_net: 0,
+            effect_high: 0,
         })
     }
 
@@ -560,6 +579,8 @@ impl<'a> Parser<'a> {
             requires: None,
             ensures: None,
             effect_bits: 0,
+            effect_net: 0,
+            effect_high: 0,
         };
         let st = Some(SubtypeAst {
             name: name.span,

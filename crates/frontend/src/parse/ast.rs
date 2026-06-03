@@ -283,6 +283,8 @@ pub struct DeclAst {
     pub requires: Option<Span>,
     pub ensures: Option<Span>,
     pub effect_bits: u16,
+    pub effect_net: i16,
+    pub effect_high: u32,
 }
 
 pub struct ModuleAst {

@@ -644,15 +644,17 @@ pub(super) fn parse_i64(bytes: &[u8]) -> Option<i64> {
     Some(v * sign)
 }
 
-pub(super) fn parse_effect_bits(effect_token: &[u8]) -> u16 {
+/// Extract effect bits AND bound annotation from a `!{...}` token.
+/// Returns `(effect_bits, net, high)` where `net`/`high` default to `0` if
+/// not present in the annotation.
+pub(super) fn parse_effect_bits(effect_token: &[u8]) -> (u16, i16, u32) {
     let mut bits = 0u16;
-    // token includes "!{...}"
+    let mut net: i16 = 0;
+    let mut high: u32 = 0;
     if effect_token.len() < 4 {
-        return bits;
+        return (bits, net, high);
     }
     // Map known effect names to their bit positions.
-    // Bits 0..4 match ir::EffectSet: SUSPEND=1<<0, INTERRUPT=1<<1,
-    // DIVERGE=1<<2, MMIO=1<<3, ALLOC=1<<4.
     for (name, bit) in &[
         (b"suspend" as &[u8], 1u16 << 0),
         (b"interrupt" as &[u8], 1u16 << 1),
@@ -664,5 +666,27 @@ pub(super) fn parse_effect_bits(effect_token: &[u8]) -> u16 {
             bits |= bit;
         }
     }
-    bits
+    // Extract net=N and high=N from the token.
+    let s = core::str::from_utf8(effect_token).unwrap_or("");
+    if let Some(pos) = s.find("net=") {
+        let val_start = pos + 4;
+        let val_end = s[val_start..]
+            .find(|c: char| !c.is_ascii_digit() && c != '-')
+            .map(|e| val_start + e)
+            .unwrap_or(s.len());
+        if let Ok(v) = s[val_start..val_end].parse::<i16>() {
+            net = v;
+        }
+    }
+    if let Some(pos) = s.find("high=") {
+        let val_start = pos + 5;
+        let val_end = s[val_start..]
+            .find(|c: char| !c.is_ascii_digit())
+            .map(|e| val_start + e)
+            .unwrap_or(s.len());
+        if let Ok(v) = s[val_start..val_end].parse::<u32>() {
+            high = v;
+        }
+    }
+    (bits, net, high)
 }

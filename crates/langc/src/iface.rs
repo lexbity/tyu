@@ -73,7 +73,10 @@ pub fn check_iface(
             if !sig_eq(slice_span(def_src, def_sig), slice_span(mod_src, mod_sig)) {
                 return Err(2218u32);
             }
-            if def_decl.effect_bits != mod_decl.effect_bits {
+            if def_decl.effect_bits != mod_decl.effect_bits
+                || def_decl.effect_net != mod_decl.effect_net
+                || def_decl.effect_high != mod_decl.effect_high
+            {
                 return Err(2219u32);
             }
         }

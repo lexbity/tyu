@@ -367,8 +367,54 @@ impl fmt::Debug for CapSet {
 }
 
 // ---------------------------------------------------------------------------
-// Tests
+// §5 — abi_hash
 // ---------------------------------------------------------------------------
+
+/// ABI contract version — bump when the hash input changes meaningfully.
+pub const ABI_CONTRACT_VERSION: u64 = 1;
+
+/// Compute a 64-bit hash of a word's ABI contract for cross-module
+/// compatibility checking.  Two modules that import/export the same word
+/// must produce the same hash; a mismatch → separate compilation error.
+///
+/// Inputs folded into the hash:
+///   - contract version (u64)
+///   - in_len (u8)
+///   - out_len (u8)
+///   - input type atoms (up to 8 × 32 bytes)
+///   - output type atoms (up to 8 × 32 bytes)
+///   - performs (EffectSet bits)
+///   - requires (CapSet bits)
+///   - bound (net i16 + high u32)
+///   - slot_bytes (bytes per data-stack slot, target-specific)
+pub fn abi_hash(
+    sig_in: &[u8],
+    sig_out: &[u8],
+    performs: EffectSet,
+    requires: CapSet,
+    bound: StackBound,
+    slot_bytes: u32,
+) -> u64 {
+    let mut h: u64 = ABI_CONTRACT_VERSION;
+    h = h.wrapping_mul(31).wrapping_add(slot_bytes as u64);
+    // Signature inputs
+    for &b in sig_in {
+        h = h.wrapping_mul(31).wrapping_add(b as u64);
+    }
+    h = h.wrapping_mul(31).wrapping_add(0xff); // separator
+                                               // Signature outputs
+    for &b in sig_out {
+        h = h.wrapping_mul(31).wrapping_add(b as u64);
+    }
+    h = h.wrapping_mul(31).wrapping_add(0xff); // separator
+                                               // Effects and capabilities
+    h = h.wrapping_mul(31).wrapping_add(performs.bits() as u64);
+    h = h.wrapping_mul(31).wrapping_add(requires.bits() as u64);
+    // Stack bound
+    h = h.wrapping_mul(31).wrapping_add(bound.net as u64);
+    h = h.wrapping_mul(31).wrapping_add(bound.wire_u32() as u64);
+    h
+}
 
 #[cfg(test)]
 mod tests {
@@ -793,5 +839,97 @@ mod tests {
     #[test]
     fn shift_high_overflow() {
         assert_eq!(shift_high(1, High::Slots(u32::MAX)), High::Top);
+    }
+
+    // -----------------------------------------------------------------------
+    // abi_hash
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn abi_hash_stable() {
+        // Same inputs must produce the same hash.
+        let h1 = abi_hash(
+            b"i64",
+            b"i64",
+            EffectSet::empty(),
+            CapSet::empty(),
+            StackBound::ID,
+            8,
+        );
+        let h2 = abi_hash(
+            b"i64",
+            b"i64",
+            EffectSet::empty(),
+            CapSet::empty(),
+            StackBound::ID,
+            8,
+        );
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn abi_hash_changes_on_performs() {
+        let base = abi_hash(
+            b"",
+            b"",
+            EffectSet::empty(),
+            CapSet::empty(),
+            StackBound::ID,
+            8,
+        );
+        let with_suspend = abi_hash(
+            b"",
+            b"",
+            EffectSet::from_bits(EffectSet::SUSPEND),
+            CapSet::empty(),
+            StackBound::ID,
+            8,
+        );
+        assert_ne!(base, with_suspend);
+    }
+
+    #[test]
+    fn abi_hash_changes_on_bound() {
+        let base = abi_hash(
+            b"",
+            b"",
+            EffectSet::empty(),
+            CapSet::empty(),
+            StackBound::ID,
+            8,
+        );
+        let bigger = abi_hash(
+            b"",
+            b"",
+            EffectSet::empty(),
+            CapSet::empty(),
+            StackBound {
+                net: 1,
+                high: High::Slots(5),
+            },
+            8,
+        );
+        assert_ne!(base, bigger);
+    }
+
+    #[test]
+    fn abi_hash_changes_on_slot_bytes() {
+        let base = abi_hash(
+            b"",
+            b"",
+            EffectSet::empty(),
+            CapSet::empty(),
+            StackBound::ID,
+            8,
+        );
+        let different = abi_hash(
+            b"",
+            b"",
+            EffectSet::empty(),
+            CapSet::empty(),
+            StackBound::ID,
+            4,
+        );
+        assert_ne!(base, different);
     }
 }

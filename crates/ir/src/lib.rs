@@ -5,7 +5,7 @@ use frontend::{fixed::FixedVec, parse::Output, span::Span};
 
 pub mod contract;
 
-pub use contract::{CapSet, Context, EffectSet, High, StackBound};
+pub use contract::{abi_hash, CapSet, Context, EffectSet, High, StackBound, ABI_CONTRACT_VERSION};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Atom {
