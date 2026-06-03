@@ -839,6 +839,10 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         };
         let elem = chan_elem_type(ch_ty).ok_or(TcError::ChanRecvType { span: op_span })?;
         push(stack, sp, Value::Plain(elem))?;
+        self.acc = self.acc.compose(StackBound {
+            net: 0,
+            high: High::Slots(1),
+        });
 
         let ch_tid = self.ty_id_of_type(ch_ty, op_span)?;
         let elem_tid = self.ty_id_of_type(elem, op_span)?;
@@ -1445,6 +1449,10 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             if is_iso_type(self.iso, top_ty) {
                 return Err(TcError::IsoDup { span: name_abs });
             }
+            self.acc = self.acc.compose(StackBound {
+                net: 1,
+                high: High::Slots(1),
+            });
             push(stack, sp, top)?;
             push(stack, sp, top)?;
             let tid = self.ty_id_of_value(top, name_abs)?;
@@ -1467,11 +1475,16 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             if is_iso_type(self.iso, top_ty) {
                 return Err(TcError::IsoDrop { span: name_abs });
             }
+            self.acc = self.acc.compose(StackBound {
+                net: -1,
+                high: High::Slots(0),
+            });
             let tid = self.ty_id_of_value(top, name_abs)?;
             self.emit_op(cur, lir::OpKind::Drop { ty: tid }, name_abs)?;
             return Ok(cur);
         }
         if name == b"swap" {
+            self.acc = self.acc.compose(StackBound::ID);
             let b = pop(stack, sp).ok_or(TcError::StackUnderflow { span })?;
             let a = pop(stack, sp).ok_or(TcError::StackUnderflow { span })?;
             push(stack, sp, b)?;
@@ -1843,6 +1856,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         {
             return Err(TcError::ScopedLiveAtSuspend { span: name_abs });
         }
+        self.acc = self.acc.compose(entry.bound);
         apply_sig(stack, sp, entry, name_abs, self.subtypes)?;
 
         let builtin = match name {

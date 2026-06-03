@@ -24,7 +24,7 @@ use frontend::lex::Lexer;
 use frontend::parse::DeclAst;
 use frontend::span::Span;
 use frontend::token::{Token, TokenKind};
-use ir::{self as lir, CapSet, EffectSet, StackBound};
+use ir::{self as lir, CapSet, EffectSet, High, StackBound};
 
 pub mod arena;
 mod compile;
@@ -83,6 +83,9 @@ struct IrWordGen<'a, 'r> {
 
     locked_resource: Option<TypeAtom>,
     in_lock: bool,
+
+    /// Accumulated stack-bound for the word being compiled (stack-bound §2).
+    acc: StackBound,
 
     terminated: bool,
     word: lir::Word,
@@ -223,6 +226,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             scope_sp: 0,
             locked_resource: None,
             in_lock: false,
+            acc: StackBound::ID,
             terminated: false,
             word: lir::Word {
                 name,
@@ -408,7 +412,8 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
 }
 
 impl<'a, 'r> IrWordGen<'a, 'r> {
-    fn finish(self, span: Span) -> Result<IrWordOutput<'r>, TcError> {
+    fn finish(mut self, span: Span) -> Result<IrWordOutput<'r>, TcError> {
+        self.word.bound = self.acc;
         let word = unsafe {
             let arena = &mut *self.arena;
             let w = arena.alloc(self.word, span)?;
