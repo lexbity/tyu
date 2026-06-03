@@ -43,7 +43,9 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
     }
 
     pub(super) fn stack_has_scope(&self, stack: &[Value; 256], sp: usize, scope: u16) -> bool {
-        stack[..sp].iter().any(|v| matches!(v, Value::Scoped { scope: s, .. } if *s == scope))
+        stack[..sp]
+            .iter()
+            .any(|v| matches!(v, Value::Scoped { scope: s, .. } if *s == scope))
     }
 
     pub(super) fn invalidate_scope_locals(&mut self, scope: u16) {

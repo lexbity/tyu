@@ -1,6 +1,6 @@
-use crate::types::TypeAtom;
 use crate::typecheck::error::TcError;
 use crate::typecheck::util::{parse_u32_any, slice_span};
+use crate::types::TypeAtom;
 use frontend::fixed::FixedVec;
 use frontend::lex::Lexer;
 use frontend::parse::{DeclKind, ModuleAst};
@@ -130,7 +130,11 @@ pub fn build_mmio_db(module: &ModuleAst, src: &[u8]) -> Result<MmioDb, TcError> 
             continue;
         };
         let base_addr = parse_u32_any(slice_span(src, inst.base_addr)).unwrap_or(0) as u64;
-        let _ = db.instances.push(MmioInstance { name, map, base_addr });
+        let _ = db.instances.push(MmioInstance {
+            name,
+            map,
+            base_addr,
+        });
     }
 
     for decl in module.decls.iter() {
@@ -144,7 +148,10 @@ pub fn build_mmio_db(module: &ModuleAst, src: &[u8]) -> Result<MmioDb, TcError> 
             continue;
         };
         validate_regmap_body(src, body)?;
-        let _ = db.maps.push(MmioMapDecl { name: map_name, body });
+        let _ = db.maps.push(MmioMapDecl {
+            name: map_name,
+            body,
+        });
     }
 
     Ok(db)
@@ -162,33 +169,56 @@ fn validate_regmap_body(src: &[u8], body: Span) -> Result<(), TcError> {
             continue;
         }
 
-        let offset = parse_u32_any(&slice[tok.span.start..tok.span.end]).ok_or(TcError::MmioParseFailed {
-            span: Span::new(body.start + tok.span.start, body.start + tok.span.end),
-        })?;
+        let offset = parse_u32_any(&slice[tok.span.start..tok.span.end]).ok_or(
+            TcError::MmioParseFailed {
+                span: Span::new(body.start + tok.span.start, body.start + tok.span.end),
+            },
+        )?;
 
         let name_tok = lex.next();
         if name_tok.kind != TokenKind::Ident {
-            return Err(TcError::MmioExpectedIdent { span: Span::new(body.start + name_tok.span.start, body.start + name_tok.span.end) });
+            return Err(TcError::MmioExpectedIdent {
+                span: Span::new(
+                    body.start + name_tok.span.start,
+                    body.start + name_tok.span.end,
+                ),
+            });
         }
 
         let ty_tok = lex.next();
         if ty_tok.kind != TokenKind::Ident {
-            return Err(TcError::MmioExpectedType { span: Span::new(body.start + ty_tok.span.start, body.start + ty_tok.span.end) });
+            return Err(TcError::MmioExpectedType {
+                span: Span::new(body.start + ty_tok.span.start, body.start + ty_tok.span.end),
+            });
         }
         let ty_bytes = &slice[ty_tok.span.start..ty_tok.span.end];
         let Some(width) = mmio_type_width_bytes(ty_bytes) else {
-            return Err(TcError::MmioRegUnknownWidth { span: Span::new(body.start + ty_tok.span.start, body.start + ty_tok.span.end) });
+            return Err(TcError::MmioRegUnknownWidth {
+                span: Span::new(body.start + ty_tok.span.start, body.start + ty_tok.span.end),
+            });
         };
         if offset % width != 0 {
-            return Err(TcError::MmioRegMisaligned { span: Span::new(body.start + tok.span.start, body.start + tok.span.end) });
+            return Err(TcError::MmioRegMisaligned {
+                span: Span::new(body.start + tok.span.start, body.start + tok.span.end),
+            });
         }
 
         let access_tok = lex.next();
         if access_tok.kind != TokenKind::Ident {
-            return Err(TcError::MmioExpectedAccess { span: Span::new(body.start + access_tok.span.start, body.start + access_tok.span.end) });
+            return Err(TcError::MmioExpectedAccess {
+                span: Span::new(
+                    body.start + access_tok.span.start,
+                    body.start + access_tok.span.end,
+                ),
+            });
         }
         if parse_access_mode(&slice[access_tok.span.start..access_tok.span.end]).is_none() {
-            return Err(TcError::MmioInvalidAccess { span: Span::new(body.start + access_tok.span.start, body.start + access_tok.span.end) });
+            return Err(TcError::MmioInvalidAccess {
+                span: Span::new(
+                    body.start + access_tok.span.start,
+                    body.start + access_tok.span.end,
+                ),
+            });
         }
 
         // Optional `volatile`
@@ -207,42 +237,91 @@ fn validate_regmap_body(src: &[u8], body: Span) -> Result<(), TcError> {
                 let ftok = lex.next();
                 match ftok.kind {
                     TokenKind::PunctRBrace => break,
-                    TokenKind::Eof => return Err(TcError::MmioUnexpectedEof { span: Span::new(body.start + maybe_lbrace.span.start, body.start + maybe_lbrace.span.end) }),
+                    TokenKind::Eof => {
+                        return Err(TcError::MmioUnexpectedEof {
+                            span: Span::new(
+                                body.start + maybe_lbrace.span.start,
+                                body.start + maybe_lbrace.span.end,
+                            ),
+                        })
+                    }
                     TokenKind::Ident => {
                         let lo_tok = lex.next();
                         if lo_tok.kind != TokenKind::Number {
-                            return Err(TcError::MmioExpectedLowBit { span: Span::new(body.start + lo_tok.span.start, body.start + lo_tok.span.end) });
+                            return Err(TcError::MmioExpectedLowBit {
+                                span: Span::new(
+                                    body.start + lo_tok.span.start,
+                                    body.start + lo_tok.span.end,
+                                ),
+                            });
                         }
-                        let lo = parse_u32_any(&slice[lo_tok.span.start..lo_tok.span.end]).ok_or(TcError::MmioBadLowBit {
-                            span: Span::new(body.start + lo_tok.span.start, body.start + lo_tok.span.end),
-                        })?;
+                        let lo = parse_u32_any(&slice[lo_tok.span.start..lo_tok.span.end]).ok_or(
+                            TcError::MmioBadLowBit {
+                                span: Span::new(
+                                    body.start + lo_tok.span.start,
+                                    body.start + lo_tok.span.end,
+                                ),
+                            },
+                        )?;
                         let mut hi = lo;
                         let mut probe3 = lex;
                         if probe3.next().kind == TokenKind::PunctDblDot {
                             let hi_tok = probe3.next();
                             if hi_tok.kind != TokenKind::Number {
-                                return Err(TcError::MmioExpectedHighBit { span: Span::new(body.start + hi_tok.span.start, body.start + hi_tok.span.end) });
+                                return Err(TcError::MmioExpectedHighBit {
+                                    span: Span::new(
+                                        body.start + hi_tok.span.start,
+                                        body.start + hi_tok.span.end,
+                                    ),
+                                });
                             }
-                            hi = parse_u32_any(&slice[hi_tok.span.start..hi_tok.span.end]).ok_or(TcError::MmioBadHighBit {
-                                span: Span::new(body.start + hi_tok.span.start, body.start + hi_tok.span.end),
-                            })?;
+                            hi = parse_u32_any(&slice[hi_tok.span.start..hi_tok.span.end]).ok_or(
+                                TcError::MmioBadHighBit {
+                                    span: Span::new(
+                                        body.start + hi_tok.span.start,
+                                        body.start + hi_tok.span.end,
+                                    ),
+                                },
+                            )?;
                             lex = probe3;
                         }
                         let hi = hi.max(lo);
                         let bit_limit = width * 8;
                         if hi >= bit_limit {
-                            return Err(TcError::MmioFieldBitRange { span: Span::new(body.start + lo_tok.span.start, body.start + lo_tok.span.end) });
+                            return Err(TcError::MmioFieldBitRange {
+                                span: Span::new(
+                                    body.start + lo_tok.span.start,
+                                    body.start + lo_tok.span.end,
+                                ),
+                            });
                         }
                         let fty_tok = lex.next();
                         if fty_tok.kind != TokenKind::Ident {
-                            return Err(TcError::MmioExpectedFieldType { span: Span::new(body.start + fty_tok.span.start, body.start + fty_tok.span.end) });
+                            return Err(TcError::MmioExpectedFieldType {
+                                span: Span::new(
+                                    body.start + fty_tok.span.start,
+                                    body.start + fty_tok.span.end,
+                                ),
+                            });
                         }
                         let faccess_tok = lex.next();
                         if faccess_tok.kind != TokenKind::Ident {
-                            return Err(TcError::MmioExpectedFieldAccess { span: Span::new(body.start + faccess_tok.span.start, body.start + faccess_tok.span.end) });
+                            return Err(TcError::MmioExpectedFieldAccess {
+                                span: Span::new(
+                                    body.start + faccess_tok.span.start,
+                                    body.start + faccess_tok.span.end,
+                                ),
+                            });
                         }
-                        if parse_access_mode(&slice[faccess_tok.span.start..faccess_tok.span.end]).is_none() {
-                            return Err(TcError::MmioInvalidFieldAccess { span: Span::new(body.start + faccess_tok.span.start, body.start + faccess_tok.span.end) });
+                        if parse_access_mode(&slice[faccess_tok.span.start..faccess_tok.span.end])
+                            .is_none()
+                        {
+                            return Err(TcError::MmioInvalidFieldAccess {
+                                span: Span::new(
+                                    body.start + faccess_tok.span.start,
+                                    body.start + faccess_tok.span.end,
+                                ),
+                            });
                         }
                     }
                     _ => {}
@@ -333,9 +412,11 @@ pub fn scan_regmap_for_reg(
             continue;
         }
 
-        let offset = parse_u32_any(&slice[tok.span.start..tok.span.end]).ok_or(TcError::MmioParseFailed {
-            span: Span::new(body.start + tok.span.start, body.start + tok.span.end),
-        })?;
+        let offset = parse_u32_any(&slice[tok.span.start..tok.span.end]).ok_or(
+            TcError::MmioParseFailed {
+                span: Span::new(body.start + tok.span.start, body.start + tok.span.end),
+            },
+        )?;
 
         let name_tok = lex.next();
         if name_tok.kind != TokenKind::Ident {
@@ -356,17 +437,22 @@ pub fn scan_regmap_for_reg(
             return Err(TcError::TypeParseFailed { span: place_span });
         };
         let Some(width) = mmio_type_width_bytes(ty_bytes) else {
-            return Err(TcError::MmioRegUnknownWidth { span: Span::new(body.start + ty_tok.span.start, body.start + ty_tok.span.end) });
+            return Err(TcError::MmioRegUnknownWidth {
+                span: Span::new(body.start + ty_tok.span.start, body.start + ty_tok.span.end),
+            });
         };
         if offset % width != 0 {
-            return Err(TcError::MmioRegMisaligned { span: Span::new(body.start + tok.span.start, body.start + tok.span.end) });
+            return Err(TcError::MmioRegMisaligned {
+                span: Span::new(body.start + tok.span.start, body.start + tok.span.end),
+            });
         }
 
         let access_tok = lex.next();
         if access_tok.kind != TokenKind::Ident {
             return Err(TcError::MmioExpectedAccess { span: place_span });
         }
-        let access = parse_access_mode(&slice[access_tok.span.start..access_tok.span.end]).ok_or(TcError::MmioInvalidAccess { span: place_span })?;
+        let access = parse_access_mode(&slice[access_tok.span.start..access_tok.span.end])
+            .ok_or(TcError::MmioInvalidAccess { span: place_span })?;
 
         let mut volatile = false;
         let mut probe = lex;
@@ -397,7 +483,8 @@ pub fn scan_regmap_for_reg(
                         if lo_tok.kind != TokenKind::Number {
                             return Err(TcError::MmioExpectedLowBit { span: place_span });
                         }
-                        let lo = parse_u32_any(&slice[lo_tok.span.start..lo_tok.span.end]).ok_or(TcError::MmioBadLowBit { span: place_span })?;
+                        let lo = parse_u32_any(&slice[lo_tok.span.start..lo_tok.span.end])
+                            .ok_or(TcError::MmioBadLowBit { span: place_span })?;
                         let mut hi = lo;
                         let mut probe3 = lex;
                         if probe3.next().kind == TokenKind::PunctDblDot {
@@ -405,7 +492,8 @@ pub fn scan_regmap_for_reg(
                             if hi_tok.kind != TokenKind::Number {
                                 return Err(TcError::MmioExpectedHighBit { span: place_span });
                             }
-                            hi = parse_u32_any(&slice[hi_tok.span.start..hi_tok.span.end]).ok_or(TcError::MmioBadHighBit { span: place_span })?;
+                            hi = parse_u32_any(&slice[hi_tok.span.start..hi_tok.span.end])
+                                .ok_or(TcError::MmioBadHighBit { span: place_span })?;
                             lex = probe3;
                         }
                         let hi = hi.max(lo);
@@ -417,7 +505,9 @@ pub fn scan_regmap_for_reg(
                         if fty_tok.kind != TokenKind::Ident {
                             return Err(TcError::MmioExpectedFieldType { span: place_span });
                         }
-                        let Some(field_ty) = TypeAtom::new(&slice[fty_tok.span.start..fty_tok.span.end]) else {
+                        let Some(field_ty) =
+                            TypeAtom::new(&slice[fty_tok.span.start..fty_tok.span.end])
+                        else {
                             return Err(TcError::TypeParseFailed { span: place_span });
                         };
 
@@ -425,7 +515,9 @@ pub fn scan_regmap_for_reg(
                         if faccess_tok.kind != TokenKind::Ident {
                             return Err(TcError::MmioExpectedFieldAccess { span: place_span });
                         }
-                        let faccess = parse_access_mode(&slice[faccess_tok.span.start..faccess_tok.span.end]).ok_or(TcError::MmioInvalidFieldAccess { span: place_span })?;
+                        let faccess =
+                            parse_access_mode(&slice[faccess_tok.span.start..faccess_tok.span.end])
+                                .ok_or(TcError::MmioInvalidFieldAccess { span: place_span })?;
 
                         if let Some(want) = want_field {
                             if fname == want && field_found.is_none() {
@@ -495,7 +587,12 @@ fn split_segments<'a>(name: &'a [u8], out: &mut [&'a [u8]; 8]) -> usize {
     count
 }
 
-pub fn resolve_mmio_place(db: &MmioDb, src: &[u8], name: &[u8], place_span: Span) -> Result<Option<MmioResolved>, TcError> {
+pub fn resolve_mmio_place(
+    db: &MmioDb,
+    src: &[u8],
+    name: &[u8],
+    place_span: Span,
+) -> Result<Option<MmioResolved>, TcError> {
     let mut segs: [&[u8]; 8] = [&[]; 8];
     let seg_len = split_segments(name, &mut segs);
     if seg_len < 2 {
@@ -525,7 +622,14 @@ pub fn resolve_mmio_place(db: &MmioDb, src: &[u8], name: &[u8], place_span: Span
         return Err(TcError::MmioPlaceTooDeep { span: place_span });
     }
 
-    let reg_info = scan_regmap_for_reg(src, map_decl.body, reg_name, want_field, place_span, map_decl.name)?;
+    let reg_info = scan_regmap_for_reg(
+        src,
+        map_decl.body,
+        reg_name,
+        want_field,
+        place_span,
+        map_decl.name,
+    )?;
     let Some((reg_info, field_info)) = reg_info else {
         return Err(TcError::MmioRegNotFound { span: place_span });
     };
@@ -543,7 +647,10 @@ pub fn resolve_mmio_place(db: &MmioDb, src: &[u8], name: &[u8], place_span: Span
     if let Some(field) = field_info {
         let width = mmio_type_width_bytes(reg_info.reg_ty.as_bytes()).unwrap_or(1) as u64;
         let idx = reg_idx.unwrap_or(0) as u64;
-        let addr = inst.base_addr.wrapping_add(reg_info.offset as u64).wrapping_add(idx.wrapping_mul(width));
+        let addr = inst
+            .base_addr
+            .wrapping_add(reg_info.offset as u64)
+            .wrapping_add(idx.wrapping_mul(width));
         Ok(Some(MmioResolved::Field(MmioResolvedField {
             map: map_decl.name,
             reg: reg_info.reg,
@@ -558,7 +665,10 @@ pub fn resolve_mmio_place(db: &MmioDb, src: &[u8], name: &[u8], place_span: Span
     } else {
         let width = mmio_type_width_bytes(reg_info.reg_ty.as_bytes()).unwrap_or(1) as u64;
         let idx = reg_idx.unwrap_or(0) as u64;
-        let addr = inst.base_addr.wrapping_add(reg_info.offset as u64).wrapping_add(idx.wrapping_mul(width));
+        let addr = inst
+            .base_addr
+            .wrapping_add(reg_info.offset as u64)
+            .wrapping_add(idx.wrapping_mul(width));
         Ok(Some(MmioResolved::Reg(MmioResolvedReg {
             map: map_decl.name,
             reg: reg_info.reg,

@@ -1,7 +1,7 @@
-use crate::types::TypeAtom;
 use crate::typecheck::error::TcError;
-use crate::typecheck::util::slice_span;
 use crate::typecheck::parse::parse_type_expr;
+use crate::typecheck::util::slice_span;
+use crate::types::TypeAtom;
 use frontend::fixed::FixedVec;
 use frontend::parse::{DeclKind, ModuleAst};
 use frontend::span::Span;
@@ -61,8 +61,11 @@ pub fn build_iso_db(module: &ModuleAst, src: &[u8]) -> Result<IsoDb, TcError> {
         if d.kind != DeclKind::Iso {
             continue;
         }
-        let name = TypeAtom::new(slice_span(src, d.name)).ok_or(TcError::IsoNameInvalid { span: d.name })?;
-        types.push(name).map_err(|_| TcError::IsoCapacityExceeded { span: d.name })?;
+        let name = TypeAtom::new(slice_span(src, d.name))
+            .ok_or(TcError::IsoNameInvalid { span: d.name })?;
+        types
+            .push(name)
+            .map_err(|_| TcError::IsoCapacityExceeded { span: d.name })?;
     }
     Ok(IsoDb { types })
 }
@@ -82,13 +85,16 @@ pub fn build_resource_db(module: &ModuleAst, src: &[u8]) -> Result<ResourceDb, T
         if d.kind != DeclKind::Resource {
             continue;
         }
-        let name = TypeAtom::new(slice_span(src, d.name)).ok_or(TcError::ResourceNameInvalid { span: d.name })?;
+        let name = TypeAtom::new(slice_span(src, d.name))
+            .ok_or(TcError::ResourceNameInvalid { span: d.name })?;
         let ty = if let Some(s) = d.sig {
             parse_type_atom_from_span(src, s).ok_or(TcError::ResourceTypeInvalid { span: s })?
         } else {
             TypeAtom::I64
         };
-        items.push(ResourceInfo { name, ty }).map_err(|_| TcError::ResourceCapacityExceeded { span: d.name })?;
+        items
+            .push(ResourceInfo { name, ty })
+            .map_err(|_| TcError::ResourceCapacityExceeded { span: d.name })?;
     }
     Ok(ResourceDb { items })
 }
@@ -98,25 +104,34 @@ pub fn build_nominal_db(module: &ModuleAst, src: &[u8]) -> Result<NominalDb, TcE
     let mut enums: FixedVec<EnumInfo, 64> = FixedVec::new();
 
     for sdecl in module.structs.iter() {
-        let name = TypeAtom::new(slice_span(src, sdecl.name)).ok_or(TcError::StructNameInvalid { span: sdecl.name })?;
+        let name = TypeAtom::new(slice_span(src, sdecl.name))
+            .ok_or(TcError::StructNameInvalid { span: sdecl.name })?;
         let mut fields: FixedVec<StructFieldInfo, 64> = FixedVec::new();
         for f in sdecl.fields.iter() {
-            let fname = TypeAtom::new(slice_span(src, f.name)).ok_or(TcError::StructFieldNameInvalid { span: f.name })?;
+            let fname = TypeAtom::new(slice_span(src, f.name))
+                .ok_or(TcError::StructFieldNameInvalid { span: f.name })?;
             for existing in fields.iter() {
                 if existing.name == fname {
                     return Err(TcError::StructFieldDuplicate { span: f.name });
                 }
             }
-            let fty = parse_type_atom_from_span(src, f.ty).ok_or(TcError::StructFieldTypeInvalid { span: f.ty })?;
+            let fty = parse_type_atom_from_span(src, f.ty)
+                .ok_or(TcError::StructFieldTypeInvalid { span: f.ty })?;
             fields
-                .push(StructFieldInfo { name: fname, ty: fty })
+                .push(StructFieldInfo {
+                    name: fname,
+                    ty: fty,
+                })
                 .map_err(|_| TcError::StructDbCapacity { span: f.name })?;
         }
-        structs.push(StructInfo { name, fields }).map_err(|_| TcError::StructDbCapacity { span: sdecl.name })?;
+        structs
+            .push(StructInfo { name, fields })
+            .map_err(|_| TcError::StructDbCapacity { span: sdecl.name })?;
     }
 
     for edecl in module.enums.iter() {
-        let name = TypeAtom::new(slice_span(src, edecl.name)).ok_or(TcError::EnumNameInvalid { span: edecl.name })?;
+        let name = TypeAtom::new(slice_span(src, edecl.name))
+            .ok_or(TcError::EnumNameInvalid { span: edecl.name })?;
         let base = match edecl.base {
             Some(s) => {
                 parse_type_atom_from_span(src, s).ok_or(TcError::EnumBaseTypeInvalid { span: s })?
@@ -125,17 +140,27 @@ pub fn build_nominal_db(module: &ModuleAst, src: &[u8]) -> Result<NominalDb, TcE
         };
         let mut variants: FixedVec<EnumVariantInfo, 64> = FixedVec::new();
         for v in edecl.variants.iter() {
-            let vname = TypeAtom::new(slice_span(src, v.name)).ok_or(TcError::EnumVariantNameInvalid { span: v.name })?;
+            let vname = TypeAtom::new(slice_span(src, v.name))
+                .ok_or(TcError::EnumVariantNameInvalid { span: v.name })?;
             for existing in variants.iter() {
                 if existing.name == vname {
                     return Err(TcError::EnumVariantDuplicate { span: v.name });
                 }
             }
             variants
-                .push(EnumVariantInfo { name: vname, value: 0 })
+                .push(EnumVariantInfo {
+                    name: vname,
+                    value: 0,
+                })
                 .map_err(|_| TcError::EnumVariantCapacityExceeded { span: v.name })?;
         }
-        enums.push(EnumInfo { name, base, variants }).map_err(|_| TcError::EnumVariantCapacityExceeded { span: edecl.name })?;
+        enums
+            .push(EnumInfo {
+                name,
+                base,
+                variants,
+            })
+            .map_err(|_| TcError::EnumVariantCapacityExceeded { span: edecl.name })?;
     }
 
     Ok(NominalDb { structs, enums })

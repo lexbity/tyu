@@ -1,5 +1,7 @@
 #![no_std]
 #![deny(unsafe_op_in_unsafe_fn)]
 
-pub mod types;
+extern crate alloc;
+
 pub mod typecheck;
+pub mod types;

@@ -12,24 +12,48 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         let mut cur = cur;
         let n = self.sig.in_len as usize;
         for i in (0..n).rev() {
-            let v = pop(stack, sp).ok_or(TcError::StackUnderflow { span: Span::new(0, 0) })?;
+            let v = pop(stack, sp).ok_or(TcError::StackUnderflow {
+                span: Span::new(0, 0),
+            })?;
             let _ = v;
-            self.emit_op(cur, lir::OpKind::LocalSet { slot: i as u16, ty: self.word.sig.inputs[i] }, Span::new(0, 0))?;
+            self.emit_op(
+                cur,
+                lir::OpKind::LocalSet {
+                    slot: i as u16,
+                    ty: self.word.sig.inputs[i],
+                },
+                Span::new(0, 0),
+            )?;
         }
 
         if self.checks == ChecksMode::All {
             for i in 0..n {
                 if let Some(st) = find_subtype(self.subtypes, self.sig.inputs[i]) {
-                    self.emit_subtype_range_trap(cur, i as u16, self.word.sig.inputs[i], &st, Span::new(0, 0))?;
+                    self.emit_subtype_range_trap(
+                        cur,
+                        i as u16,
+                        self.word.sig.inputs[i],
+                        &st,
+                        Span::new(0, 0),
+                    )?;
                 }
             }
         }
 
         let mut params_on_stack = false;
-        if self.checks != ChecksMode::Off && (self.checks == ChecksMode::Contracts || self.checks == ChecksMode::All) {
+        if self.checks != ChecksMode::Off
+            && (self.checks == ChecksMode::Contracts || self.checks == ChecksMode::All)
+        {
             if let Some(req) = requires {
                 for i in 0..n {
-                    self.emit_op(cur, lir::OpKind::LocalGet { slot: i as u16, ty: self.word.sig.inputs[i] }, req)?;
+                    self.emit_op(
+                        cur,
+                        lir::OpKind::LocalGet {
+                            slot: i as u16,
+                            ty: self.word.sig.inputs[i],
+                        },
+                        req,
+                    )?;
                     push(stack, sp, Value::Plain(self.sig.inputs[i]))?;
                 }
                 cur = self.compile_quote_span(cur, stack, sp, req, false, false, observer)?;
@@ -45,14 +69,27 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                     }
                 }
                 let _ = pop(stack, sp);
-                self.emit_op(cur, lir::OpKind::TrapIfFalse { code: lir::TrapCode::ContractFail }, req)?;
+                self.emit_op(
+                    cur,
+                    lir::OpKind::TrapIfFalse {
+                        code: lir::TrapCode::ContractFail,
+                    },
+                    req,
+                )?;
                 params_on_stack = true;
             }
         }
 
         if !params_on_stack {
             for i in 0..n {
-                self.emit_op(cur, lir::OpKind::LocalGet { slot: i as u16, ty: self.word.sig.inputs[i] }, Span::new(0, 0))?;
+                self.emit_op(
+                    cur,
+                    lir::OpKind::LocalGet {
+                        slot: i as u16,
+                        ty: self.word.sig.inputs[i],
+                    },
+                    Span::new(0, 0),
+                )?;
                 push(stack, sp, Value::Plain(self.sig.inputs[i]))?;
             }
         }
@@ -69,7 +106,9 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
     ) -> Result<lir::BlockId, TcError> {
         let mut cur = cur;
 
-        if self.checks != ChecksMode::Off && (self.checks == ChecksMode::Contracts || self.checks == ChecksMode::All) {
+        if self.checks != ChecksMode::Off
+            && (self.checks == ChecksMode::Contracts || self.checks == ChecksMode::All)
+        {
             if let Some(ens) = ensures {
                 let n = self.sig.out_len as usize;
                 let base_sp = *sp;
@@ -86,7 +125,13 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                     }
                 }
                 let _ = pop(stack, sp);
-                self.emit_op(cur, lir::OpKind::TrapIfFalse { code: lir::TrapCode::ContractFail }, ens)?;
+                self.emit_op(
+                    cur,
+                    lir::OpKind::TrapIfFalse {
+                        code: lir::TrapCode::ContractFail,
+                    },
+                    ens,
+                )?;
             }
         }
 
@@ -96,19 +141,37 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             let base_sp = *sp;
             let tmp_base = self.temp_base_slot();
             for i in (0..n).rev() {
-                let v = pop(stack, sp).ok_or(TcError::StackUnderflow { span: Span::new(0, 0) })?;
+                let v = pop(stack, sp).ok_or(TcError::StackUnderflow {
+                    span: Span::new(0, 0),
+                })?;
                 let _ = v;
-                self.emit_op(cur, lir::OpKind::LocalSet { slot: tmp_base + i as u16, ty: self.word.sig.outputs[i] }, Span::new(0, 0))?;
+                self.emit_op(
+                    cur,
+                    lir::OpKind::LocalSet {
+                        slot: tmp_base + i as u16,
+                        ty: self.word.sig.outputs[i],
+                    },
+                    Span::new(0, 0),
+                )?;
             }
             for i in 0..n {
                 if let Some(st) = find_subtype(self.subtypes, self.sig.outputs[i]) {
-                    self.emit_subtype_range_trap(cur, tmp_base + i as u16, self.word.sig.outputs[i], &st, Span::new(0, 0))?;
+                    self.emit_subtype_range_trap(
+                        cur,
+                        tmp_base + i as u16,
+                        self.word.sig.outputs[i],
+                        &st,
+                        Span::new(0, 0),
+                    )?;
                 }
             }
             for i in 0..n {
                 self.emit_op(
                     cur,
-                    lir::OpKind::LocalGet { slot: tmp_base + i as u16, ty: self.word.sig.outputs[i] },
+                    lir::OpKind::LocalGet {
+                        slot: tmp_base + i as u16,
+                        ty: self.word.sig.outputs[i],
+                    },
                     Span::new(0, 0),
                 )?;
                 stack[i] = base_stack[i];

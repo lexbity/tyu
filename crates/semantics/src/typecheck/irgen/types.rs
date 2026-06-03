@@ -50,10 +50,21 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         let from = from_ty.as_bytes();
         let to = to_ty.as_bytes();
         let is_ptrish = |t: &[u8]| matches!(t, b"ptr" | b"ptr_mut");
-        let is_intish = |t: &[u8]| matches!(
-            t,
-            b"u8" | b"u16" | b"u32" | b"u64" | b"usize" | b"i8" | b"i16" | b"i32" | b"i64" | b"isize"
-        );
+        let is_intish = |t: &[u8]| {
+            matches!(
+                t,
+                b"u8"
+                    | b"u16"
+                    | b"u32"
+                    | b"u64"
+                    | b"usize"
+                    | b"i8"
+                    | b"i16"
+                    | b"i32"
+                    | b"i64"
+                    | b"isize"
+            )
+        };
 
         if is_ptrish(from) && is_intish(to) {
             return self.allow_raw_casts;
@@ -67,16 +78,38 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         true
     }
 
-    pub(super) fn ty_id_of_type(&mut self, ty: TypeAtom, span: Span) -> Result<lir::TypeId, TcError> {
-        intern_type(&mut self.word.types, &mut self.word.type_sizes, lir_atom(ty.as_bytes())?, self.nominals, span)
+    pub(super) fn ty_id_of_type(
+        &mut self,
+        ty: TypeAtom,
+        span: Span,
+    ) -> Result<lir::TypeId, TcError> {
+        intern_type(
+            &mut self.word.types,
+            &mut self.word.type_sizes,
+            lir_atom(ty.as_bytes())?,
+            self.nominals,
+            span,
+        )
     }
 
     pub(super) fn ty_id_of_value(&mut self, v: Value, span: Span) -> Result<lir::TypeId, TcError> {
         match v {
             Value::Plain(t) => self.ty_id_of_type(t, span),
             Value::Scoped { ty, .. } => self.ty_id_of_type(ty, span),
-            Value::Resource(_) => intern_type(&mut self.word.types, &mut self.word.type_sizes, lir::AT_RESOURCE, self.nominals, span),
-            Value::Quot(_) => intern_type(&mut self.word.types, &mut self.word.type_sizes, lir::AT_QUOT, self.nominals, span),
+            Value::Resource(_) => intern_type(
+                &mut self.word.types,
+                &mut self.word.type_sizes,
+                lir::AT_RESOURCE,
+                self.nominals,
+                span,
+            ),
+            Value::Quot(_) => intern_type(
+                &mut self.word.types,
+                &mut self.word.type_sizes,
+                lir::AT_QUOT,
+                self.nominals,
+                span,
+            ),
             Value::MmioPlace(_) => Ok(lir::TY_MMIO),
             Value::Ptr { mutable: false, .. } => Ok(lir::TY_PTR),
             Value::Ptr { mutable: true, .. } => Ok(lir::TY_PTR_MUT),
@@ -102,8 +135,14 @@ pub fn intern_type(
     if idx > u8::MAX as usize {
         return Err(TcError::TooManyTypes { span });
     }
-    let size = TypeAtom::new(atom.as_bytes()).and_then(|ty| type_size_bytes(ty, nominals)).unwrap_or(0);
-    types.push(atom).map_err(|_| TcError::TypeTableFull { span })?;
-    type_sizes.push(size).map_err(|_| TcError::TypeTableFull { span })?;
+    let size = TypeAtom::new(atom.as_bytes())
+        .and_then(|ty| type_size_bytes(ty, nominals))
+        .unwrap_or(0);
+    types
+        .push(atom)
+        .map_err(|_| TcError::TypeTableFull { span })?;
+    type_sizes
+        .push(size)
+        .map_err(|_| TcError::TypeTableFull { span })?;
     Ok(lir::TypeId(idx as u8))
 }

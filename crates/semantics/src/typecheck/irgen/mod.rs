@@ -1,39 +1,48 @@
-use crate::types::{WordEntry, WordSig, TypeAtom};
-use crate::typecheck::error::{TcError, ChecksMode};
-use crate::typecheck::value::Value;
-use crate::typecheck::db::{SubtypeInfo, ResourceDb, NominalDb, IsoDb, resource_ty, struct_field_ty, enum_variant_value, is_iso_type};
-use crate::typecheck::mmio::{MmioDb, resolve_mmio_place, MmioResolved, access_can_read, access_can_write, field_mask_shift};
-use crate::typecheck::util::{
-    apply_sig, array_elem_type, array_len, chan_elem_type, check_no_scoped_live, find_local, find_subtype, lookup,
-    parse_i64_token, push, pop, region_ref_type, slice_span, slice_type_of_elem, type_compatible, type_size_bytes,
-    field_align, align_up,
+use crate::typecheck::db::{
+    enum_variant_value, is_iso_type, resource_ty, struct_field_ty, IsoDb, NominalDb, ResourceDb,
+    SubtypeInfo,
 };
+use crate::typecheck::error::{ChecksMode, TcError};
 use crate::typecheck::mmio::mmio_type_width_bytes;
+use crate::typecheck::mmio::{
+    access_can_read, access_can_write, field_mask_shift, resolve_mmio_place, MmioDb, MmioResolved,
+};
+use crate::typecheck::parse::{
+    capture_balanced, capture_scoped_block, parse_place, read_qualified_name,
+};
 use crate::typecheck::util::parse_u32_any;
-use crate::typecheck::parse::{parse_place, read_qualified_name, capture_balanced, capture_scoped_block};
+use crate::typecheck::util::{
+    align_up, apply_sig, array_elem_type, array_len, chan_elem_type, check_no_scoped_live,
+    field_align, find_local, find_subtype, lookup, parse_i64_token, pop, push, region_ref_type,
+    slice_span, slice_type_of_elem, type_compatible, type_size_bytes,
+};
+use crate::typecheck::value::Value;
+use crate::types::{TypeAtom, WordEntry, WordSig};
 use core::mem::MaybeUninit;
 use frontend::fixed::FixedVec;
 use frontend::lex::Lexer;
 use frontend::parse::DeclAst;
 use frontend::span::Span;
 use frontend::token::{Token, TokenKind};
-use ir as lir;
+use ir::{self as lir, CapSet, EffectSet, StackBound};
 
 pub mod arena;
+mod compile;
 mod control;
 mod locals;
 mod observer;
+mod prologue;
 mod quotes;
 mod types;
-mod prologue;
-mod compile;
 
+pub use observer::{NullObserver, StackcheckObserver, TypecheckObserver};
 pub use types::intern_type;
-pub use observer::{TypecheckObserver, NullObserver, StackcheckObserver};
 
 struct QuoteSig {
     sig: WordSig,
-    may_suspend: bool,
+    performs: EffectSet,
+    requires: CapSet,
+    bound: StackBound,
     body: Span,
 }
 
@@ -101,40 +110,94 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         let mut types: FixedVec<lir::Atom, 64> = FixedVec::new();
         let mut type_sizes: FixedVec<u32, 64> = FixedVec::new();
         let z = lir::AT_EMPTY;
-        types.push(z).map_err(|_| TcError::TypeTableFull { span: Span::new(0, 0) })?;
-        type_sizes.push(0).map_err(|_| TcError::TypeTableFull { span: Span::new(0, 0) })?;
-        types.push(lir::AT_I64).map_err(|_| TcError::TypeTableFull { span: Span::new(0, 0) })?;
-        type_sizes.push(8).map_err(|_| TcError::TypeTableFull { span: Span::new(0, 0) })?;
-        types.push(lir::AT_BOOL).map_err(|_| TcError::TypeTableFull { span: Span::new(0, 0) })?;
-        type_sizes.push(1).map_err(|_| TcError::TypeTableFull { span: Span::new(0, 0) })?;
-        types.push(lir::AT_STR).map_err(|_| TcError::TypeTableFull { span: Span::new(0, 0) })?;
-        type_sizes.push(8).map_err(|_| TcError::TypeTableFull { span: Span::new(0, 0) })?;
-        types.push(lir::AT_PTR).map_err(|_| TcError::TypeTableFull { span: Span::new(0, 0) })?;
-        type_sizes.push(8).map_err(|_| TcError::TypeTableFull { span: Span::new(0, 0) })?;
-        types.push(lir::AT_PTR_MUT).map_err(|_| TcError::TypeTableFull { span: Span::new(0, 0) })?;
-        type_sizes.push(8).map_err(|_| TcError::TypeTableFull { span: Span::new(0, 0) })?;
-        types.push(lir::AT_MMIO).map_err(|_| TcError::TypeTableFull { span: Span::new(0, 0) })?;
-        type_sizes.push(8).map_err(|_| TcError::TypeTableFull { span: Span::new(0, 0) })?;
+        types.push(z).map_err(|_| TcError::TypeTableFull {
+            span: Span::new(0, 0),
+        })?;
+        type_sizes.push(0).map_err(|_| TcError::TypeTableFull {
+            span: Span::new(0, 0),
+        })?;
+        types
+            .push(lir::AT_I64)
+            .map_err(|_| TcError::TypeTableFull {
+                span: Span::new(0, 0),
+            })?;
+        type_sizes.push(8).map_err(|_| TcError::TypeTableFull {
+            span: Span::new(0, 0),
+        })?;
+        types
+            .push(lir::AT_BOOL)
+            .map_err(|_| TcError::TypeTableFull {
+                span: Span::new(0, 0),
+            })?;
+        type_sizes.push(1).map_err(|_| TcError::TypeTableFull {
+            span: Span::new(0, 0),
+        })?;
+        types
+            .push(lir::AT_STR)
+            .map_err(|_| TcError::TypeTableFull {
+                span: Span::new(0, 0),
+            })?;
+        type_sizes.push(8).map_err(|_| TcError::TypeTableFull {
+            span: Span::new(0, 0),
+        })?;
+        types
+            .push(lir::AT_PTR)
+            .map_err(|_| TcError::TypeTableFull {
+                span: Span::new(0, 0),
+            })?;
+        type_sizes.push(8).map_err(|_| TcError::TypeTableFull {
+            span: Span::new(0, 0),
+        })?;
+        types
+            .push(lir::AT_PTR_MUT)
+            .map_err(|_| TcError::TypeTableFull {
+                span: Span::new(0, 0),
+            })?;
+        type_sizes.push(8).map_err(|_| TcError::TypeTableFull {
+            span: Span::new(0, 0),
+        })?;
+        types
+            .push(lir::AT_MMIO)
+            .map_err(|_| TcError::TypeTableFull {
+                span: Span::new(0, 0),
+            })?;
+        type_sizes.push(8).map_err(|_| TcError::TypeTableFull {
+            span: Span::new(0, 0),
+        })?;
 
         let mut lir_sig = lir::Sig::empty();
         lir_sig.in_len = sig.in_len;
         lir_sig.out_len = sig.out_len;
         for i in 0..(sig.in_len as usize) {
             let atom = lir_atom(sig.inputs[i].as_bytes())?;
-            lir_sig.inputs[i] = intern_type(&mut types, &mut type_sizes, atom, nominals, Span::new(0, 0))?;
+            lir_sig.inputs[i] =
+                intern_type(&mut types, &mut type_sizes, atom, nominals, Span::new(0, 0))?;
         }
         for i in 0..(sig.out_len as usize) {
             let atom = lir_atom(sig.outputs[i].as_bytes())?;
-            lir_sig.outputs[i] = intern_type(&mut types, &mut type_sizes, atom, nominals, Span::new(0, 0))?;
+            lir_sig.outputs[i] =
+                intern_type(&mut types, &mut type_sizes, atom, nominals, Span::new(0, 0))?;
         }
 
         let mut blocks: FixedVec<lir::Block, 16> = FixedVec::new();
         let mut entry_stack: FixedVec<lir::TypeId, 32> = FixedVec::new();
         for i in 0..(lir_sig.in_len as usize) {
-            entry_stack.push(lir_sig.inputs[i]).map_err(|_| TcError::TypeTableFull { span: Span::new(0, 0) })?;
+            entry_stack
+                .push(lir_sig.inputs[i])
+                .map_err(|_| TcError::TypeTableFull {
+                    span: Span::new(0, 0),
+                })?;
         }
-        let entry_block = lir::Block { id: lir::BlockId(0), entry_stack, ops: FixedVec::new() };
-        blocks.push(entry_block).map_err(|_| TcError::BlockTableFull { span: Span::new(0, 0) })?;
+        let entry_block = lir::Block {
+            id: lir::BlockId(0),
+            entry_stack,
+            ops: FixedVec::new(),
+        };
+        blocks
+            .push(entry_block)
+            .map_err(|_| TcError::BlockTableFull {
+                span: Span::new(0, 0),
+            })?;
 
         let extra_words = FixedVec::new();
         let quote_id = 0u32;
@@ -162,6 +225,9 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             word: lir::Word {
                 name,
                 sig: lir_sig,
+                performs: EffectSet::empty(),
+                requires: CapSet::empty(),
+                bound: StackBound::ID,
                 entry: lir::BlockId(0),
                 types,
                 type_sizes,
@@ -177,22 +243,34 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         self.word
             .blocks
             .get_mut(id.0 as usize)
-            .ok_or(TcError::BlockNotFound { span: Span::new(0, 0) })
+            .ok_or(TcError::BlockNotFound {
+                span: Span::new(0, 0),
+            })
     }
 
-    fn new_block(&mut self, stack: &[Value; 256], sp: usize, span: Span) -> Result<lir::BlockId, TcError> {
+    fn new_block(
+        &mut self,
+        stack: &[Value; 256],
+        sp: usize,
+        span: Span,
+    ) -> Result<lir::BlockId, TcError> {
         let id = lir::BlockId(self.word.blocks.len() as u16);
         let mut entry_stack: FixedVec<lir::TypeId, 32> = FixedVec::new();
         for (_, v) in stack.iter().enumerate().take(sp) {
             let tid = self.ty_id_of_value(*v, span)?;
-            entry_stack.push(tid).map_err(|_| TcError::TypeTableFull { span })?;
+            entry_stack
+                .push(tid)
+                .map_err(|_| TcError::TypeTableFull { span })?;
         }
         let b = lir::Block {
             id,
             entry_stack,
             ops: FixedVec::new(),
         };
-        self.word.blocks.push(b).map_err(|_| TcError::BlockTableFull { span })?;
+        self.word
+            .blocks
+            .push(b)
+            .map_err(|_| TcError::BlockTableFull { span })?;
         Ok(id)
     }
 
@@ -211,7 +289,14 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         st: &SubtypeInfo,
         span: Span,
     ) -> Result<(), TcError> {
-        self.emit_op(cur, lir::OpKind::LocalGet { slot: value_slot, ty: value_ty }, span)?;
+        self.emit_op(
+            cur,
+            lir::OpKind::LocalGet {
+                slot: value_slot,
+                ty: value_ty,
+            },
+            span,
+        )?;
         self.emit_op(cur, lir::OpKind::ConstI64(st.min), span)?;
         self.emit_op(
             cur,
@@ -229,7 +314,14 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             span,
         )?;
 
-        self.emit_op(cur, lir::OpKind::LocalGet { slot: value_slot, ty: value_ty }, span)?;
+        self.emit_op(
+            cur,
+            lir::OpKind::LocalGet {
+                slot: value_slot,
+                ty: value_ty,
+            },
+            span,
+        )?;
         self.emit_op(cur, lir::OpKind::ConstI64(st.max), span)?;
         self.emit_op(
             cur,
@@ -249,7 +341,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         Ok(())
     }
 
-    fn resolve_place_pointee_ty(&self, place_bytes: &[u8], place_abs: Span) -> Result<Option<TypeAtom>, TcError> {
+    fn resolve_place_pointee_ty(
+        &self,
+        place_bytes: &[u8],
+        place_abs: Span,
+    ) -> Result<Option<TypeAtom>, TcError> {
         let mut segs: FixedVec<(TypeAtom, bool), 8> = FixedVec::new();
         let mut start = 0usize;
         for i in 0..=place_bytes.len() {
@@ -265,8 +361,10 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 } else {
                     (seg, &[][..])
                 };
-                let atom = TypeAtom::new(name_bytes).ok_or(TcError::PlaceSegmentEmpty { span: place_abs })?;
-                segs.push((atom, has_index)).map_err(|_| TcError::PlaceSegmentEmpty { span: place_abs })?;
+                let atom = TypeAtom::new(name_bytes)
+                    .ok_or(TcError::PlaceSegmentEmpty { span: place_abs })?;
+                segs.push((atom, has_index))
+                    .map_err(|_| TcError::PlaceSegmentEmpty { span: place_abs })?;
                 start = i + 1;
             }
         }
@@ -314,7 +412,10 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             let w = arena.alloc(self.word, span)?;
             &*(w as *const lir::Word)
         };
-        Ok(IrWordOutput { word, extra_words: self.extra_words })
+        Ok(IrWordOutput {
+            word,
+            extra_words: self.extra_words,
+        })
     }
 }
 
@@ -366,11 +467,21 @@ pub fn build_ir_word<'r>(
     cur = gen.emit_prologue(cur, &mut stack, &mut sp, decl.requires, observer)?;
 
     if let Some(body_span) = decl.body {
-        cur = gen.compile_span(cur, &mut stack, &mut sp, body_span, decl.effect_suspend, true, observer)?;
+        cur = gen.compile_span(
+            cur,
+            &mut stack,
+            &mut sp,
+            body_span,
+            decl.effect_bits & 1 != 0, // bit 0 = SUSPEND
+            true,
+            observer,
+        )?;
     }
 
     if !gen.check_no_scoped_live(&stack, sp) {
-        return Err(TcError::ScopedLeak { span: decl.body.unwrap_or(decl.name) });
+        return Err(TcError::ScopedLeak {
+            span: decl.body.unwrap_or(decl.name),
+        });
     }
 
     if gen.terminated {
@@ -379,7 +490,9 @@ pub fn build_ir_word<'r>(
     }
 
     if sp != sig.out_len as usize {
-        return Err(TcError::OutputCountMismatch { span: decl.body.unwrap_or(decl.name) });
+        return Err(TcError::OutputCountMismatch {
+            span: decl.body.unwrap_or(decl.name),
+        });
     }
     for (i, v) in stack.iter().enumerate().take(sig.out_len as usize) {
         let got = match v {
@@ -394,7 +507,9 @@ pub fn build_ir_word<'r>(
             Value::MmioPtr { mutable: true, .. } => TypeAtom::PTR_MUT,
         };
         if !type_compatible(got, sig.outputs[i], subtypes) {
-            return Err(TcError::OutputTypeMismatch { span: decl.body.unwrap_or(decl.name) });
+            return Err(TcError::OutputTypeMismatch {
+                span: decl.body.unwrap_or(decl.name),
+            });
         }
     }
 
@@ -405,5 +520,7 @@ pub fn build_ir_word<'r>(
 }
 
 pub fn lir_atom(bytes: &[u8]) -> Result<lir::Atom, TcError> {
-    lir::Atom::new(bytes).ok_or(TcError::AtomTooLong { span: Span::new(0, 0) })
+    lir::Atom::new(bytes).ok_or(TcError::AtomTooLong {
+        span: Span::new(0, 0),
+    })
 }

@@ -1,8 +1,8 @@
+use crate::typecheck::util::{parse_u32_any, push_bytes, push_u32_dec};
+use crate::types::{SigParseError, TypeAtom, WordSig};
 use frontend::lex::Lexer;
 use frontend::span::Span;
 use frontend::token::{Token, TokenKind};
-use crate::types::{WordSig, SigParseError, TypeAtom};
-use crate::typecheck::util::{parse_u32_any, push_bytes, push_u32_dec};
 
 pub fn parse_word_sig(src: &[u8], sig_span: Span) -> Result<WordSig, SigParseError> {
     let mut sig = WordSig::empty();
@@ -33,21 +33,30 @@ pub fn parse_word_sig(src: &[u8], sig_span: Span) -> Result<WordSig, SigParseErr
         let start = i;
         let (atom, next) = parse_type_expr(slice, i).ok_or(SigParseError {
             code: 3100,
-            span: Span::new(sig_span.start + start, sig_span.start + core::cmp::min(start + 1, slice.len())),
+            span: Span::new(
+                sig_span.start + start,
+                sig_span.start + core::cmp::min(start + 1, slice.len()),
+            ),
         })?;
         i = next;
 
         if in_phase {
             let idx = sig.in_len as usize;
             if idx >= sig.inputs.len() {
-                return Err(SigParseError { code: 3102, span: sig_span });
+                return Err(SigParseError {
+                    code: 3102,
+                    span: sig_span,
+                });
             }
             sig.inputs[idx] = atom;
             sig.in_len += 1;
         } else {
             let idx = sig.out_len as usize;
             if idx >= sig.outputs.len() {
-                return Err(SigParseError { code: 3103, span: sig_span });
+                return Err(SigParseError {
+                    code: 3103,
+                    span: sig_span,
+                });
             }
             sig.outputs[idx] = atom;
             sig.out_len += 1;
@@ -74,7 +83,11 @@ pub fn parse_type_expr(slice: &[u8], mut i: usize) -> Option<(TypeAtom, usize)> 
             j += 1;
         }
         let (_, next) = parse_type_expr(slice, j)?;
-        let atom = if mutable { TypeAtom::new(b"ptr_mut")? } else { TypeAtom::new(b"ptr")? };
+        let atom = if mutable {
+            TypeAtom::new(b"ptr_mut")?
+        } else {
+            TypeAtom::new(b"ptr")?
+        };
         return Some((atom, next));
     }
 
@@ -119,7 +132,10 @@ pub fn parse_type_expr(slice: &[u8], mut i: usize) -> Option<(TypeAtom, usize)> 
     let ident_start = i;
     while i < slice.len() {
         let b = slice[i];
-        if matches!(b, b'(' | b')' | b',' | b'\'' | b'|' | b' ' | b'\n' | b'\r' | b'\t') {
+        if matches!(
+            b,
+            b'(' | b')' | b',' | b'\'' | b'|' | b' ' | b'\n' | b'\r' | b'\t'
+        ) {
             break;
         }
         i += 1;
@@ -257,7 +273,11 @@ pub struct ScopedBlock {
     pub inner_end: usize,
 }
 
-pub fn capture_scoped_block(lex: &mut Lexer<'_>, slice: &[u8], open_span: Span) -> Result<ScopedBlock, u32> {
+pub fn capture_scoped_block(
+    lex: &mut Lexer<'_>,
+    slice: &[u8],
+    open_span: Span,
+) -> Result<ScopedBlock, u32> {
     let mut depth = 1usize;
     let inner_start = open_span.end;
     loop {
@@ -269,10 +289,15 @@ pub fn capture_scoped_block(lex: &mut Lexer<'_>, slice: &[u8], open_span: Span) 
                 if depth == 0 {
                     let inner_end = t.span.start;
                     let _ = slice;
-                    return Ok(ScopedBlock { inner_start, inner_end });
+                    return Ok(ScopedBlock {
+                        inner_start,
+                        inner_end,
+                    });
                 }
             }
-            TokenKind::PunctLBracket | TokenKind::PunctAmpLBracket | TokenKind::PunctAmpBangLBracket => {
+            TokenKind::PunctLBracket
+            | TokenKind::PunctAmpLBracket
+            | TokenKind::PunctAmpBangLBracket => {
                 depth += 1;
             }
             _ => {}

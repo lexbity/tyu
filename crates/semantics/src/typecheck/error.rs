@@ -5,176 +5,513 @@ pub use frontend::parse::Output;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TcError {
     // 3000-3099: Internal (catch-all)
-    Internal { span: Span },
+    Internal {
+        span: Span,
+    },
 
     // 3200-3299: Stack/Control Flow/Argument/Binding Errors
-    NoSig { span: Span },
-    ExpectedIdent { span: Span },
-    StackUnderflow { span: Span },
-    TypeParseFailed { span: Span },
-    BindingAlreadyDefined { span: Span },
-    BindingCapacityExceeded { span: Span },
-    StackOverflow { span: Span },
-    WordNotFound { span: Span },
-    SigStackUnderflow { span: Span },
-    SigTypeMismatch { span: Span },
-    OutputCountMismatch { span: Span },
-    OutputTypeMismatch { span: Span },
-    ReturnStackDepth { span: Span },
-    ReturnTypeMismatch { span: Span },
-    IfPopElse { span: Span },
-    IfPopThen { span: Span },
-    IfPopCond { span: Span },
-    IfCondNotBool { span: Span },
-    IfThenNotQuot { span: Span },
-    IfElseNotQuot { span: Span },
-    IfBranchDepth { span: Span },
-    IfBranchContent { span: Span },
-    WhilePopBody { span: Span },
-    WhilePopCond { span: Span },
-    WhileBodyNotQuot { span: Span },
-    WhileCondNotQuot { span: Span },
-    WhileCondDepth { span: Span },
-    WhileCondNotBool { span: Span },
-    WhileCondModifiedStack { span: Span },
-    WhileBodyDepth { span: Span },
-    WhileBodyModifiedStack { span: Span },
-    LoopPopBody { span: Span },
-    LoopBodyNotQuot { span: Span },
-    LoopBodyDepth { span: Span },
-    LoopBodyModifiedStack { span: Span },
-    LockPopBody { span: Span },
-    LockBodyNotQuot { span: Span },
-    LockBodyDepth { span: Span },
-    LockBodyModifiedStack { span: Span },
-    BindNotAllowed { span: Span },
-    CastParseFailed { span: Span },
-    CastPopValue { span: Span },
-    CastSubtypeMismatch { span: Span },
-    BitcastOnSubtype { span: Span },
-    BitcastWidthUnknown { span: Span },
-    BitcastWidthMismatch { span: Span },
-    CastNotAllowed { span: Span },
-    ContractDepth { span: Span },
-    ContractNotBool { span: Span },
-    ContractModifiedInputs { span: Span },
+    NoSig {
+        span: Span,
+    },
+    ExpectedIdent {
+        span: Span,
+    },
+    StackUnderflow {
+        span: Span,
+    },
+    TypeParseFailed {
+        span: Span,
+    },
+    BindingAlreadyDefined {
+        span: Span,
+    },
+    BindingCapacityExceeded {
+        span: Span,
+    },
+    StackOverflow {
+        span: Span,
+    },
+    WordNotFound {
+        span: Span,
+    },
+    SigStackUnderflow {
+        span: Span,
+    },
+    SigTypeMismatch {
+        span: Span,
+    },
+    OutputCountMismatch {
+        span: Span,
+    },
+    OutputTypeMismatch {
+        span: Span,
+    },
+    ReturnStackDepth {
+        span: Span,
+    },
+    ReturnTypeMismatch {
+        span: Span,
+    },
+    IfPopElse {
+        span: Span,
+    },
+    IfPopThen {
+        span: Span,
+    },
+    IfPopCond {
+        span: Span,
+    },
+    IfCondNotBool {
+        span: Span,
+    },
+    IfThenNotQuot {
+        span: Span,
+    },
+    IfElseNotQuot {
+        span: Span,
+    },
+    IfBranchDepth {
+        span: Span,
+    },
+    IfBranchContent {
+        span: Span,
+    },
+    WhilePopBody {
+        span: Span,
+    },
+    WhilePopCond {
+        span: Span,
+    },
+    WhileBodyNotQuot {
+        span: Span,
+    },
+    WhileCondNotQuot {
+        span: Span,
+    },
+    WhileCondDepth {
+        span: Span,
+    },
+    WhileCondNotBool {
+        span: Span,
+    },
+    WhileCondModifiedStack {
+        span: Span,
+    },
+    WhileBodyDepth {
+        span: Span,
+    },
+    WhileBodyModifiedStack {
+        span: Span,
+    },
+    LoopPopBody {
+        span: Span,
+    },
+    LoopBodyNotQuot {
+        span: Span,
+    },
+    LoopBodyDepth {
+        span: Span,
+    },
+    LoopBodyModifiedStack {
+        span: Span,
+    },
+    LockPopBody {
+        span: Span,
+    },
+    LockBodyNotQuot {
+        span: Span,
+    },
+    LockBodyDepth {
+        span: Span,
+    },
+    LockBodyModifiedStack {
+        span: Span,
+    },
+    BindNotAllowed {
+        span: Span,
+    },
+    CastParseFailed {
+        span: Span,
+    },
+    CastPopValue {
+        span: Span,
+    },
+    CastSubtypeMismatch {
+        span: Span,
+    },
+    BitcastOnSubtype {
+        span: Span,
+    },
+    BitcastWidthUnknown {
+        span: Span,
+    },
+    BitcastWidthMismatch {
+        span: Span,
+    },
+    CastNotAllowed {
+        span: Span,
+    },
+    ContractDepth {
+        span: Span,
+    },
+    ContractNotBool {
+        span: Span,
+    },
+    ContractModifiedInputs {
+        span: Span,
+    },
 
     // 3500-3519: Scoped values
-    PlaceParseFailed { span: Span },
-    MutRefToLocal { span: Span },
-    ScopedLiveAtSuspend { span: Span },
-    SuspendingInNonSuspendingContext { span: Span },
-    ScopedLeak { span: Span },
-    EmptyStackForScoped { span: Span },
-    ScopedMarkerLeak { span: Span },
-    ReturnWithScoped { span: Span },
-    ScopeDepthExceeded { span: Span },
-    SliceTypeFailed { span: Span },
-    LocalNotLive { span: Span },
-    ScopedTypeMismatch { span: Span },
-    LockNested { span: Span },
-    ArrayIndexOob { span: Span },
-    IndexError { span: Span },
+    PlaceParseFailed {
+        span: Span,
+    },
+    MutRefToLocal {
+        span: Span,
+    },
+    ScopedLiveAtSuspend {
+        span: Span,
+    },
+    SuspendingInNonSuspendingContext {
+        span: Span,
+    },
+    ScopedLeak {
+        span: Span,
+    },
+    EmptyStackForScoped {
+        span: Span,
+    },
+    ScopedMarkerLeak {
+        span: Span,
+    },
+    ReturnWithScoped {
+        span: Span,
+    },
+    ScopeDepthExceeded {
+        span: Span,
+    },
+    SliceTypeFailed {
+        span: Span,
+    },
+    LocalNotLive {
+        span: Span,
+    },
+    ScopedTypeMismatch {
+        span: Span,
+    },
+    LockNested {
+        span: Span,
+    },
+    ArrayIndexOob {
+        span: Span,
+    },
+    IndexError {
+        span: Span,
+    },
 
     // 3520-3522: Resources/db
-    ResourceNameInvalid { span: Span },
-    ResourceTypeInvalid { span: Span },
-    ResourceCapacityExceeded { span: Span },
+    ResourceNameInvalid {
+        span: Span,
+    },
+    ResourceTypeInvalid {
+        span: Span,
+    },
+    ResourceCapacityExceeded {
+        span: Span,
+    },
 
     // 3600-3614: MMIO
-    MmioPlaceTooDeep { span: Span },
-    MmioMapNotFound { span: Span },
-    MmioRegNotFound { span: Span },
-    MmioArrayIndexOob { span: Span },
-    MmioArrayIndexNonArray { span: Span },
-    MmioFieldNotFound { span: Span },
-    MmioFieldNotAddressable { span: Span },
-    MmioAccessViolation { span: Span },
-    MmioReadNotAllowed { span: Span },
-    MmioRegMisaligned { span: Span },
-    MmioRegUnknownWidth { span: Span },
-    MmioTypedTypeMismatch { span: Span },
-    MmioTypedNotAllowed { span: Span },
+    MmioPlaceTooDeep {
+        span: Span,
+    },
+    MmioMapNotFound {
+        span: Span,
+    },
+    MmioRegNotFound {
+        span: Span,
+    },
+    MmioArrayIndexOob {
+        span: Span,
+    },
+    MmioArrayIndexNonArray {
+        span: Span,
+    },
+    MmioFieldNotFound {
+        span: Span,
+    },
+    MmioFieldNotAddressable {
+        span: Span,
+    },
+    MmioAccessViolation {
+        span: Span,
+    },
+    MmioReadNotAllowed {
+        span: Span,
+    },
+    MmioRegMisaligned {
+        span: Span,
+    },
+    MmioRegUnknownWidth {
+        span: Span,
+    },
+    MmioTypedTypeMismatch {
+        span: Span,
+    },
+    MmioTypedNotAllowed {
+        span: Span,
+    },
 
     // 3615-3631: MMIO parsing
-    MmioParseFailed { span: Span },
-    MmioExpectedIdent { span: Span },
-    MmioFieldBitRange { span: Span },
-    MmioExpectedType { span: Span },
-    MmioExpectedAccess { span: Span },
-    MmioInvalidAccess { span: Span },
-    MmioUnexpectedEof { span: Span },
-    MmioExpectedLowBit { span: Span },
-    MmioBadLowBit { span: Span },
-    MmioExpectedHighBit { span: Span },
-    MmioBadHighBit { span: Span },
-    MmioExpectedFieldType { span: Span },
-    MmioExpectedFieldAccess { span: Span },
-    MmioInvalidFieldAccess { span: Span },
+    MmioParseFailed {
+        span: Span,
+    },
+    MmioExpectedIdent {
+        span: Span,
+    },
+    MmioFieldBitRange {
+        span: Span,
+    },
+    MmioExpectedType {
+        span: Span,
+    },
+    MmioExpectedAccess {
+        span: Span,
+    },
+    MmioInvalidAccess {
+        span: Span,
+    },
+    MmioUnexpectedEof {
+        span: Span,
+    },
+    MmioExpectedLowBit {
+        span: Span,
+    },
+    MmioBadLowBit {
+        span: Span,
+    },
+    MmioExpectedHighBit {
+        span: Span,
+    },
+    MmioBadHighBit {
+        span: Span,
+    },
+    MmioExpectedFieldType {
+        span: Span,
+    },
+    MmioExpectedFieldAccess {
+        span: Span,
+    },
+    MmioInvalidFieldAccess {
+        span: Span,
+    },
 
     // 3632-3634: MMIO typed(load/store resolution)
-    MmioTypedAtomInvalid { span: Span },
-    MmioTypedPopAddr { span: Span },
-    MmioTypedMismatch { span: Span },
+    MmioTypedAtomInvalid {
+        span: Span,
+    },
+    MmioTypedPopAddr {
+        span: Span,
+    },
+    MmioTypedMismatch {
+        span: Span,
+    },
 
     // 3700-3718: Struct/Enum
-    DestructBorrowMix { span: Span },
-    DestructExpectedIdent { span: Span },
-    DestructEmpty { span: Span },
-    DestructNotStruct { span: Span },
-    DestructFieldCount { span: Span },
-    StructNameInvalid { span: Span },
-    StructFieldNameInvalid { span: Span },
-    StructFieldDuplicate { span: Span },
-    StructFieldTypeInvalid { span: Span },
-    StructDbCapacity { span: Span },
-    PlaceSegmentEmpty { span: Span },
-    FieldNotFound { span: Span },
-    TypedLoadStoreTypeMismatch { span: Span },
-    FieldSizeError { span: Span },
+    DestructBorrowMix {
+        span: Span,
+    },
+    DestructExpectedIdent {
+        span: Span,
+    },
+    DestructEmpty {
+        span: Span,
+    },
+    DestructNotStruct {
+        span: Span,
+    },
+    DestructFieldCount {
+        span: Span,
+    },
+    StructNameInvalid {
+        span: Span,
+    },
+    StructFieldNameInvalid {
+        span: Span,
+    },
+    StructFieldDuplicate {
+        span: Span,
+    },
+    StructFieldTypeInvalid {
+        span: Span,
+    },
+    StructDbCapacity {
+        span: Span,
+    },
+    PlaceSegmentEmpty {
+        span: Span,
+    },
+    FieldNotFound {
+        span: Span,
+    },
+    TypedLoadStoreTypeMismatch {
+        span: Span,
+    },
+    FieldSizeError {
+        span: Span,
+    },
 
     // 3720-3725: Enum
-    EnumNameInvalid { span: Span },
-    EnumBaseTypeInvalid { span: Span },
-    EnumVariantNameInvalid { span: Span },
-    EnumVariantDuplicate { span: Span },
-    EnumVariantCapacityExceeded { span: Span },
-    EnumVariantNotFound { span: Span },
+    EnumNameInvalid {
+        span: Span,
+    },
+    EnumBaseTypeInvalid {
+        span: Span,
+    },
+    EnumVariantNameInvalid {
+        span: Span,
+    },
+    EnumVariantDuplicate {
+        span: Span,
+    },
+    EnumVariantCapacityExceeded {
+        span: Span,
+    },
+    EnumVariantNotFound {
+        span: Span,
+    },
 
     // 3730-3734: Channel send/recv
-    ChanSendPop { span: Span },
-    ChanSendType { span: Span },
-    ChanSendValueMismatch { span: Span },
-    ChanRecvPop { span: Span },
-    ChanRecvType { span: Span },
+    ChanSendPop {
+        span: Span,
+    },
+    ChanSendType {
+        span: Span,
+    },
+    ChanSendValueMismatch {
+        span: Span,
+    },
+    ChanRecvPop {
+        span: Span,
+    },
+    ChanRecvType {
+        span: Span,
+    },
 
     // 3740-3743: Iso
-    IsoNameInvalid { span: Span },
-    IsoCapacityExceeded { span: Span },
-    IsoDupForbidden { span: Span },
-    IsoDropForbidden { span: Span },
+    IsoNameInvalid {
+        span: Span,
+    },
+    IsoCapacityExceeded {
+        span: Span,
+    },
+    IsoDupForbidden {
+        span: Span,
+    },
+    IsoDropForbidden {
+        span: Span,
+    },
 
     // 3750-3760: Task/Call/Quote
-    TaskRunPop { span: Span },
-    TaskRunNotQuot { span: Span },
-    TaskRunDepth { span: Span },
-    TaskRunModified { span: Span },
-    TaskSpawnPop { span: Span },
-    TaskSpawnSig { span: Span },
-    TaskSpawnType { span: Span },
-    CallPopQuot { span: Span },
-    QuoteSyntax { span: Span },
+    TaskRunPop {
+        span: Span,
+    },
+    TaskRunNotQuot {
+        span: Span,
+    },
+    TaskRunDepth {
+        span: Span,
+    },
+    TaskRunModified {
+        span: Span,
+    },
+    TaskSpawnPop {
+        span: Span,
+    },
+    TaskSpawnSig {
+        span: Span,
+    },
+    TaskSpawnType {
+        span: Span,
+    },
+    CallPopQuot {
+        span: Span,
+    },
+    QuoteSyntax {
+        span: Span,
+    },
 
     // 3900-3907: Capacity/Internal
-    AtomTooLong { span: Span },
+    AtomTooLong {
+        span: Span,
+    },
     /// Catch-all for errors converted from other error types (e.g., VerifyError).
-    InternalError { code: u32, span: Span },
-    TypeTableFull { span: Span },
-    BlockTableFull { span: Span },
-    BlockNotFound { span: Span },
-    OpTableFull { span: Span },
-    ArenaFull { span: Span },
-    TooManyTypes { span: Span },
+    InternalError {
+        code: u32,
+        span: Span,
+    },
+    TypeTableFull {
+        span: Span,
+    },
+    BlockTableFull {
+        span: Span,
+    },
+    BlockNotFound {
+        span: Span,
+    },
+    OpTableFull {
+        span: Span,
+    },
+    ArenaFull {
+        span: Span,
+    },
+    TooManyTypes {
+        span: Span,
+    },
+
+    // 5000-5040: Effect / Capability / Context errors
+    SuspendForbidden {
+        span: Span,
+    },
+    LockNest {
+        span: Span,
+    },
+    LockStack {
+        span: Span,
+    },
+    CapMissing {
+        span: Span,
+    },
+    IsoDup {
+        span: Span,
+    },
+    IsoDrop {
+        span: Span,
+    },
+    IsoUseAfterMove {
+        span: Span,
+    },
+    BorrowEscape {
+        span: Span,
+    },
+    IsrStack {
+        span: Span,
+    },
+    ResourceSharedUnlocked {
+        span: Span,
+    },
+    DivergeInBounded {
+        span: Span,
+    },
+
+    // 5100-5103: Stack depth errors
+    StackUnbounded {
+        span: Span,
+    },
+    StackExceedsBudget {
+        span: Span,
+    },
+    StackQuotErased {
+        span: Span,
+    },
 }
 
 impl TcError {
@@ -325,6 +662,20 @@ impl TcError {
             TcError::OpTableFull { .. } => 3905,
             TcError::ArenaFull { .. } => 3906,
             TcError::TooManyTypes { .. } => 3907,
+            TcError::SuspendForbidden { .. } => 5001,
+            TcError::LockNest { .. } => 5002,
+            TcError::LockStack { .. } => 5003,
+            TcError::CapMissing { .. } => 5004,
+            TcError::IsoDup { .. } => 5010,
+            TcError::IsoDrop { .. } => 5011,
+            TcError::IsoUseAfterMove { .. } => 5012,
+            TcError::BorrowEscape { .. } => 5020,
+            TcError::IsrStack { .. } => 5030,
+            TcError::ResourceSharedUnlocked { .. } => 5031,
+            TcError::DivergeInBounded { .. } => 5040,
+            TcError::StackUnbounded { .. } => 5100,
+            TcError::StackExceedsBudget { .. } => 5101,
+            TcError::StackQuotErased { .. } => 5103,
         }
     }
 
@@ -474,7 +825,21 @@ impl TcError {
             | TcError::BlockNotFound { span }
             | TcError::OpTableFull { span }
             | TcError::ArenaFull { span }
-            | TcError::TooManyTypes { span } => span,
+            | TcError::TooManyTypes { span }
+            | TcError::SuspendForbidden { span }
+            | TcError::LockNest { span }
+            | TcError::LockStack { span }
+            | TcError::CapMissing { span }
+            | TcError::IsoDup { span }
+            | TcError::IsoDrop { span }
+            | TcError::IsoUseAfterMove { span }
+            | TcError::BorrowEscape { span }
+            | TcError::IsrStack { span }
+            | TcError::ResourceSharedUnlocked { span }
+            | TcError::DivergeInBounded { span }
+            | TcError::StackUnbounded { span }
+            | TcError::StackExceedsBudget { span }
+            | TcError::StackQuotErased { span } => span,
         }
     }
 }

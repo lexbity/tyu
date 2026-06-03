@@ -1,12 +1,15 @@
-use crate::types::{TypeAtom, WordEntry, WordSig};
-use crate::typecheck::error::{TcError, Output};
-use crate::typecheck::value::Value;
 use crate::typecheck::db::{NominalDb, SubtypeInfo};
+use crate::typecheck::error::{Output, TcError};
+use crate::typecheck::value::Value;
+use crate::types::{TypeAtom, WordEntry, WordSig};
 use frontend::span::Span;
+use ir::EffectSet;
 
 pub fn push(stack: &mut [Value; 256], sp: &mut usize, v: Value) -> Result<(), TcError> {
     if *sp >= stack.len() {
-        return Err(TcError::StackOverflow { span: Span::UNKNOWN });
+        return Err(TcError::StackOverflow {
+            span: Span::UNKNOWN,
+        });
     }
     stack[*sp] = v;
     *sp += 1;
@@ -353,7 +356,7 @@ pub fn apply_sig(
     span: Span,
     subtypes: &[SubtypeInfo],
 ) -> Result<(), TcError> {
-    if entry.may_suspend && !check_no_scoped_live(stack, *sp) {
+    if entry.performs.contains(EffectSet::SUSPEND) && !check_no_scoped_live(stack, *sp) {
         return Err(TcError::ScopedLiveAtSuspend { span });
     }
 
@@ -363,9 +366,9 @@ pub fn apply_sig(
         return Err(TcError::SigStackUnderflow { span });
     }
     // Check types from top.
-	    for i in 0..need {
-	        let got = stack[*sp - need + i];
-	        let got = got.to_type_atom();
+    for i in 0..need {
+        let got = stack[*sp - need + i];
+        let got = got.to_type_atom();
         if !type_compatible(got, sig.inputs[i], subtypes) {
             return Err(TcError::SigTypeMismatch { span });
         }
@@ -446,18 +449,18 @@ pub fn write_stack(out: &mut dyn Output, stack: &[Value; 256], sp: usize) {
         if i != 0 {
             out.write(b" ");
         }
-	        match v {
-	            Value::Plain(t) => out.write(t.as_bytes()),
-	            Value::Scoped { ty, .. } => out.write(ty.as_bytes()),
-	            Value::Resource(name) => out.write(name.as_bytes()),
-	            Value::Quot(_) => out.write(b"quot"),
-	            Value::MmioPlace(_) => out.write(b"mmio"),
-	            Value::Ptr { mutable: false, .. } => out.write(b"ptr"),
-	            Value::Ptr { mutable: true, .. } => out.write(b"ptr_mut"),
-	            Value::MmioPtr { mutable: false, .. } => out.write(b"mmio_ptr"),
-	            Value::MmioPtr { mutable: true, .. } => out.write(b"mmio_ptr_mut"),
-	        }
-	    }
+        match v {
+            Value::Plain(t) => out.write(t.as_bytes()),
+            Value::Scoped { ty, .. } => out.write(ty.as_bytes()),
+            Value::Resource(name) => out.write(name.as_bytes()),
+            Value::Quot(_) => out.write(b"quot"),
+            Value::MmioPlace(_) => out.write(b"mmio"),
+            Value::Ptr { mutable: false, .. } => out.write(b"ptr"),
+            Value::Ptr { mutable: true, .. } => out.write(b"ptr_mut"),
+            Value::MmioPtr { mutable: false, .. } => out.write(b"mmio_ptr"),
+            Value::MmioPtr { mutable: true, .. } => out.write(b"mmio_ptr_mut"),
+        }
+    }
 }
 
 pub fn write_u64_dec(out: &mut impl Output, mut v: u64) {

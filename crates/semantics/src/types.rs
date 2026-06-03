@@ -1,4 +1,5 @@
 use frontend::span::Span;
+use ir::{CapSet, EffectSet, StackBound};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TypeAtom {
@@ -9,16 +10,46 @@ pub struct TypeAtom {
 impl TypeAtom {
     // Static constants for built-in type atoms.
     // These avoid repeated `TypeAtom::new(b"...").expect(...)` calls.
-    pub const EMPTY: TypeAtom = match TypeAtom::new(b"") { Some(a) => a, None => unreachable!() };
-    pub const I64: TypeAtom = match TypeAtom::new(b"i64") { Some(a) => a, None => unreachable!() };
-    pub const BOOL: TypeAtom = match TypeAtom::new(b"bool") { Some(a) => a, None => unreachable!() };
-    pub const STR: TypeAtom = match TypeAtom::new(b"str") { Some(a) => a, None => unreachable!() };
-    pub const PTR: TypeAtom = match TypeAtom::new(b"ptr") { Some(a) => a, None => unreachable!() };
-    pub const PTR_MUT: TypeAtom = match TypeAtom::new(b"ptr_mut") { Some(a) => a, None => unreachable!() };
-    pub const MMIO: TypeAtom = match TypeAtom::new(b"mmio") { Some(a) => a, None => unreachable!() };
-    pub const QUOT: TypeAtom = match TypeAtom::new(b"quot") { Some(a) => a, None => unreachable!() };
-    pub const RESOURCE: TypeAtom = match TypeAtom::new(b"resource") { Some(a) => a, None => unreachable!() };
-    pub const SCOPED: TypeAtom = match TypeAtom::new(b"scoped") { Some(a) => a, None => unreachable!() };
+    pub const EMPTY: TypeAtom = match TypeAtom::new(b"") {
+        Some(a) => a,
+        None => unreachable!(),
+    };
+    pub const I64: TypeAtom = match TypeAtom::new(b"i64") {
+        Some(a) => a,
+        None => unreachable!(),
+    };
+    pub const BOOL: TypeAtom = match TypeAtom::new(b"bool") {
+        Some(a) => a,
+        None => unreachable!(),
+    };
+    pub const STR: TypeAtom = match TypeAtom::new(b"str") {
+        Some(a) => a,
+        None => unreachable!(),
+    };
+    pub const PTR: TypeAtom = match TypeAtom::new(b"ptr") {
+        Some(a) => a,
+        None => unreachable!(),
+    };
+    pub const PTR_MUT: TypeAtom = match TypeAtom::new(b"ptr_mut") {
+        Some(a) => a,
+        None => unreachable!(),
+    };
+    pub const MMIO: TypeAtom = match TypeAtom::new(b"mmio") {
+        Some(a) => a,
+        None => unreachable!(),
+    };
+    pub const QUOT: TypeAtom = match TypeAtom::new(b"quot") {
+        Some(a) => a,
+        None => unreachable!(),
+    };
+    pub const RESOURCE: TypeAtom = match TypeAtom::new(b"resource") {
+        Some(a) => a,
+        None => unreachable!(),
+    };
+    pub const SCOPED: TypeAtom = match TypeAtom::new(b"scoped") {
+        Some(a) => a,
+        None => unreachable!(),
+    };
 
     pub const fn new(bytes: &[u8]) -> Option<Self> {
         if bytes.len() > 32 {
@@ -68,7 +99,9 @@ impl WordSig {
 pub struct WordEntry {
     pub name: TypeAtom,
     pub sig: WordSig,
-    pub may_suspend: bool,
+    pub performs: EffectSet,
+    pub requires: CapSet,
+    pub bound: StackBound,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

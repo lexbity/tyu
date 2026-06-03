@@ -30,15 +30,38 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
 
         let then_blk = self.new_block(&base_stack, base_sp, span)?;
         let else_blk = self.new_block(&base_stack, base_sp, span)?;
-        self.emit_op(cur, lir::OpKind::BrIf { then_tgt: then_blk, else_tgt: else_blk }, span)?;
+        self.emit_op(
+            cur,
+            lir::OpKind::BrIf {
+                then_tgt: then_blk,
+                else_tgt: else_blk,
+            },
+            span,
+        )?;
 
         let mut then_stack = base_stack;
         let mut then_sp = base_sp;
-        let then_end = self.compile_quote_span(then_blk, &mut then_stack, &mut then_sp, then_span, allow_suspend, false, observer)?;
+        let then_end = self.compile_quote_span(
+            then_blk,
+            &mut then_stack,
+            &mut then_sp,
+            then_span,
+            allow_suspend,
+            false,
+            observer,
+        )?;
 
         let mut else_stack = base_stack;
         let mut else_sp = base_sp;
-        let else_end = self.compile_quote_span(else_blk, &mut else_stack, &mut else_sp, else_span, allow_suspend, false, observer)?;
+        let else_end = self.compile_quote_span(
+            else_blk,
+            &mut else_stack,
+            &mut else_sp,
+            else_span,
+            allow_suspend,
+            false,
+            observer,
+        )?;
 
         if then_sp != else_sp {
             return Err(TcError::IfBranchDepth { span });
@@ -53,9 +76,9 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         self.emit_op(then_end, lir::OpKind::Br { target: join_blk }, span)?;
         self.emit_op(else_end, lir::OpKind::Br { target: join_blk }, span)?;
 
-    stack[..then_sp].copy_from_slice(&then_stack[..then_sp]);
-    *sp = then_sp;
-    Ok(join_blk)
+        stack[..then_sp].copy_from_slice(&then_stack[..then_sp]);
+        *sp = then_sp;
+        Ok(join_blk)
     }
 
     pub(super) fn compile_while(
@@ -86,7 +109,15 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
 
         let mut cond_stack = base_stack;
         let mut cond_sp = base_sp;
-        let cond_end = self.compile_quote_span(header, &mut cond_stack, &mut cond_sp, cond_span, allow_suspend, false, observer)?;
+        let cond_end = self.compile_quote_span(
+            header,
+            &mut cond_stack,
+            &mut cond_sp,
+            cond_span,
+            allow_suspend,
+            false,
+            observer,
+        )?;
         if cond_sp != base_sp + 1 {
             return Err(TcError::WhileCondDepth { span });
         }
@@ -100,11 +131,26 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         }
         let body_blk = self.new_block(&base_stack, base_sp, span)?;
         let after_blk = self.new_block(&base_stack, base_sp, span)?;
-        self.emit_op(cond_end, lir::OpKind::BrIf { then_tgt: body_blk, else_tgt: after_blk }, span)?;
+        self.emit_op(
+            cond_end,
+            lir::OpKind::BrIf {
+                then_tgt: body_blk,
+                else_tgt: after_blk,
+            },
+            span,
+        )?;
 
         let mut body_stack = base_stack;
         let mut body_sp = base_sp;
-        let body_end = self.compile_quote_span(body_blk, &mut body_stack, &mut body_sp, body_span, allow_suspend, false, observer)?;
+        let body_end = self.compile_quote_span(
+            body_blk,
+            &mut body_stack,
+            &mut body_sp,
+            body_span,
+            allow_suspend,
+            false,
+            observer,
+        )?;
         if body_sp != base_sp {
             return Err(TcError::WhileBodyDepth { span });
         }
@@ -144,11 +190,26 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         let after_blk = self.new_block(&base_stack, base_sp, span)?;
 
         self.emit_op(check_blk, lir::OpKind::ConstBool(true), span)?;
-        self.emit_op(check_blk, lir::OpKind::BrIf { then_tgt: body_blk, else_tgt: after_blk }, span)?;
+        self.emit_op(
+            check_blk,
+            lir::OpKind::BrIf {
+                then_tgt: body_blk,
+                else_tgt: after_blk,
+            },
+            span,
+        )?;
 
         let mut body_stack = base_stack;
         let mut body_sp = base_sp;
-        let body_end = self.compile_quote_span(body_blk, &mut body_stack, &mut body_sp, body_span, allow_suspend, false, observer)?;
+        let body_end = self.compile_quote_span(
+            body_blk,
+            &mut body_stack,
+            &mut body_sp,
+            body_span,
+            allow_suspend,
+            false,
+            observer,
+        )?;
         if body_sp != base_sp {
             return Err(TcError::LoopBodyDepth { span });
         }

@@ -1,4 +1,6 @@
 use super::*;
+extern crate alloc;
+use alloc::boxed::Box;
 
 pub(super) const QUOTE_WORD_CAP: usize = 16;
 // One main word + max quote words per build_ir_word call.
@@ -6,14 +8,14 @@ const WORD_ARENA_CAP: usize = QUOTE_WORD_CAP + 1;
 
 pub struct ArenaAllocator {
     len: usize,
-    words: [MaybeUninit<lir::Word>; WORD_ARENA_CAP],
+    words: Box<[MaybeUninit<lir::Word>; WORD_ARENA_CAP]>,
 }
 
 impl ArenaAllocator {
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             len: 0,
-            words: [const { MaybeUninit::uninit() }; WORD_ARENA_CAP],
+            words: Box::new([const { MaybeUninit::uninit() }; WORD_ARENA_CAP]),
         }
     }
 

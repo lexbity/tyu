@@ -1,6 +1,6 @@
 use crate::typecheck::error::Output;
-use crate::typecheck::value::Value;
 use crate::typecheck::util::write_stack;
+use crate::typecheck::value::Value;
 use frontend::span::Span;
 
 /// Callback trait invoked during IR generation to observe the typechecking

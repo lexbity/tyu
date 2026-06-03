@@ -1,7 +1,11 @@
 use super::*;
 
 impl<'a, 'r> IrWordGen<'a, 'r> {
-    pub(super) fn lir_sig_for_entry(&mut self, sig: &WordSig, span: Span) -> Result<lir::Sig, TcError> {
+    pub(super) fn lir_sig_for_entry(
+        &mut self,
+        sig: &WordSig,
+        span: Span,
+    ) -> Result<lir::Sig, TcError> {
         let mut out = lir::Sig::empty();
         out.in_len = sig.in_len;
         out.out_len = sig.out_len;
@@ -14,12 +18,17 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         Ok(out)
     }
 
-    pub(super) fn effect_has_suspend(bytes: &[u8]) -> bool {
+    pub(super) fn parse_effect_set(bytes: &[u8]) -> EffectSet {
         if bytes.len() < 4 {
-            return false;
+            return EffectSet::empty();
         }
         let needle = b"suspend";
-        bytes.windows(needle.len()).any(|w| w == needle)
+        let has_suspend = bytes.windows(needle.len()).any(|w| w == needle);
+        if has_suspend {
+            EffectSet::from_bits(EffectSet::SUSPEND)
+        } else {
+            EffectSet::empty()
+        }
     }
 
     pub(super) fn parse_quote_sig(&self, quot_span: Span) -> Result<QuoteSig, TcError> {
@@ -33,17 +42,23 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         if first.kind != TokenKind::PunctLParen {
             return Err(TcError::QuoteSyntax { span: quot_span });
         }
-        let sig = capture_balanced(&mut lex, slice, TokenKind::PunctLParen, TokenKind::PunctRParen, first.span.start)
-            .map_err(|_| TcError::Internal { span: quot_span })?;
+        let sig = capture_balanced(
+            &mut lex,
+            slice,
+            TokenKind::PunctLParen,
+            TokenKind::PunctRParen,
+            first.span.start,
+        )
+        .map_err(|_| TcError::Internal { span: quot_span })?;
         let sig_span = Span::new(inner.start + sig.start, inner.start + sig.end);
         let sig = crate::typecheck::parse::parse_word_sig(self.src, sig_span)
             .map_err(|_| TcError::TypeParseFailed { span: sig_span })?;
 
-        let mut may_suspend = false;
+        let mut performs = EffectSet::empty();
         let next = lex.next();
         let next = if next.kind == TokenKind::EffectSet {
             let tok_bytes = &slice[next.span.start..next.span.end];
-            may_suspend = Self::effect_has_suspend(tok_bytes);
+            performs = Self::parse_effect_set(tok_bytes);
             lex.next()
         } else {
             next
@@ -54,7 +69,13 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             inner.start + next.span.start
         };
         let body = Span::new(body_start, inner.end);
-        Ok(QuoteSig { sig, may_suspend, body })
+        Ok(QuoteSig {
+            sig,
+            performs,
+            requires: CapSet::empty(),
+            bound: StackBound::ID,
+            body,
+        })
     }
 
     pub(super) fn quote_word_name(&mut self) -> lir::Atom {
@@ -79,7 +100,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         let mut v = id;
         for _ in 0..8 {
             let digit = (v & 0xf) as u8;
-            let b = if digit < 10 { b'0' + digit } else { b'a' + (digit - 10) };
+            let b = if digit < 10 {
+                b'0' + digit
+            } else {
+                b'a' + (digit - 10)
+            };
             buf[i] = b;
             i += 1;
             v >>= 4;
@@ -87,7 +112,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         lir::Atom::new(&buf[..i]).unwrap_or(lir::AT_QUOT)
     }
 
-    pub(super) fn build_quote_word(&mut self, quot_span: Span, observer: &mut dyn TypecheckObserver) -> Result<(lir::Atom, WordSig, bool), TcError> {
+    pub(super) fn build_quote_word(
+        &mut self,
+        quot_span: Span,
+        observer: &mut dyn TypecheckObserver,
+    ) -> Result<(lir::Atom, WordSig, EffectSet), TcError> {
         let parsed = self.parse_quote_sig(quot_span)?;
         let name = self.quote_word_name();
         let sig = parsed.sig;
@@ -117,7 +146,15 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             }
             let cur = lir::BlockId(0);
             let cur = qgen.emit_prologue(cur, &mut stack, &mut sp, None, observer)?;
-            let cur = qgen.compile_span(cur, &mut stack, &mut sp, parsed.body, parsed.may_suspend, false, observer)?;
+            let cur = qgen.compile_span(
+                cur,
+                &mut stack,
+                &mut sp,
+                parsed.body,
+                parsed.performs.contains(EffectSet::SUSPEND),
+                false,
+                observer,
+            )?;
             if !qgen.check_no_scoped_live(&stack, sp) {
                 return Err(TcError::ScopedLeak { span: quot_span });
             }
@@ -153,8 +190,10 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         };
         let ew: *mut FixedVec<&'r lir::Word, { arena::QUOTE_WORD_CAP }> = &mut self.extra_words;
         unsafe {
-            (*ew).push(word).map_err(|_| TcError::OpTableFull { span: quot_span })?;
+            (*ew)
+                .push(word)
+                .map_err(|_| TcError::OpTableFull { span: quot_span })?;
         }
-        Ok((name, sig, parsed.may_suspend))
+        Ok((name, sig, parsed.performs))
     }
 }

@@ -7,9 +7,12 @@
 
 use std::thread;
 
-use semantics::typecheck::irgen::arena::ArenaAllocator;
 use frontend::fixed::FixedVec;
 use frontend::span::Span;
+use ir::{
+    Atom, Block, BlockId, CapSet, EffectSet, Sig, StackBound, TypeId, Word, TY_EMPTY, TY_I64,
+};
+use semantics::typecheck::irgen::arena::ArenaAllocator;
 
 fn spawn_stack(f: impl FnOnce() + Send + 'static) {
     thread::Builder::new()
@@ -24,6 +27,9 @@ fn make_word(name: &[u8]) -> ir::Word {
     ir::Word {
         name: ir::Atom::new(name).unwrap(),
         sig: ir::Sig::empty(),
+        performs: EffectSet::empty(),
+        requires: CapSet::empty(),
+        bound: StackBound::ID,
         entry: ir::BlockId(0),
         types: FixedVec::new(),
         type_sizes: FixedVec::new(),

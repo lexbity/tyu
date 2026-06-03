@@ -45,26 +45,54 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             cur = match tok.kind {
                 TokenKind::Number => self.compile_number(cur, stack, sp, span, slice, tok)?,
                 TokenKind::String => self.compile_string(cur, stack, sp, span, slice, tok)?,
-                TokenKind::PunctArrowBind => {
-                    self.compile_destruct_bind(cur, stack, sp, span, slice, tok, &mut lex, allow_locals)?
-                }
+                TokenKind::PunctArrowBind => self.compile_destruct_bind(
+                    cur,
+                    stack,
+                    sp,
+                    span,
+                    slice,
+                    tok,
+                    &mut lex,
+                    allow_locals,
+                )?,
                 TokenKind::PunctLBracket => {
                     self.compile_quotation(cur, stack, sp, span, slice, tok, &mut lex)?
                 }
                 TokenKind::PunctArrow => {
                     self.compile_field_access(cur, stack, sp, span, slice, tok, &mut lex)?
                 }
-                TokenKind::PunctApostrophe => {
-                    self.compile_index(cur, stack, sp, span, slice, tok, &mut lex, allow_suspend, allow_locals, observer)?
-                }
+                TokenKind::PunctApostrophe => self.compile_index(
+                    cur,
+                    stack,
+                    sp,
+                    span,
+                    slice,
+                    tok,
+                    &mut lex,
+                    allow_suspend,
+                    allow_locals,
+                    observer,
+                )?,
                 TokenKind::PunctAmp | TokenKind::PunctAmpBang => {
                     self.compile_addr_of(cur, stack, sp, span, slice, tok, &mut lex)?
                 }
-                TokenKind::PunctPipeGreater => self.compile_channel_send(cur, stack, sp, span, tok)?,
-                TokenKind::PunctLessPipe => self.compile_channel_recv(cur, stack, sp, span, tok)?,
-                TokenKind::PunctAmpLBracket | TokenKind::PunctAmpBangLBracket => {
-                    self.compile_scoped_block(cur, stack, sp, span, slice, tok, &mut lex, allow_suspend, allow_locals, observer)?
+                TokenKind::PunctPipeGreater => {
+                    self.compile_channel_send(cur, stack, sp, span, tok)?
                 }
+                TokenKind::PunctLessPipe => self.compile_channel_recv(cur, stack, sp, span, tok)?,
+                TokenKind::PunctAmpLBracket | TokenKind::PunctAmpBangLBracket => self
+                    .compile_scoped_block(
+                        cur,
+                        stack,
+                        sp,
+                        span,
+                        slice,
+                        tok,
+                        &mut lex,
+                        allow_suspend,
+                        allow_locals,
+                        observer,
+                    )?,
                 TokenKind::Ident
                 | TokenKind::PunctGe
                 | TokenKind::PunctLe
@@ -73,13 +101,32 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                     let mut qbuf = [0u8; 64];
                     let (name, name_span) = if tok.kind == TokenKind::Ident {
                         let (len, used, s) = read_qualified_name(&mut lex, slice, tok, &mut qbuf);
-                        let bytes = if used { &qbuf[..len] } else { &slice[tok.span.start..tok.span.end] };
+                        let bytes = if used {
+                            &qbuf[..len]
+                        } else {
+                            &slice[tok.span.start..tok.span.end]
+                        };
                         (bytes, s)
                     } else {
                         (&slice[tok.span.start..tok.span.end], tok.span)
                     };
-                    let name_abs = Span::new(span.start + name_span.start, span.start + name_span.end);
-                    self.compile_name(cur, stack, sp, span, slice, &mut lex, tok, name, name_abs, allow_suspend, allow_locals, &mut terminated, observer)?
+                    let name_abs =
+                        Span::new(span.start + name_span.start, span.start + name_span.end);
+                    self.compile_name(
+                        cur,
+                        stack,
+                        sp,
+                        span,
+                        slice,
+                        &mut lex,
+                        tok,
+                        name,
+                        name_abs,
+                        allow_suspend,
+                        allow_locals,
+                        &mut terminated,
+                        observer,
+                    )?
                 }
                 _ => cur,
             };
@@ -100,7 +147,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
     ) -> Result<lir::BlockId, TcError> {
         push(stack, sp, Value::Plain(TypeAtom::I64))?;
         let num = parse_i64_token(&slice[tok.span.start..tok.span.end]).unwrap_or(0);
-        self.emit_op(cur, lir::OpKind::ConstI64(num), Span::new(span.start + tok.span.start, span.start + tok.span.end))?;
+        self.emit_op(
+            cur,
+            lir::OpKind::ConstI64(num),
+            Span::new(span.start + tok.span.start, span.start + tok.span.end),
+        )?;
         Ok(cur)
     }
 
@@ -114,7 +165,14 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         tok: Token,
     ) -> Result<lir::BlockId, TcError> {
         push(stack, sp, Value::Plain(TypeAtom::STR))?;
-        self.emit_op(cur, lir::OpKind::ConstStr(Span::new(span.start + tok.span.start, span.start + tok.span.end)), Span::new(span.start + tok.span.start, span.start + tok.span.end))?;
+        self.emit_op(
+            cur,
+            lir::OpKind::ConstStr(Span::new(
+                span.start + tok.span.start,
+                span.start + tok.span.end,
+            )),
+            Span::new(span.start + tok.span.start, span.start + tok.span.end),
+        )?;
         Ok(cur)
     }
 
@@ -145,27 +203,43 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                         saw_borrow = true;
                         let name_tok = lex.next();
                         if name_tok.kind != TokenKind::Ident {
-                            return Err(TcError::ExpectedIdent { span: Span::new(span.start + name_tok.span.start, span.start + name_tok.span.end) });
+                            return Err(TcError::ExpectedIdent {
+                                span: Span::new(
+                                    span.start + name_tok.span.start,
+                                    span.start + name_tok.span.end,
+                                ),
+                            });
                         }
-                        let lname = TypeAtom::new(&slice[name_tok.span.start..name_tok.span.end]).ok_or(TcError::TypeParseFailed {
-                            span: Span::new(span.start + name_tok.span.start, span.start + name_tok.span.end),
+                        let lname = TypeAtom::new(&slice[name_tok.span.start..name_tok.span.end])
+                            .ok_or(TcError::TypeParseFailed {
+                            span: Span::new(
+                                span.start + name_tok.span.start,
+                                span.start + name_tok.span.end,
+                            ),
                         })?;
                         binds
                             .push(DestructBind {
                                 name: lname,
                                 borrow: true,
                                 mutable: b.kind == TokenKind::PunctAmpBang,
-                                span: Span::new(span.start + name_tok.span.start, span.start + name_tok.span.end),
+                                span: Span::new(
+                                    span.start + name_tok.span.start,
+                                    span.start + name_tok.span.end,
+                                ),
                             })
                             .map_err(|_| TcError::BindingCapacityExceeded { span })?;
                     }
                     TokenKind::Ident => {
                         if saw_borrow {
-                            return Err(TcError::DestructBorrowMix { span: Span::new(span.start + b.span.start, span.start + b.span.end) });
+                            return Err(TcError::DestructBorrowMix {
+                                span: Span::new(span.start + b.span.start, span.start + b.span.end),
+                            });
                         }
-                        let lname = TypeAtom::new(&slice[b.span.start..b.span.end]).ok_or(TcError::TypeParseFailed {
-                            span: Span::new(span.start + b.span.start, span.start + b.span.end),
-                        })?;
+                        let lname = TypeAtom::new(&slice[b.span.start..b.span.end]).ok_or(
+                            TcError::TypeParseFailed {
+                                span: Span::new(span.start + b.span.start, span.start + b.span.end),
+                            },
+                        )?;
                         binds
                             .push(DestructBind {
                                 name: lname,
@@ -176,7 +250,9 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                             .map_err(|_| TcError::BindingCapacityExceeded { span })?;
                     }
                     _ => {
-                        return Err(TcError::DestructExpectedIdent { span: Span::new(span.start + b.span.start, span.start + b.span.end) });
+                        return Err(TcError::DestructExpectedIdent {
+                            span: Span::new(span.start + b.span.start, span.start + b.span.end),
+                        });
                     }
                 }
             }
@@ -196,29 +272,70 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             if binds.len() != sinfo.fields.len() {
                 return Err(TcError::DestructFieldCount { span });
             }
-            let base_tid = if base_mut { lir::TY_PTR_MUT } else { lir::TY_PTR };
+            let base_tid = if base_mut {
+                lir::TY_PTR_MUT
+            } else {
+                lir::TY_PTR
+            };
             let tmp = self.temp_base_slot();
-            self.emit_op(cur, lir::OpKind::LocalSet { slot: tmp, ty: base_tid }, Span::new(span.start + tok.span.start, span.start + tok.span.end))?;
+            self.emit_op(
+                cur,
+                lir::OpKind::LocalSet {
+                    slot: tmp,
+                    ty: base_tid,
+                },
+                Span::new(span.start + tok.span.start, span.start + tok.span.end),
+            )?;
             let _ = pop(stack, sp);
 
             let mut offset: u32 = 0;
             for (idx, field) in sinfo.fields.iter().enumerate() {
-                let bind = binds.get(idx).expect("len verified equal to sinfo.fields.len()");
+                let bind = binds
+                    .get(idx)
+                    .expect("len verified equal to sinfo.fields.len()");
                 if bind.borrow && bind.mutable && !base_mut {
                     return Err(TcError::MutRefToLocal { span: bind.span });
                 }
-                let fsize = type_size_bytes(field.ty, self.nominals).ok_or(TcError::FieldSizeError { span: bind.span })?;
+                let fsize = type_size_bytes(field.ty, self.nominals)
+                    .ok_or(TcError::FieldSizeError { span: bind.span })?;
                 let falign = field_align(fsize);
                 offset = align_up(offset, falign);
                 let field_offset = offset;
-                offset = offset.checked_add(fsize).ok_or(TcError::FieldSizeError { span: bind.span })?;
+                offset = offset
+                    .checked_add(fsize)
+                    .ok_or(TcError::FieldSizeError { span: bind.span })?;
 
-                self.emit_op(cur, lir::OpKind::LocalGet { slot: tmp, ty: base_tid }, bind.span)?;
-                push(stack, sp, Value::Ptr { ty: struct_ty, mutable: base_mut })?;
-                self.emit_op(cur, lir::OpKind::PtrAddConst { ty: base_tid, offset: field_offset }, bind.span)?;
+                self.emit_op(
+                    cur,
+                    lir::OpKind::LocalGet {
+                        slot: tmp,
+                        ty: base_tid,
+                    },
+                    bind.span,
+                )?;
+                push(
+                    stack,
+                    sp,
+                    Value::Ptr {
+                        ty: struct_ty,
+                        mutable: base_mut,
+                    },
+                )?;
+                self.emit_op(
+                    cur,
+                    lir::OpKind::PtrAddConst {
+                        ty: base_tid,
+                        offset: field_offset,
+                    },
+                    bind.span,
+                )?;
 
                 if bind.borrow {
-                    let ptr_ty = if bind.mutable { TypeAtom::PTR_MUT } else { TypeAtom::PTR };
+                    let ptr_ty = if bind.mutable {
+                        TypeAtom::PTR_MUT
+                    } else {
+                        TypeAtom::PTR
+                    };
                     if find_local(&self.locals, self.local_len, bind.name).is_some() {
                         return Err(TcError::BindingAlreadyDefined { span: bind.span });
                     }
@@ -228,7 +345,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                     self.local_live[self.local_len] = true;
                     self.local_scoped[self.local_len] = 0u16;
                     self.local_len += 1;
-                    let tid = if bind.mutable { lir::TY_PTR_MUT } else { lir::TY_PTR };
+                    let tid = if bind.mutable {
+                        lir::TY_PTR_MUT
+                    } else {
+                        lir::TY_PTR
+                    };
                     let _ = pop(stack, sp);
                     self.emit_op(cur, lir::OpKind::LocalSet { slot, ty: tid }, bind.span)?;
                 } else {
@@ -252,9 +373,13 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         } else {
             let name = next;
             if name.kind != TokenKind::Ident {
-                return Err(TcError::ExpectedIdent { span: Span::new(span.start + name.span.start, span.start + name.span.end) });
+                return Err(TcError::ExpectedIdent {
+                    span: Span::new(span.start + name.span.start, span.start + name.span.end),
+                });
             }
-            let v = pop(stack, sp).ok_or(TcError::StackUnderflow { span: Span::new(span.start + tok.span.start, span.start + tok.span.end) })?;
+            let v = pop(stack, sp).ok_or(TcError::StackUnderflow {
+                span: Span::new(span.start + tok.span.start, span.start + tok.span.end),
+            })?;
             if v == Value::Plain(TypeAtom::SCOPED) {
                 return Err(TcError::ScopedLeak { span });
             }
@@ -269,11 +394,15 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 Value::MmioPtr { mutable: false, .. } => TypeAtom::PTR,
                 Value::MmioPtr { mutable: true, .. } => TypeAtom::PTR_MUT,
             };
-            let lname = TypeAtom::new(&slice[name.span.start..name.span.end]).ok_or(TcError::TypeParseFailed {
-                span: Span::new(span.start + name.span.start, span.start + name.span.end),
-            })?;
+            let lname = TypeAtom::new(&slice[name.span.start..name.span.end]).ok_or(
+                TcError::TypeParseFailed {
+                    span: Span::new(span.start + name.span.start, span.start + name.span.end),
+                },
+            )?;
             if find_local(&self.locals, self.local_len, lname).is_some() {
-                return Err(TcError::BindingAlreadyDefined { span: Span::new(span.start + name.span.start, span.start + name.span.end) });
+                return Err(TcError::BindingAlreadyDefined {
+                    span: Span::new(span.start + name.span.start, span.start + name.span.end),
+                });
             }
             if self.local_len >= self.locals.len() {
                 return Err(TcError::BindingCapacityExceeded { span });
@@ -288,7 +417,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             };
             self.local_len += 1;
             let tid = self.ty_id_of_type(ty, span)?;
-            self.emit_op(cur, lir::OpKind::LocalSet { slot, ty: tid }, Span::new(span.start + tok.span.start, span.start + tok.span.end))?;
+            self.emit_op(
+                cur,
+                lir::OpKind::LocalSet { slot, ty: tid },
+                Span::new(span.start + tok.span.start, span.start + tok.span.end),
+            )?;
         }
         Ok(cur)
     }
@@ -303,8 +436,16 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         tok: Token,
         lex: &mut Lexer,
     ) -> Result<lir::BlockId, TcError> {
-        let q = capture_balanced(lex, slice, TokenKind::PunctLBracket, TokenKind::PunctRBracket, tok.span.start)
-            .map_err(|_| TcError::TypeParseFailed { span: Span::new(span.start + tok.span.start, span.start + tok.span.end) })?;
+        let q = capture_balanced(
+            lex,
+            slice,
+            TokenKind::PunctLBracket,
+            TokenKind::PunctRBracket,
+            tok.span.start,
+        )
+        .map_err(|_| TcError::TypeParseFailed {
+            span: Span::new(span.start + tok.span.start, span.start + tok.span.end),
+        })?;
         let q_span = Span::new(span.start + q.start, span.start + q.end);
         push(stack, sp, Value::Quot(q_span))?;
         Ok(cur)
@@ -327,7 +468,9 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         }
         let field_atom = TypeAtom::new(&slice[field_tok.span.start..field_tok.span.end])
             .ok_or(TcError::FieldNotFound { span: op_span })?;
-        let base = *stack.get(*sp - 1).ok_or(TcError::StackUnderflow { span: op_span })?;
+        let base = *stack
+            .get(*sp - 1)
+            .ok_or(TcError::StackUnderflow { span: op_span })?;
         let (struct_ty, mutable) = match base {
             Value::Ptr { ty, mutable } => (ty, mutable),
             _ => return Err(TcError::FieldNotFound { span: op_span }),
@@ -338,21 +481,38 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         let mut offset: u32 = 0;
         let mut found: Option<TypeAtom> = None;
         for field in sinfo.fields.iter() {
-            let fsize = type_size_bytes(field.ty, self.nominals).ok_or(TcError::FieldSizeError { span: op_span })?;
+            let fsize = type_size_bytes(field.ty, self.nominals)
+                .ok_or(TcError::FieldSizeError { span: op_span })?;
             let falign = field_align(fsize);
             offset = align_up(offset, falign);
             if field.name == field_atom {
                 found = Some(field.ty);
                 break;
             }
-            offset = offset.checked_add(fsize).ok_or(TcError::FieldSizeError { span: op_span })?;
+            offset = offset
+                .checked_add(fsize)
+                .ok_or(TcError::FieldSizeError { span: op_span })?;
         }
         let Some(field_ty) = found else {
             return Err(TcError::FieldNotFound { span: op_span });
         };
-        let base_tid = if mutable { lir::TY_PTR_MUT } else { lir::TY_PTR };
-        self.emit_op(cur, lir::OpKind::PtrAddConst { ty: base_tid, offset }, op_span)?;
-        stack[*sp - 1] = Value::Ptr { ty: field_ty, mutable };
+        let base_tid = if mutable {
+            lir::TY_PTR_MUT
+        } else {
+            lir::TY_PTR
+        };
+        self.emit_op(
+            cur,
+            lir::OpKind::PtrAddConst {
+                ty: base_tid,
+                offset,
+            },
+            op_span,
+        )?;
+        stack[*sp - 1] = Value::Ptr {
+            ty: field_ty,
+            mutable,
+        };
         Ok(cur)
     }
 
@@ -382,10 +542,24 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 }
             }
             TokenKind::PunctLParen => {
-                let par = capture_balanced(lex, slice, TokenKind::PunctLParen, TokenKind::PunctRParen, next.span.start)
-                    .map_err(|_| TcError::IndexError { span: op_span })?;
+                let par = capture_balanced(
+                    lex,
+                    slice,
+                    TokenKind::PunctLParen,
+                    TokenKind::PunctRParen,
+                    next.span.start,
+                )
+                .map_err(|_| TcError::IndexError { span: op_span })?;
                 let inner = Span::new(span.start + par.start + 1, span.start + par.end - 1);
-                cur = self.compile_span(cur, stack, sp, inner, allow_suspend, allow_locals, observer)?;
+                cur = self.compile_span(
+                    cur,
+                    stack,
+                    sp,
+                    inner,
+                    allow_suspend,
+                    allow_locals,
+                    observer,
+                )?;
                 is_dynamic = true;
             }
             _ => {
@@ -419,7 +593,8 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                         return Err(TcError::ArrayIndexOob { span: op_span });
                     }
                 }
-                let size = type_size_bytes(elem, self.nominals).ok_or(TcError::IndexError { span: op_span })?;
+                let size = type_size_bytes(elem, self.nominals)
+                    .ok_or(TcError::IndexError { span: op_span })?;
                 (elem, size, IndexOut::Value, lir::TY_PTR)
             }
             Value::Ptr { ty, mutable } => {
@@ -432,8 +607,13 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                         return Err(TcError::ArrayIndexOob { span: op_span });
                     }
                 }
-                let size = type_size_bytes(elem, self.nominals).ok_or(TcError::IndexError { span: op_span })?;
-                let tid = if mutable { lir::TY_PTR_MUT } else { lir::TY_PTR };
+                let size = type_size_bytes(elem, self.nominals)
+                    .ok_or(TcError::IndexError { span: op_span })?;
+                let tid = if mutable {
+                    lir::TY_PTR_MUT
+                } else {
+                    lir::TY_PTR
+                };
                 (elem, size, IndexOut::Ptr(mutable), tid)
             }
             Value::MmioPlace(MmioResolved::Reg(reg)) => {
@@ -457,21 +637,42 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
 
         match out_kind {
             IndexOut::Value => {
-                stack[base_pos] = Value::Ptr { ty: elem_ty, mutable: false };
+                stack[base_pos] = Value::Ptr {
+                    ty: elem_ty,
+                    mutable: false,
+                };
             }
             IndexOut::Ptr(mutable) => {
-                stack[base_pos] = Value::Ptr { ty: elem_ty, mutable };
+                stack[base_pos] = Value::Ptr {
+                    ty: elem_ty,
+                    mutable,
+                };
             }
-            IndexOut::Mmio => {
-            }
+            IndexOut::Mmio => {}
         }
 
         if is_dynamic {
-            self.emit_op(cur, lir::OpKind::PtrAddIndex { ty: base_tid, scale }, op_span)?;
+            self.emit_op(
+                cur,
+                lir::OpKind::PtrAddIndex {
+                    ty: base_tid,
+                    scale,
+                },
+                op_span,
+            )?;
             *sp = (*sp).saturating_sub(1);
         } else {
-            let offset = const_idx.expect("!is_dynamic => const_idx is Some").saturating_mul(scale);
-            self.emit_op(cur, lir::OpKind::PtrAddConst { ty: base_tid, offset }, op_span)?;
+            let offset = const_idx
+                .expect("!is_dynamic => const_idx is Some")
+                .saturating_mul(scale);
+            self.emit_op(
+                cur,
+                lir::OpKind::PtrAddConst {
+                    ty: base_tid,
+                    offset,
+                },
+                op_span,
+            )?;
         }
 
         if matches!(out_kind, IndexOut::Value) {
@@ -493,10 +694,13 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         lex: &mut Lexer,
     ) -> Result<lir::BlockId, TcError> {
         let mut_tok = tok.kind == TokenKind::PunctAmpBang;
-        let place = parse_place(lex, slice).ok_or(TcError::PlaceParseFailed { span: Span::new(span.start + tok.span.start, span.start + tok.span.end) })?;
+        let place = parse_place(lex, slice).ok_or(TcError::PlaceParseFailed {
+            span: Span::new(span.start + tok.span.start, span.start + tok.span.end),
+        })?;
         let place_bytes = &slice[place.full.start..place.full.end];
         let place_abs = Span::new(span.start + place.full.start, span.start + place.full.end);
-        let root_atom = TypeAtom::new(&slice[place.root.start..place.root.end]).unwrap_or(TypeAtom::EMPTY);
+        let root_atom =
+            TypeAtom::new(&slice[place.root.start..place.root.end]).unwrap_or(TypeAtom::EMPTY);
         let mut const_addr: Option<u64> = None;
 
         if let Some(res) = resolve_mmio_place(self.mmio, self.src, place_bytes, place_abs)? {
@@ -506,9 +710,18 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                         return Err(TcError::MmioAccessViolation { span: place_abs });
                     }
                     const_addr = Some(reg.addr);
-                    push(stack, sp, Value::MmioPtr { reg, mutable: mut_tok })?;
+                    push(
+                        stack,
+                        sp,
+                        Value::MmioPtr {
+                            reg,
+                            mutable: mut_tok,
+                        },
+                    )?;
                 }
-                MmioResolved::Field(_) => return Err(TcError::MmioFieldNotAddressable { span: place_abs }),
+                MmioResolved::Field(_) => {
+                    return Err(TcError::MmioFieldNotAddressable { span: place_abs })
+                }
             }
         } else {
             if resource_ty(self.resources, root_atom).is_some() {
@@ -518,13 +731,26 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             } else if mut_tok {
                 let root = TypeAtom::new(&slice[place.root.start..place.root.end]).unwrap();
                 if find_local(&self.locals, self.local_len, root).is_some() {
-                    return Err(TcError::MutRefToLocal { span: place.root_abs(span.start) });
+                    return Err(TcError::MutRefToLocal {
+                        span: place.root_abs(span.start),
+                    });
                 }
             }
             if let Some(pointee) = self.resolve_place_pointee_ty(place_bytes, place_abs)? {
-                push(stack, sp, Value::Ptr { ty: pointee, mutable: mut_tok })?;
+                push(
+                    stack,
+                    sp,
+                    Value::Ptr {
+                        ty: pointee,
+                        mutable: mut_tok,
+                    },
+                )?;
             } else {
-                let ty = if mut_tok { TypeAtom::PTR_MUT } else { TypeAtom::PTR };
+                let ty = if mut_tok {
+                    TypeAtom::PTR_MUT
+                } else {
+                    TypeAtom::PTR
+                };
                 push(stack, sp, Value::Plain(ty))?;
             }
         }
@@ -585,7 +811,9 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             lir::OpKind::Call {
                 name: lir::Atom::new(b"platform.channel.send").unwrap(),
                 sig,
-                may_suspend: false,
+                performs: EffectSet::empty(),
+                requires: CapSet::empty(),
+                bound: StackBound::ID,
             },
             op_span,
         )?;
@@ -621,7 +849,9 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             lir::OpKind::Call {
                 name: lir::Atom::new(b"platform.channel.recv").unwrap(),
                 sig,
-                may_suspend: false,
+                performs: EffectSet::empty(),
+                requires: CapSet::empty(),
+                bound: StackBound::ID,
             },
             op_span,
         )?;
@@ -659,8 +889,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         };
 
         if let Some(elem) = array_elem_type(top_ty) {
-            let scope_id = self.enter_scope().ok_or(TcError::ScopeDepthExceeded { span })?;
-            let slice_ty = slice_type_of_elem(elem, mut_scope).ok_or(TcError::SliceTypeFailed { span })?;
+            let scope_id = self
+                .enter_scope()
+                .ok_or(TcError::ScopeDepthExceeded { span })?;
+            let slice_ty =
+                slice_type_of_elem(elem, mut_scope).ok_or(TcError::SliceTypeFailed { span })?;
             let len = array_len(top_ty).ok_or(TcError::SliceTypeFailed { span })?;
             push(
                 stack,
@@ -677,7 +910,8 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 Span::new(span.start + tok.span.start, span.start + tok.span.end),
             )?;
 
-            let block = capture_scoped_block(lex, slice, tok.span).map_err(|_| TcError::TypeParseFailed { span })?;
+            let block = capture_scoped_block(lex, slice, tok.span)
+                .map_err(|_| TcError::TypeParseFailed { span })?;
             let block_allow_suspend = if mut_scope { false } else { allow_suspend };
             cur = self.compile_span(
                 cur,
@@ -695,7 +929,9 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             self.invalidate_scope_locals(scope_id);
             self.leave_scope(scope_id);
         } else if top_ty == TypeAtom::new(b"Region").unwrap() {
-            let scope_id = self.enter_scope().ok_or(TcError::ScopeDepthExceeded { span })?;
+            let scope_id = self
+                .enter_scope()
+                .ok_or(TcError::ScopeDepthExceeded { span })?;
             let rty = region_ref_type(mut_scope);
             push(
                 stack,
@@ -712,7 +948,8 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 Span::new(span.start + tok.span.start, span.start + tok.span.end),
             )?;
 
-            let block = capture_scoped_block(lex, slice, tok.span).map_err(|_| TcError::TypeParseFailed { span })?;
+            let block = capture_scoped_block(lex, slice, tok.span)
+                .map_err(|_| TcError::TypeParseFailed { span })?;
             let block_allow_suspend = if mut_scope { false } else { allow_suspend };
             cur = self.compile_span(
                 cur,
@@ -770,7 +1007,9 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 if dot + 1 < name.len() && !name[dot + 1..].contains(&b'.') {
                     let enum_part = &name[..dot];
                     let var_part = &name[dot + 1..];
-                    if let (Some(enum_ty), Some(var)) = (TypeAtom::new(enum_part), TypeAtom::new(var_part)) {
+                    if let (Some(enum_ty), Some(var)) =
+                        (TypeAtom::new(enum_part), TypeAtom::new(var_part))
+                    {
                         if self.compile_enum_variant(cur, stack, sp, name_abs, enum_ty, var)? {
                             return Ok(cur);
                         }
@@ -790,7 +1029,14 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                     MmioResolved::Reg(reg) => reg.addr,
                     MmioResolved::Field(field) => field.addr,
                 };
-                self.emit_op(cur, lir::OpKind::MmioPlace { place: lir_atom(name)?, addr }, name_abs)?;
+                self.emit_op(
+                    cur,
+                    lir::OpKind::MmioPlace {
+                        place: lir_atom(name)?,
+                        addr,
+                    },
+                    name_abs,
+                )?;
                 return Ok(cur);
             }
         }
@@ -848,7 +1094,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             return self.compile_task_run(cur, stack, sp, name_abs, allow_suspend, span, observer);
         }
 
-        if let Some(idx) = find_local(&self.locals, self.local_len, TypeAtom::new(name).unwrap_or(TypeAtom::EMPTY)) {
+        if let Some(idx) = find_local(
+            &self.locals,
+            self.local_len,
+            TypeAtom::new(name).unwrap_or(TypeAtom::EMPTY),
+        ) {
             return self.compile_local_ref(cur, stack, sp, name_abs, idx);
         }
 
@@ -882,7 +1132,14 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             self.emit_op(cur, lir::OpKind::ConstI64(v), name_abs)?;
             push(stack, sp, Value::Plain(TypeAtom::I64))?;
             let to = self.ty_id_of_type(enum_ty, name_abs)?;
-            self.emit_op(cur, lir::OpKind::Cast { from: lir::TY_I64, to }, name_abs)?;
+            self.emit_op(
+                cur,
+                lir::OpKind::Cast {
+                    from: lir::TY_I64,
+                    to,
+                },
+                name_abs,
+            )?;
             let _ = pop(stack, sp);
             push(stack, sp, Value::Plain(enum_ty))?;
             return Ok(true);
@@ -907,7 +1164,10 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         let is_load = name[0] == b'@';
         let typed = name.len() > 1;
         let ty_atom = if typed {
-            Some(TypeAtom::new(&name[1..]).ok_or(TcError::MmioTypedAtomInvalid { span: name_abs })?)
+            Some(
+                TypeAtom::new(&name[1..])
+                    .ok_or(TcError::MmioTypedAtomInvalid { span: name_abs })?,
+            )
         } else {
             None
         };
@@ -1024,7 +1284,13 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 Value::MmioPtr { mutable: true, .. } => TypeAtom::PTR_MUT,
             };
             match (addr, v) {
-                (Value::MmioPtr { reg, mutable: false }, _) => {
+                (
+                    Value::MmioPtr {
+                        reg,
+                        mutable: false,
+                    },
+                    _,
+                ) => {
                     let _ = reg;
                     Err(TcError::MmioTypedNotAllowed { span: name_abs })
                 }
@@ -1087,7 +1353,8 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                     Ok(cur)
                 }
                 (Value::MmioPlace(MmioResolved::Field(field)), Value::Plain(_)) => {
-                    if !access_can_write(field.reg_access) || !access_can_write(field.field.access) {
+                    if !access_can_write(field.reg_access) || !access_can_write(field.field.access)
+                    {
                         return Err(TcError::MmioAccessViolation { span: name_abs });
                     }
                     if typed {
@@ -1227,9 +1494,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
     ) -> Result<lir::BlockId, TcError> {
         let first = lex.next();
         let start = first.span.start;
-        let (to_ty, next) = crate::typecheck::parse::parse_type_expr(slice, start).ok_or(TcError::CastParseFailed {
-            span: Span::new(span.start + first.span.start, span.start + first.span.end),
-        })?;
+        let (to_ty, next) = crate::typecheck::parse::parse_type_expr(slice, start).ok_or(
+            TcError::CastParseFailed {
+                span: Span::new(span.start + first.span.start, span.start + first.span.end),
+            },
+        )?;
         lex.set_pos(next);
         let v = pop(stack, sp).ok_or(TcError::CastPopValue { span })?;
         let from_ty = match v {
@@ -1275,18 +1544,46 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         let from_id = self.ty_id_of_type(from_ty, name_abs)?;
         let to_id = self.ty_id_of_type(to_ty, name_abs)?;
         if name == b"bitcast" {
-            self.emit_op(cur, lir::OpKind::Bitcast { from: from_id, to: to_id }, name_abs)?;
+            self.emit_op(
+                cur,
+                lir::OpKind::Bitcast {
+                    from: from_id,
+                    to: to_id,
+                },
+                name_abs,
+            )?;
         } else {
-            self.emit_op(cur, lir::OpKind::Cast { from: from_id, to: to_id }, name_abs)?;
+            self.emit_op(
+                cur,
+                lir::OpKind::Cast {
+                    from: from_id,
+                    to: to_id,
+                },
+                name_abs,
+            )?;
         }
         if name == b"as?" {
             push(stack, sp, Value::Plain(to_ty))?;
             if let Some(st) = subtype {
                 let tmp = self.temp_base_slot();
                 self.emit_op(cur, lir::OpKind::Dup { ty: to_id }, name_abs)?;
-                self.emit_op(cur, lir::OpKind::LocalSet { slot: tmp, ty: to_id }, name_abs)?;
+                self.emit_op(
+                    cur,
+                    lir::OpKind::LocalSet {
+                        slot: tmp,
+                        ty: to_id,
+                    },
+                    name_abs,
+                )?;
 
-                self.emit_op(cur, lir::OpKind::LocalGet { slot: tmp, ty: to_id }, name_abs)?;
+                self.emit_op(
+                    cur,
+                    lir::OpKind::LocalGet {
+                        slot: tmp,
+                        ty: to_id,
+                    },
+                    name_abs,
+                )?;
                 self.emit_op(cur, lir::OpKind::ConstI64(st.min), name_abs)?;
                 self.emit_op(
                     cur,
@@ -1296,7 +1593,14 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                     },
                     name_abs,
                 )?;
-                self.emit_op(cur, lir::OpKind::LocalGet { slot: tmp, ty: to_id }, name_abs)?;
+                self.emit_op(
+                    cur,
+                    lir::OpKind::LocalGet {
+                        slot: tmp,
+                        ty: to_id,
+                    },
+                    name_abs,
+                )?;
                 self.emit_op(cur, lir::OpKind::ConstI64(st.max), name_abs)?;
                 self.emit_op(
                     cur,
@@ -1320,7 +1624,14 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 if self.checks == ChecksMode::All {
                     let tmp = self.temp_base_slot();
                     self.emit_op(cur, lir::OpKind::Dup { ty: to_id }, name_abs)?;
-                    self.emit_op(cur, lir::OpKind::LocalSet { slot: tmp, ty: to_id }, name_abs)?;
+                    self.emit_op(
+                        cur,
+                        lir::OpKind::LocalSet {
+                            slot: tmp,
+                            ty: to_id,
+                        },
+                        name_abs,
+                    )?;
                     self.emit_subtype_range_trap(cur, tmp, to_id, &st, name_abs)?;
                 }
             }
@@ -1377,15 +1688,17 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             Value::Quot(s) => s,
             _ => return Err(TcError::CallPopQuot { span: name_abs }),
         };
-        let (qname, qsig, may_suspend) = self.build_quote_word(body_span, observer)?;
-        if may_suspend && !allow_suspend {
-            return Err(TcError::SuspendingInNonSuspendingContext { span: name_abs });
+        let (qname, qsig, performs) = self.build_quote_word(body_span, observer)?;
+        if performs.contains(EffectSet::SUSPEND) && !allow_suspend {
+            return Err(TcError::SuspendForbidden { span: name_abs });
         }
 
         let entry = WordEntry {
             name: TypeAtom::new(b"call").unwrap(),
             sig: qsig,
-            may_suspend,
+            performs,
+            requires: CapSet::empty(),
+            bound: StackBound::ID,
         };
         apply_sig(stack, sp, &entry, name_abs, self.subtypes)?;
         let call_sig = self.lir_sig_for_entry(&qsig, name_abs)?;
@@ -1394,7 +1707,9 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             lir::OpKind::Call {
                 name: qname,
                 sig: call_sig,
-                may_suspend,
+                performs,
+                requires: CapSet::empty(),
+                bound: StackBound::ID,
             },
             name_abs,
         )?;
@@ -1414,7 +1729,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             Value::Quot(s) => s,
             _ => return Err(TcError::TaskSpawnPop { span: name_abs }),
         };
-        let (qname, qsig, _may_suspend) = self.build_quote_word(body_span, observer)?;
+        let (qname, qsig, _performs) = self.build_quote_word(body_span, observer)?;
         if qsig.in_len != 0 || qsig.out_len != 0 {
             return Err(TcError::TaskSpawnSig { span: name_abs });
         }
@@ -1492,7 +1807,14 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             push(stack, sp, Value::Plain(self.local_tys[idx]))?;
         }
         let tid = self.ty_id_of_type(self.local_tys[idx], name_abs)?;
-        self.emit_op(cur, lir::OpKind::LocalGet { slot: self.local_slot(idx), ty: tid }, name_abs)?;
+        self.emit_op(
+            cur,
+            lir::OpKind::LocalGet {
+                slot: self.local_slot(idx),
+                ty: tid,
+            },
+            name_abs,
+        )?;
         Ok(cur)
     }
 
@@ -1506,10 +1828,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         allow_suspend: bool,
     ) -> Result<(), TcError> {
         let entry = lookup(self.env, name).ok_or(TcError::WordNotFound { span: name_abs })?;
-        if entry.may_suspend && !allow_suspend {
-            return Err(TcError::SuspendingInNonSuspendingContext { span: name_abs });
+        if entry.performs.contains(EffectSet::SUSPEND) && !allow_suspend {
+            return Err(TcError::SuspendForbidden { span: name_abs });
         }
-        if entry.may_suspend && !self.check_no_scoped_live_all(stack, *sp) {
+        if entry.performs.contains(EffectSet::SUSPEND) && !self.check_no_scoped_live_all(stack, *sp)
+        {
             return Err(TcError::ScopedLiveAtSuspend { span: name_abs });
         }
         apply_sig(stack, sp, entry, name_abs, self.subtypes)?;
@@ -1518,12 +1841,30 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             b"+" => Some(lir::OpKind::AddI64),
             b"-" => Some(lir::OpKind::SubI64),
             b"*" => Some(lir::OpKind::MulI64),
-            b">" => Some(lir::OpKind::Cmp { out: lir::TY_BOOL, kind: lir::CmpKind::Gt }),
-            b"<" => Some(lir::OpKind::Cmp { out: lir::TY_BOOL, kind: lir::CmpKind::Lt }),
-            b">=" => Some(lir::OpKind::Cmp { out: lir::TY_BOOL, kind: lir::CmpKind::Ge }),
-            b"<=" => Some(lir::OpKind::Cmp { out: lir::TY_BOOL, kind: lir::CmpKind::Le }),
-            b"==" => Some(lir::OpKind::Cmp { out: lir::TY_BOOL, kind: lir::CmpKind::Eq }),
-            b"!=" => Some(lir::OpKind::Cmp { out: lir::TY_BOOL, kind: lir::CmpKind::Ne }),
+            b">" => Some(lir::OpKind::Cmp {
+                out: lir::TY_BOOL,
+                kind: lir::CmpKind::Gt,
+            }),
+            b"<" => Some(lir::OpKind::Cmp {
+                out: lir::TY_BOOL,
+                kind: lir::CmpKind::Lt,
+            }),
+            b">=" => Some(lir::OpKind::Cmp {
+                out: lir::TY_BOOL,
+                kind: lir::CmpKind::Ge,
+            }),
+            b"<=" => Some(lir::OpKind::Cmp {
+                out: lir::TY_BOOL,
+                kind: lir::CmpKind::Le,
+            }),
+            b"==" => Some(lir::OpKind::Cmp {
+                out: lir::TY_BOOL,
+                kind: lir::CmpKind::Eq,
+            }),
+            b"!=" => Some(lir::OpKind::Cmp {
+                out: lir::TY_BOOL,
+                kind: lir::CmpKind::Ne,
+            }),
             b"and" => Some(lir::OpKind::AndBool),
             b"or" => Some(lir::OpKind::OrBool),
             b"not" => Some(lir::OpKind::NotBool),
@@ -1538,7 +1879,9 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 lir::OpKind::Call {
                     name: lir_atom(name)?,
                     sig: call_sig,
-                    may_suspend: entry.may_suspend,
+                    performs: entry.performs,
+                    requires: entry.requires,
+                    bound: entry.bound,
                 },
                 name_abs,
             )?;

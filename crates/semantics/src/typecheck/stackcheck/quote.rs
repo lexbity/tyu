@@ -1,5 +1,5 @@
+use super::control_flow::{do_if, do_lock, do_loop, do_while};
 use super::*;
-use super::control_flow::{do_if, do_while, do_loop, do_lock};
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn typecheck_quote_body(
@@ -11,12 +11,12 @@ pub(super) fn typecheck_quote_body(
     subtypes: &[SubtypeInfo],
     mmio: &MmioDb,
     nominals: &NominalDb,
-    allow_suspend: bool,
+    ctx: Context,
     out: &mut impl Output,
 ) -> Result<(), TcError> {
     // Expect brackets at ends; just slice inside.
     if quot_span.end <= quot_span.start + 2 {
-        return Ok(())
+        return Ok(());
     }
     let inner = Span::new(quot_span.start + 1, quot_span.end - 1);
     let slice = &src[inner.start..inner.end];
@@ -28,7 +28,13 @@ pub(super) fn typecheck_quote_body(
         lex = Lexer::new(slice);
         let first = lex.next();
         if first.kind == TokenKind::PunctLParen {
-            let _ = capture_balanced(&mut lex, slice, TokenKind::PunctLParen, TokenKind::PunctRParen, first.span.start);
+            let _ = capture_balanced(
+                &mut lex,
+                slice,
+                TokenKind::PunctLParen,
+                TokenKind::PunctRParen,
+                first.span.start,
+            );
             let maybe_eff = lex.next();
             if maybe_eff.kind != TokenKind::EffectSet {
                 // step back not supported; ok to proceed after consuming one token too far only if it's ws, but lexer skips ws.
@@ -66,7 +72,10 @@ pub(super) fn typecheck_quote_body(
                     let is_load = name[0] == b'@';
                     let typed = name.len() > 1;
                     let ty_atom = if typed {
-                        Some(TypeAtom::new(&name[1..]).ok_or(TcError::MmioTypedAtomInvalid { span: abs })?) // Corrected: Added missing '?'
+                        Some(
+                            TypeAtom::new(&name[1..])
+                                .ok_or(TcError::MmioTypedAtomInvalid { span: abs })?,
+                        ) // Corrected: Added missing '?'
                     } else {
                         None
                     };
@@ -99,7 +108,9 @@ pub(super) fn typecheck_quote_body(
                                 continue;
                             }
                             Value::MmioPlace(MmioResolved::Field(field)) => {
-                                if !access_can_read(field.reg_access) || !access_can_read(field.field.access) {
+                                if !access_can_read(field.reg_access)
+                                    || !access_can_read(field.field.access)
+                                {
                                     return Err(TcError::MmioReadNotAllowed { span: abs });
                                 }
                                 if typed {
@@ -115,7 +126,11 @@ pub(super) fn typecheck_quote_body(
                                 if t != TypeAtom::PTR && t != TypeAtom::PTR_MUT {
                                     return Err(TcError::MmioTypedNotAllowed { span: abs });
                                 }
-                                push(stack, sp, Value::Plain(ty_atom.expect("typed => ty_atom is Some")))?;
+                                push(
+                                    stack,
+                                    sp,
+                                    Value::Plain(ty_atom.expect("typed => ty_atom is Some")),
+                                )?;
                                 continue;
                             }
                             _ => return Err(TcError::MmioTypedNotAllowed { span: abs }),
@@ -153,7 +168,9 @@ pub(super) fn typecheck_quote_body(
                                 continue;
                             }
                             (Value::MmioPlace(MmioResolved::Field(field)), Value::Plain(vty)) => {
-                                if !access_can_write(field.reg_access) || !access_can_write(field.field.access) {
+                                if !access_can_write(field.reg_access)
+                                    || !access_can_write(field.field.access)
+                                {
                                     return Err(TcError::MmioAccessViolation { span: abs });
                                 }
                                 if typed {
@@ -200,15 +217,15 @@ pub(super) fn typecheck_quote_body(
                     continue;
                 }
                 if name == b"if" {
-                    do_if(stack, sp, src, env, subtypes, mmio, nominals, allow_suspend, out)?;
+                    do_if(stack, sp, src, env, subtypes, mmio, nominals, ctx, out)?;
                     continue;
                 }
                 if name == b"while" {
-                    do_while(stack, sp, src, env, subtypes, mmio, nominals, allow_suspend, out)?;
+                    do_while(stack, sp, src, env, subtypes, mmio, nominals, ctx, out)?;
                     continue;
                 }
                 if name == b"loop" {
-                    do_loop(stack, sp, src, env, subtypes, mmio, nominals, allow_suspend, out)?;
+                    do_loop(stack, sp, src, env, subtypes, mmio, nominals, ctx, out)?;
                     continue;
                 }
                 if name == b"lock" {
@@ -216,17 +233,27 @@ pub(super) fn typecheck_quote_body(
                     let next = probe.next();
                     if next.kind == TokenKind::PunctLBracket {
                         lex = probe;
-                        let _block = capture_scoped_block(&mut lex, slice, next.span)
-                            .map_err(|_| TcError::TypeParseFailed { span: Span::new(quot_span.start + next.span.start, quot_span.start + next.span.end) })?;
-                        let full_span = Span::new(quot_span.start + next.span.start, quot_span.start + lex.pos());
+                        let _block =
+                            capture_scoped_block(&mut lex, slice, next.span).map_err(|_| {
+                                TcError::TypeParseFailed {
+                                    span: Span::new(
+                                        quot_span.start + next.span.start,
+                                        quot_span.start + next.span.end,
+                                    ),
+                                }
+                            })?;
+                        let full_span = Span::new(
+                            quot_span.start + next.span.start,
+                            quot_span.start + lex.pos(),
+                        );
                         push(stack, sp, Value::Quot(full_span))?;
                     }
-                    do_lock(stack, sp, src, env, subtypes, mmio, nominals, out)?;
+                    do_lock(stack, sp, src, env, subtypes, mmio, nominals, ctx, out)?;
                     continue;
                 }
                 let entry = lookup(env, name).ok_or(TcError::WordNotFound { span: quot_span })?;
-                if entry.may_suspend && !allow_suspend {
-                    return Err(TcError::SuspendingInNonSuspendingContext { span: quot_span });
+                if !entry.performs.intersect(ctx.forbids).is_empty() {
+                    return Err(TcError::SuspendForbidden { span: quot_span });
                 }
                 apply_sig(stack, sp, entry, quot_span, subtypes)?;
             }
@@ -234,8 +261,8 @@ pub(super) fn typecheck_quote_body(
                 // treat as word-like operator
                 let name = &slice[tok.span.start..tok.span.end];
                 let entry = lookup(env, name).ok_or(TcError::WordNotFound { span: quot_span })?;
-                if entry.may_suspend && !allow_suspend {
-                    return Err(TcError::SuspendingInNonSuspendingContext { span: quot_span });
+                if !entry.performs.intersect(ctx.forbids).is_empty() {
+                    return Err(TcError::SuspendForbidden { span: quot_span });
                 }
                 apply_sig(stack, sp, entry, quot_span, subtypes)?;
             }
@@ -244,7 +271,10 @@ pub(super) fn typecheck_quote_body(
                 return Err(TcError::BindNotAllowed { span: quot_span });
             }
             TokenKind::PunctArrow => {
-                let op_span = Span::new(quot_span.start + tok.span.start, quot_span.start + tok.span.end);
+                let op_span = Span::new(
+                    quot_span.start + tok.span.start,
+                    quot_span.start + tok.span.end,
+                );
                 let field_tok = lex.next();
                 if field_tok.kind != TokenKind::Ident {
                     return Err(TcError::FieldNotFound { span: op_span });
@@ -261,11 +291,20 @@ pub(super) fn typecheck_quote_body(
                 };
                 let field_ty = struct_field_ty(nominals, struct_ty, field_atom)
                     .ok_or(TcError::FieldNotFound { span: op_span })?;
-                stack[*sp - 1] = Value::Ptr { ty: field_ty, mutable };
+                stack[*sp - 1] = Value::Ptr {
+                    ty: field_ty,
+                    mutable,
+                };
             }
             TokenKind::PunctLBracket => {
-                let q = capture_balanced(&mut lex, slice, TokenKind::PunctLBracket, TokenKind::PunctRBracket, tok.span.start)
-                    .map_err(|_| TcError::TypeParseFailed { span: quot_span })?;
+                let q = capture_balanced(
+                    &mut lex,
+                    slice,
+                    TokenKind::PunctLBracket,
+                    TokenKind::PunctRBracket,
+                    tok.span.start,
+                )
+                .map_err(|_| TcError::TypeParseFailed { span: quot_span })?;
                 let _ = q;
                 push(stack, sp, Value::Quot(Span::UNKNOWN))?;
             }
