@@ -213,7 +213,18 @@ fn e5012_iso_use_after_move() {
 #[test]
 #[ignore]
 fn e5020_borrow_escape() {
-    assert_fails_with("module m; : main ( -- ) 0 ; end;\n", 5020);
+    // A scoped borrow that escapes its scope.  Currently unreachable because
+    // ScopedMarkerLeak (3506) fires first at block exit.  When the scope
+    // model is fully threaded through the IR generator, escape detection
+    // will reach BorrowEscape (5020).
+    assert_ir_fails_with(
+        "module Main;\n\
+         : escape ( i64'4 -- i64'4 )\n\
+           &[ ]\n\
+         ;\n\
+         end;\n",
+        5020,
+    );
 }
 
 #[test]

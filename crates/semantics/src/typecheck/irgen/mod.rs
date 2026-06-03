@@ -479,7 +479,7 @@ pub fn build_ir_word<'r>(
     }
 
     if !gen.check_no_scoped_live(&stack, sp) {
-        return Err(TcError::ScopedLeak {
+        return Err(TcError::BorrowEscape {
             span: decl.body.unwrap_or(decl.name),
         });
     }

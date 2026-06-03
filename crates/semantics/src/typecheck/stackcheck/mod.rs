@@ -139,7 +139,7 @@ pub fn typecheck_word_body(
                     ),
                 })?;
                 if v == Value::Plain(TypeAtom::SCOPED) {
-                    return Err(TcError::ScopedLeak { span: body_span });
+                    return Err(TcError::BorrowEscape { span: body_span });
                 }
                 let ty = v.to_type_atom();
                 let lname = TypeAtom::new(&slice[name.span.start..name.span.end]).ok_or(
@@ -905,7 +905,7 @@ pub fn typecheck_word_body(
 
     // At end, stack must match declared outputs.
     if !check_no_scoped_live(&stack, sp) {
-        return Err(TcError::ScopedLeak { span: body_span });
+        return Err(TcError::BorrowEscape { span: body_span });
     }
     if sp != declared.out_len as usize {
         return Err(TcError::OutputCountMismatch { span: body_span });

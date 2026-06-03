@@ -156,7 +156,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 observer,
             )?;
             if !qgen.check_no_scoped_live(&stack, sp) {
-                return Err(TcError::ScopedLeak { span: quot_span });
+                return Err(TcError::BorrowEscape { span: quot_span });
             }
             if !qgen.terminated {
                 if sp != sig.out_len as usize {

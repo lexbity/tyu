@@ -381,7 +381,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 span: Span::new(span.start + tok.span.start, span.start + tok.span.end),
             })?;
             if v == Value::Plain(TypeAtom::SCOPED) {
-                return Err(TcError::ScopedLeak { span });
+                return Err(TcError::BorrowEscape { span });
             }
             let ty = match v {
                 Value::Plain(t) => t,
