@@ -367,14 +367,23 @@ fn owned_round_trip() {
 
 #[test]
 fn e5030_isr_suspend_forbidden() {
-    // ISR body forbids suspend — SuspendForbidden (5001).
+    // ISR body that exceeds the N_isr stack ceiling (32) — IsrStack (5030).
+    // `0` + 33 dups + 34 drops: high=33, exceeds N_isr=32.
     assert_ir_fails_with(
         "module Main;\n\
          @interrupt(TIMER0) : isr ( -- )\n\
-           platform.task.yield\n\
+           0\n\
+           dup dup dup dup dup dup dup dup dup dup\n\
+           dup dup dup dup dup dup dup dup dup dup\n\
+           dup dup dup dup dup dup dup dup dup dup\n\
+           dup dup dup\n\
+           drop drop drop drop drop drop drop drop drop drop\n\
+           drop drop drop drop drop drop drop drop drop drop\n\
+           drop drop drop drop drop drop drop drop drop drop\n\
+           drop drop drop drop\n\
          ;\n\
          end;\n",
-        5001,
+        5030,
     );
 }
 

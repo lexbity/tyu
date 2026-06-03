@@ -1704,17 +1704,18 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             Value::Quot(s) => s,
             _ => return Err(TcError::CallPopQuot { span: name_abs }),
         };
-        let (qname, qsig, performs) = self.build_quote_word(body_span, observer)?;
+        let (qname, qsig, performs, qbound) = self.build_quote_word(body_span, observer)?;
         if performs.contains(EffectSet::SUSPEND) && !allow_suspend {
             return Err(TcError::SuspendForbidden { span: name_abs });
         }
 
+        self.acc = self.acc.compose(qbound);
         let entry = WordEntry {
             name: TypeAtom::new(b"call").unwrap(),
             sig: qsig,
             performs,
             requires: CapSet::empty(),
-            bound: StackBound::ID,
+            bound: qbound,
         };
         apply_sig(stack, sp, &entry, name_abs, self.subtypes)?;
         let call_sig = self.lir_sig_for_entry(&qsig, name_abs)?;
@@ -1725,7 +1726,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 sig: call_sig,
                 performs,
                 requires: CapSet::empty(),
-                bound: StackBound::ID,
+                bound: qbound,
             },
             name_abs,
         )?;
@@ -1745,7 +1746,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             Value::Quot(s) => s,
             _ => return Err(TcError::TaskSpawnPop { span: name_abs }),
         };
-        let (qname, qsig, _performs) = self.build_quote_word(body_span, observer)?;
+        let (qname, qsig, _performs, _qbound) = self.build_quote_word(body_span, observer)?;
         if qsig.in_len != 0 || qsig.out_len != 0 {
             return Err(TcError::TaskSpawnSig { span: name_abs });
         }

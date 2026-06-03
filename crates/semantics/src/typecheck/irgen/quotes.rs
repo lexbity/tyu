@@ -116,7 +116,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         &mut self,
         quot_span: Span,
         observer: &mut dyn TypecheckObserver,
-    ) -> Result<(lir::Atom, WordSig, EffectSet), TcError> {
+    ) -> Result<(lir::Atom, WordSig, EffectSet, StackBound), TcError> {
         let parsed = self.parse_quote_sig(quot_span)?;
         let name = self.quote_word_name();
         let sig = parsed.sig;
@@ -180,6 +180,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 }
                 qgen.emit_op(cur, lir::OpKind::Ret, quot_span)?;
             }
+            qgen.word.bound = qgen.acc;
             qgen.word
         };
 
@@ -194,6 +195,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 .push(word)
                 .map_err(|_| TcError::OpTableFull { span: quot_span })?;
         }
-        Ok((name, sig, parsed.performs))
+        Ok((name, sig, parsed.performs, word.bound))
     }
 }
