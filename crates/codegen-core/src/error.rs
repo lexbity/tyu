@@ -50,18 +50,18 @@ impl CodegenError {
     /// Codes in the 8000–8999 range are owned by `codegen-core`.
     pub fn code(self) -> u32 {
         match self {
-            Self::UnsupportedOp { .. }          => 8001,
-            Self::MissingEntryPoint { .. }      => 8002,
-            Self::OutputCapacityExceeded        => 8003,
-            Self::InvalidCast { .. }            => 8004,
-            Self::UnsupportedEmitMode           => 8005,
-            Self::MalformedStringLiteral        => 8006,
-            Self::MalformedIr { .. }            => 8007,
-            Self::UnsupportedAddrOf             => 8008,
-            Self::UnknownTypeProperties { .. }  => 8009,
-            Self::UnsupportedCheckSubtype       => 8010,
+            Self::UnsupportedOp { .. } => 8001,
+            Self::MissingEntryPoint { .. } => 8002,
+            Self::OutputCapacityExceeded => 8003,
+            Self::InvalidCast { .. } => 8004,
+            Self::UnsupportedEmitMode => 8005,
+            Self::MalformedStringLiteral => 8006,
+            Self::MalformedIr { .. } => 8007,
+            Self::UnsupportedAddrOf => 8008,
+            Self::UnknownTypeProperties { .. } => 8009,
+            Self::UnsupportedCheckSubtype => 8010,
             Self::StringLiteralCapacityExceeded => 8011,
-            Self::ScopedAllocationOverflow      => 8012,
+            Self::ScopedAllocationOverflow => 8012,
         }
     }
 }

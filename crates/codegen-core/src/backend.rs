@@ -1,5 +1,5 @@
-use ir as lir;
 use crate::error::CodegenError;
+use ir as lir;
 
 /// The code generation interface implemented by each target backend.
 ///

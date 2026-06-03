@@ -1,8 +1,4 @@
-use std::{
-    path::PathBuf,
-    process::Command,
-    sync::Once,
-};
+use std::{path::PathBuf, process::Command, sync::Once};
 
 static BUILD_ONCE: Once = Once::new();
 
@@ -31,9 +27,11 @@ fn exe(name: &str) -> PathBuf {
 }
 
 fn fresh_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir()
-        .join("tyu_lang_tests")
-        .join(format!("{}_{}", name, std::process::id()));
+    let dir = std::env::temp_dir().join("tyu_lang_tests").join(format!(
+        "{}_{}",
+        name,
+        std::process::id()
+    ));
     let _ = std::fs::create_dir_all(&dir);
     dir
 }
@@ -81,7 +79,10 @@ fn langc_unknown_target_triple_fails() {
         .unwrap();
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("E1019"), "expected E1019 in stderr: {stderr}");
+    assert!(
+        stderr.contains("E1019"),
+        "expected E1019 in stderr: {stderr}"
+    );
 }
 
 #[test]
@@ -100,7 +101,10 @@ fn langc_obj_without_target_fails() {
         .unwrap();
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("E1020"), "expected E1020 in stderr: {stderr}");
+    assert!(
+        stderr.contains("E1020"),
+        "expected E1020 in stderr: {stderr}"
+    );
 }
 
 #[test]
@@ -115,7 +119,10 @@ fn lang_assemble_unknown_target_triple_fails() {
         .unwrap();
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("E2004"), "expected E2004 in stderr: {stderr}");
+    assert!(
+        stderr.contains("E2004"),
+        "expected E2004 in stderr: {stderr}"
+    );
 }
 
 #[test]
@@ -224,7 +231,11 @@ end;\n";
         .args(["--emit=ast", path.to_string_lossy().as_ref()])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let stdout = String::from_utf8_lossy(&out.stdout);
     let expected = "\
@@ -266,8 +277,16 @@ fn milestone2_import_symbol_not_exported_has_stable_diag() {
     build_tools();
     let dir = fresh_dir("milestone2_import_symbol_not_exported_has_stable_diag");
 
-    std::fs::write(dir.join("Core.def"), b"module Core;\nexport { a };\n: a ( -- i64 ) ;\nend;\n").unwrap();
-    std::fs::write(dir.join("Main.mod"), b"module Main;\nimport Core { b };\n: main ( -- i64 ) 0 ;\nend;\n").unwrap();
+    std::fs::write(
+        dir.join("Core.def"),
+        b"module Core;\nexport { a };\n: a ( -- i64 ) ;\nend;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("Main.mod"),
+        b"module Main;\nimport Core { b };\n: main ( -- i64 ) 0 ;\nend;\n",
+    )
+    .unwrap();
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
@@ -335,7 +354,11 @@ end;\n",
         .args(["--emit=ir", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 #[test]
@@ -369,7 +392,11 @@ end;\n",
         ])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 #[test]
@@ -407,7 +434,11 @@ fn milestone2_nested_imports_compile_each_unit() {
         .args(["--emit=ir", "A.mod"])
         .output()
         .unwrap();
-    assert!(out_a.status.success(), "stderr: {}", String::from_utf8_lossy(&out_a.stderr));
+    assert!(
+        out_a.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out_a.stderr)
+    );
 
     // Compile Main importing A.
     std::fs::write(
@@ -420,7 +451,11 @@ fn milestone2_nested_imports_compile_each_unit() {
         .args(["--emit=ir", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out_main.status.success(), "stderr: {}", String::from_utf8_lossy(&out_main.stderr));
+    assert!(
+        out_main.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out_main.stderr)
+    );
 }
 
 #[test]
@@ -443,7 +478,11 @@ end;\n",
         .args(["--emit=asm", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     std::fs::write(dir.join("Main.asm"), &out.stdout).unwrap();
 
     let status = Command::new(exe("lang-assemble"))
@@ -477,7 +516,11 @@ end;\n",
         .args(["--emit=asm", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     std::fs::write(dir.join("Main.asm"), &out.stdout).unwrap();
 
     let status = Command::new(exe("lang-assemble"))
@@ -547,7 +590,11 @@ end;\n",
         .args(["--emit=ir", "--allow-raw-casts", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out_yes.status.success(), "stderr: {}", String::from_utf8_lossy(&out_yes.stderr));
+    assert!(
+        out_yes.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out_yes.stderr)
+    );
 }
 
 #[test]
@@ -571,7 +618,11 @@ end;\n",
         .args(["--emit=asm", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     std::fs::write(dir.join("Main.asm"), &out.stdout).unwrap();
 
     let status = Command::new(exe("lang-assemble"))
@@ -607,7 +658,11 @@ end;\n",
         .args(["--checks=all", "--emit=asm", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     std::fs::write(dir.join("Main.asm"), &out.stdout).unwrap();
 
     let status = Command::new(exe("lang-assemble"))
@@ -643,7 +698,11 @@ end;\n",
         .args(["-g", "--checks=all", "--emit=asm", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let asm = String::from_utf8_lossy(&out.stdout);
     assert!(asm.contains("__lang_trap_loc:"));
     assert!(asm.contains("jmp __lang_trap_loc"));
@@ -697,7 +756,11 @@ end;\n",
         .args(["--emit=ir", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 #[test]
@@ -754,7 +817,7 @@ end;\n",
         .unwrap();
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("error[E3503]"));
+    assert!(stderr.contains("error[E5001]"));
 }
 
 #[test]
@@ -862,7 +925,11 @@ fn langc_emit_ir_typechecks_if_while() {
         .args(["--emit=ir", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("module Main"));
@@ -911,7 +978,11 @@ fn milestone4_contracts_and_subtypes_in_ir() {
         .args(["--emit=ir", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("cast"));
@@ -946,7 +1017,11 @@ end;\n",
         .args(["--emit=ir", "--allow-raw-casts", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     for needle in [
         "dup",
@@ -992,7 +1067,11 @@ end;\n",
         .args(["--emit=asm", "--allow-raw-casts", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     std::fs::write(dir.join("Main.asm"), &out.stdout).unwrap();
 
     let status = Command::new(exe("lang-assemble"))
@@ -1031,7 +1110,11 @@ end;\n",
         .args(["--emit=ir", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("vol_load u32 gpio.IN"));
     assert!(stdout.contains("vol_store u32 gpio.OUT_SET"));
@@ -1178,7 +1261,11 @@ end;\n",
         .args(["--emit=asm", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     std::fs::write(dir.join("Main.asm"), &out.stdout).unwrap();
 
     let status = Command::new(exe("lang-assemble"))
@@ -1218,7 +1305,11 @@ end;\n",
         .args(["--emit=asm", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     std::fs::write(dir.join("Main.asm"), &out.stdout).unwrap();
 
     let status = Command::new(exe("lang-assemble"))
@@ -1248,7 +1339,11 @@ fn milestone7_compile_assemble_run_exit_code() {
         .args(["--emit=asm", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     std::fs::write(dir.join("Main.asm"), &out.stdout).unwrap();
 
     let status = Command::new(exe("lang-assemble"))
@@ -1263,7 +1358,9 @@ fn milestone7_compile_assemble_run_exit_code() {
 }
 
 fn runtime_asm_linux_x86_64_hosted() -> PathBuf {
-    workspace_root().join("runtime").join("linux-x86_64-hosted.asm")
+    workspace_root()
+        .join("runtime")
+        .join("linux-x86_64-hosted.asm")
 }
 
 #[test]
@@ -1376,7 +1473,11 @@ end;\n",
         .args(["--emit=asm", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     std::fs::write(dir.join("Main.asm"), &out.stdout).unwrap();
 
     let status = Command::new(exe("lang-assemble"))
@@ -1406,7 +1507,11 @@ fn milestone10_golden_asm_add() {
         .args(["--emit=asm", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let stdout = String::from_utf8_lossy(&out.stdout);
     fn norm(s: &str) -> String {
@@ -1509,7 +1614,11 @@ end;\n",
         .args(["--checks=contracts", "--emit=asm", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     std::fs::write(dir.join("Main.asm"), &out.stdout).unwrap();
 
     let status = Command::new(exe("lang-assemble"))
@@ -1546,7 +1655,11 @@ end;\n",
         .args(["--checks=all", "--emit=asm", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     std::fs::write(dir.join("Main.asm"), &out.stdout).unwrap();
 
     let status = Command::new(exe("lang-assemble"))
@@ -1630,7 +1743,11 @@ end;\n",
         .args(["--emit=asm", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     std::fs::write(dir.join("Main.asm"), &out.stdout).unwrap();
 
     let status = Command::new(exe("lang-assemble"))
@@ -1669,7 +1786,11 @@ end;\n",
         .args(["--emit=asm", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     std::fs::write(dir.join("Main.asm"), &out.stdout).unwrap();
 
     let status = Command::new(exe("lang-assemble"))
@@ -1707,7 +1828,11 @@ end;\n",
         .args(["--emit=asm", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     std::fs::write(dir.join("Main.asm"), &out.stdout).unwrap();
 
     let status = Command::new(exe("lang-assemble"))
@@ -1742,7 +1867,11 @@ end;\n",
 
     let status = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=obj", "--target=x86_64-unknown-linux-gnu", "--out-dir=."])
+        .args([
+            "--emit=obj",
+            "--target=x86_64-unknown-linux-gnu",
+            "--out-dir=.",
+        ])
         .arg(&sysroot_arg)
         .arg("Main.mod")
         .status()
@@ -1792,7 +1921,11 @@ end;\n",
         .args(["--emit=ir", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("i64'4"));
     assert!(stdout.contains("Slice(i64)"));
@@ -1828,7 +1961,11 @@ end;\n",
         .args(["--emit=ir", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("ptr_add_const"), "stdout: {stdout}");
 }
@@ -1937,7 +2074,11 @@ end;\n",
         .args(["--emit=ir", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 #[test]
@@ -1961,7 +2102,11 @@ end;\n",
         .args(["--emit=ir", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 #[test]
@@ -2044,7 +2189,11 @@ end;\n",
         .args(["--emit=ir", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 #[test]
@@ -2072,7 +2221,11 @@ end;\n",
         .args(["--emit=ir", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("ptr_add_const"), "stdout: {stdout}");
 }
@@ -2159,7 +2312,11 @@ end;\n",
         .args(["--emit=ir", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 #[test]
@@ -2214,7 +2371,11 @@ end;\n",
         .args(["--emit=asm", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     std::fs::write(dir.join("Main.asm"), &out.stdout).unwrap();
 
     let status = Command::new(exe("lang-assemble"))
@@ -2255,7 +2416,11 @@ end;\n",
         .args(["--emit=asm", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     std::fs::write(dir.join("Main.asm"), &out.stdout).unwrap();
 
     let status = Command::new(exe("lang-assemble"))
@@ -2323,7 +2488,11 @@ end;\n",
         .args(["--emit=asm", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     std::fs::write(dir.join("Main.asm"), &out.stdout).unwrap();
 
     let status = Command::new(exe("lang-assemble"))
@@ -2379,7 +2548,11 @@ end;\n",
         .args(["--emit=asm", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     std::fs::write(dir.join("Main.asm"), &out.stdout).unwrap();
 
     let status = Command::new(exe("lang-assemble"))
@@ -2418,7 +2591,11 @@ end;\n",
         .args(["--emit=ir", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("ptr_add_const"), "stdout: {stdout}");
 }
@@ -2449,7 +2626,11 @@ end;\n",
         .args(["--emit=ir", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("ptr_add_index"), "stdout: {stdout}");
 }
@@ -2492,7 +2673,11 @@ end;\n",
         .args(["--emit=asm", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     std::fs::write(dir.join("Main.asm"), &out.stdout).unwrap();
 
     let status = Command::new(exe("lang-assemble"))
@@ -2531,7 +2716,11 @@ end;\n",
         .args(["--emit=asm", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     std::fs::write(dir.join("Main.asm"), &out.stdout).unwrap();
 
     let status = Command::new(exe("lang-assemble"))
@@ -2552,8 +2741,16 @@ fn milestone8_sysroot_flag_allows_imports() {
     let sysroot = dir.join("sysroot");
     std::fs::create_dir_all(sysroot.join("platform")).unwrap();
 
-    std::fs::write(sysroot.join("Core.def"), b"module Core;\nexport { };\nend;\n").unwrap();
-    std::fs::write(sysroot.join("Core.mod"), b"module Core;\nexport { };\nend;\n").unwrap();
+    std::fs::write(
+        sysroot.join("Core.def"),
+        b"module Core;\nexport { };\nend;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        sysroot.join("Core.mod"),
+        b"module Core;\nexport { };\nend;\n",
+    )
+    .unwrap();
     std::fs::write(
         sysroot.join("platform").join("linux.def"),
         b"module platform/linux;\n: platform.io.log ( str -- ) ;\nend;\n",
@@ -2577,7 +2774,11 @@ fn milestone8_sysroot_flag_allows_imports() {
         .args(["--emit=ir", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("platform.io.log"));
 }
@@ -2589,8 +2790,16 @@ fn milestone8_sysroot_iface_mismatch_fails() {
     let sysroot = dir.join("sysroot");
     std::fs::create_dir_all(sysroot.join("platform")).unwrap();
 
-    std::fs::write(sysroot.join("Core.def"), b"module Core;\nexport { };\nend;\n").unwrap();
-    std::fs::write(sysroot.join("Core.mod"), b"module Core;\nexport { };\nend;\n").unwrap();
+    std::fs::write(
+        sysroot.join("Core.def"),
+        b"module Core;\nexport { };\nend;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        sysroot.join("Core.mod"),
+        b"module Core;\nexport { };\nend;\n",
+    )
+    .unwrap();
     std::fs::write(
         sysroot.join("platform").join("linux.def"),
         b"module platform/linux;\n: platform.io.log ( str -- ) ;\nend;\n",
@@ -2645,7 +2854,7 @@ end;\n",
         .unwrap();
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("error[E3503]"), "stderr: {stderr}");
+    assert!(stderr.contains("error[E5001]"), "stderr: {stderr}");
 }
 
 #[test]
@@ -2668,7 +2877,11 @@ end;\n",
 
     let status = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=obj", "--target=x86_64-unknown-linux-gnu", "--out-dir=."])
+        .args([
+            "--emit=obj",
+            "--target=x86_64-unknown-linux-gnu",
+            "--out-dir=.",
+        ])
         .arg(&sysroot_arg)
         .arg("Main.mod")
         .status()
@@ -2716,7 +2929,11 @@ end;\n",
 
     let status = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=obj", "--target=x86_64-unknown-linux-gnu", "--out-dir=."])
+        .args([
+            "--emit=obj",
+            "--target=x86_64-unknown-linux-gnu",
+            "--out-dir=.",
+        ])
         .arg(&sysroot_arg)
         .arg("Main.mod")
         .status()
@@ -2764,7 +2981,11 @@ end;\n",
         .args(["--emit=asm", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     std::fs::write(dir.join("Main.asm"), &out.stdout).unwrap();
 
     let status = Command::new(exe("lang-assemble"))
@@ -2807,7 +3028,11 @@ end;\n",
         .args(["--emit=asm", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     std::fs::write(dir.join("Main.asm"), &out.stdout).unwrap();
 
     let status = Command::new(exe("lang-assemble"))
@@ -2871,7 +3096,11 @@ end;\n",
         .args(["--emit=asm", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     std::fs::write(dir.join("Main.asm"), &out.stdout).unwrap();
 
     let status = Command::new(exe("lang-assemble"))
@@ -2906,7 +3135,11 @@ end;\n",
 
     let status = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=obj", "--target=x86_64-unknown-linux-gnu", "--out-dir=."])
+        .args([
+            "--emit=obj",
+            "--target=x86_64-unknown-linux-gnu",
+            "--out-dir=.",
+        ])
         .arg(&sysroot_arg)
         .arg("Main.mod")
         .status()
@@ -2955,7 +3188,11 @@ end;\n",
 
     let status = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=obj", "--target=x86_64-unknown-linux-gnu", "--out-dir=."])
+        .args([
+            "--emit=obj",
+            "--target=x86_64-unknown-linux-gnu",
+            "--out-dir=.",
+        ])
         .arg(&sysroot_arg)
         .arg("Main.mod")
         .status()
@@ -3052,7 +3289,11 @@ fn milestone9_golden_ir_dump_if_while_locals() {
         .args(["--emit=ir", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     let stdout = String::from_utf8_lossy(&out.stdout);
     // Keep the golden minimal but stable: ensure blocks/branches/locals are present.
@@ -3079,7 +3320,11 @@ fn milestone4_checks_flag_controls_insertion() {
         .args(["--emit=ir", "--checks=contracts", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("trap_if_false CONTRACT_FAIL"));
     assert!(!stdout.contains("SUBTYPE_FAIL"));
@@ -3089,7 +3334,11 @@ fn milestone4_checks_flag_controls_insertion() {
         .args(["--emit=ir", "--checks=off", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(!stdout.contains("CONTRACT_FAIL"));
     assert!(!stdout.contains("SUBTYPE_FAIL"));
@@ -3176,7 +3425,7 @@ fn milestone5_rejects_suspend_inside_mut_scoped_block() {
         .unwrap();
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("error[E3503]"));
+    assert!(stderr.contains("error[E5001]"));
 }
 
 #[test]
@@ -3197,7 +3446,7 @@ fn milestone5_rejects_suspend_inside_lock() {
         .unwrap();
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("error[E3503]"));
+    assert!(stderr.contains("error[E5001]"));
 }
 
 #[test]
@@ -3216,7 +3465,11 @@ fn milestone5_allows_drop_before_yield() {
         .args(["--emit=ir", "Main.mod"])
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 #[test]

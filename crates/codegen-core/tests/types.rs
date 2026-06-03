@@ -47,13 +47,23 @@ fn target_spec_x86_64_linux_gnu_fields() {
 
 #[test]
 fn codegen_error_codes_are_stable() {
-    assert_eq!(CodegenError::UnsupportedOp     { op_name: b"x"    }.code(), 8001);
-    assert_eq!(CodegenError::MissingEntryPoint { name: b"main"    }.code(), 8002);
-    assert_eq!(CodegenError::OutputCapacityExceeded                .code(), 8003);
-    assert_eq!(CodegenError::InvalidCast       { from: ir::TY_I64, to: ir::TY_BOOL }.code(), 8004);
-    assert_eq!(CodegenError::UnsupportedEmitMode                   .code(), 8005);
-    assert_eq!(CodegenError::MalformedStringLiteral                .code(), 8006);
-    assert_eq!(CodegenError::MalformedIr       { detail: 0        }.code(), 8007);
+    assert_eq!(CodegenError::UnsupportedOp { op_name: b"x" }.code(), 8001);
+    assert_eq!(
+        CodegenError::MissingEntryPoint { name: b"main" }.code(),
+        8002
+    );
+    assert_eq!(CodegenError::OutputCapacityExceeded.code(), 8003);
+    assert_eq!(
+        CodegenError::InvalidCast {
+            from: ir::TY_I64,
+            to: ir::TY_BOOL
+        }
+        .code(),
+        8004
+    );
+    assert_eq!(CodegenError::UnsupportedEmitMode.code(), 8005);
+    assert_eq!(CodegenError::MalformedStringLiteral.code(), 8006);
+    assert_eq!(CodegenError::MalformedIr { detail: 0 }.code(), 8007);
 }
 
 #[test]
@@ -61,12 +71,25 @@ fn codegen_error_named_variant_codes() {
     assert_eq!(CodegenError::UnsupportedOp { op_name: b"x" }.code(), 8001);
     assert_eq!(CodegenError::MissingEntryPoint { name: b"x" }.code(), 8002);
     assert_eq!(CodegenError::OutputCapacityExceeded.code(), 8003);
-    assert_eq!(CodegenError::InvalidCast { from: ir::TY_I64, to: ir::TY_BOOL }.code(), 8004);
+    assert_eq!(
+        CodegenError::InvalidCast {
+            from: ir::TY_I64,
+            to: ir::TY_BOOL
+        }
+        .code(),
+        8004
+    );
     assert_eq!(CodegenError::UnsupportedEmitMode.code(), 8005);
     assert_eq!(CodegenError::MalformedStringLiteral.code(), 8006);
     assert_eq!(CodegenError::MalformedIr { detail: 0 }.code(), 8007);
     assert_eq!(CodegenError::UnsupportedAddrOf.code(), 8008);
-    assert_eq!(CodegenError::UnknownTypeProperties { type_id: ir::TY_I64 }.code(), 8009);
+    assert_eq!(
+        CodegenError::UnknownTypeProperties {
+            type_id: ir::TY_I64
+        }
+        .code(),
+        8009
+    );
     assert_eq!(CodegenError::UnsupportedCheckSubtype.code(), 8010);
     assert_eq!(CodegenError::StringLiteralCapacityExceeded.code(), 8011);
     assert_eq!(CodegenError::ScopedAllocationOverflow.code(), 8012);
@@ -78,7 +101,7 @@ fn codegen_error_named_variant_codes() {
 
 #[test]
 fn emit_mode_only_obj_is_production() {
-    assert!( EmitMode::Obj.is_production());
+    assert!(EmitMode::Obj.is_production());
     assert!(!EmitMode::Ast.is_production());
     assert!(!EmitMode::Ir.is_production());
     assert!(!EmitMode::StackCheck.is_production());
@@ -87,7 +110,13 @@ fn emit_mode_only_obj_is_production() {
 
 #[test]
 fn emit_mode_inspection_is_complement_of_production() {
-    for mode in [EmitMode::Ast, EmitMode::Ir, EmitMode::StackCheck, EmitMode::Asm, EmitMode::Obj] {
+    for mode in [
+        EmitMode::Ast,
+        EmitMode::Ir,
+        EmitMode::StackCheck,
+        EmitMode::Asm,
+        EmitMode::Obj,
+    ] {
         assert_eq!(mode.is_inspection(), !mode.is_production());
     }
 }

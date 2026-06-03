@@ -1,5 +1,5 @@
 use frontend::span::Span;
-use ir::{BlockId, CmpKind, Sig, TrapCode, TypeId};
+use ir::{BlockId, CapSet, CmpKind, EffectSet, Sig, StackBound, TrapCode, TypeId};
 
 /// Abstract instruction-set interface.
 ///
@@ -70,12 +70,7 @@ pub trait IsaEmitter {
     fn emit_sub_i64(&mut self, span: Span) -> Result<(), Self::Error>;
     fn emit_mul_i64(&mut self, span: Span) -> Result<(), Self::Error>;
 
-    fn emit_cmp(
-        &mut self,
-        kind: CmpKind,
-        out: TypeId,
-        span: Span,
-    ) -> Result<(), Self::Error>;
+    fn emit_cmp(&mut self, kind: CmpKind, out: TypeId, span: Span) -> Result<(), Self::Error>;
 
     // --- Boolean logic ------------------------------------------------------
 
@@ -85,35 +80,15 @@ pub trait IsaEmitter {
 
     // --- Local variables ----------------------------------------------------
 
-    fn emit_local_get(
-        &mut self,
-        slot: u16,
-        ty: TypeId,
-        span: Span,
-    ) -> Result<(), Self::Error>;
+    fn emit_local_get(&mut self, slot: u16, ty: TypeId, span: Span) -> Result<(), Self::Error>;
 
-    fn emit_local_set(
-        &mut self,
-        slot: u16,
-        ty: TypeId,
-        span: Span,
-    ) -> Result<(), Self::Error>;
+    fn emit_local_set(&mut self, slot: u16, ty: TypeId, span: Span) -> Result<(), Self::Error>;
 
     // --- Type conversions ---------------------------------------------------
 
-    fn emit_cast(
-        &mut self,
-        from: TypeId,
-        to: TypeId,
-        span: Span,
-    ) -> Result<(), Self::Error>;
+    fn emit_cast(&mut self, from: TypeId, to: TypeId, span: Span) -> Result<(), Self::Error>;
 
-    fn emit_bitcast(
-        &mut self,
-        from: TypeId,
-        to: TypeId,
-        span: Span,
-    ) -> Result<(), Self::Error>;
+    fn emit_bitcast(&mut self, from: TypeId, to: TypeId, span: Span) -> Result<(), Self::Error>;
 
     // --- Memory access ------------------------------------------------------
 
@@ -127,12 +102,8 @@ pub trait IsaEmitter {
         span: Span,
     ) -> Result<(), Self::Error>;
 
-    fn emit_ptr_add_index(
-        &mut self,
-        ty: TypeId,
-        scale: u32,
-        span: Span,
-    ) -> Result<(), Self::Error>;
+    fn emit_ptr_add_index(&mut self, ty: TypeId, scale: u32, span: Span)
+        -> Result<(), Self::Error>;
 
     // --- Control flow -------------------------------------------------------
 
@@ -151,7 +122,9 @@ pub trait IsaEmitter {
         &mut self,
         name: &[u8],
         sig: &Sig,
-        may_suspend: bool,
+        performs: EffectSet,
+        requires: CapSet,
+        bound: StackBound,
         span: Span,
     ) -> Result<(), Self::Error>;
 
@@ -159,17 +132,9 @@ pub trait IsaEmitter {
 
     /// Emit a conditional trap: consume the `bool` on top of stack and
     /// trap with `code` if it is false.
-    fn emit_trap_if_false(
-        &mut self,
-        code: TrapCode,
-        span: Span,
-    ) -> Result<(), Self::Error>;
+    fn emit_trap_if_false(&mut self, code: TrapCode, span: Span) -> Result<(), Self::Error>;
 
     /// Emit a subtype range check: peek the top-of-stack value of `ty`,
     /// push a `bool` result. Stack effect: `( ty -- ty bool )`.
-    fn emit_check_subtype(
-        &mut self,
-        ty: TypeId,
-        span: Span,
-    ) -> Result<(), Self::Error>;
+    fn emit_check_subtype(&mut self, ty: TypeId, span: Span) -> Result<(), Self::Error>;
 }

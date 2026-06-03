@@ -13,4 +13,3 @@ impl Span {
         Self { start, end }
     }
 }
-

@@ -2,9 +2,9 @@
 #![no_main]
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use codegen_core::{EmitMode, Target};
 use frontend::parse::Parser;
 use hosted::{diag, fs};
-use codegen_core::{EmitMode, Target};
 
 mod args;
 mod codegen;
@@ -12,8 +12,8 @@ mod driver;
 mod iface;
 mod util;
 
-use crate::util::{emit_parse_error, join_path, split_dir, Stdout};
 use crate::iface::{check_program, iface_error_message};
+use crate::util::{emit_parse_error, join_path, split_dir, Stdout};
 
 hosted_rt::entry!(langc_main);
 
@@ -54,7 +54,9 @@ extern "C" fn langc_main(argc: isize, argv: *const *const hosted::c::c_char) -> 
     search_dirs[1..(cfg.include_len + 1)].copy_from_slice(&cfg.include_dirs[..cfg.include_len]);
     let mut search_len = 1 + cfg.include_len;
 
-    let sysroot = cfg.sysroot.or_else(|| unsafe { hosted::env::get_str(b"LANG_SYSROOT") });
+    let sysroot = cfg
+        .sysroot
+        .or_else(|| unsafe { hosted::env::get_str(b"LANG_SYSROOT") });
     let mut sysroot_target_buf = [0u8; 512];
     if let Some(sr) = sysroot {
         // Add sysroot root — resolves target-agnostic modules (e.g. Core).
@@ -79,39 +81,53 @@ extern "C" fn langc_main(argc: isize, argv: *const *const hosted::c::c_char) -> 
 
     let mut out = Stdout;
     match cfg.emit {
-        EmitMode::Ast => {
-            match Parser::new(src).parse_module_dump(&mut out) {
-                Ok(()) => 0,
-                Err(e) => {
-                    emit_parse_error(cfg.input, src, e.code(), e.span().start);
-                    2
-                }
+        EmitMode::Ast => match Parser::new(src).parse_module_dump(&mut out) {
+            Ok(()) => 0,
+            Err(e) => {
+                emit_parse_error(cfg.input, src, e.code(), e.span().start);
+                2
             }
-        }
-        EmitMode::Ir => {
-            driver::emit_ir_driver(
-                &module, src, &search_dirs[..search_len],
-                cfg.checks, cfg.allow_raw_casts, target, &mut out,
-            )
-        }
-        EmitMode::StackCheck => {
-            driver::emit_tc_driver(
-                &module, src, &search_dirs[..search_len],
-                cfg.checks, cfg.allow_raw_casts, target, &mut out,
-            )
-        }
-        EmitMode::Asm => {
-            driver::emit_asm_driver(
-                &module, src, &search_dirs[..search_len],
-                cfg.checks, cfg.allow_raw_casts, cfg.debug_trap_loc, target, &mut out,
-            )
-        }
+        },
+        EmitMode::Ir => driver::emit_ir_driver(
+            &module,
+            src,
+            &search_dirs[..search_len],
+            cfg.checks,
+            cfg.allow_raw_casts,
+            target,
+            &mut out,
+        ),
+        EmitMode::StackCheck => driver::emit_tc_driver(
+            &module,
+            src,
+            &search_dirs[..search_len],
+            cfg.checks,
+            cfg.allow_raw_casts,
+            target,
+            &mut out,
+        ),
+        EmitMode::Asm => driver::emit_asm_driver(
+            &module,
+            src,
+            &search_dirs[..search_len],
+            cfg.checks,
+            cfg.allow_raw_casts,
+            cfg.debug_trap_loc,
+            target,
+            &mut out,
+        ),
         EmitMode::Obj => {
             let out_dir = cfg.out_dir.unwrap_or(b".");
             driver::emit_obj_driver(
-                &module, src, &search_dirs[..search_len],
-                cfg.checks, cfg.allow_raw_casts, cfg.debug_trap_loc,
-                out_dir, target, cfg.is_lib,
+                &module,
+                src,
+                &search_dirs[..search_len],
+                cfg.checks,
+                cfg.allow_raw_casts,
+                cfg.debug_trap_loc,
+                out_dir,
+                target,
+                cfg.is_lib,
             )
         }
     }

@@ -1,6 +1,6 @@
+use codegen_core::{EmitMode, Target};
 use hosted::{args::RawArgs, cstr, io};
 use semantics::typecheck::ChecksMode;
-use codegen_core::{EmitMode, Target};
 
 pub const HELP: &[u8] = b"langc (tyu_lang) v0.1.0\n\nUSAGE:\n  langc [options] <file.mod|file.def>\n\nOPTIONS:\n  --help, -h              Print help\n  --emit=ast              Parse and dump AST (inspection)\n  --emit=ir               Typecheck and dump IR (inspection)\n  --emit=tc               Stack-trace typecheck dump (inspection)\n  --emit=asm              Emit assembly text (inspection only, not assemblable standalone)\n  --emit=obj              Emit relocatable object file (production output)\n  --lib                   Compile as a library (no main required, --emit=obj only)\n  -g                      Enable trap-with-location stubs\n  -I <path>               Add include path\n  --checks=off|contracts|all  Checks insertion mode\n  --allow-raw-casts       Enable raw pointer casts\n  --sysroot=<path>        Sysroot root directory\n  --out-dir=<path>        Output directory (--emit=obj)\n  --target=<triple>       Target triple, required for --emit=obj\n                          Supported: x86_64-unknown-linux-gnu\n                                     x86_64-unknown-none\n\n";
 
@@ -98,9 +98,9 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]]) -> (ParseResult<'a>, bool) {
         }
         if a.starts_with(b"--checks=") {
             checks = match &a[b"--checks=".len()..] {
-                b"off"       => ChecksMode::Off,
+                b"off" => ChecksMode::Off,
                 b"contracts" => ChecksMode::Contracts,
-                b"all"       => ChecksMode::All,
+                b"all" => ChecksMode::All,
                 _ => {
                     emit_error(1006, b"invalid --checks value");
                     return (ParseResult::Error(2), true);
@@ -139,7 +139,10 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]]) -> (ParseResult<'a>, bool) {
             target = match Target::parse(triple) {
                 Some(t) => Some(t),
                 None => {
-                    emit_error(1019, b"unknown target triple (see --help for supported targets)");
+                    emit_error(
+                        1019,
+                        b"unknown target triple (see --help for supported targets)",
+                    );
                     return (ParseResult::Error(2), true);
                 }
             };
@@ -173,25 +176,41 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]]) -> (ParseResult<'a>, bool) {
         if !saw_help {
             emit_error(1002, b"missing input file");
         }
-        return (if saw_help { ParseResult::Help } else { ParseResult::Error(2) }, saw_help);
+        return (
+            if saw_help {
+                ParseResult::Help
+            } else {
+                ParseResult::Error(2)
+            },
+            saw_help,
+        );
     }
 
-    let emit_count = (emit_ast as u8) + (emit_ir as u8) + (emit_asm as u8)
-                   + (emit_obj as u8) + (emit_tc as u8);
+    let emit_count =
+        (emit_ast as u8) + (emit_ir as u8) + (emit_asm as u8) + (emit_obj as u8) + (emit_tc as u8);
     if emit_count > 1 {
         emit_error(1005, b"choose a single --emit=...");
         return (ParseResult::Error(2), false);
     }
     if emit_count == 0 {
-        emit_error(1001, b"use --emit=ast, --emit=ir, --emit=asm, --emit=tc, or --emit=obj");
+        emit_error(
+            1001,
+            b"use --emit=ast, --emit=ir, --emit=asm, --emit=tc, or --emit=obj",
+        );
         return (ParseResult::Error(2), false);
     }
 
-    let emit = if emit_ast      { EmitMode::Ast }
-               else if emit_ir  { EmitMode::Ir }
-               else if emit_tc  { EmitMode::StackCheck }
-               else if emit_obj { EmitMode::Obj }
-               else             { EmitMode::Asm };
+    let emit = if emit_ast {
+        EmitMode::Ast
+    } else if emit_ir {
+        EmitMode::Ir
+    } else if emit_tc {
+        EmitMode::StackCheck
+    } else if emit_obj {
+        EmitMode::Obj
+    } else {
+        EmitMode::Asm
+    };
 
     if emit == EmitMode::Obj && target.is_none() {
         emit_error(1020, b"--emit=obj requires --target=<triple>");
@@ -203,22 +222,28 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]]) -> (ParseResult<'a>, bool) {
         return (ParseResult::Error(2), false);
     };
 
-    (ParseResult::Ok(Config {
-        emit,
-        target,
-        debug_trap_loc,
-        checks,
-        allow_raw_casts,
-        is_lib,
-        input: input_path,
-        include_dirs,
-        include_len,
-        sysroot,
-        out_dir,
-    }), false)
+    (
+        ParseResult::Ok(Config {
+            emit,
+            target,
+            debug_trap_loc,
+            checks,
+            allow_raw_casts,
+            is_lib,
+            input: input_path,
+            include_dirs,
+            include_len,
+            sysroot,
+            out_dir,
+        }),
+        false,
+    )
 }
 
-pub unsafe fn parse_args<'a>(argc: isize, argv: *const *const hosted::c::c_char) -> ParseResult<'a> {
+pub unsafe fn parse_args<'a>(
+    argc: isize,
+    argv: *const *const hosted::c::c_char,
+) -> ParseResult<'a> {
     let args = unsafe { RawArgs::new(argc, argv) };
     let mut slices: [&[u8]; 256] = [&[]; 256];
     let mut count = 0usize;
@@ -287,7 +312,10 @@ mod tests {
 
     #[test]
     fn emit_tc() {
-        assert_eq!(ok(&[b"langc", b"--emit=tc", b"x.mod"]).emit, EmitMode::StackCheck);
+        assert_eq!(
+            ok(&[b"langc", b"--emit=tc", b"x.mod"]).emit,
+            EmitMode::StackCheck
+        );
     }
 
     #[test]
@@ -297,7 +325,12 @@ mod tests {
 
     #[test]
     fn emit_obj() {
-        let cfg = ok(&[b"langc", b"--emit=obj", b"--target=x86_64-unknown-linux-gnu", b"x.mod"]);
+        let cfg = ok(&[
+            b"langc",
+            b"--emit=obj",
+            b"--target=x86_64-unknown-linux-gnu",
+            b"x.mod",
+        ]);
         assert_eq!(cfg.emit, EmitMode::Obj);
         assert_eq!(cfg.target, Some(Target::X86_64UnknownLinuxGnu));
     }
@@ -362,7 +395,13 @@ mod tests {
 
     #[test]
     fn out_dir() {
-        let cfg = ok(&[b"langc", b"--out-dir=/tmp", b"--emit=obj", b"--target=x86_64-unknown-linux-gnu", b"x.mod"]);
+        let cfg = ok(&[
+            b"langc",
+            b"--out-dir=/tmp",
+            b"--emit=obj",
+            b"--target=x86_64-unknown-linux-gnu",
+            b"x.mod",
+        ]);
         assert_eq!(cfg.out_dir, Some(b"/tmp"));
     }
 

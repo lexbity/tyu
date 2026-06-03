@@ -1,12 +1,11 @@
-use std::{
-    path::PathBuf,
-    process::Command,
-};
+use std::{path::PathBuf, process::Command};
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap()
-        .parent().unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .to_path_buf()
 }
 
@@ -15,9 +14,11 @@ fn langc_exe() -> PathBuf {
 }
 
 fn fresh_dir(label: &str) -> PathBuf {
-    let dir = std::env::temp_dir()
-        .join("tyu_cap_tests")
-        .join(format!("{}_{}", label, std::process::id()));
+    let dir = std::env::temp_dir().join("tyu_cap_tests").join(format!(
+        "{}_{}",
+        label,
+        std::process::id()
+    ));
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
@@ -40,7 +41,10 @@ fn compile(src: &str) -> (i32, String) {
         .args(["--emit=asm", path.to_str().unwrap()])
         .output()
         .unwrap();
-    (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stderr).to_string())
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stderr).to_string(),
+    )
 }
 
 fn assert_ok(src: &str) {
@@ -50,7 +54,10 @@ fn assert_ok(src: &str) {
 
 fn assert_fails(src: &str) {
     let (code, stderr) = compile(src);
-    assert!(code != 0, "expected fail, got exit={code}, stderr: {stderr}");
+    assert!(
+        code != 0,
+        "expected fail, got exit={code}, stderr: {stderr}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -82,8 +89,6 @@ fn subtypes_64_succeeds() {
 // ---------------------------------------------------------------------------
 // Module with 65 subtypes should fail
 // ---------------------------------------------------------------------------
-
-
 
 // ---------------------------------------------------------------------------
 // Op table: 96 ops should succeed (FixedVec<Op, 96>)
@@ -119,7 +124,10 @@ fn no_input_fails() {
         .unwrap();
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("E1002") || stderr.contains("missing input"), "stderr: {stderr}");
+    assert!(
+        stderr.contains("E1002") || stderr.contains("missing input"),
+        "stderr: {stderr}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -140,4 +148,3 @@ fn obj_no_target_fails() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("E1020"), "stderr: {stderr}");
 }
-

@@ -171,5 +171,3 @@ fn len_tracks_pushes() {
     v.push(20).unwrap();
     assert_eq!(v.len(), 2);
 }
-
-

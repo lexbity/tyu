@@ -7,46 +7,124 @@ pub trait Output {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ParseError {
-    ExpectedModule { span: Span },
-    ExpectedModuleName { span: Span },
-    ExpectedSemiAfterModule { span: Span },
-    ExpectedEnd { span: Span },
-    ExpectedSemiAfterEnd { span: Span },
-    ExpectedImportName { span: Span },
-    ExpectedRBrace { span: Span },
-    ExpectedQualIdent { span: Span },
-    ExpectedRBraceExport { span: Span },
-    ExpectedExportName { span: Span },
-    ExpectedWordName { span: Span },
-    ExpectedSigParen { span: Span },
-    ExpectedQuotation { span: Span },
-    ExpectedQuotationEffect { span: Span },
-    ExpectedSemi { span: Span },
-    UnmatchedBracket { span: Span },
-    UnmatchedBrace { span: Span },
-    UnmatchedParen { span: Span },
-    ExpectedEnumName { span: Span },
-    ExpectedFieldIdent { span: Span },
-    ExpectedSemiOrEnd { span: Span },
-    ExpectedEndSemi { span: Span },
-    ExpectedEq { span: Span },
-    ExpectedNumber { span: Span },
-    InvalidInteger { span: Span },
-    ExpectedSubtypeName { span: Span },
-    ExpectedEqSubtype { span: Span },
-    ExpectedBaseType { span: Span },
-    ExpectedRangeKeyword { span: Span },
-    ExpectedRangeMin { span: Span },
-    InvalidRangeMin { span: Span },
-    ExpectedDblDot { span: Span },
-    ExpectedRangeMax { span: Span },
-    InvalidRangeMax { span: Span },
-    ExpectedSemiSubtype { span: Span },
-    ExpectedConstName { span: Span },
-    ExpectedRegisterName { span: Span },
-    ExpectedSemiSkip { span: Span },
+    ExpectedModule {
+        span: Span,
+    },
+    ExpectedModuleName {
+        span: Span,
+    },
+    ExpectedSemiAfterModule {
+        span: Span,
+    },
+    ExpectedEnd {
+        span: Span,
+    },
+    ExpectedSemiAfterEnd {
+        span: Span,
+    },
+    ExpectedImportName {
+        span: Span,
+    },
+    ExpectedRBrace {
+        span: Span,
+    },
+    ExpectedQualIdent {
+        span: Span,
+    },
+    ExpectedRBraceExport {
+        span: Span,
+    },
+    ExpectedExportName {
+        span: Span,
+    },
+    ExpectedWordName {
+        span: Span,
+    },
+    ExpectedSigParen {
+        span: Span,
+    },
+    ExpectedQuotation {
+        span: Span,
+    },
+    ExpectedQuotationEffect {
+        span: Span,
+    },
+    ExpectedSemi {
+        span: Span,
+    },
+    UnmatchedBracket {
+        span: Span,
+    },
+    UnmatchedBrace {
+        span: Span,
+    },
+    UnmatchedParen {
+        span: Span,
+    },
+    ExpectedEnumName {
+        span: Span,
+    },
+    ExpectedFieldIdent {
+        span: Span,
+    },
+    ExpectedSemiOrEnd {
+        span: Span,
+    },
+    ExpectedEndSemi {
+        span: Span,
+    },
+    ExpectedEq {
+        span: Span,
+    },
+    ExpectedNumber {
+        span: Span,
+    },
+    InvalidInteger {
+        span: Span,
+    },
+    ExpectedSubtypeName {
+        span: Span,
+    },
+    ExpectedEqSubtype {
+        span: Span,
+    },
+    ExpectedBaseType {
+        span: Span,
+    },
+    ExpectedRangeKeyword {
+        span: Span,
+    },
+    ExpectedRangeMin {
+        span: Span,
+    },
+    InvalidRangeMin {
+        span: Span,
+    },
+    ExpectedDblDot {
+        span: Span,
+    },
+    ExpectedRangeMax {
+        span: Span,
+    },
+    InvalidRangeMax {
+        span: Span,
+    },
+    ExpectedSemiSubtype {
+        span: Span,
+    },
+    ExpectedConstName {
+        span: Span,
+    },
+    ExpectedRegisterName {
+        span: Span,
+    },
+    ExpectedSemiSkip {
+        span: Span,
+    },
     /// Too many items of a given kind; the parser's static capacity was exceeded.
-    TooManyItems { span: Span },
+    TooManyItems {
+        span: Span,
+    },
 }
 
 impl ParseError {
@@ -204,7 +282,7 @@ pub struct DeclAst {
     pub body: Option<Span>,
     pub requires: Option<Span>,
     pub ensures: Option<Span>,
-    pub effect_suspend: bool,
+    pub effect_bits: u16,
 }
 
 pub struct ModuleAst {

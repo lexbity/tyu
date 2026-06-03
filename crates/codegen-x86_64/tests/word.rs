@@ -1,6 +1,6 @@
 use frontend::parse::Output;
 use frontend::{fixed::FixedVec, span::Span};
-use ir::{Atom, Block, BlockId, CmpKind, Op, OpKind, Sig, TrapCode, Word, TY_BOOL, TY_I64, TY_PTR, TY_PTR_MUT};
+use ir::{Atom, Block, BlockId, CapSet, CmpKind, EffectSet, Op, OpKind, Sig, StackBound, TrapCode, Word, TY_BOOL, TY_I64, TY_PTR, TY_PTR_MUT};
 use codegen_x86_64::X86_64HostedBackend;
 use codegen_core::{AsmMode, CodegenError};
 
@@ -49,6 +49,9 @@ fn single_block_word(sig: Sig, ops: &[OpKind]) -> Word {
     Word {
         name: atom(b"test"),
         sig,
+        performs: EffectSet::empty(),
+        requires: CapSet::empty(),
+        bound: StackBound::ID,
         entry: BlockId(0),
         types: baseline_types(),
         type_sizes: baseline_sizes(),
@@ -235,7 +238,9 @@ fn emit_br_if() {
     blocks.push(Block { id: BlockId(2), entry_stack: FixedVec::new(), ops: FixedVec::new() }).unwrap();
 
     let w = Word {
-        name: atom(b"test"), sig: sig_0_0(), entry: BlockId(1),
+        name: atom(b"test"), sig: sig_0_0(),
+        performs: EffectSet::empty(), requires: CapSet::empty(), bound: StackBound::ID,
+        entry: BlockId(1),
         types: baseline_types(), type_sizes: baseline_sizes(), blocks,
     };
     let out = emit(&w);

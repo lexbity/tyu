@@ -1,5 +1,5 @@
-use ir::TypeId;
 use crate::error::CodegenError;
+use ir::TypeId;
 
 /// Channel payload classification.
 ///
@@ -13,7 +13,11 @@ pub enum ChannelPayloadKind {
     /// `bits` is the natural width; `signed` controls sign-extension when
     /// the value is widened to fill the 8-byte slot; `is_bool` triggers
     /// canonicalisation to 0/1.
-    Primitive { bits: u16, signed: bool, is_bool: bool },
+    Primitive {
+        bits: u16,
+        signed: bool,
+        is_bool: bool,
+    },
 
     /// A composite value too large for a register slot — heap-boxed and
     /// transmitted by pointer to the heap allocation.
@@ -49,11 +53,7 @@ pub trait RuntimeEmitter {
 
     /// Emit a task spawn: allocate a task slot, copy the task body, push
     /// the task handle.
-    fn emit_task_spawn(
-        &mut self,
-        name: &[u8],
-        task_ty: TypeId,
-    ) -> Result<(), CodegenError>;
+    fn emit_task_spawn(&mut self, name: &[u8], task_ty: TypeId) -> Result<(), CodegenError>;
 
     /// Emit a cooperative yield point.
     fn emit_task_yield(&mut self) -> Result<(), CodegenError>;
@@ -93,18 +93,10 @@ pub trait RuntimeEmitter {
     // --- Region / scoped allocation -----------------------------------------
 
     /// Emit region entry: push a scoped slice of `len` elements of `ty`.
-    fn emit_region_enter(
-        &mut self,
-        ty: TypeId,
-        len: u32,
-    ) -> Result<(), CodegenError>;
+    fn emit_region_enter(&mut self, ty: TypeId, len: u32) -> Result<(), CodegenError>;
 
     // --- MMIO ---------------------------------------------------------------
 
     /// Push the address of an MMIO-mapped register bank.
-    fn emit_mmio_place(
-        &mut self,
-        place: &[u8],
-        addr: u64,
-    ) -> Result<(), CodegenError>;
+    fn emit_mmio_place(&mut self, place: &[u8], addr: u64) -> Result<(), CodegenError>;
 }

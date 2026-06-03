@@ -210,10 +210,14 @@ static X86_64_UNKNOWN_LINUX_GNU: TargetSpec = TargetSpec {
 };
 
 static X86_64_NONE_QEMU_EXTRA_ARGS: [&[u8]; 8] = [
-    b"-m", b"32M",
-    b"-display", b"none",
-    b"-device", b"isa-debug-exit,iobase=0x501,iosize=0x02",
-    b"-debugcon", b"stdio",
+    b"-m",
+    b"32M",
+    b"-display",
+    b"none",
+    b"-device",
+    b"isa-debug-exit,iobase=0x501,iosize=0x02",
+    b"-debugcon",
+    b"stdio",
 ];
 
 static X86_64_UNKNOWN_NONE_QEMU: QemuSpec = QemuSpec {

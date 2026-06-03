@@ -1,19 +1,30 @@
 use super::*;
 
 impl<'a> Parser<'a> {
-    pub(super) fn parse_word_ast(&mut self, pending_attrs: &mut FixedVec<Span, 16>) -> Result<DeclAst, ParseError> {
+    pub(super) fn parse_word_ast(
+        &mut self,
+        pending_attrs: &mut FixedVec<Span, 16>,
+    ) -> Result<DeclAst, ParseError> {
         self.bump(); // :
-        let name_span = self.capture_qualified_name(ParseError::ExpectedWordName { span: self.look.span })?;
+        let name_span = self.capture_qualified_name(ParseError::ExpectedWordName {
+            span: self.look.span,
+        })?;
 
         let sig = if self.look.kind == TokenKind::PunctLParen {
-            Some(self.capture_balanced(TokenKind::PunctLParen, TokenKind::PunctRParen, ParseError::ExpectedSigParen { span: self.look.span })?)
+            Some(self.capture_balanced(
+                TokenKind::PunctLParen,
+                TokenKind::PunctRParen,
+                ParseError::ExpectedSigParen {
+                    span: self.look.span,
+                },
+            )?)
         } else {
             None
         };
 
-        let mut effect_suspend = false;
+        let mut effect_bits = 0u16;
         if self.look.kind == TokenKind::EffectSet {
-            effect_suspend = effect_has_suspend(self.slice(self.look.span));
+            effect_bits = parse_effect_bits(self.slice(self.look.span));
             self.bump();
         }
 
@@ -22,7 +33,9 @@ impl<'a> Parser<'a> {
         while let TokenKind::KwRequires | TokenKind::KwEnsures = self.look.kind {
             let is_requires = self.look.kind == TokenKind::KwRequires;
             self.bump();
-            let q = self.capture_quotation(ParseError::ExpectedQuotation { span: self.look.span })?;
+            let q = self.capture_quotation(ParseError::ExpectedQuotation {
+                span: self.look.span,
+            })?;
             if is_requires {
                 requires = Some(q);
             } else {
@@ -33,7 +46,12 @@ impl<'a> Parser<'a> {
         let body_start = self.look.span.start;
         self.dump_terms_until(&mut NullOut, TokenKind::PunctSemi)?;
         let body_end = self.look.span.start;
-        self.expect(TokenKind::PunctSemi, ParseError::ExpectedSemi { span: self.look.span })?;
+        self.expect(
+            TokenKind::PunctSemi,
+            ParseError::ExpectedSemi {
+                span: self.look.span,
+            },
+        )?;
         self.bump();
 
         let attrs = core::mem::take(pending_attrs);
@@ -45,13 +63,21 @@ impl<'a> Parser<'a> {
             body: Some(Span::new(body_start, body_end)),
             requires,
             ensures,
-            effect_suspend,
+            effect_bits,
         })
     }
 
-    pub(super) fn parse_struct_decl_ast(&mut self, pending_attrs: &mut FixedVec<Span, 16>) -> Result<(DeclAst, StructDeclAst), ParseError> {
+    pub(super) fn parse_struct_decl_ast(
+        &mut self,
+        pending_attrs: &mut FixedVec<Span, 16>,
+    ) -> Result<(DeclAst, StructDeclAst), ParseError> {
         self.bump(); // struct
-        let name = self.expect(TokenKind::Ident, ParseError::ExpectedEnumName { span: self.look.span })?;
+        let name = self.expect(
+            TokenKind::Ident,
+            ParseError::ExpectedEnumName {
+                span: self.look.span,
+            },
+        )?;
         self.bump();
 
         let mut fields: FixedVec<StructFieldAst, 32> = FixedVec::new();
@@ -102,15 +128,29 @@ impl<'a> Parser<'a> {
                 self.bump();
             }
 
-            fields.push(StructFieldAst {
-                name: field_name.span,
-                ty: Span::new(start, end),
-            }).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
+            fields
+                .push(StructFieldAst {
+                    name: field_name.span,
+                    ty: Span::new(start, end),
+                })
+                .map_err(|_| ParseError::TooManyItems {
+                    span: self.look.span,
+                })?;
         }
 
-        self.expect(TokenKind::KwEnd, ParseError::ExpectedEnd { span: self.look.span })?;
+        self.expect(
+            TokenKind::KwEnd,
+            ParseError::ExpectedEnd {
+                span: self.look.span,
+            },
+        )?;
         self.bump();
-        self.expect(TokenKind::PunctSemi, ParseError::ExpectedSemiOrEnd { span: self.look.span })?;
+        self.expect(
+            TokenKind::PunctSemi,
+            ParseError::ExpectedSemiOrEnd {
+                span: self.look.span,
+            },
+        )?;
         self.bump();
 
         let attrs = core::mem::take(pending_attrs);
@@ -122,7 +162,7 @@ impl<'a> Parser<'a> {
             body: None,
             requires: None,
             ensures: None,
-            effect_suspend: false,
+            effect_bits: 0,
         };
         let sdecl = StructDeclAst {
             name: name.span,
@@ -131,9 +171,17 @@ impl<'a> Parser<'a> {
         Ok((decl, sdecl))
     }
 
-    pub(super) fn parse_enum_decl_ast(&mut self, pending_attrs: &mut FixedVec<Span, 16>) -> Result<(DeclAst, EnumDeclAst), ParseError> {
+    pub(super) fn parse_enum_decl_ast(
+        &mut self,
+        pending_attrs: &mut FixedVec<Span, 16>,
+    ) -> Result<(DeclAst, EnumDeclAst), ParseError> {
         self.bump(); // enum
-        let name = self.expect(TokenKind::Ident, ParseError::ExpectedEnumName { span: self.look.span })?;
+        let name = self.expect(
+            TokenKind::Ident,
+            ParseError::ExpectedEnumName {
+                span: self.look.span,
+            },
+        )?;
         self.bump();
 
         // Minimal v1 parsing: `enum Name : BaseTy ... end;`
@@ -173,20 +221,45 @@ impl<'a> Parser<'a> {
             }
             let vname = self.look;
             self.bump();
-            self.expect(TokenKind::PunctEq, ParseError::ExpectedEq { span: self.look.span })?;
+            self.expect(
+                TokenKind::PunctEq,
+                ParseError::ExpectedEq {
+                    span: self.look.span,
+                },
+            )?;
             self.bump();
-            let vnum = self.expect(TokenKind::Number, ParseError::ExpectedNumber { span: self.look.span })?;
-            let val = parse_i64(self.slice(vnum.span)).ok_or(ParseError::InvalidInteger { span: vnum.span })?;
+            let vnum = self.expect(
+                TokenKind::Number,
+                ParseError::ExpectedNumber {
+                    span: self.look.span,
+                },
+            )?;
+            let val = parse_i64(self.slice(vnum.span))
+                .ok_or(ParseError::InvalidInteger { span: vnum.span })?;
             self.bump();
-            variants.push(EnumVariantAst {
-                name: vname.span,
-                value: val,
-            }).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
+            variants
+                .push(EnumVariantAst {
+                    name: vname.span,
+                    value: val,
+                })
+                .map_err(|_| ParseError::TooManyItems {
+                    span: self.look.span,
+                })?;
         }
 
-        self.expect(TokenKind::KwEnd, ParseError::ExpectedEnd { span: self.look.span })?;
+        self.expect(
+            TokenKind::KwEnd,
+            ParseError::ExpectedEnd {
+                span: self.look.span,
+            },
+        )?;
         self.bump();
-        self.expect(TokenKind::PunctSemi, ParseError::ExpectedSemiOrEnd { span: self.look.span })?;
+        self.expect(
+            TokenKind::PunctSemi,
+            ParseError::ExpectedSemiOrEnd {
+                span: self.look.span,
+            },
+        )?;
         self.bump();
 
         let attrs = core::mem::take(pending_attrs);
@@ -198,7 +271,7 @@ impl<'a> Parser<'a> {
             body: None,
             requires: None,
             ensures: None,
-            effect_suspend: false,
+            effect_bits: 0,
         };
         let edecl = EnumDeclAst {
             name: name.span,
@@ -214,7 +287,12 @@ impl<'a> Parser<'a> {
         pending_attrs: &mut FixedVec<Span, 16>,
     ) -> Result<DeclAst, ParseError> {
         self.bump(); // keyword already matched by caller
-        let name = self.expect(TokenKind::Ident, ParseError::ExpectedFieldIdent { span: self.look.span })?;
+        let name = self.expect(
+            TokenKind::Ident,
+            ParseError::ExpectedFieldIdent {
+                span: self.look.span,
+            },
+        )?;
         self.bump();
         self.skip_until_semi()?;
         let attrs = core::mem::take(pending_attrs);
@@ -226,7 +304,7 @@ impl<'a> Parser<'a> {
             body: None,
             requires: None,
             ensures: None,
-            effect_suspend: false,
+            effect_bits: 0,
         })
     }
 
@@ -235,7 +313,12 @@ impl<'a> Parser<'a> {
         pending_attrs: &mut FixedVec<Span, 16>,
     ) -> Result<DeclAst, ParseError> {
         self.bump(); // resource
-        let name = self.expect(TokenKind::Ident, ParseError::ExpectedFieldIdent { span: self.look.span })?;
+        let name = self.expect(
+            TokenKind::Ident,
+            ParseError::ExpectedFieldIdent {
+                span: self.look.span,
+            },
+        )?;
         self.bump();
 
         // Minimal v1 parsing: `resource NAME : Type ... ;`
@@ -252,7 +335,9 @@ impl<'a> Parser<'a> {
                     if self.look.kind == TokenKind::PunctEq {
                         break;
                     }
-                    if self.look.kind == TokenKind::Ident && self.slice(self.look.span) == b"ceiling" {
+                    if self.look.kind == TokenKind::Ident
+                        && self.slice(self.look.span) == b"ceiling"
+                    {
                         break;
                     }
                 }
@@ -279,7 +364,7 @@ impl<'a> Parser<'a> {
             body: None,
             requires: None,
             ensures: None,
-            effect_suspend: false,
+            effect_bits: 0,
         })
     }
 
@@ -288,7 +373,12 @@ impl<'a> Parser<'a> {
         pending_attrs: &mut FixedVec<Span, 16>,
     ) -> Result<(DeclAst, Option<RegMapInstanceAst>), ParseError> {
         self.bump(); // const
-        let name = self.expect(TokenKind::Ident, ParseError::ExpectedConstName { span: self.look.span })?;
+        let name = self.expect(
+            TokenKind::Ident,
+            ParseError::ExpectedConstName {
+                span: self.look.span,
+            },
+        )?;
         self.bump();
 
         // attempt to parse: "= MAP @ <num> ;"
@@ -299,21 +389,21 @@ impl<'a> Parser<'a> {
                 let map = self.look.span;
                 self.bump();
                 if self.look.kind == TokenKind::Ident && self.slice(self.look.span) == b"@" {
+                    self.bump();
+                    if self.look.kind == TokenKind::Number {
+                        let base_addr = self.look.span;
                         self.bump();
-                        if self.look.kind == TokenKind::Number {
-                            let base_addr = self.look.span;
-                            self.bump();
-                            if self.look.kind == TokenKind::PunctSemi {
-                                inst = Some(RegMapInstanceAst {
-                                    name: name.span,
-                                    map,
-                                    base_addr,
-                                });
-                            }
+                        if self.look.kind == TokenKind::PunctSemi {
+                            inst = Some(RegMapInstanceAst {
+                                name: name.span,
+                                map,
+                                base_addr,
+                            });
                         }
                     }
                 }
             }
+        }
         // regardless of whether pattern matched, skip to ';'
         let _ = self.skip_until_semi();
 
@@ -326,7 +416,7 @@ impl<'a> Parser<'a> {
             body: None,
             requires: None,
             ensures: None,
-            effect_suspend: false,
+            effect_bits: 0,
         };
         Ok((decl, inst))
     }
@@ -336,7 +426,12 @@ impl<'a> Parser<'a> {
         pending_attrs: &mut FixedVec<Span, 16>,
     ) -> Result<DeclAst, ParseError> {
         self.bump(); // register-map
-        let name = self.expect(TokenKind::Ident, ParseError::ExpectedRegisterName { span: self.look.span })?;
+        let name = self.expect(
+            TokenKind::Ident,
+            ParseError::ExpectedRegisterName {
+                span: self.look.span,
+            },
+        )?;
         self.bump();
 
         let body_start = self.look.span.start;
@@ -346,7 +441,9 @@ impl<'a> Parser<'a> {
         let body_end;
         loop {
             if self.look.kind == TokenKind::Eof {
-                return Err(ParseError::ExpectedEndSemi { span: self.look.span });
+                return Err(ParseError::ExpectedEndSemi {
+                    span: self.look.span,
+                });
             }
             match self.look.kind {
                 TokenKind::PunctLParen => depth_paren += 1,
@@ -358,7 +455,12 @@ impl<'a> Parser<'a> {
                 TokenKind::KwEnd if depth_paren == 0 && depth_brace == 0 && depth_bracket == 0 => {
                     body_end = self.look.span.start;
                     self.bump();
-                    self.expect(TokenKind::PunctSemi, ParseError::ExpectedSemiOrEnd { span: self.look.span })?;
+                    self.expect(
+                        TokenKind::PunctSemi,
+                        ParseError::ExpectedSemiOrEnd {
+                            span: self.look.span,
+                        },
+                    )?;
                     self.bump();
                     break;
                 }
@@ -376,7 +478,7 @@ impl<'a> Parser<'a> {
             body: Some(Span::new(body_start, body_end)),
             requires: None,
             ensures: None,
-            effect_suspend: false,
+            effect_bits: 0,
         })
     }
 
@@ -385,28 +487,67 @@ impl<'a> Parser<'a> {
         pending_attrs: &mut FixedVec<Span, 16>,
     ) -> Result<(DeclAst, Option<SubtypeAst>), ParseError> {
         self.bump(); // subtype
-        let name = self.expect(TokenKind::Ident, ParseError::ExpectedSubtypeName { span: self.look.span })?;
+        let name = self.expect(
+            TokenKind::Ident,
+            ParseError::ExpectedSubtypeName {
+                span: self.look.span,
+            },
+        )?;
         self.bump();
-        self.expect(TokenKind::PunctEq, ParseError::ExpectedEqSubtype { span: self.look.span })?;
+        self.expect(
+            TokenKind::PunctEq,
+            ParseError::ExpectedEqSubtype {
+                span: self.look.span,
+            },
+        )?;
         self.bump();
-        let base = self.expect(TokenKind::Ident, ParseError::ExpectedBaseType { span: self.look.span })?;
+        let base = self.expect(
+            TokenKind::Ident,
+            ParseError::ExpectedBaseType {
+                span: self.look.span,
+            },
+        )?;
         self.bump();
 
         // Expect "range" keyword as ident.
         if self.look.kind != TokenKind::Ident || self.slice(self.look.span) != b"range" {
-            return Err(ParseError::ExpectedRangeKeyword { span: self.look.span });
+            return Err(ParseError::ExpectedRangeKeyword {
+                span: self.look.span,
+            });
         }
         self.bump();
 
-        let min_tok = self.expect(TokenKind::Number, ParseError::ExpectedRangeMin { span: self.look.span })?;
-        let min = parse_i64(self.slice(min_tok.span)).ok_or(ParseError::InvalidRangeMin { span: min_tok.span })?;
+        let min_tok = self.expect(
+            TokenKind::Number,
+            ParseError::ExpectedRangeMin {
+                span: self.look.span,
+            },
+        )?;
+        let min = parse_i64(self.slice(min_tok.span))
+            .ok_or(ParseError::InvalidRangeMin { span: min_tok.span })?;
         self.bump();
-        self.expect(TokenKind::PunctDblDot, ParseError::ExpectedDblDot { span: self.look.span })?;
+        self.expect(
+            TokenKind::PunctDblDot,
+            ParseError::ExpectedDblDot {
+                span: self.look.span,
+            },
+        )?;
         self.bump();
-        let max_tok = self.expect(TokenKind::Number, ParseError::ExpectedRangeMax { span: self.look.span })?;
-        let max = parse_i64(self.slice(max_tok.span)).ok_or(ParseError::InvalidRangeMax { span: max_tok.span })?;
+        let max_tok = self.expect(
+            TokenKind::Number,
+            ParseError::ExpectedRangeMax {
+                span: self.look.span,
+            },
+        )?;
+        let max = parse_i64(self.slice(max_tok.span))
+            .ok_or(ParseError::InvalidRangeMax { span: max_tok.span })?;
         self.bump();
-        self.expect(TokenKind::PunctSemi, ParseError::ExpectedSemiSubtype { span: self.look.span })?;
+        self.expect(
+            TokenKind::PunctSemi,
+            ParseError::ExpectedSemiSubtype {
+                span: self.look.span,
+            },
+        )?;
         self.bump();
 
         let attrs = core::mem::take(pending_attrs);
@@ -418,7 +559,7 @@ impl<'a> Parser<'a> {
             body: None,
             requires: None,
             ensures: None,
-            effect_suspend: false,
+            effect_bits: 0,
         };
         let st = Some(SubtypeAst {
             name: name.span,
@@ -431,7 +572,12 @@ impl<'a> Parser<'a> {
 
     pub(super) fn parse_import_dump(&mut self, out: &mut impl Output) -> Result<(), ParseError> {
         self.bump();
-        let name = self.expect(TokenKind::Ident, ParseError::ExpectedImportName { span: self.look.span })?;
+        let name = self.expect(
+            TokenKind::Ident,
+            ParseError::ExpectedImportName {
+                span: self.look.span,
+            },
+        )?;
         self.bump();
 
         out.write(b"  import ");
@@ -447,7 +593,9 @@ impl<'a> Parser<'a> {
                         out.write(b" ");
                     }
                     first = false;
-                    let q = self.capture_qualified_name(ParseError::ExpectedQualIdent { span: self.look.span })?;
+                    let q = self.capture_qualified_name(ParseError::ExpectedQualIdent {
+                        span: self.look.span,
+                    })?;
                     out.write(self.slice(q));
                     continue;
                 }
@@ -458,7 +606,12 @@ impl<'a> Parser<'a> {
                 // recovery: skip unknown tokens
                 self.bump();
             }
-            self.expect(TokenKind::PunctRBrace, ParseError::ExpectedRBrace { span: self.look.span })?;
+            self.expect(
+                TokenKind::PunctRBrace,
+                ParseError::ExpectedRBrace {
+                    span: self.look.span,
+                },
+            )?;
             self.bump();
             out.write(b"}");
         }
@@ -486,7 +639,9 @@ impl<'a> Parser<'a> {
                         out.write(b" ");
                     }
                     first = false;
-                    let q = self.capture_qualified_name(ParseError::ExpectedExportName { span: self.look.span })?;
+                    let q = self.capture_qualified_name(ParseError::ExpectedExportName {
+                        span: self.look.span,
+                    })?;
                     out.write(self.slice(q));
                     continue;
                 }
@@ -496,11 +651,18 @@ impl<'a> Parser<'a> {
                 }
                 self.bump();
             }
-            self.expect(TokenKind::PunctRBrace, ParseError::ExpectedRBraceExport { span: self.look.span })?;
+            self.expect(
+                TokenKind::PunctRBrace,
+                ParseError::ExpectedRBraceExport {
+                    span: self.look.span,
+                },
+            )?;
             self.bump();
             out.write(b"}");
         } else if self.look.kind == TokenKind::Ident {
-            let q = self.capture_qualified_name(ParseError::ExpectedExportName { span: self.look.span })?;
+            let q = self.capture_qualified_name(ParseError::ExpectedExportName {
+                span: self.look.span,
+            })?;
             out.write(self.slice(q));
         }
 
@@ -513,7 +675,9 @@ impl<'a> Parser<'a> {
 
     pub(super) fn parse_word_dump(&mut self, out: &mut impl Output) -> Result<(), ParseError> {
         self.bump(); // :
-        let name = self.capture_qualified_name(ParseError::ExpectedWordName { span: self.look.span })?;
+        let name = self.capture_qualified_name(ParseError::ExpectedWordName {
+            span: self.look.span,
+        })?;
 
         out.write(b"  word ");
         out.write(self.slice(name));
@@ -521,7 +685,14 @@ impl<'a> Parser<'a> {
 
         if self.look.kind == TokenKind::PunctLParen {
             out.write(b"    sig ");
-            self.dump_balanced(out, TokenKind::PunctLParen, TokenKind::PunctRParen, ParseError::ExpectedSigParen { span: self.look.span })?;
+            self.dump_balanced(
+                out,
+                TokenKind::PunctLParen,
+                TokenKind::PunctRParen,
+                ParseError::ExpectedSigParen {
+                    span: self.look.span,
+                },
+            )?;
             out.write(b"\n");
         }
 
@@ -530,13 +701,23 @@ impl<'a> Parser<'a> {
                 TokenKind::KwRequires => {
                     self.bump();
                     out.write(b"    requires ");
-                    self.dump_quotation_like(out, ParseError::ExpectedQuotation { span: self.look.span })?;
+                    self.dump_quotation_like(
+                        out,
+                        ParseError::ExpectedQuotation {
+                            span: self.look.span,
+                        },
+                    )?;
                     out.write(b"\n");
                 }
                 TokenKind::KwEnsures => {
                     self.bump();
                     out.write(b"    ensures ");
-                    self.dump_quotation_like(out, ParseError::ExpectedQuotationEffect { span: self.look.span })?;
+                    self.dump_quotation_like(
+                        out,
+                        ParseError::ExpectedQuotationEffect {
+                            span: self.look.span,
+                        },
+                    )?;
                     out.write(b"\n");
                 }
                 _ => break,
@@ -545,13 +726,21 @@ impl<'a> Parser<'a> {
 
         out.write(b"    body ");
         self.dump_terms_until(out, TokenKind::PunctSemi)?;
-        self.expect(TokenKind::PunctSemi, ParseError::ExpectedSemi { span: self.look.span })?;
+        self.expect(
+            TokenKind::PunctSemi,
+            ParseError::ExpectedSemi {
+                span: self.look.span,
+            },
+        )?;
         self.bump();
         out.write(b"\n");
         Ok(())
     }
 
-    pub(super) fn parse_block_decl_dump(&mut self, out: &mut impl Output) -> Result<(), ParseError> {
+    pub(super) fn parse_block_decl_dump(
+        &mut self,
+        out: &mut impl Output,
+    ) -> Result<(), ParseError> {
         let kind = self.look.kind;
         self.bump();
 
@@ -598,7 +787,10 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    pub(super) fn parse_unknown_stmt_dump(&mut self, out: &mut impl Output) -> Result<(), ParseError> {
+    pub(super) fn parse_unknown_stmt_dump(
+        &mut self,
+        out: &mut impl Output,
+    ) -> Result<(), ParseError> {
         out.write(b"  stmt ");
         out.write(self.slice(self.look.span));
         out.write(b"\n");

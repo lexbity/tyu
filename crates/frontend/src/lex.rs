@@ -166,7 +166,9 @@ impl<'a> Lexer<'a> {
 
     fn lex_number(&mut self, start: usize) -> Token {
         while let Some(b) = self.peek() {
-            if is_digit(b) || matches!(b, b'x' | b'X' | b'b' | b'B' | b'a'..=b'f' | b'A'..=b'F' | b'_') {
+            if is_digit(b)
+                || matches!(b, b'x' | b'X' | b'b' | b'B' | b'a'..=b'f' | b'A'..=b'F' | b'_')
+            {
                 self.i += 1;
             } else {
                 break;

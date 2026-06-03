@@ -1,15 +1,14 @@
-use frontend::{
-    parse::{DeclKind, ModuleAst, Parser},
-};
-use hosted::{diag, fs, process};
-use semantics::types::{TypeAtom, WordEntry, WordSig};
-use semantics::typecheck::{self, ChecksMode, SubtypeInfo};
+use crate::codegen::{AsmMode, CodegenBackend, X86_64HostedBackend};
+use crate::iface::{export_iter, find_decl, find_word_decl};
+use crate::util::{join_path, slice_span, try_load_module_file, MemOut, Stdout};
 use codegen_core::Target;
-use crate::codegen::{CodegenBackend, X86_64HostedBackend, AsmMode};
-use crate::util::{
-    Stdout, MemOut, slice_span, join_path, try_load_module_file,
-};
-use crate::iface::{find_decl, export_iter, find_word_decl};
+use frontend::parse::{DeclKind, ModuleAst, Parser};
+use hosted::{diag, fs, process};
+use ir::CapSet;
+use ir::EffectSet;
+use ir::StackBound;
+use semantics::typecheck::{self, ChecksMode, SubtypeInfo};
+use semantics::types::{TypeAtom, WordEntry, WordSig};
 
 struct DriverEnv {
     st_buf: [SubtypeInfo; 64],
@@ -53,7 +52,9 @@ fn init_env(
     let mut env: [WordEntry; 256] = [WordEntry {
         name: TypeAtom::EMPTY,
         sig: WordSig::empty(),
-        may_suspend: false,
+        performs: EffectSet::empty(),
+        requires: CapSet::empty(),
+        bound: StackBound::ID,
     }; 256];
     let mut env_len = 0usize;
     add_builtins(&mut env, &mut env_len, target.spec());
@@ -125,15 +126,23 @@ pub fn emit_asm_driver(
         }
     };
 
-    let mut gen_backend = X86_64HostedBackend::new(module, src, out, debug_trap_loc, AsmMode::Executable);
+    let mut gen_backend =
+        X86_64HostedBackend::new(module, src, out, debug_trap_loc, AsmMode::Executable);
     let gen: &mut dyn CodegenBackend = &mut gen_backend;
     if let Err(e) = gen.emit_prelude() {
         let _ = diag::error_simple(e.code(), b"asm emission error");
         return 2;
     }
 
-    match semantics::typecheck::for_each_ir_word(module, src, &es.env[..es.env_len], &es.st_buf[..es.st_len], checks, allow_raw_casts, |w| gen.emit_word(w))
-    {
+    match semantics::typecheck::for_each_ir_word(
+        module,
+        src,
+        &es.env[..es.env_len],
+        &es.st_buf[..es.st_len],
+        checks,
+        allow_raw_casts,
+        |w| gen.emit_word(w),
+    ) {
         Ok(()) => {}
         Err(semantics::typecheck::ForEachIrError::Type(e)) => {
             let _ = diag::error_simple(e.code(), b"typecheck error");
@@ -169,7 +178,14 @@ pub fn emit_tc_driver(
         }
     };
 
-    match semantics::typecheck::emit_stackcheck(module, src, &es.env[..es.env_len], &es.st_buf[..es.st_len], checks, out) {
+    match semantics::typecheck::emit_stackcheck(
+        module,
+        src,
+        &es.env[..es.env_len],
+        &es.st_buf[..es.st_len],
+        checks,
+        out,
+    ) {
         Ok(()) => 0,
         Err(e) => {
             let _ = allow_raw_casts; // keep signature stable vs other drivers
@@ -211,7 +227,10 @@ pub fn emit_obj_driver(
             .and_then(|s| semantics::typecheck::parse_word_sig(src, s).ok())
             .unwrap_or(WordSig::empty());
         if main_sig.out_len != 1 {
-            let _ = diag::error_simple(1018, b"for --emit=obj, main must return exactly one value (exit code)");
+            let _ = diag::error_simple(
+                1018,
+                b"for --emit=obj, main must return exactly one value (exit code)",
+            );
             return 2;
         }
     }
@@ -252,7 +271,8 @@ pub fn emit_obj_driver(
         }
     };
 
-    let mut gen_backend = X86_64HostedBackend::new(module, src, &mut mem, debug_trap_loc, AsmMode::Object);
+    let mut gen_backend =
+        X86_64HostedBackend::new(module, src, &mut mem, debug_trap_loc, AsmMode::Object);
     let gen: &mut dyn CodegenBackend = &mut gen_backend;
     if let Err(e) = gen.emit_prelude() {
         let _ = diag::error_simple(e.code(), b"asm emission error");
@@ -268,8 +288,15 @@ pub fn emit_obj_driver(
         }
     }
 
-    match semantics::typecheck::for_each_ir_word(module, src, &es.env[..es.env_len], &es.st_buf[..es.st_len], checks, allow_raw_casts, |w| gen.emit_word(w))
-    {
+    match semantics::typecheck::for_each_ir_word(
+        module,
+        src,
+        &es.env[..es.env_len],
+        &es.st_buf[..es.st_len],
+        checks,
+        allow_raw_casts,
+        |w| gen.emit_word(w),
+    ) {
         Ok(()) => {}
         Err(semantics::typecheck::ForEachIrError::Type(e)) => {
             let _ = diag::error_simple(e.code(), b"typecheck error");
@@ -296,11 +323,12 @@ pub fn emit_obj_driver(
     }
 
     let assembler_bin: &[u8] = match target.spec().assembler {
-        codegen_core::AssemblerKind::Fasm     => b"fasm",
-        codegen_core::AssemblerKind::GasArm   => b"arm-none-eabi-as",
+        codegen_core::AssemblerKind::Fasm => b"fasm",
+        codegen_core::AssemblerKind::GasArm => b"arm-none-eabi-as",
         codegen_core::AssemblerKind::GasRiscV => b"riscv32-unknown-elf-as",
     };
-    let status = process::run(assembler_bin, &[asm_path, obj_path]).map_err(|_| diag::error_simple(1016, b"failed to run assembler"));
+    let status = process::run(assembler_bin, &[asm_path, obj_path])
+        .map_err(|_| diag::error_simple(1016, b"failed to run assembler"));
     let status = match status {
         Ok(s) => s,
         Err(_) => return 2,
@@ -315,12 +343,18 @@ pub fn emit_obj_driver(
 
 fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize, spec: &codegen_core::TargetSpec) {
     // Native integer type for this target (e.g. i64 on 64-bit, i32 on 32-bit).
-    let intt  = TypeAtom::new(spec.native_int_ty).unwrap();
+    let intt = TypeAtom::new(spec.native_int_ty).unwrap();
     let boolt = TypeAtom::BOOL;
-    let quot  = TypeAtom::QUOT;
+    let quot = TypeAtom::QUOT;
     let empty = TypeAtom::EMPTY;
 
-    fn push(env: &mut [WordEntry; 256], len: &mut usize, name: &[u8], sig: WordSig, may_suspend: bool) {
+    fn push(
+        env: &mut [WordEntry; 256],
+        len: &mut usize,
+        name: &[u8],
+        sig: WordSig,
+        performs: EffectSet,
+    ) {
         if *len >= env.len() {
             return;
         }
@@ -328,7 +362,9 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize, spec: &codegen_core
         env[*len] = WordEntry {
             name,
             sig,
-            may_suspend,
+            performs,
+            requires: CapSet::empty(),
+            bound: StackBound::ID,
         };
         *len += 1;
     }
@@ -344,7 +380,7 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize, spec: &codegen_core
             inputs: [intt, empty, empty, empty, empty, empty, empty, empty],
             outputs: [intt, intt, empty, empty, empty, empty, empty, empty],
         },
-        false,
+        EffectSet::empty(),
     );
     push(
         env,
@@ -356,7 +392,7 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize, spec: &codegen_core
             inputs: [intt, empty, empty, empty, empty, empty, empty, empty],
             outputs: [empty, empty, empty, empty, empty, empty, empty, empty],
         },
-        false,
+        EffectSet::empty(),
     );
     push(
         env,
@@ -368,7 +404,7 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize, spec: &codegen_core
             inputs: [intt, intt, empty, empty, empty, empty, empty, empty],
             outputs: [intt, intt, empty, empty, empty, empty, empty, empty],
         },
-        false,
+        EffectSet::empty(),
     );
 
     // Arithmetic/comparisons — uses native integer type from TargetSpec
@@ -378,9 +414,9 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize, spec: &codegen_core
         inputs: [intt, intt, empty, empty, empty, empty, empty, empty],
         outputs: [intt, empty, empty, empty, empty, empty, empty, empty],
     };
-    push(env, len, b"+", bin_int, false);
-    push(env, len, b"-", bin_int, false);
-    push(env, len, b"*", bin_int, false);
+    push(env, len, b"+", bin_int, EffectSet::empty());
+    push(env, len, b"-", bin_int, EffectSet::empty());
+    push(env, len, b"*", bin_int, EffectSet::empty());
 
     push(
         env,
@@ -392,7 +428,7 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize, spec: &codegen_core
             inputs: [intt, intt, empty, empty, empty, empty, empty, empty],
             outputs: [boolt, empty, empty, empty, empty, empty, empty, empty],
         },
-        false,
+        EffectSet::empty(),
     );
     push(
         env,
@@ -404,7 +440,19 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize, spec: &codegen_core
             inputs: [intt, intt, empty, empty, empty, empty, empty, empty],
             outputs: [boolt, empty, empty, empty, empty, empty, empty, empty],
         },
-        false,
+        EffectSet::empty(),
+    );
+    push(
+        env,
+        len,
+        b">",
+        WordSig {
+            in_len: 2,
+            out_len: 1,
+            inputs: [intt, intt, empty, empty, empty, empty, empty, empty],
+            outputs: [boolt, empty, empty, empty, empty, empty, empty, empty],
+        },
+        EffectSet::empty(),
     );
     push(
         env,
@@ -416,7 +464,7 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize, spec: &codegen_core
             inputs: [intt, intt, empty, empty, empty, empty, empty, empty],
             outputs: [boolt, empty, empty, empty, empty, empty, empty, empty],
         },
-        false,
+        EffectSet::empty(),
     );
     push(
         env,
@@ -428,7 +476,7 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize, spec: &codegen_core
             inputs: [intt, intt, empty, empty, empty, empty, empty, empty],
             outputs: [boolt, empty, empty, empty, empty, empty, empty, empty],
         },
-        false,
+        EffectSet::empty(),
     );
     push(
         env,
@@ -440,19 +488,7 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize, spec: &codegen_core
             inputs: [intt, intt, empty, empty, empty, empty, empty, empty],
             outputs: [boolt, empty, empty, empty, empty, empty, empty, empty],
         },
-        false,
-    );
-    push(
-        env,
-        len,
-        b"!=",
-        WordSig {
-            in_len: 2,
-            out_len: 1,
-            inputs: [intt, intt, empty, empty, empty, empty, empty, empty],
-            outputs: [boolt, empty, empty, empty, empty, empty, empty, empty],
-        },
-        false,
+        EffectSet::empty(),
     );
     push(
         env,
@@ -464,7 +500,7 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize, spec: &codegen_core
             inputs: [boolt, boolt, empty, empty, empty, empty, empty, empty],
             outputs: [boolt, empty, empty, empty, empty, empty, empty, empty],
         },
-        false,
+        EffectSet::empty(),
     );
     push(
         env,
@@ -476,7 +512,7 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize, spec: &codegen_core
             inputs: [boolt, boolt, empty, empty, empty, empty, empty, empty],
             outputs: [boolt, empty, empty, empty, empty, empty, empty, empty],
         },
-        false,
+        EffectSet::empty(),
     );
     push(
         env,
@@ -488,7 +524,7 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize, spec: &codegen_core
             inputs: [boolt, empty, empty, empty, empty, empty, empty, empty],
             outputs: [boolt, empty, empty, empty, empty, empty, empty, empty],
         },
-        false,
+        EffectSet::empty(),
     );
 
     // Treat quotations as values for now (for call sites we special-case intrinsics).
@@ -502,7 +538,7 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize, spec: &codegen_core
             inputs: [quot, empty, empty, empty, empty, empty, empty, empty],
             outputs: [empty, empty, empty, empty, empty, empty, empty, empty],
         },
-        false,
+        EffectSet::empty(),
     );
 
     // Suspension points (minimal list)
@@ -516,7 +552,7 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize, spec: &codegen_core
             inputs: [empty, empty, empty, empty, empty, empty, empty, empty],
             outputs: [empty, empty, empty, empty, empty, empty, empty, empty],
         },
-        true,
+        EffectSet::from_bits(EffectSet::SUSPEND),
     );
 }
 
@@ -543,8 +579,8 @@ fn load_import_sigs(
             let Some(sig_span) = d.sig else {
                 continue;
             };
-            let sig = typecheck::parse_word_sig(def_src.as_slice(), sig_span)
-                .map_err(|_| 2205u32)?;
+            let sig =
+                typecheck::parse_word_sig(def_src.as_slice(), sig_span).map_err(|_| 2205u32)?;
             if *env_len >= env.len() {
                 return Err(2207u32); // too many imported words (max 256 total)
             }
@@ -552,7 +588,13 @@ fn load_import_sigs(
             env[*env_len] = WordEntry {
                 name: name_atom,
                 sig,
-                may_suspend: d.effect_suspend,
+                performs: if d.effect_bits != 0 {
+                    EffectSet::from_bits(d.effect_bits)
+                } else {
+                    EffectSet::empty()
+                },
+                requires: CapSet::empty(),
+                bound: StackBound::ID,
             };
             *env_len += 1;
         }
@@ -582,7 +624,13 @@ fn load_local_sigs(
         env[*env_len] = WordEntry {
             name: name_atom,
             sig,
-            may_suspend: d.effect_suspend,
+            performs: if d.effect_bits != 0 {
+                EffectSet::from_bits(d.effect_bits)
+            } else {
+                EffectSet::empty()
+            },
+            requires: CapSet::empty(),
+            bound: StackBound::ID,
         };
         *env_len += 1;
     }

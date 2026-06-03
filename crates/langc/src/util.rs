@@ -148,4 +148,3 @@ pub fn line_col(src: &[u8], offset: usize) -> (u32, u32) {
     }
     (line, col)
 }
-

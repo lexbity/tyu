@@ -1,7 +1,9 @@
 #![no_std]
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use core::alloc::{GlobalAlloc, Layout};
 use hosted::c;
+
 #[cfg(not(test))]
 use core::panic::PanicInfo;
 #[cfg(not(test))]
@@ -9,6 +11,23 @@ use hosted::io;
 
 #[no_mangle]
 pub extern "C" fn rust_eh_personality() {}
+
+struct HostedAllocator;
+
+unsafe impl GlobalAlloc for HostedAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        unsafe { c::malloc(layout.size() as _) as *mut u8 }
+    }
+    unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {
+        unsafe { c::free(ptr as *mut core::ffi::c_void) }
+    }
+    unsafe fn realloc(&self, ptr: *mut u8, _layout: Layout, new_size: usize) -> *mut u8 {
+        unsafe { c::realloc(ptr as *mut core::ffi::c_void, new_size as _) as *mut u8 }
+    }
+}
+
+#[global_allocator]
+static ALLOCATOR: HostedAllocator = HostedAllocator;
 
 #[cfg(not(test))]
 #[panic_handler]

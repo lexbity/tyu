@@ -175,7 +175,10 @@ fn struct_multi_field() {
 
 #[test]
 fn err_struct_name() {
-    assert_parse_err!("module m; struct ; end; end;", ParseError::ExpectedEnumName { .. });
+    assert_parse_err!(
+        "module m; struct ; end; end;",
+        ParseError::ExpectedEnumName { .. }
+    );
 }
 
 #[test]
@@ -211,7 +214,10 @@ fn enum_with_base() {
 
 #[test]
 fn err_enum_name() {
-    assert_parse_err!("module m; enum ; end; end;", ParseError::ExpectedEnumName { .. });
+    assert_parse_err!(
+        "module m; enum ; end; end;",
+        ParseError::ExpectedEnumName { .. }
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -230,23 +236,35 @@ fn subtype_decl() {
 
 #[test]
 fn err_subtype_name() {
-    assert_parse_err!("module m; subtype ; end;", ParseError::ExpectedSubtypeName { .. });
+    assert_parse_err!(
+        "module m; subtype ; end;",
+        ParseError::ExpectedSubtypeName { .. }
+    );
 }
 
 #[test]
 fn err_subtype_eq() {
-    assert_parse_err!("module m; subtype Age ; end;", ParseError::ExpectedEqSubtype { .. });
+    assert_parse_err!(
+        "module m; subtype Age ; end;",
+        ParseError::ExpectedEqSubtype { .. }
+    );
 }
 
 #[test]
 fn err_subtype_base() {
-    assert_parse_err!("module m; subtype Age = ; end;", ParseError::ExpectedBaseType { .. });
+    assert_parse_err!(
+        "module m; subtype Age = ; end;",
+        ParseError::ExpectedBaseType { .. }
+    );
 }
 
 #[test]
 fn err_subtype_range_kw() {
     // Expect `range` keyword after base type; using `;` without `range` should fail
-    assert_parse_err!("module m; subtype Age = i64 ; end;", ParseError::ExpectedRangeKeyword { .. });
+    assert_parse_err!(
+        "module m; subtype Age = i64 ; end;",
+        ParseError::ExpectedRangeKeyword { .. }
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -262,7 +280,10 @@ fn const_decl() {
 
 #[test]
 fn err_const_name() {
-    assert_parse_err!("module m; const ; end;", ParseError::ExpectedConstName { .. });
+    assert_parse_err!(
+        "module m; const ; end;",
+        ParseError::ExpectedConstName { .. }
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -335,12 +356,18 @@ fn import_selective() {
 
 #[test]
 fn err_import_name() {
-    assert_parse_err!("module m; import ; end;", ParseError::ExpectedImportName { .. });
+    assert_parse_err!(
+        "module m; import ; end;",
+        ParseError::ExpectedImportName { .. }
+    );
 }
 
 #[test]
 fn err_import_rbrace() {
-    assert_parse_err!("module m; import Foo { ; end;", ParseError::ExpectedRBrace { .. });
+    assert_parse_err!(
+        "module m; import Foo { ; end;",
+        ParseError::ExpectedRBrace { .. }
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -356,7 +383,10 @@ fn export_list() {
 
 #[test]
 fn err_export_rbrace() {
-    assert_parse_err!("module m; export { ; end;", ParseError::ExpectedRBraceExport { .. });
+    assert_parse_err!(
+        "module m; export { ; end;",
+        ParseError::ExpectedRBraceExport { .. }
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -379,6 +409,68 @@ fn attribute_on_struct() {
     let ast = assert_parse_ok(src);
     let d = &ast.decls.get(0).unwrap();
     assert_eq!(d.attrs.len(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// Effect sets on word declarations
+// ---------------------------------------------------------------------------
+
+#[test]
+fn word_no_effect() {
+    let ast = assert_parse_ok("module m; : foo ; end;");
+    assert_eq!(ast.decls.get(0).unwrap().effect_bits, 0);
+}
+
+#[test]
+fn word_effect_suspend() {
+    let ast = assert_parse_ok("module m; : foo !{suspend} ; end;");
+    assert_eq!(ast.decls.get(0).unwrap().effect_bits & 1, 1);
+}
+
+#[test]
+fn word_effect_interrupt() {
+    let ast = assert_parse_ok("module m; : foo !{interrupt} ; end;");
+    assert_eq!(ast.decls.get(0).unwrap().effect_bits & 2, 2);
+}
+
+#[test]
+fn word_effect_diverge() {
+    let ast = assert_parse_ok("module m; : foo !{diverge} ; end;");
+    assert_eq!(ast.decls.get(0).unwrap().effect_bits & 4, 4);
+}
+
+#[test]
+fn word_effect_mmio() {
+    let ast = assert_parse_ok("module m; : foo !{mmio} ; end;");
+    assert_eq!(ast.decls.get(0).unwrap().effect_bits & 8, 8);
+}
+
+#[test]
+fn word_effect_alloc() {
+    let ast = assert_parse_ok("module m; : foo !{alloc} ; end;");
+    assert_eq!(ast.decls.get(0).unwrap().effect_bits & 16, 16);
+}
+
+#[test]
+fn word_effect_multiple() {
+    let ast = assert_parse_ok("module m; : foo !{suspend, mmio} ; end;");
+    let bits = ast.decls.get(0).unwrap().effect_bits;
+    assert_eq!(bits & 1, 1); // suspend
+    assert_eq!(bits & 8, 8); // mmio
+    assert_eq!(bits & 2, 0); // no interrupt
+}
+
+#[test]
+fn word_effect_unknown_name() {
+    let ast = assert_parse_ok("module m; : foo !{unknown} ; end;");
+    // unknown effect names are silently ignored (no bit set)
+    assert_eq!(ast.decls.get(0).unwrap().effect_bits, 0);
+}
+
+#[test]
+fn word_effect_empty() {
+    let ast = assert_parse_ok("module m; : foo !{} ; end;");
+    assert_eq!(ast.decls.get(0).unwrap().effect_bits, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -422,12 +514,18 @@ fn unknown_token_skipped() {
 
 #[test]
 fn err_word_sig_missing_rparen() {
-    assert_parse_err!("module m; : foo ( i64 ; end;", ParseError::ExpectedSigParen { .. });
+    assert_parse_err!(
+        "module m; : foo ( i64 ; end;",
+        ParseError::ExpectedSigParen { .. }
+    );
 }
 
 #[test]
 fn err_register_map_name() {
-    assert_parse_err!("module m; register-map ; end; end;", ParseError::ExpectedRegisterName { .. });
+    assert_parse_err!(
+        "module m; register-map ; end; end;",
+        ParseError::ExpectedRegisterName { .. }
+    );
 }
 
 #[test]
@@ -447,44 +545,158 @@ fn err_unknown_kw_skipped() {
 fn error_codes_are_distinct() {
     // Verify no two error variants share the same code (just a sanity check)
     let codes = [
-        ParseError::ExpectedModule { span: Span::UNKNOWN }.code(),
-        ParseError::ExpectedModuleName { span: Span::UNKNOWN }.code(),
-        ParseError::ExpectedSemiAfterModule { span: Span::UNKNOWN }.code(),
-        ParseError::ExpectedEnd { span: Span::UNKNOWN }.code(),
-        ParseError::ExpectedSemiAfterEnd { span: Span::UNKNOWN }.code(),
-        ParseError::ExpectedImportName { span: Span::UNKNOWN }.code(),
-        ParseError::ExpectedRBrace { span: Span::UNKNOWN }.code(),
-        ParseError::ExpectedQualIdent { span: Span::UNKNOWN }.code(),
-        ParseError::ExpectedRBraceExport { span: Span::UNKNOWN }.code(),
-        ParseError::ExpectedExportName { span: Span::UNKNOWN }.code(),
-        ParseError::ExpectedWordName { span: Span::UNKNOWN }.code(),
-        ParseError::ExpectedSigParen { span: Span::UNKNOWN }.code(),
-        ParseError::ExpectedQuotation { span: Span::UNKNOWN }.code(),
-        ParseError::ExpectedQuotationEffect { span: Span::UNKNOWN }.code(),
-        ParseError::ExpectedSemi { span: Span::UNKNOWN }.code(),
-        ParseError::UnmatchedBracket { span: Span::UNKNOWN }.code(),
-        ParseError::UnmatchedBrace { span: Span::UNKNOWN }.code(),
-        ParseError::UnmatchedParen { span: Span::UNKNOWN }.code(),
-        ParseError::ExpectedEnumName { span: Span::UNKNOWN }.code(),
-        ParseError::ExpectedFieldIdent { span: Span::UNKNOWN }.code(),
-        ParseError::ExpectedSemiOrEnd { span: Span::UNKNOWN }.code(),
-        ParseError::ExpectedEndSemi { span: Span::UNKNOWN }.code(),
-        ParseError::ExpectedEq { span: Span::UNKNOWN }.code(),
-        ParseError::ExpectedNumber { span: Span::UNKNOWN }.code(),
-        ParseError::InvalidInteger { span: Span::UNKNOWN }.code(),
-        ParseError::ExpectedSubtypeName { span: Span::UNKNOWN }.code(),
-        ParseError::ExpectedEqSubtype { span: Span::UNKNOWN }.code(),
-        ParseError::ExpectedBaseType { span: Span::UNKNOWN }.code(),
-        ParseError::ExpectedRangeKeyword { span: Span::UNKNOWN }.code(),
-        ParseError::ExpectedRangeMin { span: Span::UNKNOWN }.code(),
-        ParseError::InvalidRangeMin { span: Span::UNKNOWN }.code(),
-        ParseError::ExpectedDblDot { span: Span::UNKNOWN }.code(),
-        ParseError::ExpectedRangeMax { span: Span::UNKNOWN }.code(),
-        ParseError::InvalidRangeMax { span: Span::UNKNOWN }.code(),
-        ParseError::ExpectedSemiSubtype { span: Span::UNKNOWN }.code(),
-        ParseError::ExpectedConstName { span: Span::UNKNOWN }.code(),
-        ParseError::ExpectedRegisterName { span: Span::UNKNOWN }.code(),
-        ParseError::ExpectedSemiSkip { span: Span::UNKNOWN }.code(),
+        ParseError::ExpectedModule {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::ExpectedModuleName {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::ExpectedSemiAfterModule {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::ExpectedEnd {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::ExpectedSemiAfterEnd {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::ExpectedImportName {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::ExpectedRBrace {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::ExpectedQualIdent {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::ExpectedRBraceExport {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::ExpectedExportName {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::ExpectedWordName {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::ExpectedSigParen {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::ExpectedQuotation {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::ExpectedQuotationEffect {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::ExpectedSemi {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::UnmatchedBracket {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::UnmatchedBrace {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::UnmatchedParen {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::ExpectedEnumName {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::ExpectedFieldIdent {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::ExpectedSemiOrEnd {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::ExpectedEndSemi {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::ExpectedEq {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::ExpectedNumber {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::InvalidInteger {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::ExpectedSubtypeName {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::ExpectedEqSubtype {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::ExpectedBaseType {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::ExpectedRangeKeyword {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::ExpectedRangeMin {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::InvalidRangeMin {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::ExpectedDblDot {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::ExpectedRangeMax {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::InvalidRangeMax {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::ExpectedSemiSubtype {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::ExpectedConstName {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::ExpectedRegisterName {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::ExpectedSemiSkip {
+            span: Span::UNKNOWN,
+        }
+        .code(),
     ];
     let mut sorted = codes.to_vec();
     sorted.sort();

@@ -1,10 +1,11 @@
 use frontend::parse::Output;
 use frontend::span::Span;
-use semantics::types::{TypeAtom, WordEntry, WordSig};
-use semantics::typecheck::{typecheck_word_body, ChecksMode};
+use ir::{CapSet, Context, EffectSet, High, StackBound};
+use semantics::typecheck::db::NominalDb;
 use semantics::typecheck::db::SubtypeInfo;
 use semantics::typecheck::mmio::MmioDb;
-use semantics::typecheck::db::NominalDb;
+use semantics::typecheck::{typecheck_word_body, ChecksMode};
+use semantics::types::{TypeAtom, WordEntry, WordSig};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -36,7 +37,9 @@ fn entry(name: &[u8], inp: &[&[u8]], out: &[&[u8]]) -> WordEntry {
     WordEntry {
         name: ta(name),
         sig: sig(inp, out),
-        may_suspend: false,
+        performs: EffectSet::empty(),
+        requires: CapSet::empty(),
+        bound: StackBound::ID,
     }
 }
 
@@ -44,7 +47,9 @@ fn empty_env() -> [WordEntry; 256] {
     [WordEntry {
         name: ta(b""),
         sig: WordSig::empty(),
-        may_suspend: false,
+        performs: EffectSet::empty(),
+        requires: CapSet::empty(),
+        bound: StackBound::ID,
     }; 256]
 }
 
@@ -54,27 +59,75 @@ fn check_ok(body: &str, inputs: &[&[u8]], outputs: &[&[u8]], env: &[WordEntry]) 
     let span = Span::new(0, src.len());
     let decl = sig(inputs, outputs);
     let mut out = NullOut;
-    let mmio = MmioDb { maps: frontend::fixed::FixedVec::new(), instances: frontend::fixed::FixedVec::new() };
-    let nominals = NominalDb { structs: frontend::fixed::FixedVec::new(), enums: frontend::fixed::FixedVec::new() };
+    let mmio = MmioDb {
+        maps: frontend::fixed::FixedVec::new(),
+        instances: frontend::fixed::FixedVec::new(),
+    };
+    let nominals = NominalDb {
+        structs: frontend::fixed::FixedVec::new(),
+        enums: frontend::fixed::FixedVec::new(),
+    };
     let subtypes: &[SubtypeInfo] = &[];
-    let result = typecheck_word_body(&mut out, src, span, &decl, env, subtypes, &mmio, &nominals, ChecksMode::All, true);
+    let result = typecheck_word_body(
+        &mut out,
+        src,
+        span,
+        &decl,
+        env,
+        subtypes,
+        &mmio,
+        &nominals,
+        ChecksMode::All,
+        Context::default(),
+    );
     if let Err(e) = result {
-        panic!("expected OK, got error code {} span={:?}", e.code(), e.span());
+        panic!(
+            "expected OK, got error code {} span={:?}",
+            e.code(),
+            e.span()
+        );
     }
 }
 
 /// Run a stack-check and assert it fails with the given error code.
-fn check_err(body: &str, inputs: &[&[u8]], outputs: &[&[u8]], env: &[WordEntry], expected_code: u32) {
+fn check_err(
+    body: &str,
+    inputs: &[&[u8]],
+    outputs: &[&[u8]],
+    env: &[WordEntry],
+    expected_code: u32,
+) {
     let src = body.as_bytes();
     let span = Span::new(0, src.len());
     let decl = sig(inputs, outputs);
     let mut out = NullOut;
-    let mmio = MmioDb { maps: frontend::fixed::FixedVec::new(), instances: frontend::fixed::FixedVec::new() };
-    let nominals = NominalDb { structs: frontend::fixed::FixedVec::new(), enums: frontend::fixed::FixedVec::new() };
+    let mmio = MmioDb {
+        maps: frontend::fixed::FixedVec::new(),
+        instances: frontend::fixed::FixedVec::new(),
+    };
+    let nominals = NominalDb {
+        structs: frontend::fixed::FixedVec::new(),
+        enums: frontend::fixed::FixedVec::new(),
+    };
     let subtypes: &[SubtypeInfo] = &[];
-    let err = typecheck_word_body(&mut out, src, span, &decl, env, subtypes, &mmio, &nominals, ChecksMode::All, true)
-        .expect_err("expected error");
-    assert_eq!(err.code(), expected_code, "error code mismatch for body: {body:?}");
+    let err = typecheck_word_body(
+        &mut out,
+        src,
+        span,
+        &decl,
+        env,
+        subtypes,
+        &mmio,
+        &nominals,
+        ChecksMode::All,
+        Context::default(),
+    )
+    .expect_err("expected error");
+    assert_eq!(
+        err.code(),
+        expected_code,
+        "error code mismatch for body: {body:?}"
+    );
 }
 
 /// Build a minimal environment with common builtins.
@@ -87,18 +140,18 @@ fn builtin_env() -> ([WordEntry; 256], usize) {
             len += 1;
         }};
     }
-    add!(b"dup",   &[b"i64"],        &[b"i64", b"i64"]);
-    add!(b"drop",  &[b"i64"],        &[]);
-    add!(b"swap",  &[b"i64", b"i64"], &[b"i64", b"i64"]);
-    add!(b"+",     &[b"i64", b"i64"], &[b"i64"]);
-    add!(b"-",     &[b"i64", b"i64"], &[b"i64"]);
-    add!(b"*",     &[b"i64", b"i64"], &[b"i64"]);
-    add!(b">",     &[b"i64", b"i64"], &[b"bool"]);
-    add!(b"<",     &[b"i64", b"i64"], &[b"bool"]);
-    add!(b"==",    &[b"i64", b"i64"], &[b"bool"]);
-    add!(b"and",   &[b"bool", b"bool"], &[b"bool"]);
-    add!(b"or",    &[b"bool", b"bool"], &[b"bool"]);
-    add!(b"not",   &[b"bool"],       &[b"bool"]);
+    add!(b"dup", &[b"i64"], &[b"i64", b"i64"]);
+    add!(b"drop", &[b"i64"], &[]);
+    add!(b"swap", &[b"i64", b"i64"], &[b"i64", b"i64"]);
+    add!(b"+", &[b"i64", b"i64"], &[b"i64"]);
+    add!(b"-", &[b"i64", b"i64"], &[b"i64"]);
+    add!(b"*", &[b"i64", b"i64"], &[b"i64"]);
+    add!(b">", &[b"i64", b"i64"], &[b"bool"]);
+    add!(b"<", &[b"i64", b"i64"], &[b"bool"]);
+    add!(b"==", &[b"i64", b"i64"], &[b"bool"]);
+    add!(b"and", &[b"bool", b"bool"], &[b"bool"]);
+    add!(b"or", &[b"bool", b"bool"], &[b"bool"]);
+    add!(b"not", &[b"bool"], &[b"bool"]);
     (env, len)
 }
 
@@ -219,7 +272,12 @@ fn while_loop() {
     let (env, len) = builtin_env();
     // Condition: dup 0 > — duplicates i64, compares with 0, leaves i64+bool
     // Body: 1 - — takes one i64, pushes 1, subtracts, leaves one i64
-    check_ok("[ dup 0 > ] [ 1 - ] while", &[b"i64"], &[b"i64"], &env[..len]);
+    check_ok(
+        "[ dup 0 > ] [ 1 - ] while",
+        &[b"i64"],
+        &[b"i64"],
+        &env[..len],
+    );
 }
 
 // ---------------------------------------------------------------------------

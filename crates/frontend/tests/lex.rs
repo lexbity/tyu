@@ -83,7 +83,10 @@ fn kw_resource() {
 
 #[test]
 fn kw_register_map() {
-    assert_eq!(kind("register-map"), [TokenKind::KwRegisterMap, TokenKind::Eof]);
+    assert_eq!(
+        kind("register-map"),
+        [TokenKind::KwRegisterMap, TokenKind::Eof]
+    );
 }
 
 #[test]
@@ -242,7 +245,10 @@ fn punct_amp_lbracket() {
 
 #[test]
 fn punct_ampbang_lbracket() {
-    assert_eq!(kind("&!["), [TokenKind::PunctAmpBangLBracket, TokenKind::Eof]);
+    assert_eq!(
+        kind("&!["),
+        [TokenKind::PunctAmpBangLBracket, TokenKind::Eof]
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -353,8 +359,6 @@ fn minus_non_digit_becomes_ident() {
     assert_eq!(kind("-abc"), [TokenKind::Ident, TokenKind::Eof]);
 }
 
-
-
 // ---------------------------------------------------------------------------
 // Strings
 // ---------------------------------------------------------------------------
@@ -405,7 +409,10 @@ fn comment_line_ignored() {
 
 #[test]
 fn comment_at_eof() {
-    assert_eq!(kind("123 # comment without newline"), [TokenKind::Number, TokenKind::Eof]);
+    assert_eq!(
+        kind("123 # comment without newline"),
+        [TokenKind::Number, TokenKind::Eof]
+    );
 }
 
 #[test]
@@ -448,12 +455,48 @@ fn effect_set_with_content() {
 
 #[test]
 fn effect_set_with_multiple() {
-    assert_eq!(kind("!{send, recv}"), [TokenKind::EffectSet, TokenKind::Eof]);
+    assert_eq!(
+        kind("!{send, recv}"),
+        [TokenKind::EffectSet, TokenKind::Eof]
+    );
 }
 
 #[test]
 fn effect_set_unterminated() {
     assert_eq!(kind("!{open"), [TokenKind::EffectSet, TokenKind::Eof]);
+}
+
+#[test]
+fn effect_set_suspend() {
+    assert_eq!(kind("!{suspend}"), [TokenKind::EffectSet, TokenKind::Eof]);
+}
+
+#[test]
+fn effect_set_interrupt() {
+    assert_eq!(kind("!{interrupt}"), [TokenKind::EffectSet, TokenKind::Eof]);
+}
+
+#[test]
+fn effect_set_diverge() {
+    assert_eq!(kind("!{diverge}"), [TokenKind::EffectSet, TokenKind::Eof]);
+}
+
+#[test]
+fn effect_set_mmio() {
+    assert_eq!(kind("!{mmio}"), [TokenKind::EffectSet, TokenKind::Eof]);
+}
+
+#[test]
+fn effect_set_alloc() {
+    assert_eq!(kind("!{alloc}"), [TokenKind::EffectSet, TokenKind::Eof]);
+}
+
+#[test]
+fn effect_set_multiple_names() {
+    assert_eq!(
+        kind("!{suspend, mmio}"),
+        [TokenKind::EffectSet, TokenKind::Eof]
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -466,9 +509,9 @@ fn arithmetic_expression() {
         kind("1 + 2 * 3"),
         [
             TokenKind::Number,
-            TokenKind::Ident,  // '+'
+            TokenKind::Ident, // '+'
             TokenKind::Number,
-            TokenKind::Ident,  // '*'
+            TokenKind::Ident, // '*'
             TokenKind::Number,
             TokenKind::Eof,
         ]
@@ -480,12 +523,12 @@ fn if_expression() {
     assert_eq!(
         kind("if true { 1 } else { 2 }"),
         [
-            TokenKind::Ident,   // 'if'
-            TokenKind::Ident,   // 'true'
+            TokenKind::Ident, // 'if'
+            TokenKind::Ident, // 'true'
             TokenKind::PunctLBrace,
             TokenKind::Number,
             TokenKind::PunctRBrace,
-            TokenKind::Ident,   // 'else'
+            TokenKind::Ident, // 'else'
             TokenKind::PunctLBrace,
             TokenKind::Number,
             TokenKind::PunctRBrace,
@@ -498,7 +541,12 @@ fn if_expression() {
 fn module_header() {
     assert_eq!(
         kind("module Foo;"),
-        [TokenKind::KwModule, TokenKind::Ident, TokenKind::PunctSemi, TokenKind::Eof]
+        [
+            TokenKind::KwModule,
+            TokenKind::Ident,
+            TokenKind::PunctSemi,
+            TokenKind::Eof
+        ]
     );
 }
 
@@ -614,9 +662,9 @@ fn src_returns_original_bytes() {
 
 #[cfg(test)]
 mod proptests {
-    use proptest::prelude::*;
     use frontend::lex::Lexer;
     use frontend::token::TokenKind;
+    use proptest::prelude::*;
 
     proptest! {
         /// The lexer must never panic on any byte sequence, and must always

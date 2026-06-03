@@ -1,5 +1,5 @@
-use frontend::span::Span;
 use crate::error::CodegenError;
+use frontend::span::Span;
 
 /// Platform-specific code generation interface.
 ///
@@ -17,10 +17,7 @@ pub trait PlatformEmitter {
 
     /// Emit the file header for a self-contained executable, including the
     /// entry-point symbol declaration.
-    fn emit_executable_header(
-        &mut self,
-        entry_label: &[u8],
-    ) -> Result<(), CodegenError>;
+    fn emit_executable_header(&mut self, entry_label: &[u8]) -> Result<(), CodegenError>;
 
     /// Emit the file header for a relocatable object file.
     fn emit_object_header(&mut self) -> Result<(), CodegenError>;
@@ -60,11 +57,7 @@ pub trait PlatformEmitter {
     /// `id` is the unique integer assigned to this string by the backend's
     /// string intern table. The label is derived from `id` so the text
     /// section can reference it.
-    fn emit_string_literal(
-        &mut self,
-        id: u32,
-        bytes: &[u8],
-    ) -> Result<(), CodegenError>;
+    fn emit_string_literal(&mut self, id: u32, bytes: &[u8]) -> Result<(), CodegenError>;
 
     // --- Address-of static place --------------------------------------------
 
@@ -82,9 +75,5 @@ pub trait PlatformEmitter {
     // --- String constant push -----------------------------------------------
 
     /// Push the address and byte-length of an interned string literal.
-    fn emit_const_str(
-        &mut self,
-        id: u32,
-        byte_len: u32,
-    ) -> Result<(), CodegenError>;
+    fn emit_const_str(&mut self, id: u32, byte_len: u32) -> Result<(), CodegenError>;
 }

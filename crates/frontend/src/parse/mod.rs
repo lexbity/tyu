@@ -2,8 +2,8 @@ mod ast;
 mod decl;
 
 pub use ast::{
-    Output, ParseError, DeclKind, SubtypeAst, RegMapInstanceAst, ImportAst,
-    StructFieldAst, EnumVariantAst, StructDeclAst, EnumDeclAst, DeclAst, ModuleAst,
+    DeclAst, DeclKind, EnumDeclAst, EnumVariantAst, ImportAst, ModuleAst, Output, ParseError,
+    RegMapInstanceAst, StructDeclAst, StructFieldAst, SubtypeAst,
 };
 
 use crate::{
@@ -26,13 +26,28 @@ impl<'a> Parser<'a> {
     }
 
     pub fn parse_module_dump(&mut self, out: &mut impl Output) -> Result<(), ParseError> {
-        self.expect(TokenKind::KwModule, ParseError::ExpectedModule { span: self.look.span })?;
+        self.expect(
+            TokenKind::KwModule,
+            ParseError::ExpectedModule {
+                span: self.look.span,
+            },
+        )?;
         self.bump();
 
-        let name = self.expect(TokenKind::Ident, ParseError::ExpectedModuleName { span: self.look.span })?;
+        let name = self.expect(
+            TokenKind::Ident,
+            ParseError::ExpectedModuleName {
+                span: self.look.span,
+            },
+        )?;
         self.bump();
 
-        self.expect(TokenKind::PunctSemi, ParseError::ExpectedSemiAfterModule { span: self.look.span })?;
+        self.expect(
+            TokenKind::PunctSemi,
+            ParseError::ExpectedSemiAfterModule {
+                span: self.look.span,
+            },
+        )?;
         self.bump();
 
         out.write(b"module ");
@@ -43,20 +58,45 @@ impl<'a> Parser<'a> {
             self.parse_item_dump(out)?;
         }
 
-        self.expect(TokenKind::KwEnd, ParseError::ExpectedEnd { span: self.look.span })?;
+        self.expect(
+            TokenKind::KwEnd,
+            ParseError::ExpectedEnd {
+                span: self.look.span,
+            },
+        )?;
         self.bump();
-        self.expect(TokenKind::PunctSemi, ParseError::ExpectedSemiAfterEnd { span: self.look.span })?;
+        self.expect(
+            TokenKind::PunctSemi,
+            ParseError::ExpectedSemiAfterEnd {
+                span: self.look.span,
+            },
+        )?;
         self.bump();
 
         Ok(())
     }
 
     pub fn parse_module_ast(&mut self) -> Result<ModuleAst, ParseError> {
-        self.expect(TokenKind::KwModule, ParseError::ExpectedModule { span: self.look.span })?;
+        self.expect(
+            TokenKind::KwModule,
+            ParseError::ExpectedModule {
+                span: self.look.span,
+            },
+        )?;
         self.bump();
-        let name = self.expect(TokenKind::Ident, ParseError::ExpectedModuleName { span: self.look.span })?;
+        let name = self.expect(
+            TokenKind::Ident,
+            ParseError::ExpectedModuleName {
+                span: self.look.span,
+            },
+        )?;
         self.bump();
-        self.expect(TokenKind::PunctSemi, ParseError::ExpectedSemiAfterModule { span: self.look.span })?;
+        self.expect(
+            TokenKind::PunctSemi,
+            ParseError::ExpectedSemiAfterModule {
+                span: self.look.span,
+            },
+        )?;
         self.bump();
 
         let mut ast = ModuleAst {
@@ -75,7 +115,11 @@ impl<'a> Parser<'a> {
 
         while self.look.kind != TokenKind::KwEnd && self.look.kind != TokenKind::Eof {
             if self.look.kind == TokenKind::Ident && self.slice(self.look.span).starts_with(b"@") {
-                pending_attrs.push(self.look.span).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
+                pending_attrs
+                    .push(self.look.span)
+                    .map_err(|_| ParseError::TooManyItems {
+                        span: self.look.span,
+                    })?;
                 self.bump();
                 continue;
             }
@@ -83,58 +127,98 @@ impl<'a> Parser<'a> {
             match self.look.kind {
                 TokenKind::KwImport => {
                     let imp = self.parse_import_ast()?;
-                    ast.imports.push(imp).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
+                    ast.imports
+                        .push(imp)
+                        .map_err(|_| ParseError::TooManyItems {
+                            span: self.look.span,
+                        })?;
                 }
                 TokenKind::KwExport => {
                     self.parse_export_ast(&mut ast)?;
                 }
                 TokenKind::PunctColon => {
                     let decl = self.parse_word_ast(&mut pending_attrs)?;
-                    ast.decls.push(decl).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
+                    ast.decls.push(decl).map_err(|_| ParseError::TooManyItems {
+                        span: self.look.span,
+                    })?;
                 }
                 TokenKind::KwStruct => {
                     let (decl, sdecl) = self.parse_struct_decl_ast(&mut pending_attrs)?;
-                    ast.decls.push(decl).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
-                    ast.structs.push(sdecl).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
+                    ast.decls.push(decl).map_err(|_| ParseError::TooManyItems {
+                        span: self.look.span,
+                    })?;
+                    ast.structs
+                        .push(sdecl)
+                        .map_err(|_| ParseError::TooManyItems {
+                            span: self.look.span,
+                        })?;
                 }
                 TokenKind::KwEnum => {
                     let (decl, edecl) = self.parse_enum_decl_ast(&mut pending_attrs)?;
-                    ast.decls.push(decl).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
-                    ast.enums.push(edecl).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
+                    ast.decls.push(decl).map_err(|_| ParseError::TooManyItems {
+                        span: self.look.span,
+                    })?;
+                    ast.enums
+                        .push(edecl)
+                        .map_err(|_| ParseError::TooManyItems {
+                            span: self.look.span,
+                        })?;
                 }
                 TokenKind::KwRegisterMap => {
                     let decl = self.parse_register_map_decl_ast(&mut pending_attrs)?;
-                    ast.decls.push(decl).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
+                    ast.decls.push(decl).map_err(|_| ParseError::TooManyItems {
+                        span: self.look.span,
+                    })?;
                 }
                 TokenKind::KwType => {
                     let decl = self.parse_semi_decl_ast(DeclKind::Type, &mut pending_attrs)?;
-                    ast.decls.push(decl).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
+                    ast.decls.push(decl).map_err(|_| ParseError::TooManyItems {
+                        span: self.look.span,
+                    })?;
                 }
                 TokenKind::KwSubtype => {
                     let (decl, st) = self.parse_subtype_decl_ast(&mut pending_attrs)?;
-                    ast.decls.push(decl).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
+                    ast.decls.push(decl).map_err(|_| ParseError::TooManyItems {
+                        span: self.look.span,
+                    })?;
                     if let Some(st) = st {
-                        ast.subtypes.push(st).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
+                        ast.subtypes
+                            .push(st)
+                            .map_err(|_| ParseError::TooManyItems {
+                                span: self.look.span,
+                            })?;
                     }
                 }
                 TokenKind::KwConst => {
                     let (decl, inst) = self.parse_const_decl_ast(&mut pending_attrs)?;
-                    ast.decls.push(decl).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
+                    ast.decls.push(decl).map_err(|_| ParseError::TooManyItems {
+                        span: self.look.span,
+                    })?;
                     if let Some(inst) = inst {
-                        ast.instances.push(inst).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
+                        ast.instances
+                            .push(inst)
+                            .map_err(|_| ParseError::TooManyItems {
+                                span: self.look.span,
+                            })?;
                     }
                 }
                 TokenKind::KwResource => {
                     let decl = self.parse_resource_decl_ast(&mut pending_attrs)?;
-                    ast.decls.push(decl).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
+                    ast.decls.push(decl).map_err(|_| ParseError::TooManyItems {
+                        span: self.look.span,
+                    })?;
                 }
                 TokenKind::KwOwned => {
                     let decl = self.parse_semi_decl_ast(DeclKind::Owned, &mut pending_attrs)?;
-                    ast.decls.push(decl).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
+                    ast.decls.push(decl).map_err(|_| ParseError::TooManyItems {
+                        span: self.look.span,
+                    })?;
                 }
                 TokenKind::KwIso => {
                     let decl = self.parse_semi_decl_ast(DeclKind::Iso, &mut pending_attrs)?;
-                    ast.decls.push(decl).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
+                    ast.decls.push(decl).map_err(|_| ParseError::TooManyItems {
+                        span: self.look.span,
+                    })?;
                 }
                 _ => {
                     // recovery: skip token and reset pending attrs (attributes only apply to decls)
@@ -145,9 +229,19 @@ impl<'a> Parser<'a> {
             }
         }
 
-        self.expect(TokenKind::KwEnd, ParseError::ExpectedEnd { span: self.look.span })?;
+        self.expect(
+            TokenKind::KwEnd,
+            ParseError::ExpectedEnd {
+                span: self.look.span,
+            },
+        )?;
         self.bump();
-        self.expect(TokenKind::PunctSemi, ParseError::ExpectedSemiAfterEnd { span: self.look.span })?;
+        self.expect(
+            TokenKind::PunctSemi,
+            ParseError::ExpectedSemiAfterEnd {
+                span: self.look.span,
+            },
+        )?;
         self.bump();
 
         Ok(ast)
@@ -173,7 +267,12 @@ impl<'a> Parser<'a> {
 
     fn parse_import_ast(&mut self) -> Result<ImportAst, ParseError> {
         self.bump(); // import
-        let name = self.expect(TokenKind::Ident, ParseError::ExpectedImportName { span: self.look.span })?;
+        let name = self.expect(
+            TokenKind::Ident,
+            ParseError::ExpectedImportName {
+                span: self.look.span,
+            },
+        )?;
         self.bump();
 
         let mut names: FixedVec<Span, 64> = FixedVec::new();
@@ -181,8 +280,12 @@ impl<'a> Parser<'a> {
             self.bump();
             while self.look.kind != TokenKind::PunctRBrace && self.look.kind != TokenKind::Eof {
                 if self.look.kind == TokenKind::Ident {
-                    let q = self.capture_qualified_name(ParseError::ExpectedQualIdent { span: self.look.span })?;
-                    names.push(q).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
+                    let q = self.capture_qualified_name(ParseError::ExpectedQualIdent {
+                        span: self.look.span,
+                    })?;
+                    names.push(q).map_err(|_| ParseError::TooManyItems {
+                        span: self.look.span,
+                    })?;
                     continue;
                 }
                 if self.look.kind == TokenKind::PunctComma {
@@ -191,7 +294,12 @@ impl<'a> Parser<'a> {
                 }
                 self.bump();
             }
-            self.expect(TokenKind::PunctRBrace, ParseError::ExpectedRBrace { span: self.look.span })?;
+            self.expect(
+                TokenKind::PunctRBrace,
+                ParseError::ExpectedRBrace {
+                    span: self.look.span,
+                },
+            )?;
             self.bump();
         }
         if self.look.kind == TokenKind::PunctSemi {
@@ -211,8 +319,12 @@ impl<'a> Parser<'a> {
             self.bump();
             while self.look.kind != TokenKind::PunctRBrace && self.look.kind != TokenKind::Eof {
                 if self.look.kind == TokenKind::Ident {
-                    let q = self.capture_qualified_name(ParseError::ExpectedExportName { span: self.look.span })?;
-                    ast.exports.push(q).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
+                    let q = self.capture_qualified_name(ParseError::ExpectedExportName {
+                        span: self.look.span,
+                    })?;
+                    ast.exports.push(q).map_err(|_| ParseError::TooManyItems {
+                        span: self.look.span,
+                    })?;
                     continue;
                 }
                 if self.look.kind == TokenKind::PunctComma {
@@ -221,11 +333,20 @@ impl<'a> Parser<'a> {
                 }
                 self.bump();
             }
-            self.expect(TokenKind::PunctRBrace, ParseError::ExpectedRBraceExport { span: self.look.span })?;
+            self.expect(
+                TokenKind::PunctRBrace,
+                ParseError::ExpectedRBraceExport {
+                    span: self.look.span,
+                },
+            )?;
             self.bump();
         } else if self.look.kind == TokenKind::Ident {
-            let q = self.capture_qualified_name(ParseError::ExpectedExportName { span: self.look.span })?;
-            ast.exports.push(q).map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
+            let q = self.capture_qualified_name(ParseError::ExpectedExportName {
+                span: self.look.span,
+            })?;
+            ast.exports.push(q).map_err(|_| ParseError::TooManyItems {
+                span: self.look.span,
+            })?;
         }
 
         if self.look.kind == TokenKind::PunctSemi {
@@ -248,7 +369,11 @@ impl<'a> Parser<'a> {
         Ok(Span::new(start, end))
     }
 
-    pub(super) fn dump_terms_until(&mut self, out: &mut impl Output, stop: TokenKind) -> Result<(), ParseError> {
+    pub(super) fn dump_terms_until(
+        &mut self,
+        out: &mut impl Output,
+        stop: TokenKind,
+    ) -> Result<(), ParseError> {
         let mut first = true;
         while self.look.kind != stop && self.look.kind != TokenKind::Eof {
             if !first {
@@ -257,13 +382,34 @@ impl<'a> Parser<'a> {
             first = false;
             match self.look.kind {
                 TokenKind::PunctLBracket => {
-                    self.dump_balanced(out, TokenKind::PunctLBracket, TokenKind::PunctRBracket, ParseError::UnmatchedBracket { span: self.look.span })?;
+                    self.dump_balanced(
+                        out,
+                        TokenKind::PunctLBracket,
+                        TokenKind::PunctRBracket,
+                        ParseError::UnmatchedBracket {
+                            span: self.look.span,
+                        },
+                    )?;
                 }
                 TokenKind::PunctLBrace => {
-                    self.dump_balanced(out, TokenKind::PunctLBrace, TokenKind::PunctRBrace, ParseError::UnmatchedBrace { span: self.look.span })?;
+                    self.dump_balanced(
+                        out,
+                        TokenKind::PunctLBrace,
+                        TokenKind::PunctRBrace,
+                        ParseError::UnmatchedBrace {
+                            span: self.look.span,
+                        },
+                    )?;
                 }
                 TokenKind::PunctLParen => {
-                    self.dump_balanced(out, TokenKind::PunctLParen, TokenKind::PunctRParen, ParseError::UnmatchedParen { span: self.look.span })?;
+                    self.dump_balanced(
+                        out,
+                        TokenKind::PunctLParen,
+                        TokenKind::PunctRParen,
+                        ParseError::UnmatchedParen {
+                            span: self.look.span,
+                        },
+                    )?;
                 }
                 _ => {
                     out.write(self.slice(self.look.span));
@@ -274,7 +420,11 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    pub(super) fn dump_quotation_like(&mut self, out: &mut impl Output, err: ParseError) -> Result<(), ParseError> {
+    pub(super) fn dump_quotation_like(
+        &mut self,
+        out: &mut impl Output,
+        err: ParseError,
+    ) -> Result<(), ParseError> {
         if self.look.kind == TokenKind::PunctLBracket {
             self.dump_balanced(out, TokenKind::PunctLBracket, TokenKind::PunctRBracket, err)
         } else {
@@ -361,7 +511,9 @@ impl<'a> Parser<'a> {
                 TokenKind::PunctRBrace => depth_brace = depth_brace.saturating_sub(1),
                 TokenKind::PunctLBracket => depth_bracket += 1,
                 TokenKind::PunctRBracket => depth_bracket = depth_bracket.saturating_sub(1),
-                TokenKind::PunctSemi if depth_paren == 0 && depth_brace == 0 && depth_bracket == 0 => {
+                TokenKind::PunctSemi
+                    if depth_paren == 0 && depth_brace == 0 && depth_bracket == 0 =>
+                {
                     self.bump();
                     return Ok(());
                 }
@@ -369,7 +521,9 @@ impl<'a> Parser<'a> {
             }
             self.bump();
         }
-        Err(ParseError::ExpectedSemiSkip { span: self.look.span })
+        Err(ParseError::ExpectedSemiSkip {
+            span: self.look.span,
+        })
     }
 
     pub(super) fn skip_until_end_semi(&mut self) -> Result<(), ParseError> {
@@ -386,7 +540,12 @@ impl<'a> Parser<'a> {
                 TokenKind::PunctRBracket => depth_bracket = depth_bracket.saturating_sub(1),
                 TokenKind::KwEnd if depth_paren == 0 && depth_brace == 0 && depth_bracket == 0 => {
                     self.bump();
-                    self.expect(TokenKind::PunctSemi, ParseError::ExpectedSemiOrEnd { span: self.look.span })?;
+                    self.expect(
+                        TokenKind::PunctSemi,
+                        ParseError::ExpectedSemiOrEnd {
+                            span: self.look.span,
+                        },
+                    )?;
                     self.bump();
                     return Ok(());
                 }
@@ -394,7 +553,9 @@ impl<'a> Parser<'a> {
             }
             self.bump();
         }
-        Err(ParseError::ExpectedEndSemi { span: self.look.span })
+        Err(ParseError::ExpectedEndSemi {
+            span: self.look.span,
+        })
     }
 
     pub(super) fn bump(&mut self) -> Token {
@@ -469,14 +630,25 @@ pub(super) fn parse_i64(bytes: &[u8]) -> Option<i64> {
     Some(v * sign)
 }
 
-pub(super) fn effect_has_suspend(effect_token: &[u8]) -> bool {
+pub(super) fn parse_effect_bits(effect_token: &[u8]) -> u16 {
+    let mut bits = 0u16;
     // token includes "!{...}"
     if effect_token.len() < 4 {
-        return false;
+        return bits;
     }
-    // Scan for substring "suspend"
-    let needle = b"suspend";
-    effect_token
-        .windows(needle.len())
-        .any(|w| w == needle)
+    // Map known effect names to their bit positions.
+    // Bits 0..4 match ir::EffectSet: SUSPEND=1<<0, INTERRUPT=1<<1,
+    // DIVERGE=1<<2, MMIO=1<<3, ALLOC=1<<4.
+    for (name, bit) in &[
+        (b"suspend" as &[u8], 1u16 << 0),
+        (b"interrupt" as &[u8], 1u16 << 1),
+        (b"diverge" as &[u8], 1u16 << 2),
+        (b"mmio" as &[u8], 1u16 << 3),
+        (b"alloc" as &[u8], 1u16 << 4),
+    ] {
+        if effect_token.windows(name.len()).any(|w| w == *name) {
+            bits |= bit;
+        }
+    }
+    bits
 }

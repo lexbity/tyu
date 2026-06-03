@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
-use ir as lir;
 use crate::codegen::{CodegenBackend, CodegenError};
+use ir as lir;
 
 /// Placeholder backend for target triples that have not yet been implemented.
 ///

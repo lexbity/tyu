@@ -1,10 +1,10 @@
+use crate::util::{slice_span, try_load_module_file};
 use frontend::{
     lex::Lexer,
     parse::{DeclAst, DeclKind, ModuleAst, Parser},
     span::Span,
     token::TokenKind,
 };
-use crate::util::{slice_span, try_load_module_file};
 
 pub fn check_program(module: &ModuleAst, src: &[u8], search_dirs: &[&[u8]]) -> Result<(), u32> {
     let root_name = slice_span(src, module.name);
@@ -73,7 +73,7 @@ pub fn check_iface(
             if !sig_eq(slice_span(def_src, def_sig), slice_span(mod_src, mod_sig)) {
                 return Err(2218u32);
             }
-            if def_decl.effect_suspend != mod_decl.effect_suspend {
+            if def_decl.effect_bits != mod_decl.effect_bits {
                 return Err(2219u32);
             }
         }
@@ -185,8 +185,8 @@ pub fn find_word_decl<'a>(m: &'a ModuleAst, src: &[u8], name: &[u8]) -> Option<&
 mod tests {
     use super::*;
     use frontend::fixed::FixedVec;
-    use frontend::span::Span;
     use frontend::parse::Parser;
+    use frontend::span::Span;
 
     fn parse(src: &str) -> ModuleAst {
         Parser::new(src.as_bytes()).parse_module_ast().unwrap()
@@ -194,7 +194,9 @@ mod tests {
 
     fn make_attrs(spans: &[Span]) -> FixedVec<Span, 16> {
         let mut v = FixedVec::new();
-        for &s in spans { v.push(s).unwrap(); }
+        for &s in spans {
+            v.push(s).unwrap();
+        }
         v
     }
 
@@ -289,12 +291,14 @@ mod tests {
     #[test]
     fn test_error_messages_all_codes() {
         let codes: &[u32] = &[
-            2020, 2021, 2022, 2201, 2202, 2203, 2204, 2205, 2207,
-            2210, 2211, 2212, 2213, 2214, 2215, 2216, 2217, 2218, 2219,
-            2220, 2223, 2300,
+            2020, 2021, 2022, 2201, 2202, 2203, 2204, 2205, 2207, 2210, 2211, 2212, 2213, 2214,
+            2215, 2216, 2217, 2218, 2219, 2220, 2223, 2300,
         ];
         for &code in codes {
-            assert!(!iface_error_message(code).is_empty(), "code {code} has empty message");
+            assert!(
+                !iface_error_message(code).is_empty(),
+                "code {code} has empty message"
+            );
         }
     }
 

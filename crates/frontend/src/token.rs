@@ -37,22 +37,22 @@ pub enum TokenKind {
     PunctComma,
     PunctDot,
     PunctEq,
-    PunctGe, // >=
-    PunctLe, // <=
+    PunctGe,   // >=
+    PunctLe,   // <=
     PunctEqEq, // ==
-    PunctNe, // !=
+    PunctNe,   // !=
 
-    PunctArrow, // ->
-    PunctArrowBind, // =>
-    PunctDblDot,    // ..
-    PunctDashDash,  // --
-    PunctLessPipe,  // <|
+    PunctArrow,       // ->
+    PunctArrowBind,   // =>
+    PunctDblDot,      // ..
+    PunctDashDash,    // --
+    PunctLessPipe,    // <|
     PunctPipeGreater, // |>
-    PunctPipe,     // |
-    PunctApostrophe, // '
+    PunctPipe,        // |
+    PunctApostrophe,  // '
 
-    PunctAmp,       // &
-    PunctAmpBang,   // &!
+    PunctAmp,             // &
+    PunctAmpBang,         // &!
     PunctAmpLBracket,     // &[
     PunctAmpBangLBracket, // &![
 }
