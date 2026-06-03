@@ -1440,7 +1440,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 Value::MmioPtr { mutable: true, .. } => TypeAtom::PTR_MUT,
             };
             if is_iso_type(self.iso, top_ty) {
-                return Err(TcError::IsoDupForbidden { span: name_abs });
+                return Err(TcError::IsoDup { span: name_abs });
             }
             push(stack, sp, top)?;
             push(stack, sp, top)?;
@@ -1462,7 +1462,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 Value::MmioPtr { mutable: true, .. } => TypeAtom::PTR_MUT,
             };
             if is_iso_type(self.iso, top_ty) {
-                return Err(TcError::IsoDropForbidden { span: name_abs });
+                return Err(TcError::IsoDrop { span: name_abs });
             }
             let tid = self.ty_id_of_value(top, name_abs)?;
             self.emit_op(cur, lir::OpKind::Drop { ty: tid }, name_abs)?;
@@ -1789,6 +1789,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         idx: usize,
     ) -> Result<lir::BlockId, TcError> {
         if !self.local_live[idx] {
+            // Iso types are consumed (moved) on first use.  A second reference
+            // is a use-after-move; non-iso locals are just not live.
+            if is_iso_type(self.iso, self.local_tys[idx]) {
+                return Err(TcError::IsoUseAfterMove { span: name_abs });
+            }
             return Err(TcError::LocalNotLive { span: name_abs });
         }
         if is_iso_type(self.iso, self.local_tys[idx]) {

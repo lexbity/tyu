@@ -396,17 +396,14 @@ pub enum TcError {
         span: Span,
     },
 
-    // 3740-3743: Iso
+    // 3740-3743: Iso (retired — replaced by 5010-5012)
+    //   IsoNameInvalid  → renamed to IsoNameInvalid (same code, kept for now)
+    //   IsoDupForbidden → IsoDup 5010 (see 5000-5040 below)
+    //   IsoDropForbidden → IsoDrop 5011
     IsoNameInvalid {
         span: Span,
     },
     IsoCapacityExceeded {
-        span: Span,
-    },
-    IsoDupForbidden {
-        span: Span,
-    },
-    IsoDropForbidden {
         span: Span,
     },
 
@@ -643,8 +640,6 @@ impl TcError {
             TcError::ChanRecvType { .. } => 3734,
             TcError::IsoNameInvalid { .. } => 3740,
             TcError::IsoCapacityExceeded { .. } => 3741,
-            TcError::IsoDupForbidden { .. } => 3742,
-            TcError::IsoDropForbidden { .. } => 3743,
             TcError::TaskRunPop { .. } => 3750,
             TcError::TaskRunNotQuot { .. } => 3751,
             TcError::TaskRunDepth { .. } => 3752,
@@ -807,8 +802,6 @@ impl TcError {
             | TcError::ChanRecvType { span }
             | TcError::IsoNameInvalid { span }
             | TcError::IsoCapacityExceeded { span }
-            | TcError::IsoDupForbidden { span }
-            | TcError::IsoDropForbidden { span }
             | TcError::TaskRunPop { span }
             | TcError::TaskRunNotQuot { span }
             | TcError::TaskRunDepth { span }

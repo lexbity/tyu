@@ -69,6 +69,32 @@ fn assert_tc_fails_with(src: &str, expected_code: u32) {
     );
 }
 
+/// Assert that compiling `src` with `--emit=ir` fails with exactly `expected_code`.
+/// The IR generator path is used for most corpus tests since it exercises the typechecker
+/// without requiring a full program (main symbol, runtime, etc.).
+fn assert_ir_fails_with(src: &str, expected_code: u32) {
+    build_langc();
+    let dir = fresh_dir("ir");
+    let path = dir.join("test.mod");
+    std::fs::write(&path, src).unwrap();
+    let out = Command::new(langc_exe())
+        .args(["--emit=ir", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let code = out.status.code().unwrap_or(-1);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let expected_str = format!("E{expected_code}");
+    assert!(
+        code != 0,
+        "expected E{expected_code} (exit non-zero), but compilation succeeded.\nstderr: {stderr}"
+    );
+    assert!(
+        stderr.contains(&expected_str),
+        "expected E{expected_code} in stderr, got:\n{stderr}"
+    );
+}
+
+/// Assert that compiling `src` with `--emit=asm` fails with exactly `expected_code`.
 fn assert_fails_with(src: &str, expected_code: u32) {
     build_langc();
     let dir = fresh_dir("neg");
@@ -149,21 +175,39 @@ fn e5004_cap_missing() {
 }
 
 #[test]
-#[ignore]
 fn e5010_iso_dup() {
-    assert_fails_with("module m; : main ( -- ) 0 ; end;\n", 5010);
+    assert_ir_fails_with(
+        "module Main;\n\
+         iso Msg;\n\
+         : bad_dup ( Msg -- Msg Msg ) dup ;\n\
+         end;\n",
+        5010,
+    );
 }
 
 #[test]
-#[ignore]
 fn e5011_iso_drop() {
-    assert_fails_with("module m; : main ( -- ) 0 ; end;\n", 5011);
+    assert_ir_fails_with(
+        "module Main;\n\
+         iso Msg;\n\
+         : bad_drop ( Msg -- ) drop ;\n\
+         end;\n",
+        5011,
+    );
 }
 
 #[test]
-#[ignore]
 fn e5012_iso_use_after_move() {
-    assert_fails_with("module m; : main ( -- ) 0 ; end;\n", 5012);
+    assert_ir_fails_with(
+        "module Main;\n\
+         iso Msg;\n\
+         : move_twice ( Msg -- Msg )\n\
+           => x\n\
+           x x\n\
+         ;\n\
+         end;\n",
+        5012,
+    );
 }
 
 #[test]

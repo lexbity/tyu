@@ -3243,7 +3243,7 @@ end;\n",
         .unwrap();
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("error[E3742]"), "stderr: {stderr}");
+    assert!(stderr.contains("error[E5010]"), "stderr: {stderr}");
 }
 
 #[test]
@@ -3269,7 +3269,7 @@ end;\n",
         .unwrap();
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("error[E3743]"), "stderr: {stderr}");
+    assert!(stderr.contains("error[E5011]"), "stderr: {stderr}");
 }
 
 #[test]
