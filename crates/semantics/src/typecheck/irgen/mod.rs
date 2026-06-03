@@ -1,6 +1,6 @@
 use crate::typecheck::db::{
-    enum_variant_value, is_iso_type, resource_ty, struct_field_ty, IsoDb, NominalDb, ResourceDb,
-    SubtypeInfo,
+    enum_variant_value, is_iso_type, resource_sharing_class, resource_ty, struct_field_ty, IsoDb,
+    NominalDb, ResourceDb, SubtypeInfo,
 };
 use crate::typecheck::error::{ChecksMode, TcError};
 use crate::typecheck::mmio::mmio_type_width_bytes;
@@ -465,16 +465,31 @@ pub fn build_ir_word<'r>(
         sp += 1;
     }
 
+    // Detect @interrupt(VEC) attribute — ISR bodies run under interrupt context.
+    let is_isr = decl
+        .attrs
+        .iter()
+        .any(|a| slice_span(src, *a).starts_with(b"@interrupt("));
+    if is_isr {
+        gen.word.performs = EffectSet::from_bits(EffectSet::INTERRUPT);
+    }
+
     let mut cur = lir::BlockId(0);
     cur = gen.emit_prologue(cur, &mut stack, &mut sp, decl.requires, observer)?;
 
     if let Some(body_span) = decl.body {
+        // ISR body forbids suspend (and runs with ceiling = N_isr, checked in Phase 15).
+        let allow_suspend = if is_isr {
+            false
+        } else {
+            decl.effect_bits & 1 != 0
+        };
         cur = gen.compile_span(
             cur,
             &mut stack,
             &mut sp,
             body_span,
-            decl.effect_bits & 1 != 0, // bit 0 = SUSPEND
+            allow_suspend,
             true,
             observer,
         )?;

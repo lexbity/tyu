@@ -411,6 +411,16 @@ fn attribute_on_struct() {
     assert_eq!(d.attrs.len(), 1);
 }
 
+#[test]
+fn attribute_interrupt() {
+    let src = "module m; @interrupt(TIMER0) : isr ; end;";
+    let ast = assert_parse_ok(src);
+    let d = &ast.decls.get(0).unwrap();
+    assert_eq!(d.attrs.len(), 1);
+    // "@interrupt(TIMER0)" starts at byte 10, ends at 28
+    assert_span(*d.attrs.get(0).unwrap(), 10, 28);
+}
+
 // ---------------------------------------------------------------------------
 // Effect sets on word declarations
 // ---------------------------------------------------------------------------

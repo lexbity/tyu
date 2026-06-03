@@ -82,6 +82,40 @@ pub fn is_iso_type(iso: &IsoDb, ty: TypeAtom) -> bool {
     false
 }
 
+/// A word bound to an interrupt vector via `@interrupt(VEC)`.
+#[derive(Clone, Copy)]
+pub struct IsrBinding {
+    /// Name of the bound word.
+    pub word_name: TypeAtom,
+    /// Vector/shorthand name parsed from `@interrupt(VEC)` source text, e.g. `TIMER0`.
+    pub vec_name: TypeAtom,
+}
+
+/// Collects all `@interrupt(VEC)` bindings from word declarations.
+/// Returns an empty vec if none are found.
+pub fn build_isr_bindings(module: &ModuleAst, src: &[u8]) -> FixedVec<IsrBinding, 16> {
+    let mut bindings: FixedVec<IsrBinding, 16> = FixedVec::new();
+    for d in module.decls.iter() {
+        if d.kind != DeclKind::Word {
+            continue;
+        }
+        for a in d.attrs.iter() {
+            let bytes = slice_span(src, *a);
+            if let Some(vec_name) = bytes.strip_prefix(b"@interrupt(").and_then(|s| {
+                let end = s.iter().position(|&b| b == b')')?;
+                TypeAtom::new(&s[..end])
+            }) {
+                let word_name = TypeAtom::new(slice_span(src, d.name)).unwrap_or(TypeAtom::EMPTY);
+                let _ = bindings.push(IsrBinding {
+                    word_name,
+                    vec_name,
+                });
+            }
+        }
+    }
+    bindings
+}
+
 pub fn build_resource_db(module: &ModuleAst, src: &[u8]) -> Result<ResourceDb, TcError> {
     let mut items: FixedVec<ResourceInfo, 64> = FixedVec::new();
     for d in module.decls.iter() {
@@ -194,6 +228,65 @@ pub fn resource_ty(db: &ResourceDb, name: TypeAtom) -> Option<TypeAtom> {
         }
     }
     None
+}
+
+pub fn resource_sharing_class(db: &ResourceDb, name: TypeAtom) -> u8 {
+    for r in db.items.iter() {
+        if r.name == name {
+            return r.sharing_class;
+        }
+    }
+    0
+}
+
+/// Mark resources that are reachable from `@interrupt(VEC)` words as shared.
+/// Sets `sharing_class = 1` (main + ISR, single-core) for each such resource.
+/// This is a simple declaration-level scan: for every ISR word, we scan its
+/// body text for any resource name known to the db.
+pub fn compute_resource_sharing(module: &ModuleAst, src: &[u8], db: &mut ResourceDb) {
+    // Collect ISR word bodies.
+    let isr_bodies: FixedVec<Span, 64> = {
+        let mut bodies = FixedVec::new();
+        for d in module.decls.iter() {
+            if d.kind != DeclKind::Word {
+                continue;
+            }
+            let is_isr = d
+                .attrs
+                .iter()
+                .any(|a| slice_span(src, *a).starts_with(b"@interrupt("));
+            if is_isr {
+                if let Some(body) = d.body {
+                    let _ = bodies.push(body);
+                }
+            }
+        }
+        bodies
+    };
+    if isr_bodies.is_empty() {
+        return; // no ISRs → nothing is shared
+    }
+
+    // For each resource, check if its name appears in any ISR body.
+    for i in 0..db.items.len() {
+        let rname = db.items.get(i).map(|r| r.name).unwrap_or(TypeAtom::EMPTY);
+        if rname.as_bytes().is_empty() {
+            continue;
+        }
+        let name_bytes = rname.as_bytes();
+        for body_span in isr_bodies.iter() {
+            let body_slice = &src[body_span.start..body_span.end];
+            if body_slice
+                .windows(name_bytes.len())
+                .any(|w| w == name_bytes)
+            {
+                if let Some(r) = db.items.get_mut(i) {
+                    r.sharing_class = 1;
+                }
+                break;
+            }
+        }
+    }
 }
 
 pub fn struct_field_ty(db: &NominalDb, struct_ty: TypeAtom, field: TypeAtom) -> Option<TypeAtom> {

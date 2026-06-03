@@ -296,16 +296,103 @@ fn e5020_borrow_escape() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Owned enforcement (reuses iso machinery: 5010/5011/5012)
+// ---------------------------------------------------------------------------
+
 #[test]
-#[ignore]
-fn e5030_isr_stack() {
-    assert_fails_with("module m; : main ( -- ) 0 ; end;\n", 5030);
+fn owned_dup_forbidden() {
+    assert_ir_fails_with(
+        "module Main;\n\
+         owned Buffer;\n\
+         : bad_dup ( Buffer -- Buffer Buffer ) dup ;\n\
+         end;\n",
+        5010,
+    );
 }
 
 #[test]
-#[ignore]
+fn owned_drop_forbidden() {
+    assert_ir_fails_with(
+        "module Main;\n\
+         owned Buffer;\n\
+         : bad_drop ( Buffer -- ) drop ;\n\
+         end;\n",
+        5011,
+    );
+}
+
+#[test]
+fn owned_use_after_move() {
+    assert_ir_fails_with(
+        "module Main;\n\
+         owned Buffer;\n\
+         : move_twice ( Buffer -- Buffer )\n\
+           => x\n\
+           x x\n\
+         ;\n\
+         end;\n",
+        5012,
+    );
+}
+
+#[test]
+fn owned_round_trip() {
+    // owned values can be moved once via local binding.
+    build_langc();
+    let dir = fresh_dir("owned_rt");
+    let path = dir.join("test.mod");
+    std::fs::write(
+        &path,
+        b"module Main;\n\
+          owned Buffer;\n\
+          : use_once ( Buffer -- Buffer )\n\
+            => x\n\
+            x\n\
+          ;\n\
+          end;\n",
+    )
+    .unwrap();
+    let out = Command::new(langc_exe())
+        .args(["--emit=ir", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let code = out.status.code().unwrap_or(-1);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        code == 0,
+        "expected owned round-trip to pass, got exit={code} stderr={stderr}"
+    );
+}
+
+#[test]
+fn e5030_isr_suspend_forbidden() {
+    // ISR body forbids suspend — SuspendForbidden (5001).
+    assert_ir_fails_with(
+        "module Main;\n\
+         @interrupt(TIMER0) : isr ( -- )\n\
+           platform.task.yield\n\
+         ;\n\
+         end;\n",
+        5001,
+    );
+}
+
+#[test]
 fn e5031_resource_shared_unlocked() {
-    assert_fails_with("module m; : main ( -- ) 0 ; end;\n", 5031);
+    // A resource reachable from an ISR context, accessed without a lock.
+    assert_ir_fails_with(
+        "module Main;\n\
+         resource R;\n\
+         @interrupt(TIMER0) : isr ( -- )\n\
+           &!R drop\n\
+         ;\n\
+         : main ( -- )\n\
+           &!R drop\n\
+         ;\n\
+         end;\n",
+        5031,
+    );
 }
 
 #[test]

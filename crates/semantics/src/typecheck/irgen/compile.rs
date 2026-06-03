@@ -726,6 +726,9 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         } else {
             if resource_ty(self.resources, root_atom).is_some() {
                 if self.locked_resource != Some(root_atom) {
+                    if resource_sharing_class(self.resources, root_atom) >= 1 {
+                        return Err(TcError::ResourceSharedUnlocked { span: place_abs });
+                    }
                     return Err(TcError::CapMissing { span: place_abs });
                 }
             } else if mut_tok {

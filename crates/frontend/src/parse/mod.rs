@@ -115,12 +115,26 @@ impl<'a> Parser<'a> {
 
         while self.look.kind != TokenKind::KwEnd && self.look.kind != TokenKind::Eof {
             if self.look.kind == TokenKind::Ident && self.slice(self.look.span).starts_with(b"@") {
+                let mut attr_span = self.look.span;
+                self.bump();
+                // Attributes may carry parenthesized arguments, e.g. @interrupt(VEC).
+                // Extend the span to include the balanced parens if present.
+                if self.look.kind == TokenKind::PunctLParen {
+                    if let Ok(paren_span) = self.capture_balanced(
+                        TokenKind::PunctLParen,
+                        TokenKind::PunctRParen,
+                        ParseError::UnmatchedParen {
+                            span: self.look.span,
+                        },
+                    ) {
+                        attr_span = Span::new(attr_span.start, paren_span.end);
+                    }
+                }
                 pending_attrs
-                    .push(self.look.span)
+                    .push(attr_span)
                     .map_err(|_| ParseError::TooManyItems {
                         span: self.look.span,
                     })?;
-                self.bump();
                 continue;
             }
 

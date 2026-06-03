@@ -134,6 +134,13 @@ pub fn emit_asm_driver(
         return 2;
     }
 
+    let mut resources = match semantics::typecheck::db::build_resource_db(module, src) {
+        Ok(r) => r,
+        Err(e) => {
+            let _ = diag::error_simple(e.code(), b"typecheck error");
+            return 2;
+        }
+    };
     match semantics::typecheck::for_each_ir_word(
         module,
         src,
@@ -141,6 +148,7 @@ pub fn emit_asm_driver(
         &es.st_buf[..es.st_len],
         checks,
         allow_raw_casts,
+        &mut resources,
         |w| gen.emit_word(w),
     ) {
         Ok(()) => {}
@@ -288,6 +296,13 @@ pub fn emit_obj_driver(
         }
     }
 
+    let mut resources = match semantics::typecheck::db::build_resource_db(module, src) {
+        Ok(r) => r,
+        Err(e) => {
+            let _ = diag::error_simple(e.code(), b"typecheck error");
+            return 2;
+        }
+    };
     match semantics::typecheck::for_each_ir_word(
         module,
         src,
@@ -295,6 +310,7 @@ pub fn emit_obj_driver(
         &es.st_buf[..es.st_len],
         checks,
         allow_raw_casts,
+        &mut resources,
         |w| gen.emit_word(w),
     ) {
         Ok(()) => {}

@@ -13,7 +13,9 @@ pub use crate::typecheck::error::{ChecksMode, Output, TcError};
 pub use crate::typecheck::parse::parse_word_sig;
 pub use crate::typecheck::stackcheck::typecheck_word_body;
 
-use crate::typecheck::db::{build_iso_db, build_nominal_db, build_resource_db};
+use crate::typecheck::db::{
+    build_iso_db, build_nominal_db, build_resource_db, compute_resource_sharing, ResourceDb,
+};
 use crate::typecheck::irgen::{build_ir_word, lir_atom, NullObserver};
 use crate::typecheck::mmio::build_mmio_db;
 use crate::typecheck::util::{slice_span, write_sig};
@@ -31,7 +33,9 @@ pub fn emit_ir(
     out: &mut impl Output,
 ) -> Result<(), TcError> {
     let mmio = build_mmio_db(module, src)?;
-    let resources = build_resource_db(module, src)?;
+    let mut resources = build_resource_db(module, src)?;
+    // Compute resource sharing from ISR roots before compiling any word body.
+    compute_resource_sharing(module, src, &mut resources);
     let nominals = build_nominal_db(module, src)?;
     let iso = build_iso_db(module, src)?;
     let mut arena = irgen::arena::ArenaAllocator::new();
@@ -121,7 +125,8 @@ pub fn emit_stackcheck(
     out: &mut impl Output,
 ) -> Result<(), TcError> {
     let mmio = build_mmio_db(module, src)?;
-    let resources = build_resource_db(module, src)?;
+    let mut resources = build_resource_db(module, src)?;
+    compute_resource_sharing(module, src, &mut resources);
     let nominals = build_nominal_db(module, src)?;
     let iso = build_iso_db(module, src)?;
     let mut arena = irgen::arena::ArenaAllocator::new();
@@ -183,15 +188,17 @@ pub fn for_each_ir_word<E, F>(
     subtypes: &[SubtypeInfo],
     checks: ChecksMode,
     allow_raw_casts: bool,
+    resources: &mut ResourceDb,
     mut f: F,
 ) -> Result<(), ForEachIrError<E>>
 where
     F: FnMut(&lir::Word) -> Result<(), E>,
 {
     let mmio = build_mmio_db(module, src).map_err(ForEachIrError::Type)?;
-    let resources = build_resource_db(module, src).map_err(ForEachIrError::Type)?;
     let nominals = build_nominal_db(module, src).map_err(ForEachIrError::Type)?;
     let iso = build_iso_db(module, src).map_err(ForEachIrError::Type)?;
+    // Compute resource sharing from ISR roots before compiling any word body.
+    compute_resource_sharing(module, src, resources);
     let mut arena = irgen::arena::ArenaAllocator::new();
 
     for decl in module.decls.iter() {
