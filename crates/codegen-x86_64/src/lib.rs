@@ -1,12 +1,12 @@
 #![no_std]
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use codegen_core::{AsmMode, CodegenBackend, CodegenError};
 use frontend::{
     parse::{ModuleAst, Output},
     span::Span,
 };
 use ir as lir;
-use codegen_core::{AsmMode, CodegenBackend, CodegenError};
 
 pub mod channel;
 pub mod mmio;

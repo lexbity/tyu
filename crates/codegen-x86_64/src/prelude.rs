@@ -1,6 +1,6 @@
 use codegen_core::{AsmMode, CodegenError};
-use semantics::types::WordSig;
 use semantics::typecheck;
+use semantics::types::WordSig;
 
 use crate::ophelpers::{emit_stack_overflow, write_label};
 use crate::util::find_word_decl;
@@ -18,7 +18,8 @@ impl<'a> X86_64HostedBackend<'a> {
                 self.out.write(b"  mov r15, __lang_ds_base\n");
                 self.out.write(b"  mov r14, __lang_ds_limit\n");
 
-                let main_decl = find_word_decl(self.module, self.src, b"main").ok_or(CodegenError::MissingEntryPoint { name: b"main" })?;
+                let main_decl = find_word_decl(self.module, self.src, b"main")
+                    .ok_or(CodegenError::MissingEntryPoint { name: b"main" })?;
                 let main_sig = main_decl
                     .sig
                     .and_then(|s| typecheck::parse_word_sig(self.src, s).ok())
@@ -55,6 +56,7 @@ impl<'a> X86_64HostedBackend<'a> {
                 self.out.write(b"extrn __lang_trap\n");
                 self.out.write(b"extrn __lang_trap_loc\n");
                 self.out.write(b"extrn __stack_overflow\n");
+                self.out.write(b"extrn __lang_ds_high\n");
                 self.out.write(b"extrn __mmio_mem\n");
                 self.out.write(b"extrn __chan_next\n");
                 self.out.write(b"extrn __chan_inuse\n");

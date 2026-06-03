@@ -24,6 +24,7 @@ _start:
 __lang_start:
   mov r15, __lang_ds_base
   mov r14, __lang_ds_limit
+  mov qword [__lang_ds_high], r15
   mov qword [__task_current], 0
   mov qword [__task_worker], 0
   mov qword [__task_state], 2
@@ -383,3 +384,5 @@ __task_cs_mem rb 1048576
 __mmio_mem rb 65536
 __lang_ds_base rb 65536
 __lang_ds_limit:
+public __lang_ds_high
+__lang_ds_high dq 0

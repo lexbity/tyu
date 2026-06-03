@@ -94,12 +94,17 @@ impl<'a> X86_64HostedBackend<'a> {
                 Ok(())
             }
 
-            lir::OpKind::AddrOf { const_addr: Some(addr), .. } => {
+            lir::OpKind::AddrOf {
+                const_addr: Some(addr),
+                ..
+            } => {
                 self.uses_mmio = true;
                 emit_push_u64(self.out, addr);
                 Ok(())
             }
-            lir::OpKind::AddrOf { const_addr: None, .. } => Err(CodegenError::UnsupportedAddrOf),
+            lir::OpKind::AddrOf {
+                const_addr: None, ..
+            } => Err(CodegenError::UnsupportedAddrOf),
             lir::OpKind::MmioPlace { addr, .. } => {
                 self.uses_mmio = true;
                 emit_push_u64(self.out, addr);
@@ -266,45 +271,45 @@ impl<'a> X86_64HostedBackend<'a> {
                     self.out.write(b"  mov rdi, 2\n");
                     self.out.write(b"  mov rax, 1\n");
                     self.out.write(b"  syscall\n");
-                    return Ok(())
+                    return Ok(());
                 }
                 if n == b"platform.channel.make" {
                     self.uses_channels = true;
                     self.uses_tasks = true;
                     channel::emit_chan_make(self);
-                    return Ok(())
+                    return Ok(());
                 }
                 if n == b"platform.channel.send" {
                     self.uses_channels = true;
                     self.uses_tasks = true;
                     channel::emit_chan_send(self, w, op, &sig);
-                    return Ok(())
+                    return Ok(());
                 }
                 if n == b"platform.channel.recv" {
                     self.uses_channels = true;
                     self.uses_tasks = true;
                     channel::emit_chan_recv(self, w, op, &sig);
-                    return Ok(())
+                    return Ok(());
                 }
                 if n == b"platform.mem.region-create" {
                     self.uses_regions = true;
                     region::emit_region_create(self);
-                    return Ok(())
+                    return Ok(());
                 }
                 if n == b"platform.mem.region-alloc" {
                     self.uses_regions = true;
                     region::emit_region_alloc(self);
-                    return Ok(())
+                    return Ok(());
                 }
                 if n == b"platform.mem.region-reset" {
                     self.uses_regions = true;
                     region::emit_region_reset(self);
-                    return Ok(())
+                    return Ok(());
                 }
                 if n == b"platform.mem.region-destroy" {
                     self.uses_regions = true;
                     region::emit_region_destroy(self);
-                    return Ok(())
+                    return Ok(());
                 }
                 if n == b"platform.time.now_ms" {
                     self.out.write(b"  sub rsp, 16\n");
@@ -322,30 +327,30 @@ impl<'a> X86_64HostedBackend<'a> {
                     self.out.write(b"  add rax, r9\n");
                     self.out.write(b"  add rsp, 16\n");
                     emit_push_rax(self.out);
-                    return Ok(())
+                    return Ok(());
                 }
                 if n == b"platform.task.yield" {
                     self.uses_tasks = true;
                     task::emit_task_yield(self);
-                    return Ok(())
+                    return Ok(());
                 }
                 if n == b"platform.task.join" {
                     self.uses_tasks = true;
                     task::emit_task_join(self);
-                    return Ok(())
+                    return Ok(());
                 }
                 if n == b"platform.task.sleep-ms" {
                     self.uses_tasks = true;
                     task::emit_task_sleep_ms(self);
-                    return Ok(())
+                    return Ok(());
                 }
                 if n == b"platform.task.sleep-us" {
                     self.uses_tasks = true;
                     task::emit_task_sleep_us(self);
-                    return Ok(())
+                    return Ok(());
                 }
                 if n == b"platform.critical.enter" || n == b"platform.critical.exit" {
-                    return Ok(())
+                    return Ok(());
                 }
                 self.out.write(b"  call ");
                 write_label(self.out, name.as_bytes());
@@ -354,7 +359,8 @@ impl<'a> X86_64HostedBackend<'a> {
             }
 
             lir::OpKind::Load { ty } => {
-                let (bits, signed) = prim_ty_bits_signed(w, ty).ok_or(CodegenError::UnknownTypeProperties { type_id: ty })?;
+                let (bits, signed) = prim_ty_bits_signed(w, ty)
+                    .ok_or(CodegenError::UnknownTypeProperties { type_id: ty })?;
                 let width = core::cmp::max(1u32, (bits as u32) / 8);
                 self.out.write(b"  sub r15, 8\n");
                 self.out.write(b"  mov rax, [r15]\n");
@@ -373,7 +379,8 @@ impl<'a> X86_64HostedBackend<'a> {
                 Ok(())
             }
             lir::OpKind::Store { ty } => {
-                let (bits, _signed) = prim_ty_bits_signed(w, ty).ok_or(CodegenError::UnknownTypeProperties { type_id: ty })?;
+                let (bits, _signed) = prim_ty_bits_signed(w, ty)
+                    .ok_or(CodegenError::UnknownTypeProperties { type_id: ty })?;
                 let width = core::cmp::max(1u32, (bits as u32) / 8);
                 self.out.write(b"  sub r15, 8\n");
                 self.out.write(b"  mov rcx, [r15]\n");
@@ -391,29 +398,53 @@ impl<'a> X86_64HostedBackend<'a> {
 
             lir::OpKind::MmioVolLoad { ty, .. } => {
                 self.uses_mmio = true;
-                let (bits, signed) = prim_ty_bits_signed(w, ty).ok_or(CodegenError::UnknownTypeProperties { type_id: ty })?;
+                let (bits, signed) = prim_ty_bits_signed(w, ty)
+                    .ok_or(CodegenError::UnknownTypeProperties { type_id: ty })?;
                 let width = core::cmp::max(1u32, (bits as u32) / 8);
                 mmio::emit_mmio_load(self, width, signed, op.span);
                 Ok(())
             }
             lir::OpKind::MmioVolStore { ty, access, .. } => {
                 self.uses_mmio = true;
-                let (bits, _signed) = prim_ty_bits_signed(w, ty).ok_or(CodegenError::UnknownTypeProperties { type_id: ty })?;
+                let (bits, _signed) = prim_ty_bits_signed(w, ty)
+                    .ok_or(CodegenError::UnknownTypeProperties { type_id: ty })?;
                 let width = core::cmp::max(1u32, (bits as u32) / 8);
                 mmio::emit_mmio_store(self, width, access, op.span);
                 Ok(())
             }
-            lir::OpKind::MmioVolLoadField { reg_ty, field_ty, mask, shift, .. } => {
+            lir::OpKind::MmioVolLoadField {
+                reg_ty,
+                field_ty,
+                mask,
+                shift,
+                ..
+            } => {
                 self.uses_mmio = true;
-                let (reg_bits, _reg_signed) = prim_ty_bits_signed(w, reg_ty).ok_or(CodegenError::UnknownTypeProperties { type_id: reg_ty })?;
+                let (reg_bits, _reg_signed) = prim_ty_bits_signed(w, reg_ty)
+                    .ok_or(CodegenError::UnknownTypeProperties { type_id: reg_ty })?;
                 let reg_width = core::cmp::max(1u32, (reg_bits as u32) / 8);
-                let (field_bits, field_signed) = prim_ty_bits_signed(w, field_ty).ok_or(CodegenError::UnknownTypeProperties { type_id: field_ty })?;
-                mmio::emit_mmio_load_field(self, reg_width, field_bits, field_signed, mask, shift, op.span);
+                let (field_bits, field_signed) = prim_ty_bits_signed(w, field_ty)
+                    .ok_or(CodegenError::UnknownTypeProperties { type_id: field_ty })?;
+                mmio::emit_mmio_load_field(
+                    self,
+                    reg_width,
+                    field_bits,
+                    field_signed,
+                    mask,
+                    shift,
+                    op.span,
+                );
                 Ok(())
             }
-            lir::OpKind::MmioVolStoreField { reg_ty, mask, shift, .. } => {
+            lir::OpKind::MmioVolStoreField {
+                reg_ty,
+                mask,
+                shift,
+                ..
+            } => {
                 self.uses_mmio = true;
-                let (reg_bits, _reg_signed) = prim_ty_bits_signed(w, reg_ty).ok_or(CodegenError::UnknownTypeProperties { type_id: reg_ty })?;
+                let (reg_bits, _reg_signed) = prim_ty_bits_signed(w, reg_ty)
+                    .ok_or(CodegenError::UnknownTypeProperties { type_id: reg_ty })?;
                 let reg_width = core::cmp::max(1u32, (reg_bits as u32) / 8);
                 mmio::emit_mmio_store_field(self, reg_width, mask, shift, op.span);
                 Ok(())
@@ -470,8 +501,16 @@ impl<'a> X86_64HostedBackend<'a> {
     }
 
     fn emit_cast(&mut self, w: &lir::Word, from: lir::TypeId, to: lir::TypeId) {
-        let from_ty = w.types.get(from.0 as usize).map(|a| a.as_bytes()).unwrap_or(b"");
-        let to_ty = w.types.get(to.0 as usize).map(|a| a.as_bytes()).unwrap_or(b"");
+        let from_ty = w
+            .types
+            .get(from.0 as usize)
+            .map(|a| a.as_bytes())
+            .unwrap_or(b"");
+        let to_ty = w
+            .types
+            .get(to.0 as usize)
+            .map(|a| a.as_bytes())
+            .unwrap_or(b"");
         if from_ty == to_ty {
             return;
         }

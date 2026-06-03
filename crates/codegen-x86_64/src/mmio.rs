@@ -41,7 +41,12 @@ pub fn emit_mmio_load(gen: &mut X86_64HostedBackend<'_>, width: u32, signed: boo
     gen.out.write(b"  add r15, 8\n");
 }
 
-pub fn emit_mmio_store(gen: &mut X86_64HostedBackend<'_>, width: u32, access: lir::MmioAccess, span: Span) {
+pub fn emit_mmio_store(
+    gen: &mut X86_64HostedBackend<'_>,
+    width: u32,
+    access: lir::MmioAccess,
+    span: Span,
+) {
     gen.out.write(b"  sub r15, 8\n");
     gen.out.write(b"  mov rcx, [r15]\n"); // value to store
     gen.out.write(b"  sub r15, 8\n");
@@ -66,7 +71,10 @@ pub fn emit_mmio_store(gen: &mut X86_64HostedBackend<'_>, width: u32, access: li
                 2 => gen.out.write(b"  movzx rdx, word [__mmio_mem + rax]\n"),
                 4 => gen.out.write(b"  mov edx, dword [__mmio_mem + rax]\n"),
                 8 => gen.out.write(b"  mov rdx, qword [__mmio_mem + rax]\n"),
-                _ => { gen.emit_trap_with_loc(lir::trap_code_u32(lir::TrapCode::Unreachable), span); return; }
+                _ => {
+                    gen.emit_trap_with_loc(lir::trap_code_u32(lir::TrapCode::Unreachable), span);
+                    return;
+                }
             }
             gen.out.write(b"  not rcx\n");
             gen.out.write(b"  and rdx, rcx\n");
@@ -85,7 +93,10 @@ pub fn emit_mmio_store(gen: &mut X86_64HostedBackend<'_>, width: u32, access: li
                 2 => gen.out.write(b"  movzx rdx, word [__mmio_mem + rax]\n"),
                 4 => gen.out.write(b"  mov edx, dword [__mmio_mem + rax]\n"),
                 8 => gen.out.write(b"  mov rdx, qword [__mmio_mem + rax]\n"),
-                _ => { gen.emit_trap_with_loc(lir::trap_code_u32(lir::TrapCode::Unreachable), span); return; }
+                _ => {
+                    gen.emit_trap_with_loc(lir::trap_code_u32(lir::TrapCode::Unreachable), span);
+                    return;
+                }
             }
             gen.out.write(b"  or rdx, rcx\n");
             match width {

@@ -117,14 +117,22 @@ __lang_start:
 
     call w_6d61696e          ; call main (mangled: 'main' in hex)
 
-    ; Pop exit code from data stack
+    ; Pop exit code from data stack into rbx (callee-saved)
     sub r15, 8
-    mov rax, [r15]
+    mov rbx, [r15]
+
+    ; Emit high-water mark to debugcon before exiting.
+    ; Compute DS peak in slots: (__lang_ds_high - __lang_ds_base) / 8
+    mov rsi, [__lang_ds_high]
+    sub rsi, __lang_ds_base
+    shr rsi, 3               ; divide by 8 (bytes per slot)
+    call .emit_hex64         ; write rsi as hex digits to debugcon (clobbers rax, rcx, rsi)
+    mov al, 0x0a             ; newline
+    out 0xe9, al
 
     ; Signal exit via isa-debug-exit port 0x501
-    ; guest writes 0 → QEMU exits (0<<1)|1 = 1 (pass)
-    ; guest writes N≠0 → QEMU exits (N<<1)|1 (fail)
-    test rax, rax
+    ; exit code is in rbx (preserved across .emit_hex64)
+    test rbx, rbx
     jz .pass
     mov ax, 1
 .pass:
@@ -132,6 +140,25 @@ __lang_start:
     out dx, ax
     cli
     hlt
+
+; ---------------------------------------------------------------------------
+; Helper: emit rsi as lowercase hex digits to debugcon port 0xe9
+; ---------------------------------------------------------------------------
+.emit_hex64:
+    mov rcx, 16
+.loop_hex:
+    mov rax, rsi
+    and rax, 0xf
+    cmp al, 10
+    jb .digit
+    add al, 'a'-'0'-10
+.digit:
+    add al, '0'
+    out 0xe9, al
+    ror rsi, 4
+    dec rcx
+    jnz .loop_hex
+    ret
 
 ; ---------------------------------------------------------------------------
 ; Trap / overflow handlers (same public names as hosted runtime)
@@ -161,18 +188,20 @@ __stack_overflow:
 ; Symbols use the same mangling convention as langc:
 ;   word name bytes encoded as lowercase hex, prefixed with w_
 ;
+; ---------------------------------------------------------------------------
+; DS high-water update helper (inline): update __lang_ds_high if r15 > current
+; ---------------------------------------------------------------------------
 ; testio.write-byte ( i64 -- )
 ;   Pop one cell from data stack, write low byte to QEMU debugcon (port 0xe9)
 ;   Mangled: "testio.write-byte"
 ;     t=74 e=65 s=73 t=74 i=69 o=6f .=2e w=77 r=72 i=69 t=74 e=65 -=2d b=62 y=79 t=74 e=65
-; ---------------------------------------------------------------------------
-
-; testio.write-byte
 public w_74657374696f2e77726974652d62797465
 w_74657374696f2e77726974652d62797465:
     sub r15, 8
     mov rax, [r15]
     out 0xe9, al
+    ret
+
     ret
 
 ; testio.write-str ( str -- )

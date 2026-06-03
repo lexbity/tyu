@@ -5,8 +5,14 @@ use crate::util::{prim_ty_bits_signed, type_size_bytes, write_u32};
 use crate::X86_64HostedBackend;
 
 pub enum ChannelPayloadKind {
-    Primitive { bits: u16, signed: bool, is_bool: bool },
-    BoxCopy { bytes: u32 },
+    Primitive {
+        bits: u16,
+        signed: bool,
+        is_bool: bool,
+    },
+    BoxCopy {
+        bytes: u32,
+    },
     Word,
 }
 
@@ -14,7 +20,11 @@ pub fn channel_payload_kind(w: &lir::Word, ty: lir::TypeId) -> Option<ChannelPay
     let ty_bytes = w.types.get(ty.0 as usize).map(|a| a.as_bytes())?;
     if let Some((bits, signed)) = prim_ty_bits_signed(w, ty) {
         let is_bool = ty_bytes == b"bool";
-        return Some(ChannelPayloadKind::Primitive { bits, signed, is_bool });
+        return Some(ChannelPayloadKind::Primitive {
+            bits,
+            signed,
+            is_bool,
+        });
     }
     if ty_bytes.starts_with(b"Slice(") || ty_bytes.starts_with(b"SliceMut(") {
         return None;
@@ -85,7 +95,12 @@ pub fn emit_chan_make(gen: &mut X86_64HostedBackend<'_>) {
     ophelpers::emit_push_rax(gen.out);
 }
 
-pub fn emit_chan_send(gen: &mut X86_64HostedBackend<'_>, w: &lir::Word, op: &lir::Op, sig: &lir::Sig) {
+pub fn emit_chan_send(
+    gen: &mut X86_64HostedBackend<'_>,
+    w: &lir::Word,
+    op: &lir::Op,
+    sig: &lir::Sig,
+) {
     let payload_ty = sig.inputs[1];
     let ok = gen.fresh_label();
     let space = gen.fresh_label();
@@ -97,8 +112,14 @@ pub fn emit_chan_send(gen: &mut X86_64HostedBackend<'_>, w: &lir::Word, op: &lir
     gen.out.write(b"  sub r15, 8\n");
     gen.out.write(b"  mov rdx, [r15]\n"); // payload
     match channel_payload_kind(w, payload_ty) {
-        Some(ChannelPayloadKind::Primitive { bits, signed, is_bool }) => {
-            ophelpers::emit_channel_canon_prim(gen.out, b"rdx", b"edx", b"dl", bits, signed, is_bool);
+        Some(ChannelPayloadKind::Primitive {
+            bits,
+            signed,
+            is_bool,
+        }) => {
+            ophelpers::emit_channel_canon_prim(
+                gen.out, b"rdx", b"edx", b"dl", bits, signed, is_bool,
+            );
         }
         Some(ChannelPayloadKind::BoxCopy { bytes }) => {
             let ok_box = gen.fresh_label();
@@ -148,8 +169,10 @@ pub fn emit_chan_send(gen: &mut X86_64HostedBackend<'_>, w: &lir::Word, op: &lir
     gen.out.write(b"  mov r12, rax\n");
     gen.out.write(b"  mov r13, rdx\n");
     gen.out.write(b"  mov rdx, [__task_current]\n");
-    gen.out.write(b"  mov r8, [__chan_wait_send_tail + r12*8]\n");
-    gen.out.write(b"  mov r9, [__chan_wait_send_head + r12*8]\n");
+    gen.out
+        .write(b"  mov r8, [__chan_wait_send_tail + r12*8]\n");
+    gen.out
+        .write(b"  mov r9, [__chan_wait_send_head + r12*8]\n");
     gen.out.write(b"  mov r10, r8\n");
     gen.out.write(b"  sub r10, r9\n");
     gen.out.write(b"  cmp r10, 8\n");
@@ -170,7 +193,8 @@ pub fn emit_chan_send(gen: &mut X86_64HostedBackend<'_>, w: &lir::Word, op: &lir
     gen.out.write(b"  add r9, r10\n");
     gen.out.write(b"  mov [__chan_wait_send_buf + r9*8], rdx\n");
     gen.out.write(b"  add r8, 1\n");
-    gen.out.write(b"  mov [__chan_wait_send_tail + r12*8], r8\n");
+    gen.out
+        .write(b"  mov [__chan_wait_send_tail + r12*8], r8\n");
     gen.out.write(b"  mov qword [__task_state + rdx*8], 4\n");
     gen.out.write(b"  call __task_yield\n");
     gen.out.write(b"  mov rax, r12\n");
@@ -190,8 +214,10 @@ pub fn emit_chan_send(gen: &mut X86_64HostedBackend<'_>, w: &lir::Word, op: &lir
     gen.out.write(b"  mov [__chan_buf + r9*8], rdx\n");
     gen.out.write(b"  add rcx, 1\n");
     gen.out.write(b"  mov [__chan_tail + rax*8], rcx\n");
-    gen.out.write(b"  mov r8, [__chan_wait_recv_head + rax*8]\n");
-    gen.out.write(b"  mov r9, [__chan_wait_recv_tail + rax*8]\n");
+    gen.out
+        .write(b"  mov r8, [__chan_wait_recv_head + rax*8]\n");
+    gen.out
+        .write(b"  mov r9, [__chan_wait_recv_tail + rax*8]\n");
     gen.out.write(b"  cmp r8, r9\n");
     gen.out.write(b"  je .chan_send_wake_done_");
     write_u32(gen.out, wake);
@@ -201,9 +227,11 @@ pub fn emit_chan_send(gen: &mut X86_64HostedBackend<'_>, w: &lir::Word, op: &lir
     gen.out.write(b"  mov r11, rax\n");
     gen.out.write(b"  shl r11, 3\n");
     gen.out.write(b"  add r11, r10\n");
-    gen.out.write(b"  mov r10, [__chan_wait_recv_buf + r11*8]\n");
+    gen.out
+        .write(b"  mov r10, [__chan_wait_recv_buf + r11*8]\n");
     gen.out.write(b"  add r8, 1\n");
-    gen.out.write(b"  mov [__chan_wait_recv_head + rax*8], r8\n");
+    gen.out
+        .write(b"  mov [__chan_wait_recv_head + rax*8], r8\n");
     gen.out.write(b"  mov qword [__task_state + r10*8], 1\n");
     gen.out.write(b"  mov r8, [__task_g_tail]\n");
     gen.out.write(b"  mov r9, [__task_g_head]\n");
@@ -214,7 +242,10 @@ pub fn emit_chan_send(gen: &mut X86_64HostedBackend<'_>, w: &lir::Word, op: &lir
     write_u32(gen.out, gfull);
     gen.out.write(b"\n");
     gen.out.write(b"  mov rdi, ");
-    write_u32(gen.out, lir::trap_code_u32(lir::TrapCode::TaskQueueOverflow));
+    write_u32(
+        gen.out,
+        lir::trap_code_u32(lir::TrapCode::TaskQueueOverflow),
+    );
     gen.out.write(b"\n");
     gen.out.write(b"  jmp __lang_trap\n");
     gen.out.write(b".chan_send_wake_space_");
@@ -230,7 +261,12 @@ pub fn emit_chan_send(gen: &mut X86_64HostedBackend<'_>, w: &lir::Word, op: &lir
     gen.out.write(b":\n");
 }
 
-pub fn emit_chan_recv(gen: &mut X86_64HostedBackend<'_>, w: &lir::Word, op: &lir::Op, sig: &lir::Sig) {
+pub fn emit_chan_recv(
+    gen: &mut X86_64HostedBackend<'_>,
+    w: &lir::Word,
+    op: &lir::Op,
+    sig: &lir::Sig,
+) {
     let out_ty = sig.outputs[0];
     let ok = gen.fresh_label();
     let has = gen.fresh_label();
@@ -275,8 +311,10 @@ pub fn emit_chan_recv(gen: &mut X86_64HostedBackend<'_>, w: &lir::Word, op: &lir
     gen.out.write(b"\n");
     gen.out.write(b"  mov r12, r11\n");
     gen.out.write(b"  mov rdx, [__task_current]\n");
-    gen.out.write(b"  mov r8, [__chan_wait_recv_tail + r11*8]\n");
-    gen.out.write(b"  mov r9, [__chan_wait_recv_head + r11*8]\n");
+    gen.out
+        .write(b"  mov r8, [__chan_wait_recv_tail + r11*8]\n");
+    gen.out
+        .write(b"  mov r9, [__chan_wait_recv_head + r11*8]\n");
     gen.out.write(b"  mov r10, r8\n");
     gen.out.write(b"  sub r10, r9\n");
     gen.out.write(b"  cmp r10, 8\n");
@@ -297,7 +335,8 @@ pub fn emit_chan_recv(gen: &mut X86_64HostedBackend<'_>, w: &lir::Word, op: &lir
     gen.out.write(b"  add r9, r10\n");
     gen.out.write(b"  mov [__chan_wait_recv_buf + r9*8], rdx\n");
     gen.out.write(b"  add r8, 1\n");
-    gen.out.write(b"  mov [__chan_wait_recv_tail + r11*8], r8\n");
+    gen.out
+        .write(b"  mov [__chan_wait_recv_tail + r11*8], r8\n");
     gen.out.write(b"  mov qword [__task_state + rdx*8], 4\n");
     gen.out.write(b"  call __task_yield\n");
     gen.out.write(b"  mov r11, r12\n");
@@ -314,8 +353,14 @@ pub fn emit_chan_recv(gen: &mut X86_64HostedBackend<'_>, w: &lir::Word, op: &lir
     gen.out.write(b"  add r10, r9\n");
     gen.out.write(b"  mov rax, [__chan_buf + r10*8]\n");
     match channel_payload_kind(w, out_ty) {
-        Some(ChannelPayloadKind::Primitive { bits, signed, is_bool }) => {
-            ophelpers::emit_channel_canon_prim(gen.out, b"rax", b"eax", b"al", bits, signed, is_bool);
+        Some(ChannelPayloadKind::Primitive {
+            bits,
+            signed,
+            is_bool,
+        }) => {
+            ophelpers::emit_channel_canon_prim(
+                gen.out, b"rax", b"eax", b"al", bits, signed, is_bool,
+            );
         }
         Some(ChannelPayloadKind::BoxCopy { .. }) => {}
         Some(ChannelPayloadKind::Word) => {}
@@ -326,8 +371,10 @@ pub fn emit_chan_recv(gen: &mut X86_64HostedBackend<'_>, w: &lir::Word, op: &lir
     }
     gen.out.write(b"  add rcx, 1\n");
     gen.out.write(b"  mov [__chan_head + r11*8], rcx\n");
-    gen.out.write(b"  mov r8, [__chan_wait_send_head + r11*8]\n");
-    gen.out.write(b"  mov r9, [__chan_wait_send_tail + r11*8]\n");
+    gen.out
+        .write(b"  mov r8, [__chan_wait_send_head + r11*8]\n");
+    gen.out
+        .write(b"  mov r9, [__chan_wait_send_tail + r11*8]\n");
     gen.out.write(b"  cmp r8, r9\n");
     gen.out.write(b"  je .chan_recv_wake_done_");
     write_u32(gen.out, wake);
@@ -337,9 +384,11 @@ pub fn emit_chan_recv(gen: &mut X86_64HostedBackend<'_>, w: &lir::Word, op: &lir
     gen.out.write(b"  mov rdx, r11\n");
     gen.out.write(b"  shl rdx, 3\n");
     gen.out.write(b"  add rdx, r10\n");
-    gen.out.write(b"  mov r10, [__chan_wait_send_buf + rdx*8]\n");
+    gen.out
+        .write(b"  mov r10, [__chan_wait_send_buf + rdx*8]\n");
     gen.out.write(b"  add r8, 1\n");
-    gen.out.write(b"  mov [__chan_wait_send_head + r11*8], r8\n");
+    gen.out
+        .write(b"  mov [__chan_wait_send_head + r11*8], r8\n");
     gen.out.write(b"  mov qword [__task_state + r10*8], 1\n");
     gen.out.write(b"  mov r8, [__task_g_tail]\n");
     gen.out.write(b"  mov r9, [__task_g_head]\n");
@@ -350,7 +399,10 @@ pub fn emit_chan_recv(gen: &mut X86_64HostedBackend<'_>, w: &lir::Word, op: &lir
     write_u32(gen.out, gfull);
     gen.out.write(b"\n");
     gen.out.write(b"  mov rdi, ");
-    write_u32(gen.out, lir::trap_code_u32(lir::TrapCode::TaskQueueOverflow));
+    write_u32(
+        gen.out,
+        lir::trap_code_u32(lir::TrapCode::TaskQueueOverflow),
+    );
     gen.out.write(b"\n");
     gen.out.write(b"  jmp __lang_trap\n");
     gen.out.write(b".chan_recv_wake_space_");

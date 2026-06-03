@@ -3,6 +3,8 @@ use ir as lir;
 
 pub(crate) use crate::util::{hex_digit, write_u32, write_u64_hex};
 
+static DS_HIGH_LABEL_ID: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
 pub fn write_label(out: &mut dyn Output, name: &[u8]) {
     out.write(b"w_");
     for &b in name {
@@ -10,6 +12,20 @@ pub fn write_label(out: &mut dyn Output, name: &[u8]) {
         let lo = b & 0xf;
         out.write(&[hex_digit(hi), hex_digit(lo)]);
     }
+}
+
+/// Emit a DS high-water update: if r15 > __lang_ds_high, update it.
+/// Must be called AFTER `add r15, 8` (i.e., after the stack pointer has advanced).
+pub fn emit_update_ds_high(out: &mut dyn Output) {
+    let id = DS_HIGH_LABEL_ID.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    out.write(b"  cmp r15, [__lang_ds_high]\n");
+    out.write(b"  jna .ds_high_");
+    write_u32(out, id);
+    out.write(b"\n");
+    out.write(b"  mov [__lang_ds_high], r15\n");
+    out.write(b".ds_high_");
+    write_u32(out, id);
+    out.write(b":\n");
 }
 
 pub fn emit_push_i64(out: &mut dyn Output, v: i64) {
@@ -20,6 +36,7 @@ pub fn emit_push_i64(out: &mut dyn Output, v: i64) {
     emit_i64(out, v);
     out.write(b"\n");
     out.write(b"  add r15, 8\n");
+    emit_update_ds_high(out);
 }
 
 pub fn emit_push_u64(out: &mut dyn Output, v: u64) {
@@ -30,6 +47,7 @@ pub fn emit_push_u64(out: &mut dyn Output, v: u64) {
     write_u64_hex(out, v);
     out.write(b"\n");
     out.write(b"  add r15, 8\n");
+    emit_update_ds_high(out);
 }
 
 pub fn emit_push_rax(out: &mut dyn Output) {
@@ -38,6 +56,7 @@ pub fn emit_push_rax(out: &mut dyn Output) {
     out.write(b"  ja __stack_overflow\n");
     out.write(b"  mov [r15], rax\n");
     out.write(b"  add r15, 8\n");
+    emit_update_ds_high(out);
 }
 
 pub fn emit_i64(out: &mut dyn Output, mut v: i64) {
@@ -69,6 +88,7 @@ pub fn emit_dup(out: &mut dyn Output) {
     out.write(b"  ja __stack_overflow\n");
     out.write(b"  mov [r15], rax\n");
     out.write(b"  add r15, 8\n");
+    emit_update_ds_high(out);
 }
 
 pub fn emit_drop(out: &mut dyn Output) {
@@ -92,6 +112,7 @@ pub fn emit_binop(out: &mut dyn Output, op: &[u8]) {
     out.write(b" rax, rcx\n");
     out.write(b"  mov [r15], rax\n");
     out.write(b"  add r15, 8\n");
+    emit_update_ds_high(out);
 }
 
 pub fn emit_cmp(out: &mut dyn Output, setcc: &[u8]) {
@@ -106,6 +127,7 @@ pub fn emit_cmp(out: &mut dyn Output, setcc: &[u8]) {
     out.write(b"  movzx rax, al\n");
     out.write(b"  mov [r15], rax\n");
     out.write(b"  add r15, 8\n");
+    emit_update_ds_high(out);
 }
 
 pub fn emit_store_local(out: &mut dyn Output, idx: u32) {
@@ -125,6 +147,7 @@ pub fn emit_load_local(out: &mut dyn Output, idx: u32) {
     out.write(b"]\n");
     out.write(b"  mov [r15], rax\n");
     out.write(b"  add r15, 8\n");
+    emit_update_ds_high(out);
 }
 
 pub fn emit_stack_overflow(out: &mut dyn Output) {

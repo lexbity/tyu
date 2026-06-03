@@ -160,7 +160,11 @@ pub fn count_scoped_slices(w: &lir::Word) -> u32 {
     for b in w.blocks.iter() {
         for op in b.ops.iter() {
             if let lir::OpKind::ScopedEnter { ty, .. } = op.kind {
-                let name = w.types.get(ty.0 as usize).map(|a| a.as_bytes()).unwrap_or(b"");
+                let name = w
+                    .types
+                    .get(ty.0 as usize)
+                    .map(|a| a.as_bytes())
+                    .unwrap_or(b"");
                 if name.starts_with(b"Slice(") || name.starts_with(b"SliceMut(") {
                     count = count.wrapping_add(1);
                 }

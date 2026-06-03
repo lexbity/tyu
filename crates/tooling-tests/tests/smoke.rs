@@ -1559,11 +1559,19 @@ w_6d61696e:\n\
   ja __stack_overflow\n\
   mov qword [r15], 1\n\
   add r15, 8\n\
+  cmp r15, [__lang_ds_high]\n\
+  jna .ds_high_0\n\
+  mov [__lang_ds_high], r15\n\
+.ds_high_0:\n\
   lea rax, [r15+8]\n\
   cmp rax, r14\n\
   ja __stack_overflow\n\
   mov qword [r15], 2\n\
   add r15, 8\n\
+  cmp r15, [__lang_ds_high]\n\
+  jna .ds_high_1\n\
+  mov [__lang_ds_high], r15\n\
+.ds_high_1:\n\
   sub r15, 8\n\
   mov rcx, [r15]\n\
   sub r15, 8\n\
@@ -1571,6 +1579,10 @@ w_6d61696e:\n\
   add rax, rcx\n\
   mov [r15], rax\n\
   add r15, 8\n\
+  cmp r15, [__lang_ds_high]\n\
+  jna .ds_high_2\n\
+  mov [__lang_ds_high], r15\n\
+.ds_high_2:\n\
   sub r15, 8\n\
   mov rax, [r15]\n\
   mov [rsp+8], rax\n\
@@ -1580,6 +1592,10 @@ w_6d61696e:\n\
   mov rax, [rsp+8]\n\
   mov [r15], rax\n\
   add r15, 8\n\
+  cmp r15, [__lang_ds_high]\n\
+  jna .ds_high_3\n\
+  mov [__lang_ds_high], r15\n\
+.ds_high_3:\n\
   jmp .endword_0\n\
 .endword_0:\n\
   add rsp, 16\n\
@@ -1587,7 +1603,8 @@ w_6d61696e:\n\
 \n\
 segment readable writeable\n\
 __lang_ds_base rb 65536\n\
-__lang_ds_limit:\n";
+__lang_ds_limit:\n\
+__lang_ds_high dq 0\n";
 
     assert_eq!(norm(&stdout), norm(expected));
 }

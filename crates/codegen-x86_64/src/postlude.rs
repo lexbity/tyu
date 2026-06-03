@@ -12,7 +12,8 @@ impl<'a> X86_64HostedBackend<'a> {
                 for i in 0..self.str_len {
                     let id = self.str_ids[i];
                     let span = self.str_spans[i];
-                    let bytes = decode_string_bytes(self.src, span).ok_or(CodegenError::MalformedStringLiteral)?;
+                    let bytes = decode_string_bytes(self.src, span)
+                        .ok_or(CodegenError::MalformedStringLiteral)?;
 
                     self.out.write(b"\n__lang_str_");
                     write_u32(self.out, id);
@@ -93,6 +94,7 @@ impl<'a> X86_64HostedBackend<'a> {
                 }
                 self.out.write(b"__lang_ds_base rb 65536\n");
                 self.out.write(b"__lang_ds_limit:\n");
+                self.out.write(b"__lang_ds_high dq 0\n");
                 Ok(())
             }
             AsmMode::Object => {
@@ -103,7 +105,8 @@ impl<'a> X86_64HostedBackend<'a> {
                 for i in 0..self.str_len {
                     let id = self.str_ids[i];
                     let span = self.str_spans[i];
-                    let bytes = decode_string_bytes(self.src, span).ok_or(CodegenError::MalformedStringLiteral)?;
+                    let bytes = decode_string_bytes(self.src, span)
+                        .ok_or(CodegenError::MalformedStringLiteral)?;
 
                     self.out.write(b"\n__lang_str_");
                     write_u32(self.out, id);
