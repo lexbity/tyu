@@ -233,9 +233,10 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         span: Span,
         observer: &mut dyn TypecheckObserver,
     ) -> Result<lir::BlockId, TcError> {
-        if self.locked_resource.is_some() {
-            return Err(TcError::LockNested { span });
+        if self.in_lock {
+            return Err(TcError::LockNest { span });
         }
+        self.in_lock = true;
         let body_q = pop(stack, sp).ok_or(TcError::LockPopBody { span })?;
         let body_span = match body_q {
             Value::Quot(s) => s,
@@ -257,14 +258,17 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         let base_sp = *sp;
         let end = self.compile_quote_span(cur, stack, sp, body_span, false, true, observer)?;
         if *sp != base_sp {
-            return Err(TcError::LockBodyDepth { span });
+            self.in_lock = false;
+            return Err(TcError::LockStack { span });
         }
         for i in 0..base_sp {
             if stack[i] != base_stack[i] {
-                return Err(TcError::LockBodyModifiedStack { span });
+                self.in_lock = false;
+                return Err(TcError::LockStack { span });
             }
         }
         self.locked_resource = None;
+        self.in_lock = false;
         Ok(end)
     }
 }

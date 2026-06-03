@@ -82,6 +82,7 @@ struct IrWordGen<'a, 'r> {
     scope_sp: usize,
 
     locked_resource: Option<TypeAtom>,
+    in_lock: bool,
 
     terminated: bool,
     word: lir::Word,
@@ -221,6 +222,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             scope_stack: [0u16; 16],
             scope_sp: 0,
             locked_resource: None,
+            in_lock: false,
             terminated: false,
             word: lir::Word {
                 name,

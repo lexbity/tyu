@@ -1,6 +1,6 @@
 use super::quote::typecheck_quote_body;
 use super::*;
-use ir::{Context, EffectSet};
+use ir::{CapSet, Context, EffectSet};
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn do_if(
@@ -261,6 +261,11 @@ pub(super) fn do_lock(
     ctx: Context,
     out: &mut impl Output,
 ) -> Result<(), TcError> {
+    if ctx.grants.contains(CapSet::WRITE) {
+        return Err(TcError::LockNest {
+            span: Span::UNKNOWN,
+        });
+    }
     let body_q = pop(stack, sp).ok_or(TcError::LockPopBody {
         span: Span::UNKNOWN,
     })?;
@@ -276,8 +281,9 @@ pub(super) fn do_lock(
     let base_stack = *stack;
     let mut body_stack = base_stack;
     let mut body_sp = base_sp;
+    // lock grants WRITE and forbids SUSPEND
     let lock_ctx = Context::new(
-        ctx.grants,
+        ctx.grants.union(CapSet::from_bits(CapSet::WRITE)),
         ctx.forbids.union(EffectSet::from_bits(EffectSet::SUSPEND)),
         ctx.ceiling,
     );
@@ -294,13 +300,13 @@ pub(super) fn do_lock(
         out,
     )?;
     if body_sp != base_sp {
-        return Err(TcError::LockBodyDepth {
+        return Err(TcError::LockStack {
             span: Span::UNKNOWN,
         });
     }
     for i in 0..base_sp {
         if body_stack[i] != base_stack[i] {
-            return Err(TcError::LockBodyModifiedStack {
+            return Err(TcError::LockStack {
                 span: Span::UNKNOWN,
             });
         }

@@ -11,7 +11,10 @@
 //! band (semantics) and 8xxx band (verifier/IR).  The 50xx/51xx band is
 //! reserved and unused until the corresponding phases un-ignore these tests.
 
+use std::sync::Once;
 use std::{path::PathBuf, process::Command};
+
+static BUILD_ONCE: Once = Once::new();
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -28,20 +31,31 @@ fn langc_exe() -> PathBuf {
 
 fn fresh_dir(label: &str) -> PathBuf {
     let dir = std::env::temp_dir().join("tyu_effect_corpus").join(format!(
-        "{}_{}",
+        "{}_{}_{}",
         label,
-        std::process::id()
+        std::process::id(),
+        rand()
     ));
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
 
+fn rand() -> u64 {
+    // Simple counter-based unique id per call.
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
+}
+
 fn build_langc() {
-    let status = Command::new("cargo")
-        .args(["build", "-p", "langc"])
-        .status()
-        .expect("cargo build failed");
-    assert!(status.success());
+    BUILD_ONCE.call_once(|| {
+        let status = Command::new(env!("CARGO"))
+            .current_dir(workspace_root())
+            .args(["build", "-p", "langc"])
+            .status()
+            .expect("cargo build failed");
+        assert!(status.success());
+    });
 }
 
 /// Assert that compiling `src` fails with exactly `expected_code`.
@@ -157,21 +171,76 @@ fn e5001_suspend_forbidden() {
 }
 
 #[test]
-#[ignore]
 fn e5002_lock_nest() {
-    assert_fails_with("module m; : main ( -- ) 0 ; end;\n", 5002);
+    // Nested lock on the same resource.
+    assert_ir_fails_with(
+        "module Main;\n\
+         resource R;\n\
+         : nested ( -- )\n\
+           lock [ lock [ ] ]\n\
+         ;\n\
+         end;\n",
+        5002,
+    );
 }
 
 #[test]
-#[ignore]
 fn e5003_lock_stack() {
-    assert_fails_with("module m; : main ( -- ) 0 ; end;\n", 5003);
+    // Lock body with non-empty net stack effect.
+    assert_ir_fails_with(
+        "module Main;\n\
+         resource R;\n\
+         : bad ( -- )\n\
+           lock [ 1 ]\n\
+         ;\n\
+         end;\n",
+        5003,
+    );
 }
 
 #[test]
-#[ignore]
 fn e5004_cap_missing() {
-    assert_fails_with("module m; : main ( -- ) 0 ; end;\n", 5004);
+    // Accessing a resource without a lock.
+    assert_ir_fails_with(
+        "module Main;\n\
+         resource R;\n\
+         : write ( -- )\n\
+           &!R drop\n\
+         ;\n\
+         end;\n",
+        5004,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Positive: lock body is green
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lock_body_green() {
+    build_langc();
+    let dir = fresh_dir("lock_green");
+    let path = dir.join("test.mod");
+    std::fs::write(
+        &path,
+        b"module Main;\n\
+          resource R;\n\
+          : ok ( -- )\n\
+            R lock [ &!R drop ]\n\
+          ;\n\
+          end;\n",
+    )
+    .unwrap();
+    let out = Command::new(langc_exe())
+        .args(["--emit=ir", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let code = out.status.code().unwrap_or(-1);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        code == 0,
+        "expected lock body to pass, got exit={code} stderr={stderr}"
+    );
 }
 
 #[test]

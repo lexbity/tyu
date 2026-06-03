@@ -726,7 +726,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         } else {
             if resource_ty(self.resources, root_atom).is_some() {
                 if self.locked_resource != Some(root_atom) {
-                    return Err(TcError::ScopedTypeMismatch { span: place_abs });
+                    return Err(TcError::CapMissing { span: place_abs });
                 }
             } else if mut_tok {
                 let root = TypeAtom::new(&slice[place.root.start..place.root.end]).unwrap();

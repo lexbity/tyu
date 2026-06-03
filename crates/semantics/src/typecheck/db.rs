@@ -18,6 +18,9 @@ pub struct SubtypeInfo {
 pub struct ResourceInfo {
     pub name: TypeAtom,
     pub ty: TypeAtom,
+    /// Sharing class: 0 = main-only, 1 = main+ISR (single-core), 2 = multi-core.
+    /// Updated by the cross-context resource-sharing analysis (effect-context-model §6.2).
+    pub sharing_class: u8,
 }
 
 pub struct ResourceDb {
@@ -58,7 +61,7 @@ pub struct IsoDb {
 pub fn build_iso_db(module: &ModuleAst, src: &[u8]) -> Result<IsoDb, TcError> {
     let mut types: FixedVec<TypeAtom, 64> = FixedVec::new();
     for d in module.decls.iter() {
-        if d.kind != DeclKind::Iso {
+        if d.kind != DeclKind::Iso && d.kind != DeclKind::Owned {
             continue;
         }
         let name = TypeAtom::new(slice_span(src, d.name))
@@ -93,7 +96,11 @@ pub fn build_resource_db(module: &ModuleAst, src: &[u8]) -> Result<ResourceDb, T
             TypeAtom::I64
         };
         items
-            .push(ResourceInfo { name, ty })
+            .push(ResourceInfo {
+                name,
+                ty,
+                sharing_class: 0,
+            })
             .map_err(|_| TcError::ResourceCapacityExceeded { span: d.name })?;
     }
     Ok(ResourceDb { items })

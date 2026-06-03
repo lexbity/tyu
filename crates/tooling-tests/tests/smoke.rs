@@ -2050,7 +2050,7 @@ end;\n",
         .unwrap();
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("error[E3515]"), "stderr: {stderr}");
+    assert!(stderr.contains("error[E5004]"), "stderr: {stderr}");
 }
 
 #[test]
@@ -2133,7 +2133,7 @@ end;\n",
         .unwrap();
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("error[E3515]"), "stderr: {stderr}");
+    assert!(stderr.contains("error[E5004]"), "stderr: {stderr}");
 }
 
 #[test]
@@ -2161,7 +2161,7 @@ end;\n",
         .unwrap();
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("error[E3517]"), "stderr: {stderr}");
+    assert!(stderr.contains("error[E5002]"), "stderr: {stderr}");
 }
 
 #[test]

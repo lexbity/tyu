@@ -379,7 +379,12 @@ pub fn typecheck_word_body(
                         ctx.ceiling,
                     )
                 } else {
-                    ctx
+                    // &[ forbids suspend while the borrow is live
+                    Context::new(
+                        ctx.grants,
+                        ctx.forbids.union(EffectSet::from_bits(EffectSet::SUSPEND)),
+                        ctx.ceiling,
+                    )
                 };
                 typecheck_word_body(
                     out,
