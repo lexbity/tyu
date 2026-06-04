@@ -243,3 +243,14 @@ __lang_ds_high:
 public __lang_expected_abi_hash
 __lang_expected_abi_hash:
     dq 0x7ff852243aa7202b
+
+; ---------------------------------------------------------------------------
+; Module modpack section (S2 Phase 14)
+; ---------------------------------------------------------------------------
+; Embedded .lmod images live in their own section, each prefixed with a
+; u32 length.  The loader scans [__lang_modpack_start .. __lang_modpack_end).
+section '.modpack' writeable
+public __lang_modpack_start
+__lang_modpack_start:
+public __lang_modpack_end
+__lang_modpack_end:

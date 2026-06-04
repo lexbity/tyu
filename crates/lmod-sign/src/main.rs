@@ -71,6 +71,8 @@ fn main() {
     out[68..72].copy_from_slice(&sig_len.to_le_bytes());
     // Update total_len.
     out[16..20].copy_from_slice(&new_total.to_le_bytes());
+    // Set the SIGNED flag in the header flags (byte 6, bit 0).
+    out[6] |= lmod::header::LMOD_FLAG_SIGNED as u8;
 
     fs::write(&args[2], &out).unwrap_or_else(|e| {
         eprintln!("error: cannot write {}: {}", args[2], e);

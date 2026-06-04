@@ -388,3 +388,12 @@ public __lang_ds_high
 __lang_ds_high dq 0
 public __lang_expected_abi_hash
 __lang_expected_abi_hash dq 0x7ff852243aa7202b
+
+; ---------------------------------------------------------------------------
+; Module modpack section (S2 Phase 14) — empty for hosted; FS used instead
+; ---------------------------------------------------------------------------
+section '.modpack' writeable
+public __lang_modpack_start
+__lang_modpack_start:
+public __lang_modpack_end
+__lang_modpack_end:

@@ -65,6 +65,23 @@ impl Region {
 }
 
 // ---------------------------------------------------------------------------
+// Placement policy (S2 Phase 16 — PIC/XIP vs copy-to-RAM)
+// ---------------------------------------------------------------------------
+
+/// How a module's sections are placed in memory.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PlacementPolicy {
+    /// Copy everything to RAM: code, rodata, data, bss.  W^X is enforced
+    /// by flipping code from RW to RX after relocation.  Used on hosted
+    /// and bare-metal x86_64 targets.
+    CopyToRam,
+    /// Execute In Place (XIP): code runs directly from flash; only data
+    /// and bss are copied to RAM.  Code must be position-independent (PIC).
+    /// Used on Cortex-M and other microcontrollers with unified flash.
+    XipFromFlash,
+}
+
+// ---------------------------------------------------------------------------
 // Trust tier
 // ---------------------------------------------------------------------------
 
@@ -138,5 +155,14 @@ pub trait LoaderPlatform {
     /// The trust tier this platform operates at.
     fn trust_tier(&self) -> Tier {
         Tier::Zero
+    }
+
+    /// The placement policy for this target.
+    ///
+    /// Defaults to `CopyToRam` — the only policy currently implemented
+    /// in `load_module`.  XIP support is reserved for future Cortex-M
+    /// and flash-target enablement.
+    fn placement_policy(&self) -> PlacementPolicy {
+        PlacementPolicy::CopyToRam
     }
 }

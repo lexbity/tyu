@@ -8,6 +8,14 @@ pub const FORMAT_VER: u16 = 2;
 /// Size of the fixed container header in bytes.
 pub const HEADER_SIZE: u32 = 72;
 
+/// Container header flags (bits in `LmodHeader.flags`).
+///
+/// Bit assignments per module-format-and-loading.md §3:
+///   bit 0: signed     — signature/MAC trailer present
+///   bit 1: encrypted  — container is encrypted-at-rest
+pub const LMOD_FLAG_SIGNED: u16 = 1 << 0;
+pub const LMOD_FLAG_ENCRYPTED: u16 = 1 << 1;
+
 // ---------------------------------------------------------------------------
 // In-memory representation
 // ---------------------------------------------------------------------------
@@ -189,6 +197,7 @@ pub fn compute_layout(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
 
     #[test]
     fn header_roundtrip() {
@@ -262,6 +271,23 @@ mod tests {
         // sig off 208, len 0
         // total = 208
         assert_eq!(h.total_len, 208);
+    }
+
+    #[test]
+    fn flags_roundtrip() {
+        for (name, flag) in &[("SIGNED", LMOD_FLAG_SIGNED), ("ENCRYPTED", LMOD_FLAG_ENCRYPTED)] {
+            let mut h = LmodHeader::new();
+            h.flags = *flag;
+            let mut buf = vec![0u8; HEADER_SIZE as usize];
+            encode_header(&mut buf, &h);
+            let decoded = decode_header(&buf).unwrap();
+            assert_eq!(
+                decoded.flags & *flag,
+                *flag,
+                "flag {} should survive round-trip",
+                name
+            );
+        }
     }
 
     #[test]

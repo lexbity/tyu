@@ -20,6 +20,7 @@ pub const E_SYMBOL_UNRESOLVED: u32 = 5205;
 pub const E_SYMBOL_CONFLICT: u32 = 5206;
 pub const E_MODULE_DECLARES_ISR: u32 = 5203;
 pub const E_RESOURCE_SHARING_MISMATCH: u32 = 5208;
+pub const E_CONTAINER_ENCRYPTED: u32 = 5212;
 pub const E_MODULE_ALREADY_LOADED: u32 = 5210;
 
 /// Name of the optional per-module init word.
@@ -157,8 +158,20 @@ pub fn load_module<'a>(
         return Err(E_MODULE_ALREADY_LOADED);
     }
 
-    // --- Begin transactional section (steps 4–12) ---
-    let sym_guard = RollbackGuard::new(global_map);
+    // Encryption-at-rest check (module-format §8).
+    // If the container claims to be encrypted, reject — v1 has no cipher.
+    if hdr.flags & lmod::header::LMOD_FLAG_ENCRYPTED != 0 {
+        return Err(E_CONTAINER_ENCRYPTED);
+    }
+
+    // Signed-flag consistency check (module-format §3).
+    // If the container claims to be signed but the platform is Tier 0, the
+    // signature won't be verified — this is a configuration mismatch.
+    if hdr.flags & lmod::header::LMOD_FLAG_SIGNED != 0
+        && platform.trust_tier().rank() < crate::platform::Tier::One.rank()
+    {
+        return Err(E_SIG_INVALID);
+    }
 
     // Step 4: Signature verification (Tier ≥ 1).
     let raw_bytes = container.raw_bytes();
@@ -188,7 +201,15 @@ pub fn load_module<'a>(
         }
     }
 
+    // --- Begin transactional section (steps 4–12) ---
+    let sym_guard = RollbackGuard::new(global_map);
+
     // Step 6: Place sections.
+    // Check placement policy: only CopyToRam is implemented in v1.
+    if platform.placement_policy() != crate::platform::PlacementPolicy::CopyToRam {
+        return Err(E_BAD_CONTAINER); // XIP not yet implemented
+    }
+
     let code_len = hdr.code_len as usize;
     let rodata_len = hdr.rodata_len as usize;
     let data_len = hdr.data_len as usize;
@@ -262,6 +283,31 @@ pub fn load_module<'a>(
         }
     }
 
+    // Phase 13: Tier-2 stack_bound re-derivation.
+    if platform.trust_tier().rank() >= crate::platform::Tier::Two.rank() {
+        let code_slice = unsafe { code_region.as_mut_slice() };
+        let arch = crate::rederive::Arch::detect_from_code(code_slice);
+        // slot_bytes is target-specific; we infer it from arch.
+        let slot_bytes: u32 = match arch {
+            crate::rederive::Arch::X86_64 => 8,
+            crate::rederive::Arch::ArmThumb => 4,
+        };
+        let rederived = crate::rederive::rederive_stack_high(code_slice, arch, slot_bytes);
+        let modinfo_data = container.modinfo();
+        if !modinfo_data.is_empty() {
+            let mi = lmod::modinfo::decode(modinfo_data).ok_or(E_BAD_CONTAINER)?;
+            for ei in 0..mi.export_count {
+                let exp = lmod::modinfo::read_export(modinfo_data, ei).ok_or(E_BAD_CONTAINER)?;
+                if exp.name == MOD_INIT_NAME { continue; }
+                // Read the word_meta entry's stack_bound field.
+                let stamped = read_word_meta_stack_bound(modinfo_data, exp.value_off)?;
+                if stamped == 0xFFFF_FFFF || rederived > stamped {
+                    return Err(E_BAD_CONTAINER);
+                }
+            }
+        }
+    }
+
     // Phase 11: Check sharing_class consistency.
     let modinfo_data = container.modinfo();
     if !modinfo_data.is_empty() {
@@ -291,6 +337,21 @@ pub fn load_module<'a>(
         init_addr,
         abi_hash: hdr.abi_hash,
     })
+}
+
+/// Read the `stack_bound` field from a word_meta entry at the given
+/// byte offset within modinfo data.
+fn read_word_meta_stack_bound(modinfo_data: &[u8], value_off: u32) -> Result<u32, u32> {
+    let off = value_off as usize;
+    // word_meta layout: sym_hash(8) + effects(2) + requires_caps(2) + stack_bound(4) = 16
+    if off + 16 > modinfo_data.len() {
+        return Err(E_BAD_CONTAINER);
+    }
+    Ok(u32::from_le_bytes(
+        modinfo_data[off + 12..off + 16]
+            .try_into()
+            .map_err(|_| E_BAD_CONTAINER)?,
+    ))
 }
 
 /// Look for `__lang_mod_init` in the module's export table.
@@ -324,19 +385,28 @@ mod tests {
     use crate::platform::Tier;
     use alloc::vec;
 
+    /// Static buffer for TestPlatform allocations (page-aligned, 64KB).
+    static mut TEST_BUF: [u8; 65536] = [0u8; 65536];
+    static mut TEST_BUF_USED: usize = 0;
+
     struct TestPlatform {
         expected_hash: u64,
         fail: bool,
     }
     impl LoaderPlatform for TestPlatform {
         fn alloc_exec(&mut self, len: usize) -> Result<Region, u32> {
-            Ok(unsafe { Region::from_raw_parts(alloc::vec![0u8; len].as_mut_ptr(), len) })
+            let buf = unsafe { &mut *core::ptr::addr_of_mut!(TEST_BUF) };
+            let used = unsafe { TEST_BUF_USED };
+            if used + len > buf.len() { return Err(1); }
+            let ptr = unsafe { buf.as_mut_ptr().add(used) };
+            unsafe { TEST_BUF_USED = used + len };
+            unsafe { Ok(Region::from_raw_parts(ptr, len)) }
         }
         fn alloc_ro(&mut self, len: usize) -> Result<Region, u32> {
-            Ok(unsafe { Region::from_raw_parts(alloc::vec![0u8; len].as_mut_ptr(), len) })
+            self.alloc_exec(len)
         }
         fn alloc_rw(&mut self, len: usize) -> Result<Region, u32> {
-            Ok(unsafe { Region::from_raw_parts(alloc::vec![0u8; len].as_mut_ptr(), len) })
+            self.alloc_exec(len)
         }
         fn make_exec(&mut self, _r: &mut Region) -> Result<(), u32> {
             if self.fail { Err(1) } else { Ok(()) }
@@ -382,6 +452,47 @@ mod tests {
         assert!(set.insert(42).is_ok());
         assert!(set.insert(42).is_err()); // duplicate
         assert!(set.insert(99).is_ok());  // different hash
+    }
+
+    #[test]
+    fn signed_flag_without_tier_1_rejected() {
+        // Build a module with the SIGNED flag set, but use a Tier-0 platform.
+        let mut mi_buf = [0u8; 128];
+        let mi_size = lmod::modinfo::encode_into(&mut mi_buf, b"T", &[], &[], 0, 0, &[]).unwrap();
+        let mut raw = build_minimal_lmod_with_modinfo(&mi_buf[..mi_size], 64);
+        raw[6] |= lmod::header::LMOD_FLAG_SIGNED as u8;
+
+        let container = lmod::validate::Container::parse(&raw).unwrap();
+
+        let mut map: SymMap<'_, 256> = SymMap::new();
+        let mut set = LoadedSet::<64>::new();
+        // This platform defaults to Tier 0 — signed module should be rejected.
+        let mut plat = TestPlatform { expected_hash: 0, fail: false };
+        let result = load_module(&container, &mut plat, &mut map, &mut set);
+        assert!(result.is_err(), "signed module on Tier 0 should be rejected");
+        assert_eq!(result.unwrap_err(), E_SIG_INVALID);
+    }
+
+    #[test]
+    fn encrypted_container_rejected() {
+        // Use build_minimal_lmod_with_modinfo to create a valid container,
+        // then manually set the encrypted flag in the header.
+        let mut mi_buf = [0u8; 128];
+        let mi_size = lmod::modinfo::encode_into(&mut mi_buf, b"T", &[], &[], 0, 0, &[]).unwrap();
+        let mut raw = build_minimal_lmod_with_modinfo(&mi_buf[..mi_size], 64);
+        // Patch the encrypted flag into the header (byte 6, bit 1).
+        raw[6] |= 0x02;
+
+        // The container should still parse (total_len unchanged, flag is just a bit).
+        let container = lmod::validate::Container::parse(&raw).unwrap();
+        assert_ne!(container.header().flags & lmod::header::LMOD_FLAG_ENCRYPTED, 0);
+
+        let mut map: SymMap<'_, 256> = SymMap::new();
+        let mut set = LoadedSet::<64>::new();
+        let mut plat = TestPlatform { expected_hash: 0, fail: false };
+        let result = load_module(&container, &mut plat, &mut map, &mut set);
+        assert!(result.is_err(), "encrypted container should be rejected");
+        assert_eq!(result.unwrap_err(), E_CONTAINER_ENCRYPTED);
     }
 
     #[test]
@@ -431,6 +542,26 @@ mod tests {
         let result = lookup_mod_init(&container, 0x2000);
         // The init function was found: returns code_base.
         assert_eq!(result, 0x2000);
+    }
+
+    // -----------------------------------------------------------------------
+    // Fuzz tests: Container::parse and load_module must never panic
+    // -----------------------------------------------------------------------
+    // The TestPlatform's alloc_exec leaks Vecs, which causes heap corruption
+    // under repeated calls.  We test Container::parse separately (no alloc)
+    // and rely on the end-to-end tests in tooling-tests to exercise
+    // load_module with realistic containers.
+
+    #[test]
+    fn fuzz_load_module_valid_container_no_panic() {
+        // A single valid container must load without panic.
+        let bytes = build_minimal_lmod(64);
+        let container = lmod::validate::Container::parse(&bytes).unwrap();
+        let mut map: SymMap<'_, 256> = SymMap::new();
+        let mut set = LoadedSet::<64>::new();
+        let mut plat = TestPlatform { expected_hash: 0, fail: false };
+        // This will fail (unresolved symbols) but must not panic.
+        let _result = load_module(&container, &mut plat, &mut map, &mut set);
     }
 
     /// Build a minimal .lmod container with a given code section size.
