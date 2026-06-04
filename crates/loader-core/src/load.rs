@@ -7,7 +7,6 @@
 //! load-once enforcement, failure atomicity.
 
 use crate::platform::{LoaderPlatform, Region};
-use crate::reloc_x86_64::apply_import_reloc;
 use crate::symbols::SymMap;
 use lmod::validate::Container;
 
@@ -247,18 +246,14 @@ pub fn load_module<'a>(
         let site_off = entry.site_off as u64;
         if site_off < container_code_off { continue; }
         let local_off = (site_off - container_code_off) as usize;
-        if local_off + 8 > code_len { return Err(E_BAD_CONTAINER); }
+        let need = if entry.kind == 1 { 8 } else { 4 };
+        if local_off + need > code_len { return Err(E_BAD_CONTAINER); }
         let sym = sym_guard
             .map
             .lookup_by_hash(entry.sym_hash)
             .ok_or(E_SYMBOL_UNRESOLVED)?;
-        let addend: i64 = match entry.kind {
-            1 => 0,
-            2 | 3 => -4,
-            _ => 0,
-        };
         let code_slice = unsafe { code_region.as_mut_slice() };
-        apply_import_reloc(code_slice, local_off, entry.kind, sym.addr as u64, addend)
+        dispatch_import_reloc(code_slice, local_off, entry.kind, sym.addr as u64)
             .map_err(|_| E_RELOC_UNSUPPORTED)?;
     }
 
@@ -291,6 +286,7 @@ pub fn load_module<'a>(
         let slot_bytes: u32 = match arch {
             crate::rederive::Arch::X86_64 => 8,
             crate::rederive::Arch::ArmThumb => 4,
+            crate::rederive::Arch::RiscV => 4,
         };
         let rederived = crate::rederive::rederive_stack_high(code_slice, arch, slot_bytes);
         let modinfo_data = container.modinfo();
@@ -582,5 +578,30 @@ mod tests {
         let off = layout.modinfo_off as usize;
         buf[off..off + modinfo.len()].copy_from_slice(modinfo);
         buf
+    }
+}
+
+/// Dispatch an import relocation to the correct architecture backend.
+fn dispatch_import_reloc(
+    code: &mut [u8],
+    site_off: usize,
+    kind: u8,
+    sym_addr: u64,
+) -> Result<(), u32> {
+    // Determine addend based on relocation kind.
+    let addend = match kind {
+        1 => 0,           // R_X86_64_64
+        2 | 3 => -4,      // R_X86_64_PC32 / R_X86_64_PLT32
+        4 => 0,           // R_ARM_ABS32
+        5 => -4,          // R_ARM_THM_CALL (PC = site + 4)
+        6 => -4,          // R_ARM_THM_JUMP24
+        7 => 0,           // R_ARM_REL32
+        _ => 0,
+    };
+    match kind {
+        1 | 2 | 3 => crate::reloc_x86_64::apply_import_reloc(code, site_off, kind, sym_addr, addend),
+        4 | 5 | 6 | 7 => crate::reloc_arm::apply_import_reloc(code, site_off, kind, sym_addr, addend),
+        8 | 9 => crate::reloc_riscv::apply_import_reloc(code, site_off, kind, sym_addr, addend),
+        _ => Err(crate::reloc_x86_64::E_RELOC_UNSUPPORTED),
     }
 }

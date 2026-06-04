@@ -15,6 +15,9 @@ pub enum Arch {
     /// ARM Thumb (Cortex-M) — data-stack pointer is `r4`.
     /// Patterns: 16-bit `SUBS r4, r4, #N` / `ADDS r4, r4, #N`.
     ArmThumb,
+    /// RISC-V (RV32) — data-stack pointer is `s2` (x18).
+    /// Patterns: `addi s2, s2, N` (push) / `addi s2, s2, -N` (pop).
+    RiscV,
 }
 
 impl Arch {
@@ -43,6 +46,19 @@ impl Arch {
                 }
             }
         }
+        // Check for RISC-V: `addi s2, s2, N` (opcode 0x13, funct3=0, rd=18, rs1=18).
+        if code.len() >= 4 {
+            for i in 0..code.len().saturating_sub(3) {
+                let insn = u32::from_le_bytes(code[i..i + 4].try_into().unwrap());
+                let opcode = insn & 0x7f;
+                let rd = ((insn >> 7) & 0x1f) as u8;
+                let funct3 = ((insn >> 12) & 0x7) as u8;
+                let rs1 = ((insn >> 15) & 0x1f) as u8;
+                if opcode == 0x13 && funct3 == 0 && rd == 18 && rs1 == 18 {
+                    return Arch::RiscV;
+                }
+            }
+        }
         Arch::X86_64
     }
 }
@@ -50,12 +66,13 @@ impl Arch {
 /// Re-derive a conservative stack-bound high-water mark (in slots) from the
 /// code section bytes.
 ///
-/// `slot_bytes` is target-specific (8 for x86_64, 4 for ARM Thumb).
+/// `slot_bytes` is target-specific (8 for x86_64, 4 for ARM Thumb, 4 for RISC-V).
 /// Dispatches to the architecture-specific scanner based on `arch`.
 pub fn rederive_stack_high(code: &[u8], arch: Arch, slot_bytes: u32) -> u32 {
     match arch {
         Arch::X86_64 => rederive_x86_64(code, slot_bytes),
         Arch::ArmThumb => rederive_arm_thumb(code, slot_bytes),
+        Arch::RiscV => rederive_riscv(code, slot_bytes),
     }
 }
 
@@ -160,6 +177,36 @@ fn rederive_arm_thumb(code: &[u8], slot_bytes: u32) -> u32 {
             }
         }
 
+        i += 1;
+    }
+    peak
+}
+
+/// RISC-V RV32 scanner: tracks `addi s2, s2, +N` (push) and
+/// `addi s2, s2, -N` (pop) to compute DS peak.
+fn rederive_riscv(code: &[u8], slot_bytes: u32) -> u32 {
+    let mut sp_off: i64 = 0;
+    let mut peak: u32 = 0;
+    let mut i = 0;
+    while i + 3 < code.len() {
+        let insn = u32::from_le_bytes(code[i..i + 4].try_into().unwrap());
+        let opcode = insn & 0x7f;
+        let rd = ((insn >> 7) & 0x1f) as u8;
+        let funct3 = ((insn >> 12) & 0x7) as u8;
+        let rs1 = ((insn >> 15) & 0x1f) as u8;
+        // ADDI s2, s2, imm12: opcode=0x13, funct3=0, rd=18, rs1=18
+        if opcode == 0x13 && funct3 == 0 && rd == 18 && rs1 == 18 {
+            let imm12 = (insn >> 20) & 0xfff;
+            // Sign-extend 12-bit: i32 handles sign, then widen to i64
+            let imm = (((imm12 as i32) << 20) >> 20) as i64;
+            sp_off += imm;
+            if sp_off < 0 {
+                let depth = (-sp_off as u32 + slot_bytes - 1) / slot_bytes;
+                peak = peak.max(depth);
+            }
+            i += 4;
+            continue;
+        }
         i += 1;
     }
     peak
@@ -275,5 +322,41 @@ mod tests {
     fn detect_arm_thumb_from_thumb_code() {
         let code = encode_thumb_sub_r4(4);
         assert_eq!(Arch::detect_from_code(&code), Arch::ArmThumb);
+    }
+
+    // ---- RISC-V tests ----
+
+    #[test]
+    fn riscv_empty_code() {
+        assert_eq!(rederive_stack_high(b"", Arch::RiscV, 4), 0);
+    }
+
+    #[test]
+    fn riscv_single_push() {
+        let code = encode_riscv_addi_s2(-8);
+        assert_eq!(rederive_stack_high(&code, Arch::RiscV, 4), 2);
+    }
+
+    #[test]
+    fn riscv_push_then_pop() {
+        let mut code = encode_riscv_addi_s2(-8);
+        code.extend_from_slice(&encode_riscv_addi_s2(8));
+        assert_eq!(rederive_stack_high(&code, Arch::RiscV, 4), 2);
+    }
+
+    #[test]
+    fn riscv_detect_from_code() {
+        let code = encode_riscv_addi_s2(-8);
+        assert_eq!(Arch::detect_from_code(&code), Arch::RiscV);
+    }
+
+    fn encode_riscv_addi_s2(imm: i32) -> Vec<u8> {
+        let imm12 = imm as u32 & 0xfff;
+        let insn = (imm12 << 20) | (18 << 15) | (0 << 12) | (18 << 7) | 0x13;
+        let bytes = insn.to_le_bytes();
+        // Build vec manually to avoid vec! macro in no_std
+        let mut v = Vec::new();
+        v.extend_from_slice(&bytes[..4]);
+        v
     }
 }

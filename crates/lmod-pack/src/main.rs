@@ -19,11 +19,13 @@ use std::process;
 // Minimal ELF64 reader
 // ---------------------------------------------------------------------------
 
+const ELFCLASS32: u8 = 1;
 const ELFCLASS64: u8 = 2;
 const ELFDATA2LSB: u8 = 1;
 const ET_REL: u16 = 1;
 
 const SHT_RELA: u32 = 4;
+const SHT_REL: u32 = 9;
 const SHT_SYMTAB: u32 = 2;
 const SHN_UNDEF: u16 = 0;
 const SHN_ABS: u16 = 0xFFF1;
@@ -62,6 +64,7 @@ struct Symbol {
 
 struct Elf<'a> {
     data: &'a [u8],
+    elf_class: u8,          // 1 = ELF32, 2 = ELF64
     sections: Vec<Section>,
     strtab: &'a [u8],
 }
@@ -69,13 +72,14 @@ struct Elf<'a> {
 impl<'a> Elf<'a> {
     fn parse(data: &'a [u8]) -> Result<Self, String> {
         if data.len() < 64 {
-            return Err("too small for ELF64".into());
+            return Err("too small for ELF".into());
         }
         if data[0..4] != [0x7f, b'E', b'L', b'F'] {
             return Err("bad ELF magic".into());
         }
-        if data[4] != ELFCLASS64 {
-            return Err("not ELF64".into());
+        let elf_class = data[4];
+        if elf_class != ELFCLASS32 && elf_class != ELFCLASS64 {
+            return Err(format!("unsupported ELF class {}", elf_class));
         }
         if data[5] != ELFDATA2LSB {
             return Err("not little-endian".into());
@@ -84,36 +88,51 @@ impl<'a> Elf<'a> {
         if e_type != ET_REL {
             return Err("not ET_REL".into());
         }
-        let e_shoff = le_u64(data, 40) as usize;
-        let e_shentsize = le_u16(data, 58) as usize;
-        let e_shnum = le_u16(data, 60) as usize;
-        let e_shstrndx = le_u16(data, 62) as usize;
 
-        if e_shentsize != 64 {
-            return Err(format!("shentsize {} != 64", e_shentsize));
+        let (e_shoff, e_shentsize, e_shnum, e_shstrndx, shent_size) = if elf_class == 2 {
+            let shoff = le_u64(data, 40) as usize;
+            let shent = le_u16(data, 58) as usize;
+            let shnum = le_u16(data, 60) as usize;
+            let shstr = le_u16(data, 62) as usize;
+            (shoff, shent, shnum, shstr, 64)
+        } else {
+            let shoff = le_u32(data, 0x20) as usize;
+            let shent = le_u16(data, 0x2E) as usize;
+            let shnum = le_u16(data, 0x30) as usize;
+            let shstr = le_u16(data, 0x32) as usize;
+            (shoff, shent, shnum, shstr, 40)
+        };
+
+        if e_shentsize != shent_size {
+            return Err(format!("shentsize {} != {}", e_shentsize, shent_size));
         }
-        if e_shoff + e_shnum * 64 > data.len() {
+        if e_shoff + e_shnum * shent_size > data.len() {
             return Err("section headers overflow".into());
         }
 
         let mut sections = Vec::with_capacity(e_shnum);
         for i in 0..e_shnum {
-            let b = e_shoff + i * 64;
+            let b = e_shoff + i * shent_size;
+            let (sec_offset, sec_size) = if elf_class == 2 {
+                (le_u64(data, b + 24), le_u64(data, b + 32))
+            } else {
+                (le_u32(data, b + 20) as u64, le_u32(data, b + 24) as u64)
+            };
             sections.push(Section {
                 name: String::new(),
                 ty: le_u32(data, b + 4),
-                offset: le_u64(data, b + 24),
-                size: le_u64(data, b + 32),
-                link: le_u32(data, b + 40),
-                info: le_u32(data, b + 44),
-                entsize: le_u64(data, b + 56),
+                offset: sec_offset,
+                size: sec_size,
+                link: le_u32(data, b + 40 - if elf_class == 2 { 0 } else { 8 }),
+                info: le_u32(data, b + 44 - if elf_class == 2 { 0 } else { 8 }),
+                entsize: if elf_class == 2 { le_u64(data, b + 56) } else { le_u32(data, b + 36) as u64 },
             });
         }
 
         let shstrtab_sec = &sections[e_shstrndx];
         let shstrtab = &data[shstrtab_sec.offset as usize..][..shstrtab_sec.size as usize];
         for (i, sec) in sections.iter_mut().enumerate() {
-            let b = e_shoff + i * 64;
+            let b = e_shoff + i * shent_size;
             let name_off = le_u32(data, b) as usize;
             let raw = &shstrtab[name_off..];
             let end = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
@@ -137,7 +156,7 @@ impl<'a> Elf<'a> {
             }
         };
 
-        Ok(Self { data, sections, strtab })
+        Ok(Self { data, elf_class, sections, strtab })
     }
 
     fn section_by_name(&self, name: &str) -> Option<&Section> {
@@ -160,16 +179,19 @@ impl<'a> Elf<'a> {
             None => return vec![],
         };
         let st_data = self.section_data(st);
-        let entsize = if st.entsize != 0 { st.entsize as usize } else { 24 };
+        let sym_entry_size = if self.elf_class == 2 { 24usize } else { 16usize };
+        let entsize = if st.entsize != 0 { st.entsize as usize } else { sym_entry_size };
         let mut syms = Vec::new();
         let mut pos = 0;
-        // ELF64 symtab entry layout:
-        //   st_name(4) + st_info(1) + st_other(1) + st_shndx(2)
-        //   + st_value(8) + st_size(8) = 24 bytes
+        // ELF64 symtab: st_name(4)+st_info(1)+st_other(1)+st_shndx(2)+st_value(8)+st_size(8)=24
+        // ELF32 symtab: st_name(4)+st_value(4)+st_size(4)+st_info(1)+st_other(1)+st_shndx(2)=16
         while pos + entsize <= st_data.len() {
             let name_off = le_u32(st_data, pos) as usize;
-            let st_shndx = le_u16(st_data, pos + 6);
-            let st_value = le_u64(st_data, pos + 8);
+            let (st_shndx, st_value) = if self.elf_class == 2 {
+                (le_u16(st_data, pos + 6), le_u64(st_data, pos + 8))
+            } else {
+                (le_u16(st_data, pos + 14), le_u32(st_data, pos + 4) as u64)
+            };
             let name = if name_off < self.strtab.len() {
                 let nb = &self.strtab[name_off..];
                 let end = nb.iter().position(|&b| b == 0).unwrap_or(nb.len());
@@ -209,43 +231,65 @@ impl<'a> Elf<'a> {
 // Relocation application
 // ---------------------------------------------------------------------------
 
-/// Apply an x86_64 internal relocation.
+/// Apply an internal relocation (pre-resolution).
 ///
+/// Supports x86_64 (RELA) and ARM (REL) relocation types.
 /// Patches `out` at `site_off` with the resolved value.
-/// Returns an error on unsupported relocation type.
 fn apply_internal_reloc(
     out: &mut [u8],
     r_type: u32,
     r_offset: u64,
-    sym_value: u64,   // = lmod_section_base(sym) + st_value
-    site_base: u64,   // = lmod_section_base(site_section)
+    sym_value: u64,
+    site_base: u64,
     addend: i64,
 ) -> Result<(), String> {
     let site_addr = site_base + r_offset;
     match r_type {
         1 => {
-            // R_X86_64_64: S + A  (write 8 bytes)
+            // R_X86_64_64: S + A (8 bytes)
             let val = sym_value.wrapping_add(addend as u64);
-            let le = val.to_le_bytes();
             let off = site_addr as usize;
             if off + 8 > out.len() {
                 return Err(format!("R_X86_64_64 site {} out of range", off));
             }
-            out[off..off + 8].copy_from_slice(&le);
+            out[off..off + 8].copy_from_slice(&val.to_le_bytes());
         }
-        2 | 3 => {
-            // R_X86_64_PC32 (2) or R_X86_64_PLT32 (3): S + A - P (write 4 bytes)
+        2 => {
+            // R_X86_64_PC32 or R_ARM_ABS32
+            if site_addr > 0xFFFFFFFF {
+                // R_X86_64_PC32: S + A - P (4 bytes)
+                let p = site_addr as i64;
+                let val = (sym_value as i64).wrapping_add(addend).wrapping_sub(p);
+                let off = site_addr as usize;
+                if off + 4 > out.len() {
+                    return Err(format!("R_X86_64_PC32 site {} out of range", off));
+                }
+                out[off..off + 4].copy_from_slice(&(val as u32).to_le_bytes());
+            } else {
+                // R_ARM_ABS32: S + A (4 bytes)
+                let val = sym_value.wrapping_add(addend as u64);
+                let off = site_addr as usize;
+                if off + 4 > out.len() {
+                    return Err(format!("R_ARM_ABS32 site {} out of range", off));
+                }
+                out[off..off + 4].copy_from_slice(&(val as u32).to_le_bytes());
+            }
+        }
+        3 => {
+            // R_X86_64_PLT32: S + A - P (4 bytes)
             let p = site_addr as i64;
             let val = (sym_value as i64).wrapping_add(addend).wrapping_sub(p);
-            let le = (val as u32).to_le_bytes();
             let off = site_addr as usize;
             if off + 4 > out.len() {
-                return Err(format!("R_X86_64_PC32 site {} out of range", off));
+                return Err(format!("R_X86_64_PLT32 site {} out of range", off));
             }
-            out[off..off + 4].copy_from_slice(&le);
+            out[off..off + 4].copy_from_slice(&(val as u32).to_le_bytes());
         }
         _ => {
-            return Err(format!("unsupported relocation type {}", r_type));
+            // Other relocation types (Thumb call/branch) are handled by the
+            // loader at load time for external references.  Internal references
+            // using these types are rare; return an error for safety.
+            return Err(format!("unsupported internal relocation type {}", r_type));
         }
     }
     Ok(())
@@ -290,24 +334,42 @@ fn pack(input: &str, output: &str) -> Result<(), String> {
     let mut internal_fixups: Vec<(usize, u32, u64, usize, u64, i64)> = Vec::new();
 
     for sec in elf.sections.iter() {
-        if sec.ty != SHT_RELA {
+        if sec.ty != SHT_RELA && sec.ty != SHT_REL {
             continue;
         }
         let target_idx = sec.info as usize;
         if target_idx >= elf.sections.len() {
             continue;
         }
-        let rela_data = elf.section_data(sec);
-        let entsize = if sec.entsize != 0 { sec.entsize as usize } else { 24 };
+        let rel_data = elf.section_data(sec);
+        let is_rela = sec.ty == SHT_RELA;
+        let entsize = if sec.entsize != 0 {
+            sec.entsize as usize
+        } else if is_rela {
+            if elf.elf_class == 2 { 24 } else { 12 } // ELF64_RELA or ELF32_RELA
+        } else {
+            if elf.elf_class == 2 { 24 } else { 8 }   // ELF64_REL or ELF32_REL
+        };
         let mut pos = 0;
 
-        while pos + entsize <= rela_data.len() {
-            let r_offset = le_u64(rela_data, pos);
-            let r_info = le_u64(rela_data, pos + 8);
-            let r_addend = le_u64(rela_data, pos + 16) as i64;
+        while pos + entsize <= rel_data.len() {
+            let (r_offset, r_info_wide, r_addend) = if is_rela && elf.elf_class == 2 {
+                (le_u64(rel_data, pos), le_u64(rel_data, pos + 8), le_u64(rel_data, pos + 16) as i64)
+            } else if is_rela && elf.elf_class == 1 {
+                (le_u32(rel_data, pos) as u64, le_u32(rel_data, pos + 4) as u64, le_u32(rel_data, pos + 8) as i64)
+            } else if !is_rela && elf.elf_class == 2 {
+                // ELF64 REL (rare but supported)
+                (le_u64(rel_data, pos), le_u64(rel_data, pos + 8), 0i64)
+            } else {
+                // ELF32 REL (ARM)
+                (le_u32(rel_data, pos) as u64, le_u32(rel_data, pos + 4) as u64, 0i64)
+            };
 
-            let sym_idx = (r_info >> 32) as usize;
-            let r_type = (r_info & 0xFFFFFFFF) as u32;
+            let (sym_idx, r_type) = if elf.elf_class == 2 {
+                ((r_info_wide >> 32) as usize, (r_info_wide & 0xFFFFFFFF) as u32)
+            } else {
+                ((r_info_wide >> 8) as usize, (r_info_wide & 0xFF) as u32)
+            };
 
             if sym_idx >= symbols.len() {
                 pos += entsize;
@@ -319,15 +381,32 @@ fn pack(input: &str, output: &str) -> Result<(), String> {
             if sym.shndx == SHN_UNDEF || (sym.name.is_empty() && sym_idx != 0) {
                 // External reference → import fixup.
                 let sym_hash = lmod::hash::fnv1a_u64(sym.name.as_bytes());
-                // site_off will be adjusted when we know section bases.
-                // Store (section_start_in_lmod, r_offset_within_section, sym_hash, kind)
-                // and resolve site_off after layout computation.
                 let site_base = elf.lmod_section_base(target_idx, &lmod::header::LmodHeader::new());
                 import_relocs.push((site_base + r_offset, sym_hash, r_type as u8));
             } else if sym.shndx != SHN_ABS {
                 // Internal reference → pre-resolve after layout is known.
+                // For REL relocations (ARM), read addend from section data at site.
+                let actual_addend = if is_rela {
+                    r_addend
+                } else {
+                    // REL: addend stored in-place. Read it from the section data.
+                    // For REL-format, the addend is at r_offset in the target section.
+                    let target_sec = &elf.sections[target_idx];
+                    let section_data = elf.section_data(target_sec);
+                    let site_in_section = r_offset as usize;
+                    if r_type == 2 {
+                        // R_ARM_ABS32: read 4-byte addend
+                        if site_in_section + 4 <= section_data.len() {
+                            le_u32(section_data, site_in_section) as i32 as i64
+                        } else { 0 }
+                    } else {
+                        // For Thumb call/branch relocations, addend is encoded
+                        // in the instruction. lmod-reloc handles these internally.
+                        0
+                    }
+                };
                 let sym_sec_idx = sym.shndx as usize;
-                internal_fixups.push((target_idx, r_type, r_offset, sym_sec_idx, sym.value, r_addend));
+                internal_fixups.push((target_idx, r_type, r_offset, sym_sec_idx, sym.value, actual_addend));
             }
             // SHN_ABS: absolute symbol (e.g. section start) — skip in v1
 

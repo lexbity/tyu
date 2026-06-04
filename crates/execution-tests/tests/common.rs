@@ -181,8 +181,8 @@ pub fn assemble_runtime(target: Target, out_dir: &Path) -> PathBuf {
         AssemblerKind::GasRiscV => {
             let status = Command::new("riscv64-unknown-elf-as")
                 .args([
-                    "-march=rv64gc",
-                    "-mabi=lp64",
+                    "-march=rv32i",
+                    "-mabi=ilp32",
                     asm.to_str().unwrap(),
                     "-o",
                     out.to_str().unwrap(),
@@ -545,7 +545,8 @@ pub fn rederive_elf_high(elf_path: &Path, slot_bytes: u8) -> u32 {
         let high = if slot_bytes == 8 {
             rederive_x86_64(code, slot_bytes as u32)
         } else {
-            rederive_arm_thumb(code, slot_bytes as u32)
+            let arm = rederive_arm_thumb(code, slot_bytes as u32);
+            if arm > 0 { arm } else { rederive_riscv(code, slot_bytes as u32) }
         };
         total_high = total_high.max(high);
     }
@@ -585,6 +586,35 @@ fn rederive_arm_thumb(code: &[u8], slot_bytes: u32) -> u32 {
     }
     peak
 }
+/// Scan RISC-V RV32 code bytes for `addi s2, s2, imm12` (push) and
+/// `addi s2, s2, -imm12` (pop), tracking running peak.
+fn rederive_riscv(code: &[u8], slot_bytes: u32) -> u32 {
+    let mut sp_off: i64 = 0;
+    let mut peak: u32 = 0;
+    let mut i = 0;
+    while i + 3 < code.len() {
+        let insn = u32::from_le_bytes(code[i..i + 4].try_into().unwrap());
+        let opcode = insn & 0x7f;
+        let rd = ((insn >> 7) & 0x1f) as u8;
+        let funct3 = ((insn >> 12) & 0x7) as u8;
+        let rs1 = ((insn >> 15) & 0x1f) as u8;
+        // ADDI s2, s2, imm12: opcode=0x13, funct3=0, rd=18, rs1=18
+        if opcode == 0x13 && funct3 == 0 && rd == 18 && rs1 == 18 {
+            let imm12 = (insn >> 20) & 0xfff;
+            let imm = (((imm12 as i32) << 20) >> 20) as i64;
+            sp_off += imm;
+            if sp_off < 0 {
+                let depth = (-sp_off as u32 + slot_bytes - 1) / slot_bytes;
+                peak = peak.max(depth);
+            }
+            i += 4;
+            continue;
+        }
+        i += 1;
+    }
+    peak
+}
+
 /// Scan x86_64 code bytes for `add r15, imm8` (49 83 c7 XX — push, DS grows
 /// upward) and `sub r15, imm8` (49 83 ef XX — pop), tracking running peak.
 fn rederive_x86_64(code: &[u8], slot_bytes: u32) -> u32 {

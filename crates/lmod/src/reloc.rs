@@ -29,6 +29,9 @@ pub enum RelocKind {
     ArmThmCall = 5,
     ArmThmJump24 = 6,
     ArmRel32 = 7,
+    // RISC-V
+    RiscV32 = 8,
+    RiscVCall = 9,
 }
 
 impl RelocKind {
@@ -43,6 +46,8 @@ impl RelocKind {
             5 => Some(Self::ArmThmCall),
             6 => Some(Self::ArmThmJump24),
             7 => Some(Self::ArmRel32),
+            8 => Some(Self::RiscV32),
+            9 => Some(Self::RiscVCall),
             _ => None,
         }
     }

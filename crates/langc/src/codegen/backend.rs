@@ -4,14 +4,16 @@
 pub use codegen_core::{CodegenBackend, CodegenError};
 
 use codegen_arm::ArmThumbBackend;
+use codegen_riscv::RiscVBackend;
 use codegen_x86_64::X86_64HostedBackend;
 use ir as lir;
 
-/// Enum dispatch wrapper: allows using either the x86_64 or ARM backend
-/// through a single `CodegenBackend` impl without heap allocation.
+/// Enum dispatch wrapper: allows using any backend through a single
+/// `CodegenBackend` impl without heap allocation.
 pub enum Backend<'a> {
     X86(X86_64HostedBackend<'a>),
     Arm(ArmThumbBackend<'a>),
+    RiscV(RiscVBackend<'a>),
 }
 
 impl<'a> CodegenBackend for Backend<'a> {
@@ -19,6 +21,7 @@ impl<'a> CodegenBackend for Backend<'a> {
         match self {
             Backend::X86(b) => b.emit_prelude(),
             Backend::Arm(b) => b.emit_prelude(),
+            Backend::RiscV(b) => b.emit_prelude(),
         }
     }
 
@@ -26,6 +29,7 @@ impl<'a> CodegenBackend for Backend<'a> {
         match self {
             Backend::X86(b) => b.emit_word(w),
             Backend::Arm(b) => b.emit_word(w),
+            Backend::RiscV(b) => b.emit_word(w),
         }
     }
 
@@ -33,6 +37,7 @@ impl<'a> CodegenBackend for Backend<'a> {
         match self {
             Backend::X86(b) => b.emit_postlude(),
             Backend::Arm(b) => b.emit_postlude(),
+            Backend::RiscV(b) => b.emit_postlude(),
         }
     }
 
@@ -40,6 +45,7 @@ impl<'a> CodegenBackend for Backend<'a> {
         match self {
             Backend::X86(b) => CodegenBackend::emit_extern_word(b, name),
             Backend::Arm(b) => CodegenBackend::emit_extern_word(b, name),
+            Backend::RiscV(b) => CodegenBackend::emit_extern_word(b, name),
         }
     }
 
@@ -47,6 +53,7 @@ impl<'a> CodegenBackend for Backend<'a> {
         match self {
             Backend::X86(b) => b.set_expected_abi_hash(hash),
             Backend::Arm(b) => b.set_expected_abi_hash(hash),
+            Backend::RiscV(b) => b.set_expected_abi_hash(hash),
         }
     }
 }

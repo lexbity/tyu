@@ -7,5 +7,6 @@ pub mod modpack;
 pub mod platform;
 pub mod rederive;
 pub mod reloc_arm;
+pub mod reloc_riscv;
 pub mod reloc_x86_64;
 pub mod symbols;

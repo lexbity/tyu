@@ -13,3 +13,7 @@ harness = true
 [[test]]
 name    = "arm"
 harness = true
+
+[[test]]
+name    = "riscv"
+harness = true

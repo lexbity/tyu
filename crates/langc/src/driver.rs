@@ -300,6 +300,13 @@ pub fn emit_obj_driver(
             bk.set_expected_abi_hash(abi_hash_val);
             Backend::Arm(bk)
         }
+        Target::RiscV32UnknownNone => {
+            let mut bk = codegen_riscv::RiscVBackend::new(
+                module, src, &mut mem, debug_trap_loc, AsmMode::Object,
+            );
+            bk.set_expected_abi_hash(abi_hash_val);
+            Backend::RiscV(bk)
+        }
     };
 
     if let Err(e) = gen.emit_prelude() {
@@ -361,7 +368,7 @@ pub fn emit_obj_driver(
     let assembler_bin: &[u8] = match target.spec().assembler {
         codegen_core::AssemblerKind::Fasm => b"fasm",
         codegen_core::AssemblerKind::GasArm => b"arm-none-eabi-as",
-        codegen_core::AssemblerKind::GasRiscV => b"riscv32-unknown-elf-as",
+        codegen_core::AssemblerKind::GasRiscV => b"riscv64-unknown-elf-as",
     };
     let status = process::run(assembler_bin, &[asm_path, obj_path])
         .map_err(|_| diag::error_simple(1016, b"failed to run assembler"));

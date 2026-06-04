@@ -8,6 +8,7 @@ members = [
   "crates/codegen-core",
   "crates/codegen-x86_64",
   "crates/codegen-arm",
+  "crates/codegen-riscv",
   "crates/lang-assemble",
   "crates/langc",
   "crates/semantics",

@@ -1,0 +1,11 @@
+[package]
+name = "codegen-riscv"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+frontend     = { path = "../frontend" }
+ir           = { path = "../ir" }
+semantics    = { path = "../semantics" }
+codegen-core = { path = "../codegen-core" }
+lmod         = { path = "../lmod" }

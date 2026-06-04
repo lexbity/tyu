@@ -11,6 +11,8 @@ pub enum Target {
     X86_64UnknownNone,
     /// ARM Cortex-M3 bare-metal (lm3s6965evb QEMU machine, Thumb).
     ArmV7MUnknownNone,
+    /// RISC-V 32-bit bare-metal (QEMU virt machine, RV32IM).
+    RiscV32UnknownNone,
 }
 
 impl Target {
@@ -23,6 +25,7 @@ impl Target {
             b"x86_64-unknown-linux-gnu" => Some(Self::X86_64UnknownLinuxGnu),
             b"x86_64-unknown-none" => Some(Self::X86_64UnknownNone),
             b"armv7m-unknown-none" => Some(Self::ArmV7MUnknownNone),
+            b"riscv32-unknown-none" => Some(Self::RiscV32UnknownNone),
             _ => None,
         }
     }
@@ -33,6 +36,7 @@ impl Target {
             Self::X86_64UnknownLinuxGnu => b"x86_64-unknown-linux-gnu",
             Self::X86_64UnknownNone => b"x86_64-unknown-none",
             Self::ArmV7MUnknownNone => b"armv7m-unknown-none",
+            Self::RiscV32UnknownNone => b"riscv32-unknown-none",
         }
     }
 
@@ -43,6 +47,7 @@ impl Target {
             Self::X86_64UnknownLinuxGnu => &X86_64_UNKNOWN_LINUX_GNU,
             Self::X86_64UnknownNone => &X86_64_UNKNOWN_NONE,
             Self::ArmV7MUnknownNone => &ARM_V7M_UNKNOWN_NONE,
+            Self::RiscV32UnknownNone => &RISCV32_UNKNOWN_NONE,
         }
     }
 }
@@ -276,6 +281,37 @@ static X86_64_UNKNOWN_NONE: TargetSpec = TargetSpec {
     capabilities: &[],
     qemu: Some(&X86_64_UNKNOWN_NONE_QEMU),
     linker: b"ld",
+};
+
+// ---------------------------------------------------------------------------
+// RISC-V RV32 (riscv32-unknown-none)
+// ---------------------------------------------------------------------------
+
+static RISCV32_NONE_EXTRA_ARGS: [&[u8]; 1] = [b"-nographic"];
+
+static RISCV32_NONE_QEMU: QemuSpec = QemuSpec {
+    system_bin: b"qemu-system-riscv32",
+    machine: b"virt",
+    extra_args: &RISCV32_NONE_EXTRA_ARGS,
+    exit_convention: QemuExitConvention::Semihosting,
+};
+
+static RISCV32_UNKNOWN_NONE: TargetSpec = TargetSpec {
+    word_bits: 32,
+    pointer_bits: 32,
+    endian: Endian::Little,
+    has_hardware_mul: true,
+    has_hardware_div: true,
+    has_fpu: false,
+    stack_alignment_bytes: 16,
+    output_format: OutputFormat::Elf32,
+    assembler: AssemblerKind::GasRiscV,
+    calling_conv: CallingConv::RiscV,
+    native_int_ty: b"i64",
+    slot_bytes: 4,
+    capabilities: &[],
+    qemu: Some(&RISCV32_NONE_QEMU),
+    linker: b"riscv64-unknown-elf-ld",
 };
 
 // ---------------------------------------------------------------------------
