@@ -32,4 +32,9 @@ extern "C" {
     pub fn fork() -> c_int;
     pub fn execvp(file: *const c_char, argv: *const *const c_char) -> c_int;
     pub fn waitpid(pid: c_int, status: *mut c_int, options: c_int) -> c_int;
+
+    // Memory mapping (S2 Phase 7)
+    pub fn mmap(addr: *mut c_void, length: size_t, prot: c_int, flags: c_int, fd: c_int, offset: isize) -> *mut c_void;
+    pub fn mprotect(addr: *mut c_void, len: size_t, prot: c_int) -> c_int;
+    pub fn munmap(addr: *mut c_void, length: size_t) -> c_int;
 }

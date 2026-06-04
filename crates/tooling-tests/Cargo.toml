@@ -5,4 +5,7 @@ edition = "2021"
 
 [dependencies]
 hosted = { path = "../hosted" }
+hosted-rt = { path = "../hosted-rt" }
+loader-core = { path = "../loader-core" }
+lmod = { path = "../lmod" }
 

@@ -4,10 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-test = false
 doctest = false
 
 [dependencies]
+loader-core = { path = "../loader-core" }
+lmod = { path = "../lmod" }
 
 [features]
 default = []

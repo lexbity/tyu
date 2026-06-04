@@ -1,0 +1,8 @@
+[package]
+name = "loader-core"
+version = "0.1.0"
+edition = "2021"
+
+# no_std, no alloc — used by on-device loader and host-side testing.
+[dependencies]
+lmod = { path = "../lmod" }

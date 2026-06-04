@@ -6,11 +6,12 @@ pub(crate) use crate::util::{hex_digit, write_u32, write_u64_hex};
 static DS_HIGH_LABEL_ID: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
 pub fn write_label(out: &mut dyn Output, name: &[u8]) {
+    // Emit symbol = w_<16-hex-digit-fnv1a_u64> per abi-contract §6.
+    let hash = crate::util::fnv1a_u64(name);
     out.write(b"w_");
-    for &b in name {
-        let hi = b >> 4;
-        let lo = b & 0xf;
-        out.write(&[hex_digit(hi), hex_digit(lo)]);
+    for i in (0..64).step_by(4).rev() {
+        let nib = ((hash >> i) & 0xf) as u8;
+        out.write(&[hex_digit(nib)]);
     }
 }
 

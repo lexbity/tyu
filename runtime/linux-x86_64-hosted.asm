@@ -12,7 +12,7 @@ public __task_yield
 public __task_sleep_ms
 public __task_sleep_us
 
-extrn w_6d61696e ; main
+extrn w_1f5962a2ce9803c8 ; main
 
 TASK_WORKERS equ 4
 TASK_DEQUE_CAP equ 8
@@ -28,7 +28,7 @@ __lang_start:
   mov qword [__task_current], 0
   mov qword [__task_worker], 0
   mov qword [__task_state], 2
-  call w_6d61696e
+  call w_1f5962a2ce9803c8
   sub r15, 8
   mov rdi, [r15]
   and rdi, 0xff

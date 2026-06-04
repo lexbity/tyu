@@ -203,6 +203,92 @@ pub struct ModInfo<'a> {
     pub abi_hash: u64,
 }
 
+/// Compute the byte offset of the export entries array within the modinfo
+/// data, or `None` if the data is truncated.
+///
+/// The name table layout (re-encoded from the encoder in this same file):
+///   - header (MODINFO_HEADER_SIZE bytes)
+///   - module name bytes (name_len, padded to 4)
+///   - export names (NUL-terminated each, padded to 4)
+///   - import names (NUL-terminated each, padded to 4)
+///   - export entries follow immediately
+pub fn export_entries_offset(data: &[u8]) -> Option<usize> {
+    let hdr = decode(data)?;
+    let mut off = MODINFO_HEADER_SIZE as usize;
+
+    // Skip module name
+    off += hdr.module_name_len as usize;
+    off = (off + 3) & !3;
+
+    // Skip export names
+    for _ in 0..hdr.export_count {
+        while off < data.len() && data[off] != 0 {
+            off += 1;
+        }
+        if off >= data.len() {
+            return None;
+        }
+        off += 1; // skip NUL
+    }
+    off = (off + 3) & !3;
+
+    // Skip import names
+    for _ in 0..hdr.import_count {
+        while off < data.len() && data[off] != 0 {
+            off += 1;
+        }
+        if off >= data.len() {
+            return None;
+        }
+        off += 1;
+    }
+    off = (off + 3) & !3;
+
+    if off + (hdr.export_count as usize) * EXPORT_ENTRY_SIZE as usize > data.len() {
+        return None;
+    }
+    Some(off)
+}
+
+/// Read one export entry by index.
+///
+/// Returns `None` if the index is out of range or the data is truncated.
+/// The `name` field borrows from `data` (a NUL-terminated string in the
+/// name table).
+pub fn read_export<'a>(data: &'a [u8], index: u32) -> Option<ParsedExport<'a>> {
+    let hdr = decode(data)?;
+    if index >= hdr.export_count {
+        return None;
+    }
+    let entries_off = export_entries_offset(data)?;
+    let entry_off = entries_off + (index as usize) * EXPORT_ENTRY_SIZE as usize;
+
+    let sym_hash = u64::from_le_bytes(data[entry_off..entry_off + 8].try_into().ok()?);
+    let name_off = u32::from_le_bytes(data[entry_off + 8..entry_off + 12].try_into().ok()?) as usize;
+    let value_off = u32::from_le_bytes(data[entry_off + 12..entry_off + 16].try_into().ok()?);
+
+    if name_off >= data.len() {
+        return None;
+    }
+    let name_bytes = &data[name_off..];
+    let end = name_bytes.iter().position(|&b| b == 0).unwrap_or(name_bytes.len());
+    let name = &data[name_off..name_off + end];
+
+    Some(ParsedExport {
+        sym_hash,
+        name,
+        value_off,
+    })
+}
+
+/// A single export entry decoded from raw bytes (name borrows from source).
+#[derive(Clone, Debug)]
+pub struct ParsedExport<'a> {
+    pub sym_hash: u64,
+    pub name: &'a [u8],
+    pub value_off: u32,
+}
+
 /// Decode a `LangModInfo` header from raw bytes.
 ///
 /// Returns `None` if the bytes are malformed (bad magic, bad version,

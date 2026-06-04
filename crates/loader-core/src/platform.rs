@@ -1,0 +1,131 @@
+//! `LoaderPlatform` trait — abstract memory management for loading modules.
+//!
+//! Each target implements this trait to provide platform-specific memory
+//! allocation, protection, and verification primitives.  The target-independent
+//! loader algorithm (§9 of module-format-and-loading.md) calls these methods
+//! through this trait.
+
+// ---------------------------------------------------------------------------
+// Region — a slab of mapped memory
+// ---------------------------------------------------------------------------
+
+/// A contiguous mapped memory region.
+///
+/// Created by [`LoaderPlatform::alloc_exec`], `alloc_ro`, or `alloc_rw`.
+/// The `as_mut_ptr`/`as_ptr` accessors provide access to the underlying bytes.
+#[derive(Debug)]
+pub struct Region {
+    ptr: *mut u8,
+    len: usize,
+}
+
+impl Region {
+    /// Create a region from a raw pointer and length.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must point to a valid, uniquely-owned allocation of `len` bytes.
+    pub unsafe fn from_raw_parts(ptr: *mut u8, len: usize) -> Self {
+        Self { ptr, len }
+    }
+
+    /// Return the region as a mutable byte slice.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure the memory is writable at this point.
+    pub unsafe fn as_mut_slice(&mut self) -> &mut [u8] {
+        unsafe { core::slice::from_raw_parts_mut(self.ptr, self.len) }
+    }
+
+    /// Return the region as an immutable byte slice.
+    pub fn as_slice(&self) -> &[u8] {
+        unsafe { core::slice::from_raw_parts(self.ptr, self.len) }
+    }
+
+    /// The raw mutable pointer.
+    pub fn as_mut_ptr(&mut self) -> *mut u8 {
+        self.ptr
+    }
+
+    /// The raw const pointer.
+    pub fn as_ptr(&self) -> *const u8 {
+        self.ptr
+    }
+
+    /// The length of the region in bytes.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Returns `true` if the region is empty.
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Trust tier
+// ---------------------------------------------------------------------------
+
+/// Trust level for a loaded module (module-format-and-loading.md §6.1).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Tier {
+    /// Baked into firmware; whole-image secure boot.
+    Zero,
+    /// External/updatable; verify per-module signature.
+    One,
+    /// Genuinely untrusted; re-derive safety claims.
+    Two,
+}
+
+// ---------------------------------------------------------------------------
+// LoaderPlatform trait
+// ---------------------------------------------------------------------------
+
+/// Abstract interface that each target's runtime implements.
+pub trait LoaderPlatform {
+    /// Allocate a region for executable code.
+    ///
+    /// The memory must be mapped RW initially so the loader can apply
+    /// relocations.  The caller will call `make_exec` to flip it to RX.
+    fn alloc_exec(&mut self, len: usize) -> Result<Region, u32>;
+
+    /// Allocate a read-only data region.
+    fn alloc_ro(&mut self, len: usize) -> Result<Region, u32>;
+
+    /// Allocate a read-write data region.
+    fn alloc_rw(&mut self, len: usize) -> Result<Region, u32>;
+
+    /// Flip an exec region from RW to RX (W^X discipline).
+    ///
+    /// After this call the region is no longer writable but is executable.
+    fn make_exec(&mut self, region: &mut Region) -> Result<(), u32>;
+
+    /// Release an allocated region (undo `alloc_*`).
+    ///
+    /// Called during rollback to free memory.  Default is a no-op
+    /// (memory leak is acceptable for some embedded use cases, but
+    /// hosted platforms should implement this with `munmap`).
+    fn release(&mut self, _region: &mut Region) {}
+
+    /// Verify a signature/MAC over the signed region.
+    ///
+    /// Default: trust unconditionally (Tier 0).
+    fn verify_sig(&self, _signed: &[u8], _sig: &[u8]) -> bool {
+        true
+    }
+
+    /// The `abi_hash` that the runtime expects.
+    fn expected_abi_hash(&self) -> u64;
+
+    /// Remaining data-stack budget in slots (for `stack_bound` check).
+    fn ds_remaining_slots(&self) -> u32 {
+        u32::MAX
+    }
+
+    /// The trust tier this platform operates at.
+    fn trust_tier(&self) -> Tier {
+        Tier::Zero
+    }
+}

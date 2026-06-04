@@ -4,8 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-test = false
 doctest = false
 
 [dependencies]
 hosted = { path = "../hosted" }
+loader-core = { path = "../loader-core" }
+
+[dev-dependencies]
+lmod = { path = "../lmod" }

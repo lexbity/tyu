@@ -5,10 +5,9 @@ use core::alloc::{GlobalAlloc, Layout};
 use hosted::c;
 
 #[cfg(not(test))]
-use core::panic::PanicInfo;
-#[cfg(not(test))]
 use hosted::io;
 
+#[cfg(not(test))]
 #[no_mangle]
 pub extern "C" fn rust_eh_personality() {}
 
@@ -31,7 +30,7 @@ static ALLOCATOR: HostedAllocator = HostedAllocator;
 
 #[cfg(not(test))]
 #[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
+fn panic(_info: &core::panic::PanicInfo) -> ! {
     let _ = io::stderr(b"error: panic\n");
     unsafe { c::_exit(101) }
 }

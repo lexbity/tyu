@@ -11,14 +11,14 @@ use crate::ophelpers::{
 use crate::region;
 use crate::task;
 use crate::util::{
-    count_scoped_slices, fnv1a_u32, is_exported, line_col, locals_bytes_ir, mask_for_bits,
+    count_scoped_slices, fnv1a_u64, is_exported, line_col, locals_bytes_ir, mask_for_bits,
     max_local_slot_ir, prim_bits_signed, prim_ty_bits_signed,
 };
 use crate::X86_64HostedBackend;
 
 impl<'a> X86_64HostedBackend<'a> {
     pub fn emit_word(&mut self, w: &lir::Word) -> Result<(), CodegenError> {
-        self.cur_word_id = fnv1a_u32(w.name.as_bytes());
+        self.cur_word_id = fnv1a_u64(w.name.as_bytes()) as u32;
         self.out.write(b"\n");
         if self.mode == AsmMode::Object && is_exported(self.module, self.src, w.name.as_bytes()) {
             self.out.write(b"public ");

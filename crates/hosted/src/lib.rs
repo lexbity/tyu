@@ -12,3 +12,5 @@ pub mod fs;
 pub mod io;
 pub mod mem;
 pub mod process;
+
+pub mod loader;

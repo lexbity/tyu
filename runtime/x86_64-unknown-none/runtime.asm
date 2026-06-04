@@ -97,7 +97,7 @@ section '.text' executable
 use64
 
 ; External symbols provided by the compiled user modules.
-extrn w_6d61696e    ; main ( -- i64 )
+extrn w_1f5962a2ce9803c8    ; main ( -- i64 )
 
 _start64_trampoline:
     ; We arrive here in 64-bit mode but with 32-bit address space constraints
@@ -115,7 +115,7 @@ __lang_start:
     mov qword [__lang_ds_high], r15
     xor rbp, rbp
 
-    call w_6d61696e          ; call main (mangled: 'main' in hex)
+    call w_1f5962a2ce9803c8          ; call main
 
     ; Pop exit code from data stack
     sub r15, 8
@@ -159,17 +159,16 @@ __stack_overflow:
 ; testio words — called by compiled tyu_lang code via normal ABI
 ;
 ; Symbols use the same mangling convention as langc:
-;   word name bytes encoded as lowercase hex, prefixed with w_
+;   fnv1a_u64(word name bytes), prefixed with w_
 ;
 ; testio.write-byte ( i64 -- )
 ;   Pop one cell from data stack, write low byte to QEMU debugcon (port 0xe9)
-;   Mangled: "testio.write-byte"
-;     t=74 e=65 s=73 t=74 i=69 o=6f .=2e w=77 r=72 i=69 t=74 e=65 -=2d b=62 y=79 t=74 e=65
+;   fnv1a_u64("testio.write-byte") = accb676a903a06d9
 ; ---------------------------------------------------------------------------
 
 ; testio.write-byte
-public w_74657374696f2e77726974652d62797465
-w_74657374696f2e77726974652d62797465:
+public w_accb676a903a06d9
+w_accb676a903a06d9:
     sub r15, 8
     mov rax, [r15]
     out 0xe9, al
@@ -177,10 +176,9 @@ w_74657374696f2e77726974652d62797465:
 
 ; testio.write-str ( str -- )
 ;   str is a pointer to a length-prefixed byte string: [u64 len][u8 bytes...]
-;   Mangled: "testio.write-str"
-;     t=74 e=65 s=73 t=74 i=69 o=6f .=2e w=77 r=72 i=69 t=74 e=65 -=2d s=73 t=74 r=72
-public w_74657374696f2e77726974652d737472
-w_74657374696f2e77726974652d737472:
+;   fnv1a_u64("testio.write-str") = eb06855547211672
+public w_eb06855547211672
+w_eb06855547211672:
     sub r15, 8
     mov rsi, [r15]       ; rsi = pointer to string struct
     mov rcx, [rsi]       ; rcx = length
@@ -197,10 +195,9 @@ w_74657374696f2e77726974652d737472:
     ret
 
 ; testio.exit ( i64 -- )
-;   Mangled: "testio.exit"
-;     t=74 e=65 s=73 t=74 i=69 o=6f .=2e e=65 x=78 i=69 t=74
-public w_74657374696f2e65786974
-w_74657374696f2e65786974:
+;   fnv1a_u64("testio.exit") = f91ca4f233247b4d
+public w_f91ca4f233247b4d
+w_f91ca4f233247b4d:
     sub r15, 8
     mov rax, [r15]
     test rax, rax

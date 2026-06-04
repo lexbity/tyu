@@ -158,12 +158,18 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 [[package]]
 name = "hosted"
 version = "0.1.0"
+dependencies = [
+ "lmod",
+ "loader-core",
+]
 
 [[package]]
 name = "hosted-rt"
 version = "0.1.0"
 dependencies = [
  "hosted",
+ "lmod",
+ "loader-core",
 ]
 
 [[package]]
@@ -248,6 +254,13 @@ dependencies = [
 
 [[package]]
 name = "lmod-pack"
+version = "0.1.0"
+dependencies = [
+ "lmod",
+]
+
+[[package]]
+name = "loader-core"
 version = "0.1.0"
 dependencies = [
  "lmod",
@@ -508,6 +521,9 @@ name = "tooling-tests"
 version = "0.1.0"
 dependencies = [
  "hosted",
+ "hosted-rt",
+ "lmod",
+ "loader-core",
 ]
 
 [[package]]
