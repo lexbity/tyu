@@ -17,22 +17,7 @@ fn arithmetic_and_stack_pass() {
     let spec = Target::RiscV32UnknownNone.spec().qemu.unwrap();
     let summary = common::parse_output(&result.stdout);
 
-    assert!(
-        summary.completed,
-        "RISC-V test image did not complete (crashed or hung)"
-    );
-    assert_eq!(
-        summary.failures, 0,
-        "RISC-V test reported {} failure(s)",
-        summary.failures
-    );
-    assert_eq!(
-        result.exit_code,
-        spec.exit_convention.host_pass_exit(),
-        "QEMU exit code {} does not match expected pass code {}",
-        result.exit_code,
-        spec.exit_convention.host_pass_exit(),
-    );
+    common::assert_qemu_ok(&result, &summary, spec);
 
     let slot_bytes = Target::RiscV32UnknownNone.spec().slot_bytes;
     common::assert_high_water(summary.high_slots, &image, slot_bytes);

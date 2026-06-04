@@ -17,15 +17,7 @@ fn arithmetic_and_stack_pass() {
     let spec = Target::X86_64UnknownNone.spec().qemu.unwrap();
     let summary = common::parse_output(&result.stdout);
 
-    assert!(summary.completed, "test image did not complete (crashed or hung)");
-    assert_eq!(summary.failures, 0, "test reported {} failure(s)", summary.failures);
-    assert_eq!(
-        result.exit_code,
-        spec.exit_convention.host_pass_exit(),
-        "QEMU exit code {} does not match expected pass code {}",
-        result.exit_code,
-        spec.exit_convention.host_pass_exit(),
-    );
+    common::assert_qemu_ok(&result, &summary, spec);
 
     // High-water assertion: measured peak ≤ re-derived conservative bound
     let slot_bytes = Target::X86_64UnknownNone.spec().slot_bytes;

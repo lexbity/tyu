@@ -1,4 +1,4 @@
-use codegen_core::{AssemblerKind, PlatformCapability, Target};
+use codegen_core::{AssemblerKind, PlatformCapability, QemuExitConvention, Target};
 use std::{
     path::{Path, PathBuf},
     process::Command,
@@ -404,7 +404,7 @@ pub fn qemu_run(target: Target, image: &Path) -> QemuResult {
             None => {
                 if start.elapsed() >= timeout {
                     let _ = child.kill();
-                    panic!("QEMU timed out after 10 seconds");
+                    panic!("HANG: QEMU timed out after 10 seconds");
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
@@ -459,6 +459,34 @@ pub fn parse_output(stdout: &[u8]) -> OutputSummary {
         failures,
         completed,
         high_slots,
+    }
+}
+
+/// Assert that the QEMU result indicates successful completion.
+/// Distinguishes failure classes for unambiguous CI diagnostics per §6.3:
+/// - `HANG`: QEMU did not exit within the timeout.
+/// - `NO_COMPLETION`: QEMU exited but no `S\n` marker in output.
+/// - `FAIL_MARKER`: One or more `F` bytes in output.
+/// - `EXIT_MISMATCH`: QEMU exit code does not match expected pass code.
+pub fn assert_qemu_ok(result: &QemuResult, summary: &OutputSummary, spec: &QemuSpec) {
+    if !summary.completed {
+        panic!(
+            "NO_COMPLETION: QEMU exited with code {} but no `S\\n` completion marker found",
+            result.exit_code,
+        );
+    }
+    if summary.failures > 0 {
+        panic!(
+            "FAIL_MARKER: test reported {} failure(s) via 'F' bytes",
+            summary.failures,
+        );
+    }
+    let expected = spec.exit_convention.host_pass_exit();
+    if result.exit_code != expected {
+        panic!(
+            "EXIT_MISMATCH: QEMU exit code {} != expected pass code {}",
+            result.exit_code, expected,
+        );
     }
 }
 

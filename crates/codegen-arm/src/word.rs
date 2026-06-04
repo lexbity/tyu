@@ -92,6 +92,7 @@ impl<'a> ArmThumbBackend<'a> {
                 self.out.write(b"\tstr r0, [r4]\n\tadds r4, r4, #4\n");
                 self.emit_const32(0);
                 self.out.write(b"\tstr r0, [r4]\n\tadds r4, r4, #4\n");
+                self.emit_ds_high_update();
                 Ok(())
             }
             lir::OpKind::ConstStr(_) => {
@@ -217,6 +218,7 @@ impl<'a> ArmThumbBackend<'a> {
                 write_u32(self.out, offset);
                 self.out.write(b"]\n");
                 self.emit_push_r0r1();
+                self.emit_ds_high_update();
                 Ok(())
             }
             lir::OpKind::Call { name, .. } => {
