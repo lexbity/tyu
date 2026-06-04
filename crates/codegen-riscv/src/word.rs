@@ -52,12 +52,14 @@ impl<'a> RiscVBackend<'a> {
                 let low = v as u32; let high = (v >> 32) as u32;
                 self.emit_const32(low); self.out.write(b"\tsw a0, 0(s2)\n\taddi s2, s2, 4\n");
                 self.emit_const32(high); self.out.write(b"\tsw a0, 0(s2)\n\taddi s2, s2, 4\n");
+                self.emit_ds_high_update();
                 Ok(())
             }
             lir::OpKind::ConstBool(v) => {
                 let val: u32 = if v { 1 } else { 0 };
                 self.emit_const32(val); self.out.write(b"\tsw a0, 0(s2)\n\taddi s2, s2, 4\n");
                 self.emit_const32(0); self.out.write(b"\tsw a0, 0(s2)\n\taddi s2, s2, 4\n");
+                self.emit_ds_high_update();
                 Ok(())
             }
             lir::OpKind::ConstStr(_) => Err(CodegenError::UnsupportedOp { op_name: b"ConstStr" }),
@@ -65,6 +67,7 @@ impl<'a> RiscVBackend<'a> {
                 self.out.write(b"\taddi s2, s2, -8\n\tlw a0, 0(s2)\n\tlw a1, 4(s2)\n");
                 self.out.write(b"\tsw a0, 0(s2)\n\tsw a1, 4(s2)\n\taddi s2, s2, 8\n");
                 self.out.write(b"\tsw a0, 0(s2)\n\tsw a1, 4(s2)\n\taddi s2, s2, 8\n");
+                self.emit_ds_high_update();
                 Ok(())
             }
             lir::OpKind::Drop { .. } => { self.out.write(b"\taddi s2, s2, -8\n"); Ok(()) }
@@ -116,6 +119,7 @@ impl<'a> RiscVBackend<'a> {
                 let off = (slot as u32) * 8;
                 self.out.write(b"\tlw a0, "); write_u32(self.out, off); self.out.write(b"(sp)\n\tlw a1, "); write_u32(self.out, off + 4); self.out.write(b"(sp)\n");
                 self.out.write(b"\tsw a0, 0(s2)\n\tsw a1, 4(s2)\n\taddi s2, s2, 8\n");
+                self.emit_ds_high_update();
                 Ok(())
             }
             lir::OpKind::Call { name, .. } => {
@@ -147,6 +151,20 @@ impl<'a> RiscVBackend<'a> {
     fn emit_const32(&mut self, val: u32) {
         if val == 0 { self.out.write(b"\tli a0, 0\n"); }
         else { self.out.write(b"\tli a0, "); write_hex(self.out, val); self.out.write(b"\n"); }
+    }
+
+    /// Update __lang_ds_high if s2 exceeds the stored value.
+    /// Preserves all registers (uses t0/t1 which are caller-save).
+    fn emit_ds_high_update(&mut self) {
+        let id = self.fresh_label();
+        self.out.write(b"\tla t0, __lang_ds_high\n");
+        self.out.write(b"\tlw t1, 0(t0)\n");
+        self.out.write(b"\tbltu s2, t1, .ds_high_");
+        write_u32(self.out, id);
+        self.out.write(b"\n\tsw s2, 0(t0)\n");
+        self.out.write(b".ds_high_");
+        write_u32(self.out, id);
+        self.out.write(b":\n");
     }
 
     /// 64-bit subtraction with correct borrow detection.
