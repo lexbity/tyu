@@ -98,10 +98,13 @@ impl<'a> X86_64HostedBackend<'a> {
                 Ok(())
             }
             AsmMode::Object => {
+                // Emit .lang.modinfo first (S2 Phase 1).
+                X86_64HostedBackend::emit_modinfo_section(self)?;
+
                 if self.str_len == 0 {
                     return Ok(());
                 }
-                self.out.write(b"section '.data' writeable\n");
+                self.out.write(b"section '.rodata'\n");
                 for i in 0..self.str_len {
                     let id = self.str_ids[i];
                     let span = self.str_spans[i];

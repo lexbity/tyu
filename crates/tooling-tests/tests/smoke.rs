@@ -1452,6 +1452,253 @@ fn milestone7_emit_obj_link_trap_exit_code() {
     assert_eq!(run.code(), Some(21));
 }
 
+// ---------------------------------------------------------------------------
+// S2 Phase 0 — ET_REL relocatable module emission
+// ---------------------------------------------------------------------------
+
+#[test]
+fn phase0_et_rel_object_structure() {
+    build_tools();
+    let dir = fresh_dir("phase0_et_rel_object_structure");
+
+    // Module with string literal (exercises .rodata section).
+    // No explicit export → all words are public (w_<hash> symbols in .o).
+    std::fs::write(
+        dir.join("Arith.mod"),
+        b"module Arith;\n\
+          : helper ( i64 -- i64 ) 42 + ;\n\
+          : main ( -- i64 ) \"ok\" drop 7 helper ;\n\
+          end;\n",
+    )
+    .unwrap();
+
+    // --- Static path (--emit=asm) must still work ---
+    let out = Command::new(exe("langc"))
+        .current_dir(&dir)
+        .args(["--emit=asm", "Arith.mod"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "static asm emission failed");
+    std::fs::write(dir.join("Arith.asm"), &out.stdout).unwrap();
+
+    let status = Command::new("fasm")
+        .current_dir(&dir)
+        .args(["Arith.asm", "prog_static"])
+        .status()
+        .unwrap();
+    assert!(status.success(), "fasm static assembly failed");
+
+    let run = Command::new(dir.join("prog_static")).status().unwrap();
+    assert_eq!(run.code(), Some(49), "static executable gave wrong exit code");
+
+    // --- Dynamic/obj path (--emit=obj) produces valid ET_REL ---
+    let status = Command::new(exe("langc"))
+        .current_dir(&dir)
+        .args([
+            "--emit=obj",
+            "--target=x86_64-unknown-linux-gnu",
+            "--out-dir=.",
+            "Arith.mod",
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success(), "obj emission failed");
+
+    let obj_path = dir.join("Arith.o");
+    assert!(obj_path.exists(), "Arith.o was not produced");
+
+    // readelf -h: verify ELF type is REL (relocatable).
+    let readelf_h = Command::new("readelf")
+        .arg("-h")
+        .arg(&obj_path)
+        .output()
+        .unwrap();
+    assert!(readelf_h.status.success());
+    let h_out = String::from_utf8_lossy(&readelf_h.stdout);
+    assert!(
+        h_out.contains("Type:                              REL (Relocatable file)"),
+        "expected REL type, got:\n{h_out}"
+    );
+
+    // readelf -S: verify expected sections.
+    let readelf_s = Command::new("readelf")
+        .args(["-S", &obj_path.to_string_lossy()])
+        .output()
+        .unwrap();
+    assert!(readelf_s.status.success());
+    let s_out = String::from_utf8_lossy(&readelf_s.stdout);
+    assert!(s_out.contains(".text"), "missing .text section");
+    assert!(s_out.contains(".rodata"), "missing .rodata section");
+    assert!(s_out.contains(".symtab"), "missing .symtab section");
+    assert!(s_out.contains(".strtab"), "missing .strtab section");
+    assert!(
+        s_out.contains(".rela.text"),
+        "missing .rela.text section"
+    );
+
+    // readelf -s: verify w_<hash> exported symbols.
+    // Without an explicit export statement, all words are public.
+    let readelf_syms = Command::new("readelf")
+        .args(["-s", &obj_path.to_string_lossy()])
+        .output()
+        .unwrap();
+    assert!(readelf_syms.status.success());
+    let syms_out = String::from_utf8_lossy(&readelf_syms.stdout);
+    // "main" → hex("main") = 6d61696e → label w_6d61696e
+    assert!(
+        syms_out.contains("w_6d61696e"),
+        "expected exported symbol w_6d61696e (main), got:\n{syms_out}"
+    );
+    // "helper" → hex("helper") = 68656c706572 → label w_68656c706572
+    assert!(
+        syms_out.contains("w_68656c706572"),
+        "expected exported symbol w_68656c706572 (helper), got:\n{syms_out}"
+    );
+
+    // Link the .o against the runtime and verify the linked executable runs.
+    let status = Command::new(exe("lang-assemble"))
+        .current_dir(&dir)
+        .args([
+            "--out=rt.o",
+            runtime_asm_linux_x86_64_hosted()
+                .to_string_lossy()
+                .as_ref(),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let status = Command::new("ld")
+        .current_dir(&dir)
+        .args(["-o", "prog_dynamic", "rt.o", "Arith.o"])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let run = Command::new(dir.join("prog_dynamic")).status().unwrap();
+    assert_eq!(
+        run.code(),
+        Some(49),
+        "linked dynamic executable gave wrong exit code"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// S2 Phase 1 — .lang.modinfo serialization
+// ---------------------------------------------------------------------------
+
+#[test]
+fn phase1_modinfo_section_present_and_decodable() {
+    build_tools();
+    let dir = fresh_dir("phase1_modinfo_section_present_and_decodable");
+
+    // Module with one export + string literal (exercises both export and
+    // import paths — imports are from sysroot builtins).
+    std::fs::write(
+        dir.join("Main.mod"),
+        b"module Main;\n\
+          : add ( i64 -- i64 ) 1 + ;\n\
+          : main ( -- i64 ) \"x\" drop 0 add ;\n\
+          end;\n",
+    )
+    .unwrap();
+
+    let status = Command::new(exe("langc"))
+        .current_dir(&dir)
+        .args([
+            "--emit=obj",
+            "--target=x86_64-unknown-linux-gnu",
+            "--out-dir=.",
+            "Main.mod",
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success(), "obj emission failed");
+
+    let obj_path = dir.join("Main.o");
+    assert!(obj_path.exists(), "Main.o was not produced");
+
+    // readelf -S must show a .lang.modinfo section.
+    let readelf_s = Command::new("readelf")
+        .args(["-S", &obj_path.to_string_lossy()])
+        .output()
+        .unwrap();
+    assert!(readelf_s.status.success());
+    let s_out = String::from_utf8_lossy(&readelf_s.stdout);
+    assert!(
+        s_out.contains(".lang.modinfo"),
+        "missing .lang.modinfo section:\n{s_out}"
+    );
+
+    // objcopy the section to a binary blob and verify header fields via
+    // a small Rust helper that reads the 32-byte fixed header.
+    let blob_path = dir.join("modinfo.bin");
+    let status = Command::new("objcopy")
+        .args([
+            "-O",
+            "binary",
+            "-j",
+            ".lang.modinfo",
+            obj_path.to_str().unwrap(),
+            blob_path.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success(), "objcopy failed");
+
+    let blob = std::fs::read(&blob_path).unwrap();
+    assert!(blob.len() >= 32, "modinfo blob too small: {} bytes", blob.len());
+
+    // Manually decode the fixed header (32-byte little-endian with abi_hash).
+    let magic = u32::from_le_bytes(blob[0..4].try_into().unwrap());
+    assert_eq!(magic, 0x4c4d4f44, "bad magic: 0x{magic:08x}");
+
+    let version = u16::from_le_bytes(blob[4..6].try_into().unwrap());
+    assert_eq!(version, 2, "bad version: {version}");
+
+    // abi_hash lives at bytes [8..16]; skip byte-checking it.
+    let name_off = u32::from_le_bytes(blob[16..20].try_into().unwrap()) as usize;
+    let name_len = u32::from_le_bytes(blob[20..24].try_into().unwrap()) as usize;
+    let export_count = u32::from_le_bytes(blob[24..28].try_into().unwrap());
+    let import_count = u32::from_le_bytes(blob[28..32].try_into().unwrap());
+
+    // Verify module name.
+    let module_name = &blob[name_off..name_off + name_len];
+    assert_eq!(module_name, b"Main", "bad module name");
+
+    // At minimum we export `main` and `add`.
+    assert!(
+        export_count >= 2,
+        "expected at least 2 exports, got {export_count}"
+    );
+
+    // Imports may be 0 (builtins like `+` are not in the import table;
+    // only symbols from `.def` files appear there).
+
+    // Verify the linked executable still runs correctly.
+    let status = Command::new(exe("lang-assemble"))
+        .current_dir(&dir)
+        .args([
+            "--out=rt.o",
+            runtime_asm_linux_x86_64_hosted()
+                .to_string_lossy()
+                .as_ref(),
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let status = Command::new("ld")
+        .current_dir(&dir)
+        .args(["-o", "prog", "rt.o", "Main.o"])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let run = Command::new(dir.join("prog")).status().unwrap();
+    assert_eq!(run.code(), Some(1), "linked executable gave wrong exit code");
+}
+
 #[test]
 fn milestone7_if_while_locals_smoke() {
     build_tools();

@@ -386,3 +386,5 @@ __lang_ds_base rb 65536
 __lang_ds_limit:
 public __lang_ds_high
 __lang_ds_high dq 0
+public __lang_expected_abi_hash
+__lang_expected_abi_hash dq 0x7ff852243aa7202b

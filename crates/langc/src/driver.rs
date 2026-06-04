@@ -8,6 +8,8 @@ use ir::CapSet;
 use ir::EffectSet;
 use ir::High;
 use ir::StackBound;
+use lmod::abi_hash;
+use lmod::modinfo;
 use semantics::typecheck::{self, ChecksMode, SubtypeInfo};
 use semantics::types::{TypeAtom, WordEntry, WordSig};
 
@@ -282,50 +284,60 @@ pub fn emit_obj_driver(
 
     let mut gen_backend =
         X86_64HostedBackend::new(module, src, &mut mem, debug_trap_loc, AsmMode::Object);
-    let gen: &mut dyn CodegenBackend = &mut gen_backend;
-    if let Err(e) = gen.emit_prelude() {
-        let _ = diag::error_simple(e.code(), b"asm emission error");
-        return 2;
-    }
-
-    // Emit extrn declarations for all imported word symbols so the assembler
-    // can resolve cross-module calls at link time.
-    for i in builtin_env_end..import_env_end {
-        if let Err(e) = gen.emit_extern_word(es.env[i].name.as_bytes()) {
+    {
+        let gen: &mut dyn CodegenBackend = &mut gen_backend;
+        if let Err(e) = gen.emit_prelude() {
             let _ = diag::error_simple(e.code(), b"asm emission error");
             return 2;
         }
-    }
 
-    let mut resources = match semantics::typecheck::db::build_resource_db(module, src) {
-        Ok(r) => r,
-        Err(e) => {
-            let _ = diag::error_simple(e.code(), b"typecheck error");
-            return 2;
+        // Emit extrn declarations for all imported word symbols so the assembler
+        // can resolve cross-module calls at link time.
+        for i in builtin_env_end..import_env_end {
+            if let Err(e) = gen.emit_extern_word(es.env[i].name.as_bytes()) {
+                let _ = diag::error_simple(e.code(), b"asm emission error");
+                return 2;
+            }
         }
-    };
-    match semantics::typecheck::for_each_ir_word(
-        module,
-        src,
-        &es.env[..es.env_len],
-        &es.st_buf[..es.st_len],
-        checks,
-        allow_raw_casts,
-        &mut resources,
-        |w| gen.emit_word(w),
-    ) {
-        Ok(()) => {}
-        Err(semantics::typecheck::ForEachIrError::Type(e)) => {
-            let _ = diag::error_simple(e.code(), b"typecheck error");
-            return 2;
-        }
-        Err(semantics::typecheck::ForEachIrError::Consumer(e)) => {
-            let _ = diag::error_simple(e.code(), b"asm emission error");
-            return 2;
-        }
-    }
 
-    if let Err(e) = gen.emit_postlude() {
+        let mut resources = match semantics::typecheck::db::build_resource_db(module, src) {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = diag::error_simple(e.code(), b"typecheck error");
+                return 2;
+            }
+        };
+        match semantics::typecheck::for_each_ir_word(
+            module,
+            src,
+            &es.env[..es.env_len],
+            &es.st_buf[..es.st_len],
+            checks,
+            allow_raw_casts,
+            &mut resources,
+            |w| gen.emit_word(w),
+        ) {
+            Ok(()) => {}
+            Err(semantics::typecheck::ForEachIrError::Type(e)) => {
+                let _ = diag::error_simple(e.code(), b"typecheck error");
+                return 2;
+            }
+            Err(semantics::typecheck::ForEachIrError::Consumer(e)) => {
+                let _ = diag::error_simple(e.code(), b"asm emission error");
+                return 2;
+            }
+        }
+    } // drop the CodegenBackend borrow so we can access gen_backend directly
+
+    // S2 Phase 2: compute and embed abi_hash before emitting postlude.
+    let spec = target.spec();
+    gen_backend.expected_abi_hash = abi_hash::compute_abi_hash(
+        spec.slot_bytes,
+        spec.word_bits,
+        modinfo::MODINFO_VER,
+    );
+
+    if let Err(e) = X86_64HostedBackend::emit_postlude(&mut gen_backend) {
         let _ = diag::error_simple(e.code(), b"asm emission error");
         return 2;
     }

@@ -24,6 +24,19 @@ impl<'a> X86_64HostedBackend<'a> {
             self.out.write(b"public ");
             write_label(self.out, w.name.as_bytes());
             self.out.write(b"\n");
+
+            // Collect export metadata for .lang.modinfo (S2 Phase 1).
+            let idx = self.mi_export_count;
+            if idx < self.mi_exports.len() {
+                let n = lir::Atom::new(w.name.as_bytes()).unwrap_or(lir::AT_EMPTY);
+                self.mi_exports[idx] = crate::ModInfoExport {
+                    name: n,
+                    effects: w.performs.bits(),
+                    requires_caps: w.requires.bits(),
+                    stack_bound: w.bound.wire_u32(),
+                };
+                self.mi_export_count = idx + 1;
+            }
         }
         write_label(self.out, w.name.as_bytes());
         self.out.write(b":\n");

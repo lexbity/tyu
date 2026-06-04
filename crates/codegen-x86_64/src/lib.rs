@@ -19,6 +19,25 @@ pub mod task;
 pub(crate) mod util;
 pub mod word;
 
+// ---------------------------------------------------------------------------
+// Modinfo collection (S2 Phase 1 — .lang.modinfo serialization)
+// ---------------------------------------------------------------------------
+
+/// Metadata collected for an export during word emission.
+#[derive(Clone, Copy)]
+pub(crate) struct ModInfoExport {
+    pub name: lir::Atom,
+    pub effects: u16,
+    pub requires_caps: u16,
+    pub stack_bound: u32,
+}
+
+/// Metadata collected for an import during extern word emission.
+#[derive(Clone, Copy)]
+pub(crate) struct ModInfoImport {
+    pub name: lir::Atom,
+}
+
 pub struct X86_64HostedBackend<'a> {
     pub module: &'a ModuleAst,
     pub src: &'a [u8],
@@ -37,6 +56,17 @@ pub struct X86_64HostedBackend<'a> {
     pub scoped_base: u32,
     pub scoped_slots: u32,
     pub scoped_next: u32,
+
+    // --- S2 Phase 1: modinfo collection ---
+    pub(crate) mi_exports: [ModInfoExport; 64],
+    pub(crate) mi_export_count: usize,
+    pub(crate) mi_imports: [ModInfoImport; 64],
+    pub(crate) mi_import_count: usize,
+
+    // --- S2 Phase 2: abi_hash (abi-contract §5) ---
+    /// Module-level ABI compatibility hash.  Set by the driver before
+    /// `emit_postlude` is called (meaningless in Executable mode).
+    pub expected_abi_hash: u64,
 }
 
 impl<'a> X86_64HostedBackend<'a> {
@@ -65,6 +95,16 @@ impl<'a> X86_64HostedBackend<'a> {
             scoped_base: 0,
             scoped_slots: 0,
             scoped_next: 0,
+            mi_exports: [ModInfoExport {
+                name: lir::AT_EMPTY,
+                effects: 0,
+                requires_caps: 0,
+                stack_bound: 0,
+            }; 64],
+            mi_export_count: 0,
+            mi_imports: [ModInfoImport { name: lir::AT_EMPTY }; 64],
+            mi_import_count: 0,
+            expected_abi_hash: 0,
         }
     }
 
@@ -72,6 +112,87 @@ impl<'a> X86_64HostedBackend<'a> {
         let id = self.label_id;
         self.label_id = self.label_id.wrapping_add(1);
         id
+    }
+
+    /// Emit the `.lang.modinfo` section (S2 Phase 1).
+    /// Called from `emit_postlude` in object mode.
+    pub(crate) fn emit_modinfo_section(&mut self) -> Result<(), CodegenError> {
+        if self.mode != AsmMode::Object {
+            return Ok(());
+        }
+        let export_count = self.mi_export_count;
+        let import_count = self.mi_import_count;
+
+        // Build export entries for the encoder.
+        let mut export_entries: [lmod::modinfo::ExportEntry; 64] =
+            [lmod::modinfo::ExportEntry {
+                sym_hash: 0,
+                name: b"",
+                effects: 0,
+                requires_caps: 0,
+                stack_bound: 0,
+            }; 64];
+        for i in 0..export_count {
+            let mi = &self.mi_exports[i];
+            let name = mi.name.as_bytes();
+            let sym_hash = lmod::hash::fnv1a_u64(name);
+            export_entries[i] = lmod::modinfo::ExportEntry {
+                sym_hash,
+                name,
+                effects: mi.effects,
+                requires_caps: mi.requires_caps,
+                stack_bound: mi.stack_bound,
+            };
+        }
+
+        // Build import entries for the encoder.
+        let mut import_entries: [lmod::modinfo::ImportEntry; 64] =
+            [lmod::modinfo::ImportEntry {
+                sym_hash: 0,
+                name: b"",
+            }; 64];
+        for i in 0..import_count {
+            let name = self.mi_imports[i].name.as_bytes();
+            let sym_hash = lmod::hash::fnv1a_u64(name);
+            import_entries[i] = lmod::modinfo::ImportEntry {
+                sym_hash,
+                name,
+            };
+        }
+
+        let module_name = util::slice_span(self.src, self.module.name);
+
+        // Encode into a fixed-size stack buffer.
+        let mut buf = [0u8; 8192];
+        let abi_hash = if self.expected_abi_hash != 0 {
+            self.expected_abi_hash
+        } else {
+            // Compute a default hash from the current target contract.
+            lmod::abi_hash::compute_abi_hash(8, 64, lmod::modinfo::MODINFO_VER)
+        };
+        let size = match lmod::modinfo::encode_into(
+            &mut buf,
+            module_name,
+            &export_entries[..export_count],
+            &import_entries[..import_count],
+            abi_hash,
+        ) {
+            Some(s) => s,
+            None => return Ok(()), // buffer too small (should not happen)
+        };
+
+        // Emit FASM section.
+        self.out.write(b"section '.lang.modinfo'\n");
+        self.out.write(b"  db ");
+        if size > 0 {
+            crate::ophelpers::write_u32(self.out, buf[0] as u32);
+            for i in 1..size {
+                self.out.write(b",");
+                crate::ophelpers::write_u32(self.out, buf[i] as u32);
+            }
+        }
+        self.out.write(b"\n");
+        Ok(())
     }
 }
 

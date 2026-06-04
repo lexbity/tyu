@@ -10,6 +10,8 @@ doctest = false
 [dependencies]
 frontend = { path = "../frontend" }
 ir = { path = "../ir" }
+lmod = { path = "../lmod" }
 
 [dev-dependencies]
 ir = { path = "../ir" }
+lmod = { path = "../lmod" }

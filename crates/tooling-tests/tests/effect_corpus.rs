@@ -2,14 +2,10 @@
 //! error bands.  Each test compiles a `.mod` source that MUST fail with exactly
 //! the expected error code.
 //!
-//! Every test is `#[ignore]`d by default.  Un-ignore a test once the phase that
-//! implements the corresponding rule makes it green.  The negative corpus
-//! defines "done" for each rule (effect-context-model.md §9.1).
-//!
 //! Note: TcError codes live in the semantics crate at
 //! crates/semantics/src/typecheck/error.rs and are distinct from the 3xxx
 //! band (semantics) and 8xxx band (verifier/IR).  The 50xx/51xx band is
-//! reserved and unused until the corresponding phases un-ignore these tests.
+//! reserved for these tests.
 
 use std::sync::Once;
 use std::{path::PathBuf, process::Command};

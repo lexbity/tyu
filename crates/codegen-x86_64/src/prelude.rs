@@ -1,4 +1,5 @@
 use codegen_core::{AsmMode, CodegenError};
+use ir as lir;
 use semantics::typecheck;
 use semantics::types::WordSig;
 
@@ -83,6 +84,7 @@ impl<'a> X86_64HostedBackend<'a> {
                 self.out.write(b"extrn __task_yield\n");
                 self.out.write(b"extrn __task_sleep_ms\n");
                 self.out.write(b"extrn __task_sleep_us\n");
+                self.out.write(b"extrn __lang_expected_abi_hash\n");
                 self.out.write(b"\n");
                 Ok(())
             }
@@ -96,5 +98,14 @@ impl<'a> X86_64HostedBackend<'a> {
         self.out.write(b"extrn ");
         write_label(self.out, name);
         self.out.write(b"\n");
+
+        // Collect import metadata for .lang.modinfo (S2 Phase 1).
+        let idx = self.mi_import_count;
+        if idx < self.mi_imports.len() {
+            if let Some(n) = lir::Atom::new(name) {
+                self.mi_imports[idx] = crate::ModInfoImport { name: n };
+                self.mi_import_count = idx + 1;
+            }
+        }
     }
 }

@@ -164,6 +164,11 @@ pub struct TargetSpec {
     /// Minimum stack pointer alignment in bytes at a call boundary.
     pub stack_alignment_bytes: u8,
 
+    /// Data-stack slot width in bytes (§2.1 of abi-contract).
+    /// `high` in slots × `slot_bytes` = peak data-stack usage in bytes.
+    /// x86_64 = 8, armv7-m = 4, riscv32 = 4.
+    pub slot_bytes: u8,
+
     /// Binary format produced by `--emit=obj`.
     pub output_format: OutputFormat,
 
@@ -185,6 +190,20 @@ pub struct TargetSpec {
     pub qemu: Option<&'static QemuSpec>,
 }
 
+impl TargetSpec {
+    /// The `abi_hash` that the runtime expects for this target.
+    ///
+    /// Every compiled module embeds its own `abi_hash` (abi-contract §5);
+    /// the loader rejects modules whose hash does not match this value.
+    pub fn expected_abi_hash(&self) -> u64 {
+        lmod::abi_hash::compute_abi_hash(
+            self.slot_bytes,
+            self.word_bits,
+            lmod::modinfo::MODINFO_VER,
+        )
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Static target specifications
 // ---------------------------------------------------------------------------
@@ -201,6 +220,7 @@ static X86_64_UNKNOWN_LINUX_GNU: TargetSpec = TargetSpec {
     assembler: AssemblerKind::Fasm,
     calling_conv: CallingConv::SysV64,
     native_int_ty: b"i64",
+    slot_bytes: 8,
     capabilities: &[
         PlatformCapability::TaskScheduler,
         PlatformCapability::DynamicAlloc,
@@ -243,6 +263,7 @@ static X86_64_UNKNOWN_NONE: TargetSpec = TargetSpec {
     assembler: AssemblerKind::Fasm,
     calling_conv: CallingConv::SysV64,
     native_int_ty: b"i64",
+    slot_bytes: 8,
     capabilities: &[],
     qemu: Some(&X86_64_UNKNOWN_NONE_QEMU),
 };

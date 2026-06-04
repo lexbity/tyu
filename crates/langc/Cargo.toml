@@ -18,5 +18,6 @@ semantics = { path = "../semantics" }
 ir = { path = "../ir" }
 codegen-core  = { path = "../codegen-core" }
 codegen-x86_64 = { path = "../codegen-x86_64" }
+lmod           = { path = "../lmod" }
 
 [dev-dependencies]

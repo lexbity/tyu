@@ -1,0 +1,11 @@
+[package]
+name = "lmod"
+version = "0.1.0"
+edition = "2021"
+
+# no_std, no alloc — shared by producer and on-device loader.
+# No dependencies: the codec works with raw integers, not ir types.
+[lib]
+
+[dependencies]
+ir = { path = "../ir" }

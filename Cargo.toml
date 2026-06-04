@@ -12,6 +12,7 @@ members = [
   "crates/semantics",
   "crates/tooling-tests",
   "crates/execution-tests",
+  "crates/lmod",
 ]
 
 # Panic=abort is intentional: the hosted-rt crate provides a custom panic handler

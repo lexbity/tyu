@@ -174,9 +174,7 @@ pub enum TcError {
     SuspendingInNonSuspendingContext {
         span: Span,
     },
-    ScopedLeak {
-        span: Span,
-    },
+    // (ScopedLeak 3504 retired — replaced by BorrowEscape 5020)
     EmptyStackForScoped {
         span: Span,
     },
@@ -569,7 +567,7 @@ impl TcError {
             TcError::MutRefToLocal { .. } => 3501,
             TcError::ScopedLiveAtSuspend { .. } => 3502,
             TcError::SuspendingInNonSuspendingContext { .. } => 3503,
-            TcError::ScopedLeak { .. } => 3504,
+            // (ScopedLeak 3504 retired — replaced by BorrowEscape 5020)
             TcError::EmptyStackForScoped { .. } => 3505,
             TcError::ScopedMarkerLeak { .. } => 3506,
             TcError::ReturnWithScoped { .. } => 3511,
@@ -731,7 +729,7 @@ impl TcError {
             | TcError::MutRefToLocal { span }
             | TcError::ScopedLiveAtSuspend { span }
             | TcError::SuspendingInNonSuspendingContext { span }
-            | TcError::ScopedLeak { span }
+            // (ScopedLeak 3504 retired — replaced by BorrowEscape 5020)
             | TcError::EmptyStackForScoped { span }
             | TcError::ScopedMarkerLeak { span }
             | TcError::ReturnWithScoped { span }
