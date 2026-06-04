@@ -117,6 +117,23 @@ __lang_start:
 
     call w_1f5962a2ce9803c8          ; call main
 
+    ; Emit high-water mark: 'H' (0x48) + u32-le (peak DS depth in slots)
+    mov rax, [__lang_ds_high]
+    sub rax, __lang_ds_base          ; bytes used
+    shr rax, 3                       ; slots (slot_bytes = 8)
+    mov r12, rax                     ; save
+    mov al, 'H'
+    mov dx, 0xe9
+    out dx, al                       ; prefix byte
+    mov rax, r12
+    out dx, al                       ; byte 0 (LSB)
+    shr rax, 8
+    out dx, al                       ; byte 1
+    shr rax, 8
+    out dx, al                       ; byte 2
+    shr rax, 8
+    out dx, al                       ; byte 3 (MSB)
+
     ; Pop exit code from data stack
     sub r15, 8
     mov rax, [r15]
@@ -234,8 +251,10 @@ __lang_stack_top:
 
     ; Data stack — 128KB. R15 starts at __lang_ds_base (low address)
     ; and grows upward. R14 = __lang_ds_limit (upper bound, exclusive).
+public __lang_ds_base
 __lang_ds_base:
     rb 131072
+public __lang_ds_limit
 __lang_ds_limit:
 public __lang_ds_high
 __lang_ds_high:

@@ -12,8 +12,19 @@
 /// Recipe version — bump when the input list or ordering changes.
 pub const ABI_HASH_VER: u64 = 1;
 
-/// Runtime ABI version — bump when `__lang_start` / `__lang_trap` / data-stack
-/// contract changes in a way that breaks compatibility.
+/// Runtime ABI version — bump when the `__lang_*` symbol contract changes.
+///
+/// Canonical definition: abi-contract.md §4.4.3 (Runtime ABI bump discipline).
+/// The contract sheet is at §4.4.1 (required exported symbols) and §4.4.2
+/// (per-arch data-stack register / slot_bytes).
+///
+/// Bump this constant when:
+/// - A symbol in the §4.4.1 table is added, removed, or renamed.
+/// - The data-stack register (abi-contract §4.4.2) changes for an existing arch.
+/// - The calling convention for `__lang_start` or `__lang_trap` changes.
+///
+/// A bump changes `abi_hash` for every module, so a mismatched runtime/module
+/// pair is rejected at load (abi-contract §5 loader rule).
 pub const RUNTIME_ABI_VERSION: u64 = 1;
 
 // ---------------------------------------------------------------------------
@@ -84,6 +95,38 @@ mod tests {
         let a = compute_abi_hash(8, 64, 2);
         let b = compute_abi_hash(8, 64, 2);
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn runtime_abi_version_is_documented_value() {
+        // The value must match abi-contract.md §4.4.3.
+        // If the contract is revised, bump this constant and update the doc.
+        assert_eq!(RUNTIME_ABI_VERSION, 1, "RUNTIME_ABI_VERSION must match abi-contract.md §4.4.3");
+    }
+
+    #[test]
+    fn abi_hash_changes_on_runtime_abi_version() {
+        let base = compute_abi_hash(8, 64, 2);
+        // Simulate a bump of RUNTIME_ABI_VERSION by folding a different value.
+        // (The actual constant is read inside compute_abi_hash, so we test
+        //  indirectly by comparing: if someone changes the const, the hash
+        //  must change.)
+        fn compute_with(slot: u8, bits: u8, ver: u16, rt: u64) -> u64 {
+            let mut h: u64 = ABI_HASH_VER;
+            h = fold_u64(h, slot as u64);
+            h = fold_u64(h, bits as u64);
+            h = fold_u64(h, rt);
+            h = fold_u64(h, ver as u64);
+            h = fold_u64(h, ABI_HASH_VER);
+            h
+        }
+        let base2 = compute_with(8, 64, 2, RUNTIME_ABI_VERSION);
+        let bumped = compute_with(8, 64, 2, RUNTIME_ABI_VERSION + 1);
+        assert_eq!(base, base2, "compute_with must match compute_abi_hash");
+        assert_ne!(
+            base, bumped,
+            "changing RUNTIME_ABI_VERSION must change abi_hash"
+        );
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use crate::codegen::{AsmMode, CodegenBackend, X86_64HostedBackend};
+use crate::codegen::{AsmMode, Backend, CodegenBackend};
 use crate::iface::{export_iter, find_decl, find_word_decl};
 use crate::util::{join_path, slice_span, try_load_module_file, MemOut, Stdout};
 use codegen_core::Target;
@@ -130,7 +130,7 @@ pub fn emit_asm_driver(
     };
 
     let mut gen_backend =
-        X86_64HostedBackend::new(module, src, out, debug_trap_loc, AsmMode::Executable);
+        codegen_x86_64::X86_64HostedBackend::new(module, src, out, debug_trap_loc, AsmMode::Executable);
     let gen: &mut dyn CodegenBackend = &mut gen_backend;
     if let Err(e) = gen.emit_prelude() {
         let _ = diag::error_simple(e.code(), b"asm emission error");
@@ -218,12 +218,6 @@ pub fn emit_obj_driver(
     target: Target,
     is_lib: bool,
 ) -> i32 {
-    // Dispatch on Target enum. Each arm selects the appropriate backend.
-    // Adding a new target means adding a new arm here and a new backend crate.
-    match target {
-        Target::X86_64UnknownLinuxGnu | Target::X86_64UnknownNone => {}
-    }
-
     // Library modules have no entry point; only executables require `main`.
     if !is_lib {
         let main_decl = match find_word_decl(module, src, b"main") {
@@ -282,62 +276,75 @@ pub fn emit_obj_driver(
         }
     };
 
-    let mut gen_backend =
-        X86_64HostedBackend::new(module, src, &mut mem, debug_trap_loc, AsmMode::Object);
-    {
-        let gen: &mut dyn CodegenBackend = &mut gen_backend;
-        if let Err(e) = gen.emit_prelude() {
-            let _ = diag::error_simple(e.code(), b"asm emission error");
-            return 2;
-        }
-
-        // Emit extrn declarations for all imported word symbols so the assembler
-        // can resolve cross-module calls at link time.
-        for i in builtin_env_end..import_env_end {
-            if let Err(e) = gen.emit_extern_word(es.env[i].name.as_bytes()) {
-                let _ = diag::error_simple(e.code(), b"asm emission error");
-                return 2;
-            }
-        }
-
-        let mut resources = match semantics::typecheck::db::build_resource_db(module, src) {
-            Ok(r) => r,
-            Err(e) => {
-                let _ = diag::error_simple(e.code(), b"typecheck error");
-                return 2;
-            }
-        };
-        match semantics::typecheck::for_each_ir_word(
-            module,
-            src,
-            &es.env[..es.env_len],
-            &es.st_buf[..es.st_len],
-            checks,
-            allow_raw_casts,
-            &mut resources,
-            |w| gen.emit_word(w),
-        ) {
-            Ok(()) => {}
-            Err(semantics::typecheck::ForEachIrError::Type(e)) => {
-                let _ = diag::error_simple(e.code(), b"typecheck error");
-                return 2;
-            }
-            Err(semantics::typecheck::ForEachIrError::Consumer(e)) => {
-                let _ = diag::error_simple(e.code(), b"asm emission error");
-                return 2;
-            }
-        }
-    } // drop the CodegenBackend borrow so we can access gen_backend directly
-
-    // S2 Phase 2: compute and embed abi_hash before emitting postlude.
+    // Compute ABI hash before creating the backend (shared across targets).
     let spec = target.spec();
-    gen_backend.expected_abi_hash = abi_hash::compute_abi_hash(
+    let abi_hash_val = abi_hash::compute_abi_hash(
         spec.slot_bytes,
         spec.word_bits,
         modinfo::MODINFO_VER,
     );
 
-    if let Err(e) = X86_64HostedBackend::emit_postlude(&mut gen_backend) {
+    // Create target-appropriate backend.
+    let mut gen: Backend = match target {
+        Target::X86_64UnknownLinuxGnu | Target::X86_64UnknownNone => {
+            let mut bk = codegen_x86_64::X86_64HostedBackend::new(
+                module, src, &mut mem, debug_trap_loc, AsmMode::Object,
+            );
+            bk.set_expected_abi_hash(abi_hash_val);
+            Backend::X86(bk)
+        }
+        Target::ArmV7MUnknownNone => {
+            let mut bk = codegen_arm::ArmThumbBackend::new(
+                module, src, &mut mem, debug_trap_loc, AsmMode::Object,
+            );
+            bk.set_expected_abi_hash(abi_hash_val);
+            Backend::Arm(bk)
+        }
+    };
+
+    if let Err(e) = gen.emit_prelude() {
+        let _ = diag::error_simple(e.code(), b"asm emission error");
+        return 2;
+    }
+
+    // Emit extrn declarations for all imported word symbols so the assembler
+    // can resolve cross-module calls at link time.
+    for i in builtin_env_end..import_env_end {
+        if let Err(e) = gen.emit_extern_word(es.env[i].name.as_bytes()) {
+            let _ = diag::error_simple(e.code(), b"asm emission error");
+            return 2;
+        }
+    }
+
+    let mut resources = match semantics::typecheck::db::build_resource_db(module, src) {
+        Ok(r) => r,
+        Err(e) => {
+            let _ = diag::error_simple(e.code(), b"typecheck error");
+            return 2;
+        }
+    };
+    match semantics::typecheck::for_each_ir_word(
+        module,
+        src,
+        &es.env[..es.env_len],
+        &es.st_buf[..es.st_len],
+        checks,
+        allow_raw_casts,
+        &mut resources,
+        |w| gen.emit_word(w),
+    ) {
+        Ok(()) => {}
+        Err(semantics::typecheck::ForEachIrError::Type(e)) => {
+            let _ = diag::error_simple(e.code(), b"typecheck error");
+            return 2;
+        }
+        Err(semantics::typecheck::ForEachIrError::Consumer(e)) => {
+            let _ = diag::error_simple(e.code(), b"asm emission error");
+            return 2;
+        }
+    }
+
+    if let Err(e) = gen.emit_postlude() {
         let _ = diag::error_simple(e.code(), b"asm emission error");
         return 2;
     }

@@ -1,4 +1,4 @@
-use codegen_core::{PlatformCapability, Target};
+use codegen_core::{AssemblerKind, PlatformCapability, Target};
 use std::{
     path::{Path, PathBuf},
     process::Command,
@@ -35,7 +35,7 @@ pub fn langc_exe() -> PathBuf {
     workspace_root().join("target").join("debug").join("langc")
 }
 
-fn temp_dir(label: &str) -> PathBuf {
+pub fn temp_dir(label: &str) -> PathBuf {
     let dir = std::env::temp_dir()
         .join("tyu_exec_tests")
         .join(format!("{}_{}", label, std::process::id()));
@@ -54,6 +54,36 @@ pub fn tool_available(name: &str) -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+/// Environment-aware tool gating (S3 Phase 0).
+///
+/// Checks that all named tools are available.  In CI (`CI` env var set) a missing
+/// tool is a **hard failure** — panics with the binary name.  Locally (no `CI`)
+/// the test is skipped with an `eprintln`, preserving the fast inner loop.
+///
+/// Returns `true` when all tools are present (caller should run the test).
+pub fn require_tools(tools: &[&str]) -> bool {
+    let missing: Vec<&str> = tools
+        .iter()
+        .filter(|t| !tool_available(t))
+        .copied()
+        .collect();
+    if missing.is_empty() {
+        return true;
+    }
+    if std::env::var("CI").is_ok() {
+        panic!(
+            "Required tools not available under CI: {}. \
+             Install them or add them to PATH.",
+            missing.join(", ")
+        );
+    }
+    eprintln!(
+        "SKIP: required tools not available ({})",
+        missing.join(", ")
+    );
+    false
 }
 
 // ---------------------------------------------------------------------------
@@ -115,36 +145,76 @@ pub fn langc_compile(target: Target, src: &Path, out_dir: &Path, is_lib: bool) -
         .expect("langc produced no .o file")
 }
 
-/// Assemble `runtime.asm` for the given target using FASM.
+/// Assemble `runtime.asm` for the given target.
+/// Dispatches to the target-specific assembler via `TargetSpec.assembler`.
 /// Returns the path to the produced `runtime.o`.
 pub fn assemble_runtime(target: Target, out_dir: &Path) -> PathBuf {
+    let spec = target.spec();
     let rt_dir = runtime_dir(target);
     let asm = rt_dir.join("runtime.asm");
     let out = out_dir.join("runtime.o");
 
-    let status = Command::new("fasm")
-        .args([asm.to_str().unwrap(), out.to_str().unwrap()])
-        .status()
-        .expect("fasm invocation failed");
-    assert!(status.success(), "fasm failed to assemble runtime");
+    match spec.assembler {
+        AssemblerKind::Fasm => {
+            let status = Command::new("fasm")
+                .args([asm.to_str().unwrap(), out.to_str().unwrap()])
+                .status()
+                .expect("fasm invocation failed");
+            assert!(status.success(), "fasm failed to assemble runtime");
+        }
+        AssemblerKind::GasArm => {
+            let status = Command::new("arm-none-eabi-as")
+                .args([
+                    "-mcpu=cortex-m3",
+                    "-mthumb",
+                    asm.to_str().unwrap(),
+                    "-o",
+                    out.to_str().unwrap(),
+                ])
+                .status()
+                .expect("arm-none-eabi-as invocation failed");
+            assert!(
+                status.success(),
+                "arm-none-eabi-as failed to assemble runtime"
+            );
+        }
+        AssemblerKind::GasRiscV => {
+            let status = Command::new("riscv64-unknown-elf-as")
+                .args([
+                    "-march=rv64gc",
+                    "-mabi=lp64",
+                    asm.to_str().unwrap(),
+                    "-o",
+                    out.to_str().unwrap(),
+                ])
+                .status()
+                .expect("riscv64-unknown-elf-as invocation failed");
+            assert!(
+                status.success(),
+                "riscv64-unknown-elf-as failed to assemble runtime"
+            );
+        }
+    }
     out
 }
 
-/// Link object files + runtime into an ELF using `ld` and the target's
+/// Link object files + runtime into an ELF using the target's linker and
 /// linker script.  Returns the path to the output ELF.
 pub fn link_image(target: Target, objs: &[PathBuf], out_dir: &Path) -> PathBuf {
+    let spec = target.spec();
     let rt_dir = runtime_dir(target);
     let linker_script = rt_dir.join("link.ld");
     let out = out_dir.join("test.elf");
 
-    let mut cmd = Command::new("ld");
+    let linker = core::str::from_utf8(spec.linker).expect("non-UTF-8 linker name");
+    let mut cmd = Command::new(linker);
     cmd.arg("-T").arg(&linker_script).arg("-o").arg(&out);
     for obj in objs {
         cmd.arg(obj);
     }
 
-    let status = cmd.status().expect("ld invocation failed");
-    assert!(status.success(), "ld failed to link test image");
+    let status = cmd.status().unwrap_or_else(|_| panic!("{linker} invocation failed"));
+    assert!(status.success(), "{linker} failed to link test image");
     out
 }
 
@@ -294,6 +364,14 @@ pub fn qemu_run(target: Target, image: &Path) -> QemuResult {
     for arg in spec.extra_args {
         cmd.arg(std::str::from_utf8(arg).unwrap());
     }
+    // Semihosting targets need the QEMU semihosting backend enabled.
+    match spec.exit_convention {
+        codegen_core::QemuExitConvention::Semihosting => {
+            cmd.arg("-semihosting-config");
+            cmd.arg("enable=on,target=native");
+        }
+        codegen_core::QemuExitConvention::IsaDebugExit { .. } => {}
+    }
     cmd.arg("-kernel").arg(image);
 
     // Use a child process with a timeout rather than output() directly
@@ -338,14 +416,25 @@ pub fn qemu_run(target: Target, image: &Path) -> QemuResult {
 // Serial output parsing
 // ---------------------------------------------------------------------------
 
+/// Parsed summary of QEMU serial output.
+pub struct OutputSummary {
+    pub failures: usize,
+    pub completed: bool,
+    /// Peak data-stack depth in slots, measured at runtime.
+    /// 0 if no high-water marker was emitted.
+    pub high_slots: u32,
+}
+
 /// Scan serial output for:
 /// - `F` (0x46): a test failure was signalled
 /// - `S` (0x53) followed by `\n`: all suites completed
+/// - `H` (0x48) followed by u32-le: runtime high-water measurement (slots)
 ///
-/// Returns `(failure_count, completed)`.
-pub fn parse_output(stdout: &[u8]) -> (usize, bool) {
+/// Returns an `OutputSummary`.
+pub fn parse_output(stdout: &[u8]) -> OutputSummary {
     let mut failures = 0usize;
     let mut completed = false;
+    let mut high_slots = 0u32;
     let mut i = 0;
     while i < stdout.len() {
         match stdout[i] {
@@ -355,9 +444,184 @@ pub fn parse_output(stdout: &[u8]) -> (usize, bool) {
                     completed = true;
                 }
             }
+            b'H' => {
+                if i + 4 < stdout.len() {
+                    high_slots = u32::from_le_bytes(
+                        stdout[i + 1..i + 5].try_into().unwrap(),
+                    );
+                }
+            }
             _ => {}
         }
         i += 1;
     }
-    (failures, completed)
+    OutputSummary {
+        failures,
+        completed,
+        high_slots,
+    }
+}
+
+/// ⊤ sentinel for data-stack bound — means "no finite bound provable".
+const TOP_SENTINEL: u32 = 0xFFFF_FFFF;
+
+/// Assert that the runtime-measured high-water does not exceed the re-derived
+/// conservative bound extracted from the ELF code bytes.
+///
+/// If the re-derived bound is `⊤` (`0xFFFF_FFFF`, no finite bound provable),
+/// the check is skipped — the analysis already refused to certify it.
+/// Otherwise, asserts `measured ≤ re-derived`.  A value exceeding the bound
+/// is a hard failure (the static analysis or the re-derivation is unsound).
+pub fn assert_high_water(measured: u32, elf_path: &Path, slot_bytes: u8) {
+    let rederived = rederive_elf_high(elf_path, slot_bytes);
+    if rederived == TOP_SENTINEL {
+        return;
+    }
+    assert!(
+        measured <= rederived,
+        "high-water mismatch: runtime measured {} slots but re-derived \
+         conservative bound is {} slots (measured > re-derived => analysis unsound)",
+        measured,
+        rederived,
+    );
+}
+
+/// Re-derive a conservative data-stack high-water bound (in slots) from the
+/// code section of an ELF (ELF64 or ELF32).
+///
+/// Dispatches to the architecture-specific byte-code scanner based on the
+/// slot_bytes parameter (8 = x86_64, 4 = ARM Thumb).
+pub fn rederive_elf_high(elf_path: &Path, slot_bytes: u8) -> u32 {
+    let data = std::fs::read(elf_path).expect("failed to read ELF");
+
+    assert!(data.len() >= 64, "ELF too small");
+    assert_eq!(&data[0..4], b"\x7fELF", "not an ELF");
+
+    let elf_class = data[4]; // 1 = ELF32, 2 = ELF64
+
+    let (e_phoff, e_phentsize, e_phnum) = if elf_class == 2 {
+        // ELF64 header layout
+        let phoff = u64::from_le_bytes(data[0x20..0x28].try_into().unwrap()) as usize;
+        let phent = u16::from_le_bytes(data[0x36..0x38].try_into().unwrap()) as usize;
+        let phnum = u16::from_le_bytes(data[0x38..0x3a].try_into().unwrap()) as usize;
+        (phoff, phent, phnum)
+    } else {
+        // ELF32 header layout
+        let phoff = u32::from_le_bytes(data[0x1c..0x20].try_into().unwrap()) as usize;
+        let phent = u16::from_le_bytes(data[0x2a..0x2c].try_into().unwrap()) as usize;
+        let phnum = u16::from_le_bytes(data[0x2c..0x2e].try_into().unwrap()) as usize;
+        (phoff, phent, phnum)
+    };
+
+    let mut total_high = 0u32;
+
+    for i in 0..e_phnum {
+        let off = e_phoff + i * e_phentsize;
+        let phdr_size = if elf_class == 2 { 56usize } else { 32usize };
+        if off + phdr_size > data.len() {
+            break;
+        }
+
+        // p_type and p_flags are at the same offsets in both formats
+        let p_type = u32::from_le_bytes(data[off..off + 4].try_into().unwrap());
+        if p_type != 1 { continue; } // PT_LOAD
+        let p_flags =
+            u32::from_le_bytes(data[off + 4..off + 8].try_into().unwrap());
+        if p_flags & 1 == 0 { continue; } // PF_X
+
+        let (p_offset, p_filesz) = if elf_class == 2 {
+            let po = u64::from_le_bytes(data[off + 8..off + 16].try_into().unwrap()) as usize;
+            let sz = u64::from_le_bytes(data[off + 32..off + 40].try_into().unwrap()) as usize;
+            (po, sz)
+        } else {
+            let po = u32::from_le_bytes(data[off + 12..off + 16].try_into().unwrap()) as usize;
+            let sz = u32::from_le_bytes(data[off + 16..off + 20].try_into().unwrap()) as usize;
+            (po, sz)
+        };
+
+        if p_offset + p_filesz > data.len() || p_filesz == 0 { continue; }
+
+        let code = &data[p_offset..p_offset + p_filesz];
+        let high = if slot_bytes == 8 {
+            rederive_x86_64(code, slot_bytes as u32)
+        } else {
+            rederive_arm_thumb(code, slot_bytes as u32)
+        };
+        total_high = total_high.max(high);
+    }
+
+    total_high
+}
+
+/// Scan ARM Thumb code bytes for `adds r4, r4, #imm3` (16-bit: 0x1Cxx,
+/// push, DS grows upward) and `subs r4, r4, #imm3` (16-bit: 0x1Exx,
+/// pop), tracking running peak.
+fn rederive_arm_thumb(code: &[u8], slot_bytes: u32) -> u32 {
+    let mut sp_off: i64 = 0;
+    let mut peak: u32 = 0;
+    let mut i = 0;
+    while i + 1 < code.len() {
+        let w = u16::from_le_bytes([code[i], code[i + 1]]);
+        if (w >> 11) == 0b00011 {
+            let rd = (w & 0x7) as u32;
+            let rn = ((w >> 4) & 0x7) as u32;
+            let op_is_sub = ((w >> 10) & 1) as u32;
+            if rd == rn && rd == 4 {
+                let imm3 = ((w >> 7) & 0x7) as i64;
+                if op_is_sub == 1 {
+                    sp_off -= imm3; // pop
+                } else {
+                    sp_off += imm3; // push
+                }
+                if sp_off < 0 && slot_bytes > 0 {
+                    let depth = (-sp_off as u32 + slot_bytes - 1) / slot_bytes;
+                    peak = peak.max(depth);
+                }
+                i += 2;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    peak
+}
+/// Scan x86_64 code bytes for `add r15, imm8` (49 83 c7 XX — push, DS grows
+/// upward) and `sub r15, imm8` (49 83 ef XX — pop), tracking running peak.
+fn rederive_x86_64(code: &[u8], slot_bytes: u32) -> u32 {
+    // Our data-stack grows UPWARD: r15 increases on push, decreases on pop.
+    // offset tracks depth in bytes: positive = deeper (values on stack).
+    let mut offset: i64 = 0;
+    let mut peak: u32 = 0;
+    let mut i = 0;
+    while i < code.len() {
+        let b = code[i];
+        if i + 3 < code.len()
+            && b == 0x49
+            && code[i + 1] == 0x83
+            && code[i + 2] == 0xc7
+        {
+            // add r15, imm8 — PUSH (DS grows upward)
+            let imm = code[i + 3] as i8 as i64;
+            offset += imm;
+            peak = peak.max((offset / slot_bytes as i64) as u32);
+            i += 4;
+            continue;
+        }
+        if i + 3 < code.len()
+            && b == 0x49
+            && code[i + 1] == 0x83
+            && code[i + 2] == 0xef
+        {
+            // sub r15, imm8 — POP (DS shrinks)
+            let imm = code[i + 3] as i8 as i64;
+            offset -= imm;
+            if offset < 0 {
+                offset = 0;
+            }
+            i += 4;
+            continue;
+        }
+        i += 1;
+    }
+    peak
 }

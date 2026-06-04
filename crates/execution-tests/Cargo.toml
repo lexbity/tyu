@@ -9,3 +9,7 @@ codegen-core = { path = "../codegen-core" }
 [[test]]
 name    = "x86_64_none"
 harness = true
+
+[[test]]
+name    = "arm"
+harness = true

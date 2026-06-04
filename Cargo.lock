@@ -42,6 +42,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
+name = "codegen-arm"
+version = "0.1.0"
+dependencies = [
+ "codegen-core",
+ "frontend",
+ "ir",
+ "lmod",
+ "semantics",
+]
+
+[[package]]
 name = "codegen-core"
 version = "0.1.0"
 dependencies = [
@@ -217,6 +228,7 @@ dependencies = [
 name = "langc"
 version = "0.1.0"
 dependencies = [
+ "codegen-arm",
  "codegen-core",
  "codegen-x86_64",
  "frontend",

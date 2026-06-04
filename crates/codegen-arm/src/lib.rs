@@ -8,20 +8,10 @@ use frontend::{
 };
 use ir as lir;
 
-pub mod channel;
-pub mod mmio;
 pub mod ophelpers;
 pub mod postlude;
 pub mod prelude;
-pub mod region;
-pub mod strings;
-pub mod task;
-pub(crate) mod util;
 pub mod word;
-
-// ---------------------------------------------------------------------------
-// Modinfo collection (S2 Phase 1 — .lang.modinfo serialization)
-// ---------------------------------------------------------------------------
 
 /// Metadata collected for an export during word emission.
 #[derive(Clone, Copy)]
@@ -38,24 +28,17 @@ pub(crate) struct ModInfoImport {
     pub name: lir::Atom,
 }
 
-pub struct X86_64HostedBackend<'a> {
+pub struct ArmThumbBackend<'a> {
     pub module: &'a ModuleAst,
     pub src: &'a [u8],
     pub out: &'a mut dyn Output,
     pub mode: AsmMode,
     pub label_id: u32,
-    pub uses_channels: bool,
-    pub uses_mmio: bool,
-    pub uses_regions: bool,
-    pub uses_tasks: bool,
     pub str_len: usize,
     pub str_spans: [Span; 128],
     pub str_ids: [u32; 128],
     pub debug_trap_loc: bool,
     pub cur_word_id: u32,
-    pub scoped_base: u32,
-    pub scoped_slots: u32,
-    pub scoped_next: u32,
 
     // --- S2 Phase 1: modinfo collection ---
     pub(crate) mi_exports: [ModInfoExport; 64],
@@ -63,13 +46,11 @@ pub struct X86_64HostedBackend<'a> {
     pub(crate) mi_imports: [ModInfoImport; 64],
     pub(crate) mi_import_count: usize,
 
-    // --- S2 Phase 2: abi_hash (abi-contract §5) ---
-    /// Module-level ABI compatibility hash.  Set by the driver before
-    /// `emit_postlude` is called (meaningless in Executable mode).
+    // --- S2 Phase 2: abi_hash ---
     pub expected_abi_hash: u64,
 }
 
-impl<'a> X86_64HostedBackend<'a> {
+impl<'a> ArmThumbBackend<'a> {
     pub fn new(
         module: &'a ModuleAst,
         src: &'a [u8],
@@ -83,18 +64,11 @@ impl<'a> X86_64HostedBackend<'a> {
             out,
             mode,
             label_id: 0,
-            uses_channels: false,
-            uses_mmio: false,
-            uses_regions: false,
-            uses_tasks: false,
             str_len: 0,
             str_spans: [Span::UNKNOWN; 128],
             str_ids: [0u32; 128],
             debug_trap_loc,
             cur_word_id: 0,
-            scoped_base: 0,
-            scoped_slots: 0,
-            scoped_next: 0,
             mi_exports: [ModInfoExport {
                 name: lir::AT_EMPTY,
                 effects: 0,
@@ -114,8 +88,6 @@ impl<'a> X86_64HostedBackend<'a> {
         id
     }
 
-    /// Emit the `.lang.modinfo` section (S2 Phase 1).
-    /// Called from `emit_postlude` in object mode.
     pub(crate) fn emit_modinfo_section(&mut self) -> Result<(), CodegenError> {
         if self.mode != AsmMode::Object {
             return Ok(());
@@ -123,7 +95,6 @@ impl<'a> X86_64HostedBackend<'a> {
         let export_count = self.mi_export_count;
         let import_count = self.mi_import_count;
 
-        // Build export entries for the encoder.
         let mut export_entries: [lmod::modinfo::ExportEntry; 64] =
             [lmod::modinfo::ExportEntry {
                 sym_hash: 0,
@@ -145,7 +116,6 @@ impl<'a> X86_64HostedBackend<'a> {
             };
         }
 
-        // Build import entries for the encoder.
         let mut import_entries: [lmod::modinfo::ImportEntry; 64] =
             [lmod::modinfo::ImportEntry {
                 sym_hash: 0,
@@ -160,15 +130,13 @@ impl<'a> X86_64HostedBackend<'a> {
             };
         }
 
-        let module_name = util::slice_span(self.src, self.module.name);
+        let module_name = ophelpers::slice_span(self.src, self.module.name);
 
-        // Encode into a fixed-size stack buffer.
         let mut buf = [0u8; 8192];
         let abi_hash = if self.expected_abi_hash != 0 {
             self.expected_abi_hash
         } else {
-            // Compute a default hash from the current target contract.
-            lmod::abi_hash::compute_abi_hash(8, 64, lmod::modinfo::MODINFO_VER)
+            lmod::abi_hash::compute_abi_hash(4, 32, lmod::modinfo::MODINFO_VER)
         };
         let size = match lmod::modinfo::encode_into(
             &mut buf,
@@ -176,21 +144,20 @@ impl<'a> X86_64HostedBackend<'a> {
             &export_entries[..export_count],
             &import_entries[..import_count],
             abi_hash,
-            0, // flags (no ISR in current modules)
-            &[], // res_metas (no resources in current modules)
+            0,
+            &[],
         ) {
             Some(s) => s,
-            None => return Ok(()), // buffer too small (should not happen)
+            None => return Ok(()),
         };
 
-        // Emit FASM section.
-        self.out.write(b"section '.lang.modinfo'\n");
-        self.out.write(b"  db ");
+        self.out.write(b"\t.section .lang.modinfo\n");
+        self.out.write(b"\t.byte ");
         if size > 0 {
-            crate::ophelpers::write_u32(self.out, buf[0] as u32);
+            ophelpers::write_u32(self.out, buf[0] as u32);
             for i in 1..size {
                 self.out.write(b",");
-                crate::ophelpers::write_u32(self.out, buf[i] as u32);
+                ophelpers::write_u32(self.out, buf[i] as u32);
             }
         }
         self.out.write(b"\n");
@@ -198,21 +165,21 @@ impl<'a> X86_64HostedBackend<'a> {
     }
 }
 
-impl<'a> CodegenBackend for X86_64HostedBackend<'a> {
+impl<'a> CodegenBackend for ArmThumbBackend<'a> {
     fn emit_prelude(&mut self) -> Result<(), CodegenError> {
-        X86_64HostedBackend::emit_prelude(self)
+        ArmThumbBackend::emit_prelude(self)
     }
 
     fn emit_word(&mut self, w: &lir::Word) -> Result<(), CodegenError> {
-        X86_64HostedBackend::emit_word(self, w)
+        ArmThumbBackend::emit_word(self, w)
     }
 
     fn emit_postlude(&mut self) -> Result<(), CodegenError> {
-        X86_64HostedBackend::emit_postlude(self)
+        ArmThumbBackend::emit_postlude(self)
     }
 
     fn emit_extern_word(&mut self, name: &[u8]) -> Result<(), CodegenError> {
-        X86_64HostedBackend::emit_extern_word(self, name);
+        ArmThumbBackend::emit_extern_word(self, name);
         Ok(())
     }
 

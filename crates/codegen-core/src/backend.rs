@@ -30,4 +30,9 @@ pub trait CodegenBackend {
     fn emit_extern_word(&mut self, _name: &[u8]) -> Result<(), CodegenError> {
         Ok(())
     }
+
+    /// Set the ABI compatibility hash that the backend will embed in the
+    /// output's `.lang.modinfo` section during `emit_postlude`.
+    /// This is called by the driver between word emission and postlude.
+    fn set_expected_abi_hash(&mut self, _hash: u64) {}
 }

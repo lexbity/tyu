@@ -17,3 +17,8 @@ requires = ["Channels"]
 name = "tasks"
 file = "tasks.mod"
 requires = ["TaskScheduler"]
+
+[[fixture]]
+name = "deep_stack"
+file = "deep_stack.mod"
+requires = []

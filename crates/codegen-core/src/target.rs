@@ -9,6 +9,8 @@ pub enum Target {
     X86_64UnknownLinuxGnu,
     /// x86-64 bare-metal — no OS, QEMU system mode only.
     X86_64UnknownNone,
+    /// ARM Cortex-M3 bare-metal (lm3s6965evb QEMU machine, Thumb).
+    ArmV7MUnknownNone,
 }
 
 impl Target {
@@ -20,6 +22,7 @@ impl Target {
         match s {
             b"x86_64-unknown-linux-gnu" => Some(Self::X86_64UnknownLinuxGnu),
             b"x86_64-unknown-none" => Some(Self::X86_64UnknownNone),
+            b"armv7m-unknown-none" => Some(Self::ArmV7MUnknownNone),
             _ => None,
         }
     }
@@ -29,6 +32,7 @@ impl Target {
         match self {
             Self::X86_64UnknownLinuxGnu => b"x86_64-unknown-linux-gnu",
             Self::X86_64UnknownNone => b"x86_64-unknown-none",
+            Self::ArmV7MUnknownNone => b"armv7m-unknown-none",
         }
     }
 
@@ -38,6 +42,7 @@ impl Target {
         match self {
             Self::X86_64UnknownLinuxGnu => &X86_64_UNKNOWN_LINUX_GNU,
             Self::X86_64UnknownNone => &X86_64_UNKNOWN_NONE,
+            Self::ArmV7MUnknownNone => &ARM_V7M_UNKNOWN_NONE,
         }
     }
 }
@@ -188,6 +193,9 @@ pub struct TargetSpec {
 
     /// QEMU system-mode parameters. `None` for host-native targets.
     pub qemu: Option<&'static QemuSpec>,
+
+    /// Linker binary name, e.g. `b"ld"`, `b"arm-none-eabi-ld"`.
+    pub linker: &'static [u8],
 }
 
 impl TargetSpec {
@@ -227,6 +235,7 @@ static X86_64_UNKNOWN_LINUX_GNU: TargetSpec = TargetSpec {
         PlatformCapability::Channels,
     ],
     qemu: None,
+    linker: b"ld",
 };
 
 static X86_64_NONE_QEMU_EXTRA_ARGS: [&[u8]; 8] = [
@@ -266,4 +275,118 @@ static X86_64_UNKNOWN_NONE: TargetSpec = TargetSpec {
     slot_bytes: 8,
     capabilities: &[],
     qemu: Some(&X86_64_UNKNOWN_NONE_QEMU),
+    linker: b"ld",
 };
+
+// ---------------------------------------------------------------------------
+// ARM Cortex-M3 (armv7m-unknown-none)
+// ---------------------------------------------------------------------------
+
+static ARM_V7M_NONE_EXTRA_ARGS: [&[u8]; 1] = [b"-nographic"];
+
+static ARM_V7M_NONE_QEMU: QemuSpec = QemuSpec {
+    system_bin: b"qemu-system-arm",
+    machine: b"lm3s6965evb",
+    extra_args: &ARM_V7M_NONE_EXTRA_ARGS,
+    exit_convention: QemuExitConvention::Semihosting,
+};
+
+static ARM_V7M_UNKNOWN_NONE: TargetSpec = TargetSpec {
+    word_bits: 32,
+    pointer_bits: 32,
+    endian: Endian::Little,
+    has_hardware_mul: true,
+    has_hardware_div: true,
+    has_fpu: false,
+    stack_alignment_bytes: 8,
+    output_format: OutputFormat::Elf32,
+    assembler: AssemblerKind::GasArm,
+    calling_conv: CallingConv::Aapcs32,
+    native_int_ty: b"i64",
+    slot_bytes: 4,
+    capabilities: &[],
+    qemu: Some(&ARM_V7M_NONE_QEMU),
+    linker: b"arm-none-eabi-ld",
+};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn x86_64_none_linker_is_ld() {
+        let spec = Target::X86_64UnknownNone.spec();
+        assert_eq!(spec.linker, b"ld");
+        assert_eq!(spec.assembler, AssemblerKind::Fasm);
+    }
+
+    #[test]
+    fn x86_64_linux_linker_is_ld() {
+        let spec = Target::X86_64UnknownLinuxGnu.spec();
+        assert_eq!(spec.linker, b"ld");
+        assert_eq!(spec.assembler, AssemblerKind::Fasm);
+    }
+
+    #[test]
+    fn assembler_variants_are_wired() {
+        // All assembler variants must be present to verify the dispatch
+        // in assemble_runtime is exhaustive.  Adding a new variant here
+        // means the dispatch match must handle it.
+        match AssemblerKind::Fasm {
+            AssemblerKind::Fasm => {}
+            AssemblerKind::GasArm => unreachable!(),
+            AssemblerKind::GasRiscV => unreachable!(),
+        }
+        match AssemblerKind::GasArm {
+            AssemblerKind::Fasm => unreachable!(),
+            AssemblerKind::GasArm => {}
+            AssemblerKind::GasRiscV => unreachable!(),
+        }
+        match AssemblerKind::GasRiscV {
+            AssemblerKind::Fasm => unreachable!(),
+            AssemblerKind::GasArm => unreachable!(),
+            AssemblerKind::GasRiscV => {}
+        }
+    }
+
+    #[test]
+    fn arm_target_parses() {
+        let t = Target::parse(b"armv7m-unknown-none");
+        assert_eq!(t, Some(Target::ArmV7MUnknownNone));
+    }
+
+    #[test]
+    fn arm_target_spec_fields() {
+        let spec = Target::ArmV7MUnknownNone.spec();
+        assert_eq!(spec.word_bits, 32);
+        assert_eq!(spec.native_int_ty, b"i64");
+        assert_eq!(spec.slot_bytes, 4);
+        assert_eq!(spec.assembler, AssemblerKind::GasArm);
+        assert_eq!(spec.calling_conv, CallingConv::Aapcs32);
+        assert_eq!(spec.linker, b"arm-none-eabi-ld");
+        assert_eq!(spec.qemu.map(|q| q.system_bin), Some(b"qemu-system-arm"));
+        assert_eq!(
+            spec.qemu.and_then(|q| Some(q.exit_convention.host_pass_exit())),
+            Some(0),
+        );
+    }
+
+    #[test]
+    fn arm_target_semihosting_convention() {
+        let qemu = Target::ArmV7MUnknownNone.spec().qemu.unwrap();
+        assert!(matches!(qemu.exit_convention, QemuExitConvention::Semihosting));
+        assert_eq!(qemu.exit_convention.host_pass_exit(), 0);
+    }
+
+    #[test]
+    fn x86_targets_unchanged_after_arm_added() {
+        // Adding a new target must not change existing behavior.
+        let none = Target::X86_64UnknownNone.spec();
+        assert_eq!(none.linker, b"ld");
+        assert_eq!(none.assembler, AssemblerKind::Fasm);
+        assert_eq!(none.slot_bytes, 8);
+        let linux = Target::X86_64UnknownLinuxGnu.spec();
+        assert_eq!(linux.linker, b"ld");
+        assert_eq!(linux.assembler, AssemblerKind::Fasm);
+    }
+}

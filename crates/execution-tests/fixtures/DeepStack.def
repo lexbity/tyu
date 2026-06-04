@@ -1,0 +1,4 @@
+module DeepStack;
+export { deep-stack-run };
+: deep-stack-run ( -- ) ;
+end;
