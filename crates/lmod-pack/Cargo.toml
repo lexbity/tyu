@@ -1,0 +1,11 @@
+[package]
+name = "lmod-pack"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "lmod-pack"
+path = "src/main.rs"
+
+[dependencies]
+lmod = { path = "../lmod" }

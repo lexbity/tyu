@@ -1699,6 +1699,127 @@ fn phase1_modinfo_section_present_and_decodable() {
     assert_eq!(run.code(), Some(1), "linked executable gave wrong exit code");
 }
 
+// ---------------------------------------------------------------------------
+// S2 Phase 3 — .lmod container packer
+// ---------------------------------------------------------------------------
+
+fn lmod_pack_exe() -> PathBuf {
+    exe("lmod-pack")
+}
+
+#[test]
+fn phase3_lmod_packer_produces_valid_container() {
+    build_tools();
+    let dir = fresh_dir("phase3_lmod_packer_produces_valid_container");
+
+    std::fs::write(
+        dir.join("Main.mod"),
+        b"module Main;\n\
+          : main ( -- i64 ) \"done\" drop 42 ;\n\
+          end;\n",
+    )
+    .unwrap();
+
+    // Compile to .o first.
+    let status = Command::new(exe("langc"))
+        .current_dir(&dir)
+        .args([
+            "--emit=obj",
+            "--target=x86_64-unknown-linux-gnu",
+            "--out-dir=.",
+            "Main.mod",
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success(), "obj emission failed");
+
+    assert!(dir.join("Main.o").exists(), "Main.o missing");
+
+    // Pack to .lmod.
+    let status = Command::new(lmod_pack_exe())
+        .current_dir(&dir)
+        .args(["Main.o", "Main.lmod"])
+        .status()
+        .unwrap();
+    assert!(status.success(), "lmod-pack failed");
+
+    let lmod_path = dir.join("Main.lmod");
+    assert!(lmod_path.exists(), "Main.lmod missing");
+
+    let lmod = std::fs::read(&lmod_path).unwrap();
+    assert!(lmod.len() > 72, ".lmod too small");
+
+    // Verify header magic.
+    let magic = u32::from_le_bytes(lmod[0..4].try_into().unwrap());
+    assert_eq!(magic, 0x4c4d4f44, "bad magic");
+
+    // Verify format version.
+    let ver = u16::from_le_bytes(lmod[4..6].try_into().unwrap());
+    assert_eq!(ver, 2, "bad format version");
+
+    // Verify total_len matches file size.
+    let total_len = u32::from_le_bytes(lmod[16..20].try_into().unwrap());
+    assert_eq!(total_len as usize, lmod.len(), "total_len mismatch");
+
+    // Verify modinfo section is present and decodable.
+    let mi_off = u32::from_le_bytes(lmod[20..24].try_into().unwrap()) as usize;
+    let mi_len = u32::from_le_bytes(lmod[24..28].try_into().unwrap()) as usize;
+    assert!(mi_off >= 72, "modinfo_off before header end");
+    assert!(mi_len > 0, "modinfo_len zero");
+
+    let modinfo = &lmod[mi_off..mi_off + mi_len];
+    let mi_magic = u32::from_le_bytes(modinfo[0..4].try_into().unwrap());
+    assert_eq!(mi_magic, 0x4c4d4f44, "bad modinfo magic");
+
+    // Verify code section.
+    let code_off = u32::from_le_bytes(lmod[28..32].try_into().unwrap()) as usize;
+    let code_len = u32::from_le_bytes(lmod[32..36].try_into().unwrap()) as usize;
+    assert!(code_len > 0, "code_len zero");
+    assert!(code_off > mi_off, "code overlaps modinfo");
+
+    // Verify no sections overlap.
+    let data_off = u32::from_le_bytes(lmod[44..48].try_into().unwrap()) as usize;
+    let data_len = u32::from_le_bytes(lmod[48..52].try_into().unwrap()) as usize;
+    let reloc_off = u32::from_le_bytes(lmod[56..60].try_into().unwrap()) as usize;
+    let reloc_count = u32::from_le_bytes(lmod[60..64].try_into().unwrap()) as usize;
+
+    let mut ranges = vec![
+        ("header", 0usize, 72usize),
+        ("modinfo", mi_off, mi_off + mi_len),
+        ("code", code_off, code_off + code_len),
+    ];
+    if data_len > 0 {
+        ranges.push(("data", data_off, data_off + data_len));
+    }
+    if reloc_count > 0 {
+        ranges.push((
+            "reloc",
+            reloc_off,
+            reloc_off + reloc_count * 16,
+        ));
+    }
+    for i in 0..ranges.len() {
+        for j in (i + 1)..ranges.len() {
+            let (name1, s1, e1) = ranges[i];
+            let (name2, s2, e2) = ranges[j];
+            assert!(
+                e1 <= s2 || e2 <= s1,
+                "section overlap: {} [{},{}) vs {} [{},{})",
+                name1, s1, e1, name2, s2, e2
+            );
+        }
+    }
+
+    // Verify total_len covers everything.
+    let max_end = ranges.iter().map(|&(_, _, e)| e).max().unwrap_or(0);
+    assert!(
+        total_len as usize >= max_end,
+        "total_len {} < last section end {}",
+        total_len,
+        max_end
+    );
+}
+
 #[test]
 fn milestone7_if_while_locals_smoke() {
     build_tools();

@@ -13,6 +13,7 @@ members = [
   "crates/tooling-tests",
   "crates/execution-tests",
   "crates/lmod",
+  "crates/lmod-pack",
 ]
 
 # Panic=abort is intentional: the hosted-rt crate provides a custom panic handler
