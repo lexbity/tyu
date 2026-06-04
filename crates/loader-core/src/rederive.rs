@@ -4,19 +4,33 @@
 //! to produce a conservative upper bound on stack usage.  The analysis is
 //! necessarily conservative — it may over-estimate but will not under-estimate.
 //!
-//! Canonical reference: stack-bound-analysis.md; module-format §6.2.
+//! Canonical reference: stack-bound-analysis.md; engineering-spec §3.
+//!
+//! # Direction convention
+//!
+//! The data stack grows **upward** on every architecture: a push increments the
+//! DS register (`r15` on x86_64, `r4` on ARM Thumb, `s2` on RISC-V) and a pop
+//! decrements it.  The running offset `off` tracks `DS_ptr − base_ptr` in bytes:
+//! positive after a push, negative after a pop.
+//!
+//! Peak is raised **only** on the push (positive) direction — a pop never
+//! contributes to high-water.
+
+/// ⊤ sentinel — "no finite bound provable" (abi-contract §2.2).
+pub const TOP_SENTINEL: u32 = 0xFFFF_FFFF;
 
 /// Which target architecture to scan for.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Arch {
     /// x86_64 — data-stack pointer is `r15`.
-    /// Patterns: `49 83 ef XX` (sub r15, imm8), `49 83 c7 XX` (add r15, imm8).
+    /// Patterns: `49 83 c7 XX` (add r15, imm8 — push),
+    ///           `49 83 ef XX` (sub r15, imm8 — pop).
     X86_64,
     /// ARM Thumb (Cortex-M) — data-stack pointer is `r4`.
-    /// Patterns: 16-bit `SUBS r4, r4, #N` / `ADDS r4, r4, #N`.
+    /// Patterns: 16-bit `ADDS r4, r4, #N` / `SUBS r4, r4, #N`.
     ArmThumb,
     /// RISC-V (RV32) — data-stack pointer is `s2` (x18).
-    /// Patterns: `addi s2, s2, N` (push) / `addi s2, s2, -N` (pop).
+    /// Patterns: `addi s2, s2, +N` (push) / `addi s2, s2, -N` (pop).
     RiscV,
 }
 
@@ -27,20 +41,16 @@ impl Arch {
     pub fn detect_from_code(code: &[u8]) -> Self {
         // Check for distinctive 16-bit Thumb ADD/SUB immediate patterns.
         // These have bits 15:11 = 00011 (top 5 bits = 3).
-        // For SUBS/ADDS R4,R4: w = 0x3x44 (LE) or 0x3x7C for R7
+        // For ADDS/SUBS R4,R4: w = 0x1C24 / 0x1E44 (LE).
         if code.len() >= 2 {
             for i in 0..code.len().saturating_sub(1) {
                 let w = u16::from_le_bytes([code[i], code[i + 1]]);
-                // The ADD/SUB immediate format for 16-bit Thumb:
-                //   bits 15:11 = 00011
-                //   bit 10 = op (1=SUB)
-                //   bits 9:7 = imm3
-                //   bits 6:4 = Rn
-                //   bits 2:0 = Rd
                 if (w >> 11) == 0b00011 {
                     let rd = (w & 0x7) as u32;
                     let rn = ((w >> 4) & 0x7) as u32;
-                    if rd == rn && (rd == 4 || rd == 7) {
+                    // The DS register is `r4` (abi-contract §4.4.2).
+                    // `r7` is NOT the DS pointer — matching it produces spurious deltas.
+                    if rd == rn && rd == 4 {
                         return Arch::ArmThumb;
                     }
                 }
@@ -76,31 +86,37 @@ pub fn rederive_stack_high(code: &[u8], arch: Arch, slot_bytes: u32) -> u32 {
     }
 }
 
-/// x86_64 scanner: tracks `sub r15, imm8` and `add r15, imm8`.
+/// x86_64 scanner: tracks `add r15, imm8` (push) and `sub r15, imm8` (pop).
+///
+/// Push (`add r15, N`) increments the DS pointer → positive offset → raises peak.
+/// Pop  (`sub r15, N`) decrements the DS pointer → offset moves toward / below base.
 fn rederive_x86_64(code: &[u8], slot_bytes: u32) -> u32 {
-    let mut r15_off: i64 = 0;
+    let mut off: i64 = 0; // bytes above base (push) or below (pop)
     let mut peak: u32 = 0;
     let mut i = 0;
     while i < code.len() {
         let b = code[i];
-        if i + 3 < code.len()
-            && b == 0x49
-            && code[i + 1] == 0x83
-            && code[i + 2] == 0xef
-        {
-            let imm = code[i + 3] as i8 as i64;
-            r15_off -= imm;
-            update_peak(&mut peak, r15_off, slot_bytes);
-            i += 4;
-            continue;
-        }
+        // add r15, imm8 — PUSH (DS grows upward: 49 83 c7 XX)
         if i + 3 < code.len()
             && b == 0x49
             && code[i + 1] == 0x83
             && code[i + 2] == 0xc7
         {
             let imm = code[i + 3] as i8 as i64;
-            r15_off += imm;
+            off += imm;
+            update_peak(&mut peak, off, slot_bytes);
+            i += 4;
+            continue;
+        }
+        // sub r15, imm8 — POP (DS shrinks: 49 83 ef XX)
+        if i + 3 < code.len()
+            && b == 0x49
+            && code[i + 1] == 0x83
+            && code[i + 2] == 0xef
+        {
+            let imm = code[i + 3] as i8 as i64;
+            off -= imm;
+            if off < 0 { off = 0; }
             i += 4;
             continue;
         }
@@ -109,69 +125,44 @@ fn rederive_x86_64(code: &[u8], slot_bytes: u32) -> u32 {
     peak
 }
 
-/// ARM Thumb scanner: tracks 16-bit `SUBS r4, r4, #N` and `ADDS r4, r4, #N`.
+/// ARM Thumb scanner: tracks 16-bit `ADDS r4, r4, #N` (push) and
+/// `SUBS r4, r4, #N` (pop).
+///
+/// Push (`ADDS`) increments the DS register `r4` → positive offset → raises peak.
+/// Pop  (`SUBS`) decrements `r4` → offset moves toward / below base.
 fn rederive_arm_thumb(code: &[u8], slot_bytes: u32) -> u32 {
-    let mut sp_off: i64 = 0; // offset from initial data-stack pointer (negative = deeper)
+    let mut off: i64 = 0;
     let mut peak: u32 = 0;
     let mut i = 0;
 
     while i + 1 < code.len() {
         let w = u16::from_le_bytes([code[i], code[i + 1]]);
 
-        // Match: SUBS Rd, Rd, #imm8  (16-bit Thumb)
-        // Encoding: 0001 1 1 0 I I I R R R
-        // Low byte: 0x1C | (Rd << 4) | (III << 7)?  Let's check:
-        //   bits 15:11 = 00011
-        //   bit 10 = 1 (SUB), bit 9 = I2, bit 8 = I1, bit 7 = I0
-        //   bits 6:4 = Rd, bits 2:0 = Rn (same as Rd for our pattern)
-        // Hmm this format is actually:
-        // bits 15:12 = 0001
-        // bit 11 = 1
-        // bit 10 = op (1 = SUB, 0 = ADD? or SUB=1, ADD=0 for this format)
-        // bits 9:8 = imm2 (bits 7:6 of the shifted immediate)
-        // bits 7:6 = Rd
-        // bits 5:3 = imm3 (bits 5:3 of the shifted immediate)
-        // bits 2:0 = Rn
-        //
-        // No, this format is 0x1C00 based with different encodings.
-
-        // Let me use a simpler heuristic: ARM Thumb SUBS Rd, #N uses
-        // the encoding 0001110x xxxxRRR where RRR is the register.
-        // For R4: bytes are 0x24 0x1C (LE: w = 0x1C24)
-        // For R7: bytes are 0x3C 0x1C (LE: w = 0x1C3C)
-        // SUBS R4, R4, #8: LE = [0x24, 0x1C]
-        // ADDS R4, R4, #8: LE = [0x24, 0x1E]
-
-        // Check for SUBS R4, R4: pattern 0x1C24 — but this is only #0 immediate
-        // Actually: 8-bit immediate, Rn = Rd = R4.
-
-        // For cortex-m the push is `PUSH {reg}` which adjusts SP (R13),
-        // not a general-purpose register.  The data-stack pointer in
-        // the tyu_lang ARM backend is TBD.
-        //
-        // For now, return 0 (conservative lower bound).  When the ARM
-        // backend lands, the specific data-stack register and instruction
-        // patterns will be determined then.
-
-        // Detect `SUBS Rd, Rd, #imm3` or `ADDS Rd, Rd, #imm3` for R4/R7.
         // 16-bit Thumb ADD/SUB immediate encoding:
         //   bits 15:11 = 00011 (fixed)
         //   bit 10 = op (1=SUB, 0=ADD)
         //   bits 9:7 = imm3 (0-7)
         //   bits 6:4 = Rn
         //   bits 2:0 = Rd
+        //
+        // The DS register is `r4` only (abi-contract §4.4.2).
+        // `r7` is excluded — matching it produces spurious deltas
+        // (false over- or under-count).
         if (w >> 11) == 0b00011 {
             let rd = (w & 0x7) as u32;
             let rn = ((w >> 4) & 0x7) as u32;
             let op_is_sub = ((w >> 10) & 1) as u32;
-            if rd == rn && (rd == 4 || rd == 7) {
+            if rd == rn && rd == 4 {
                 let imm3 = ((w >> 7) & 0x7) as i64;
-                if op_is_sub == 1 {
-                    sp_off -= imm3;
+                if op_is_sub == 0 {
+                    // ADD → push: DS grows upward
+                    off += imm3;
+                    update_peak(&mut peak, off, slot_bytes);
                 } else {
-                    sp_off += imm3;
+                    // SUB → pop: DS shrinks
+                    off -= imm3;
+                    if off < 0 { off = 0; }
                 }
-                update_peak(&mut peak, sp_off, slot_bytes);
                 i += 2;
                 continue;
             }
@@ -182,10 +173,13 @@ fn rederive_arm_thumb(code: &[u8], slot_bytes: u32) -> u32 {
     peak
 }
 
-/// RISC-V RV32 scanner: tracks `addi s2, s2, +N` (push) and
-/// `addi s2, s2, -N` (pop) to compute DS peak.
+/// RISC-V RV32 scanner: tracks `addi s2, s2, +N` (push, imm > 0) and
+/// `addi s2, s2, -N` (pop, imm < 0) to compute DS peak.
+///
+/// Push (positive imm) increments the DS register `s2` → positive offset → raises peak.
+/// Pop  (negative imm) decrements `s2` → offset moves toward / below base.
 fn rederive_riscv(code: &[u8], slot_bytes: u32) -> u32 {
-    let mut sp_off: i64 = 0;
+    let mut off: i64 = 0;
     let mut peak: u32 = 0;
     let mut i = 0;
     while i + 3 < code.len() {
@@ -197,13 +191,17 @@ fn rederive_riscv(code: &[u8], slot_bytes: u32) -> u32 {
         // ADDI s2, s2, imm12: opcode=0x13, funct3=0, rd=18, rs1=18
         if opcode == 0x13 && funct3 == 0 && rd == 18 && rs1 == 18 {
             let imm12 = (insn >> 20) & 0xfff;
-            // Sign-extend 12-bit: i32 handles sign, then widen to i64
             let imm = (((imm12 as i32) << 20) >> 20) as i64;
-            sp_off += imm;
-            if sp_off < 0 {
-                let depth = (-sp_off as u32 + slot_bytes - 1) / slot_bytes;
-                peak = peak.max(depth);
+            if imm > 0 {
+                // push: DS grows upward
+                off += imm;
+                update_peak(&mut peak, off, slot_bytes);
+            } else if imm < 0 {
+                // pop: DS shrinks
+                off += imm; // add negative = decrement
+                if off < 0 { off = 0; }
             }
+            // imm == 0 is a no-op (addi s2, s2, 0)
             i += 4;
             continue;
         }
@@ -212,9 +210,12 @@ fn rederive_riscv(code: &[u8], slot_bytes: u32) -> u32 {
     peak
 }
 
-fn update_peak(peak: &mut u32, sp_off: i64, slot_bytes: u32) {
-    if sp_off < 0 && slot_bytes > 0 {
-        let depth = ((-sp_off) / slot_bytes as i64) as u32;
+/// Raise `peak` when `off` is positive (DS above base).
+/// The data stack grows upward — a push increases the DS register, making
+/// `off` positive.  `off` is always in bytes; `slot_bytes` converts to slots.
+fn update_peak(peak: &mut u32, off: i64, slot_bytes: u32) {
+    if off > 0 && slot_bytes > 0 {
+        let depth = (off / slot_bytes as i64) as u32;
         if depth > *peak {
             *peak = depth;
         }
@@ -227,37 +228,51 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
+    // ---- x86_64 encoders ----
+    // add r15, imm8 = push (DS grows upward)
+    fn encode_add_r15(imm: i8) -> Vec<u8> {
+        vec![0x49, 0x83, 0xc7, imm as u8]
+    }
+    // sub r15, imm8 = pop (DS shrinks)
     fn encode_sub_r15(imm: i8) -> Vec<u8> {
         vec![0x49, 0x83, 0xef, imm as u8]
     }
 
-    fn encode_add_r15(imm: i8) -> Vec<u8> {
-        vec![0x49, 0x83, 0xc7, imm as u8]
-    }
-
-    /// Encode 16-bit Thumb SUBS R4, R4, #imm3 (imm3 is 0-7)
-    fn encode_thumb_sub_r4(imm3: u8) -> Vec<u8> {
+    // ---- ARM Thumb encoders ----
+    // ADDS R4, R4, #imm3 = push (DS grows upward)
+    fn encode_thumb_add_r4(imm3: u8) -> Vec<u8> {
         let iii = imm3 & 0x7;
-        let w: u16 = (0b0001_1 << 11)   // fixed pattern
-            | (1 << 10)                  // op = SUB
+        let w: u16 = (0b0001_1 << 11)   // fixed pattern bits 15:11 = 00011
+            | (0 << 10)                  // op = ADD
             | ((iii as u16) << 7)        // imm3
             | (4 << 4)                   // Rn = R4
             | 4;                         // Rd = R4
         w.to_le_bytes().to_vec()
     }
-
-    /// Encode 16-bit Thumb ADDS R4, R4, #imm3
-    fn encode_thumb_add_r4(imm3: u8) -> Vec<u8> {
+    // SUBS R4, R4, #imm3 = pop (DS shrinks)
+    fn encode_thumb_sub_r4(imm3: u8) -> Vec<u8> {
         let iii = imm3 & 0x7;
-        let w: u16 = (0b0001_1 << 11)   // fixed pattern
-            | (0 << 10)                  // op = ADD
+        let w: u16 = (0b0001_1 << 11)
+            | (1 << 10)                  // op = SUB
             | ((iii as u16) << 7)
             | (4 << 4)
             | 4;
         w.to_le_bytes().to_vec()
     }
 
-    // ---- x86_64 tests ----
+    // ---- RISC-V encoder ----
+    fn encode_riscv_addi_s2(imm: i32) -> Vec<u8> {
+        let imm12 = imm as u32 & 0xfff;
+        let insn = (imm12 << 20) | (18 << 15) | (0 << 12) | (18 << 7) | 0x13;
+        let bytes = insn.to_le_bytes();
+        let mut v = Vec::new();
+        v.extend_from_slice(&bytes[..4]);
+        v
+    }
+
+    // ===================================================================
+    // x86_64 tests
+    // ===================================================================
 
     #[test]
     fn x86_64_empty_code_zero_high() {
@@ -266,25 +281,56 @@ mod tests {
 
     #[test]
     fn x86_64_single_push() {
-        let code = encode_sub_r15(8);
+        // add r15, 8 → 1 slot of DS growth
+        let code = encode_add_r15(8);
         assert_eq!(rederive_stack_high(&code, Arch::X86_64, 8), 1);
     }
 
     #[test]
     fn x86_64_push_then_pop() {
-        let mut code = encode_sub_r15(8);
-        code.extend_from_slice(&encode_add_r15(8));
+        // push 8 then pop 8 → peak should still be 1
+        let mut code = encode_add_r15(8);
+        code.extend_from_slice(&encode_sub_r15(8));
         assert_eq!(rederive_stack_high(&code, Arch::X86_64, 8), 1);
     }
 
     #[test]
     fn x86_64_three_pushes() {
+        // three pushes of 8 bytes each → 3 slots
         let mut code = Vec::new();
-        for _ in 0..3 { code.extend_from_slice(&encode_sub_r15(8)); }
+        for _ in 0..3 { code.extend_from_slice(&encode_add_r15(8)); }
         assert_eq!(rederive_stack_high(&code, Arch::X86_64, 8), 3);
     }
 
-    // ---- ARM Thumb tests ----
+    #[test]
+    fn x86_64_push_then_pop_peak_held() {
+        // push 8, push 8, pop 8 → peak = 2 (held at max)
+        let mut code = encode_add_r15(8);
+        code.extend_from_slice(&encode_add_r15(8));
+        code.extend_from_slice(&encode_sub_r15(8));
+        assert_eq!(rederive_stack_high(&code, Arch::X86_64, 8), 2);
+    }
+
+    #[test]
+    fn x86_64_pops_only_zero_high() {
+        // just pops (sub r15) with no prior push → peak = 0
+        let mut code = Vec::new();
+        for _ in 0..3 { code.extend_from_slice(&encode_sub_r15(8)); }
+        assert_eq!(rederive_stack_high(&code, Arch::X86_64, 8), 0);
+    }
+
+    #[test]
+    fn x86_64_mixed_push_pop_varied_imm() {
+        // push 16, pop 8, push 8 → max offset 16, then 8, then 16 → peak = 2 (16/8)
+        let mut code = encode_add_r15(16);
+        code.extend_from_slice(&encode_sub_r15(8));
+        code.extend_from_slice(&encode_add_r15(8));
+        assert_eq!(rederive_stack_high(&code, Arch::X86_64, 8), 2);
+    }
+
+    // ===================================================================
+    // ARM Thumb tests
+    // ===================================================================
 
     #[test]
     fn arm_thumb_empty_code() {
@@ -292,39 +338,56 @@ mod tests {
     }
 
     #[test]
-    fn arm_thumb_single_push_with_arm_slot_bytes() {
-        // imm3 = 4 bytes, slot_bytes = 4 (ARM) => 1 slot
-        let code = encode_thumb_sub_r4(4);
+    fn arm_thumb_single_push() {
+        // adds r4, r4, #4 → 1 slot (slot_bytes = 4)
+        let code = encode_thumb_add_r4(4);
         assert_eq!(rederive_stack_high(&code, Arch::ArmThumb, 4), 1);
     }
 
     #[test]
-    fn arm_thumb_push_then_pop_with_arm_slot_bytes() {
-        let mut code = encode_thumb_sub_r4(4);
+    fn arm_thumb_push_then_pop() {
+        let mut code = encode_thumb_add_r4(4);
+        code.extend_from_slice(&encode_thumb_sub_r4(4));
+        assert_eq!(rederive_stack_high(&code, Arch::ArmThumb, 4), 1);
+    }
+
+    #[test]
+    fn arm_thumb_three_pushes() {
+        let mut code = Vec::new();
+        for _ in 0..3 { code.extend_from_slice(&encode_thumb_add_r4(4)); }
+        assert_eq!(rederive_stack_high(&code, Arch::ArmThumb, 4), 3);
+    }
+
+    #[test]
+    fn arm_thumb_push_peak_held() {
+        // push 4, push 4, pop 4 → peak = 2
+        let mut code = encode_thumb_add_r4(4);
         code.extend_from_slice(&encode_thumb_add_r4(4));
-        assert_eq!(rederive_stack_high(&code, Arch::ArmThumb, 4), 1);
-    }
-
-    // ---- Arch detection ----
-
-    #[test]
-    fn detect_x86_64_from_empty_code() {
-        assert_eq!(Arch::detect_from_code(b""), Arch::X86_64);
+        code.extend_from_slice(&encode_thumb_sub_r4(4));
+        assert_eq!(rederive_stack_high(&code, Arch::ArmThumb, 4), 2);
     }
 
     #[test]
-    fn detect_x86_64_from_x86_code() {
-        let code = encode_sub_r15(8);
-        assert_eq!(Arch::detect_from_code(&code), Arch::X86_64);
+    fn arm_thumb_pops_only_zero_high() {
+        let mut code = Vec::new();
+        for _ in 0..3 { code.extend_from_slice(&encode_thumb_sub_r4(4)); }
+        assert_eq!(rederive_stack_high(&code, Arch::ArmThumb, 4), 0);
     }
 
+    /// `r7` must NOT be detected as a DS register — only `r4` is the DS pointer.
     #[test]
-    fn detect_arm_thumb_from_thumb_code() {
-        let code = encode_thumb_sub_r4(4);
-        assert_eq!(Arch::detect_from_code(&code), Arch::ArmThumb);
+    fn arm_thumb_r7_not_ds_register() {
+        // SUBS R7, R7, #4: encoding uses Rd=Rn=7
+        let iii = 4u8 & 0x7;
+        let w: u16 = (0b0001_1 << 11) | (1 << 10) | ((iii as u16) << 7) | (7 << 4) | 7;
+        let code = w.to_le_bytes().to_vec();
+        // Should NOT match (r4 only) → peak = 0
+        assert_eq!(rederive_stack_high(&code, Arch::ArmThumb, 4), 0);
     }
 
-    // ---- RISC-V tests ----
+    // ===================================================================
+    // RISC-V tests
+    // ===================================================================
 
     #[test]
     fn riscv_empty_code() {
@@ -332,31 +395,130 @@ mod tests {
     }
 
     #[test]
-    fn riscv_single_push() {
-        let code = encode_riscv_addi_s2(-8);
-        assert_eq!(rederive_stack_high(&code, Arch::RiscV, 4), 2);
+    fn riscv_single_push_4_bytes() {
+        // addi s2, s2, 4 → 1 slot (slot_bytes = 4)
+        let code = encode_riscv_addi_s2(4);
+        assert_eq!(rederive_stack_high(&code, Arch::RiscV, 4), 1);
     }
 
     #[test]
     fn riscv_push_then_pop() {
-        let mut code = encode_riscv_addi_s2(-8);
-        code.extend_from_slice(&encode_riscv_addi_s2(8));
+        let mut code = encode_riscv_addi_s2(4);
+        code.extend_from_slice(&encode_riscv_addi_s2(-4));
+        assert_eq!(rederive_stack_high(&code, Arch::RiscV, 4), 1);
+    }
+
+    #[test]
+    fn riscv_three_pushes() {
+        let mut code = Vec::new();
+        for _ in 0..3 { code.extend_from_slice(&encode_riscv_addi_s2(4)); }
+        assert_eq!(rederive_stack_high(&code, Arch::RiscV, 4), 3);
+    }
+
+    #[test]
+    fn riscv_push_peak_held() {
+        // push 4, push 4, pop 8 → peak = 2
+        let mut code = encode_riscv_addi_s2(4);
+        code.extend_from_slice(&encode_riscv_addi_s2(4));
+        code.extend_from_slice(&encode_riscv_addi_s2(-8));
         assert_eq!(rederive_stack_high(&code, Arch::RiscV, 4), 2);
     }
 
     #[test]
-    fn riscv_detect_from_code() {
-        let code = encode_riscv_addi_s2(-8);
+    fn riscv_pops_only_zero_high() {
+        let mut code = Vec::new();
+        for _ in 0..3 { code.extend_from_slice(&encode_riscv_addi_s2(-8)); }
+        assert_eq!(rederive_stack_high(&code, Arch::RiscV, 4), 0);
+    }
+
+    #[test]
+    fn riscv_push_8_two_slots() {
+        // addi s2, s2, 8 → 2 slots (8 bytes / 4 per slot)
+        let code = encode_riscv_addi_s2(8);
+        assert_eq!(rederive_stack_high(&code, Arch::RiscV, 4), 2);
+    }
+
+    // ===================================================================
+    // Arch detection tests
+    // ===================================================================
+
+    #[test]
+    fn detect_x86_64_from_empty_code() {
+        assert_eq!(Arch::detect_from_code(b""), Arch::X86_64);
+    }
+
+    #[test]
+    fn detect_x86_64_from_x86_push() {
+        let code = encode_add_r15(8);
+        assert_eq!(Arch::detect_from_code(&code), Arch::X86_64);
+    }
+
+    #[test]
+    fn detect_arm_thumb_from_thumb_code() {
+        let code = encode_thumb_add_r4(4);
+        assert_eq!(Arch::detect_from_code(&code), Arch::ArmThumb);
+    }
+
+    #[test]
+    fn detect_riscv_from_code() {
+        let code = encode_riscv_addi_s2(4);
         assert_eq!(Arch::detect_from_code(&code), Arch::RiscV);
     }
 
-    fn encode_riscv_addi_s2(imm: i32) -> Vec<u8> {
-        let imm12 = imm as u32 & 0xfff;
-        let insn = (imm12 << 20) | (18 << 15) | (0 << 12) | (18 << 7) | 0x13;
-        let bytes = insn.to_le_bytes();
-        // Build vec manually to avoid vec! macro in no_std
-        let mut v = Vec::new();
-        v.extend_from_slice(&bytes[..4]);
-        v
+    // ===================================================================
+    // TOP_SENTINEL tests
+    // ===================================================================
+
+    #[test]
+    fn top_sentinel_defined() {
+        assert_eq!(TOP_SENTINEL, 0xFFFF_FFFF);
+    }
+
+    // ===================================================================
+    // Integration: direction correctness tests
+    // ===================================================================
+
+    /// A multi-push sequence on each arch must produce nonzero high.
+    #[test]
+    fn x86_64_push_sequence_nonzero() {
+        let mut code = Vec::new();
+        for _ in 0..5 { code.extend_from_slice(&encode_add_r15(8)); }
+        assert!(rederive_stack_high(&code, Arch::X86_64, 8) > 0);
+    }
+
+    #[test]
+    fn arm_thumb_push_sequence_nonzero() {
+        let mut code = Vec::new();
+        for _ in 0..5 { code.extend_from_slice(&encode_thumb_add_r4(4)); }
+        assert!(rederive_stack_high(&code, Arch::ArmThumb, 4) > 0);
+    }
+
+    #[test]
+    fn riscv_push_sequence_nonzero() {
+        let mut code = Vec::new();
+        for _ in 0..5 { code.extend_from_slice(&encode_riscv_addi_s2(4)); }
+        assert!(rederive_stack_high(&code, Arch::RiscV, 4) > 0);
+    }
+
+    /// Pops-only sequences must produce zero high (pops don't raise peak).
+    #[test]
+    fn x86_64_pops_only_zero() {
+        let mut code = Vec::new();
+        for _ in 0..5 { code.extend_from_slice(&encode_sub_r15(8)); }
+        assert_eq!(rederive_stack_high(&code, Arch::X86_64, 8), 0);
+    }
+
+    #[test]
+    fn arm_thumb_pops_only_zero() {
+        let mut code = Vec::new();
+        for _ in 0..5 { code.extend_from_slice(&encode_thumb_sub_r4(4)); }
+        assert_eq!(rederive_stack_high(&code, Arch::ArmThumb, 4), 0);
+    }
+
+    #[test]
+    fn riscv_pops_only_zero() {
+        let mut code = Vec::new();
+        for _ in 0..5 { code.extend_from_slice(&encode_riscv_addi_s2(-8)); }
+        assert_eq!(rederive_stack_high(&code, Arch::RiscV, 4), 0);
     }
 }

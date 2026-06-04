@@ -3,7 +3,14 @@
 //! Canonical definition: module-format-and-loading.md §3.
 
 pub const LMOD_MAGIC: u32 = 0x4c4d4f44; // "LMOD"
-pub const FORMAT_VER: u16 = 2;
+
+/// Current format version.
+///
+/// - 2: original (no encryption envelope).
+/// - 3: adds optional `EncHeader` after the container header (inside the
+///      signed region) and before modinfo.  A v3 container with
+///      `enc_header_len == 0` is byte-identical to v2 except this field.
+pub const FORMAT_VER: u16 = 3;
 
 /// Size of the fixed container header in bytes.
 pub const HEADER_SIZE: u32 = 72;
@@ -137,11 +144,16 @@ pub fn decode_header(bytes: &[u8]) -> Option<LmodHeader> {
 
 /// Compute the placement of sections within a `.lmod` container.
 ///
+/// `enc_header_len` is the size of the encryption envelope header (0 when
+/// not encrypted).  When non-zero, the enc-header is placed immediately
+/// after the fixed container header and inside the signed region.
+///
 /// Returns a fully populated `LmodHeader` with all offsets and lengths set,
 /// plus the total container size.  The caller can then iterate:
 ///   1. Write `HEADER_SIZE` bytes of the encoded header.
-///   2. Write `modinfo` at `header.modinfo_off`.
-///   3. Write code at `header.code_off`, rodata, data, etc.
+///   2. If `enc_header_len > 0`, write the enc-header at offset `HEADER_SIZE`.
+///   3. Write `modinfo` at `header.modinfo_off`.
+///   4. Write code at `header.code_off`, rodata, data, etc.
 pub fn compute_layout(
     abi_hash: u64,
     modinfo_len: u32,
@@ -150,11 +162,15 @@ pub fn compute_layout(
     data_len: u32,
     bss_len: u32,
     reloc_count: u32,
+    enc_header_len: u32,
 ) -> LmodHeader {
     let mut h = LmodHeader::new();
     h.abi_hash = abi_hash;
 
     let mut off = HEADER_SIZE;
+    // Enc-header sits immediately after the fixed header (inside signed region).
+    off += enc_header_len;
+
     h.modinfo_off = off;
     h.modinfo_len = modinfo_len;
     off += modinfo_len;
@@ -183,7 +199,7 @@ pub fn compute_layout(
     off = (off + 7) & !7; // align 8
 
     h.sig_off = off;
-    h.sig_len = 0; // no signature in v1
+    h.sig_len = 0;
     off += h.sig_len;
 
     h.total_len = off;
@@ -240,7 +256,7 @@ mod tests {
 
     #[test]
     fn compute_layout_basic() {
-        let h = compute_layout(42, 32, 128, 16, 8, 0, 2);
+        let h = compute_layout(42, 32, 128, 16, 8, 0, 2, 0);
         assert_eq!(h.magic, LMOD_MAGIC);
         assert_eq!(h.abi_hash, 42);
         assert_eq!(h.modinfo_off, HEADER_SIZE);
@@ -255,7 +271,7 @@ mod tests {
 
     #[test]
     fn compute_layout_total_len() {
-        let h = compute_layout(0, 16, 64, 32, 8, 0, 1);
+        let h = compute_layout(0, 16, 64, 32, 8, 0, 1, 0);
         // Verifiable invariants:
         // header = 72
         // modinfo at 72, len 16 → ends at 88
@@ -293,7 +309,7 @@ mod tests {
     #[test]
     fn compute_layout_empty_sections() {
         // Some modules have no rodata or data.
-        let h = compute_layout(99, 8, 32, 0, 0, 0, 0);
+        let h = compute_layout(99, 8, 32, 0, 0, 0, 0, 0);
         assert_eq!(h.rodata_len, 0);
         assert_eq!(h.data_len, 0);
         assert_eq!(h.reloc_count, 0);

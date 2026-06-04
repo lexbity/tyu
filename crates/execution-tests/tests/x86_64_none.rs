@@ -1,27 +1,37 @@
+//! x86_64 bare-metal execution tests via `tyu test` driver.
+
 mod common;
 
-use codegen_core::Target;
+use std::process::Command;
+
+fn build_langc() {
+    let _ = Command::new(env!("CARGO"))
+        .current_dir(&common::workspace_root())
+        .args(["build", "-q", "-p", "langc"])
+        .status();
+}
 
 #[test]
 fn arithmetic_and_stack_pass() {
-    if !common::require_tools(&["qemu-system-x86_64", "fasm", "ld"]) {
+    if !common::require_tools(&["langc", "fasm", "ld", "qemu-system-x86_64"]) {
         return;
     }
+    build_langc();
 
-    let image = common::build_test_image(
-        Target::X86_64UnknownNone,
-        &["arithmetic", "stack_ops", "deep_stack"],
+    let output = Command::new(common::tyu_exe())
+        .args([
+            "test",
+            "--target=x86_64-unknown-none",
+            &format!("--manifest={}", common::fixtures_manifest().display()),
+        ])
+        .output()
+        .expect("tyu test");
+
+    assert!(
+        output.status.success(),
+        "tyu test x86_64-unknown-none failed:\n{}",
+        String::from_utf8_lossy(&output.stderr),
     );
-    let result = common::qemu_run(Target::X86_64UnknownNone, &image);
-
-    let spec = Target::X86_64UnknownNone.spec().qemu.unwrap();
-    let summary = common::parse_output(&result.stdout);
-
-    common::assert_qemu_ok(&result, &summary, spec);
-
-    // High-water assertion: measured peak ≤ re-derived conservative bound
-    let slot_bytes = Target::X86_64UnknownNone.spec().slot_bytes;
-    common::assert_high_water(summary.high_slots, &image, slot_bytes);
 }
 
 /// Verify that the x86_64 metal runtime exports every symbol required by the
@@ -32,11 +42,11 @@ fn runtime_exports_required_symbols() {
         return;
     }
 
-    let target = Target::X86_64UnknownNone;
+    let target = codegen_core::Target::X86_64UnknownNone;
     let out_dir = common::temp_dir("runtime_symcheck");
     let runtime_o = common::assemble_runtime(target, &out_dir);
 
-    let output = std::process::Command::new("nm")
+    let output = Command::new("nm")
         .arg("--defined-only")
         .arg("-o")
         .arg(&runtime_o)
@@ -45,7 +55,6 @@ fn runtime_exports_required_symbols() {
     assert!(output.status.success(), "nm failed");
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    // Required from abi-contract.md §4.4.1 (mandatory column).
     let required = &[
         "__lang_start",
         "__lang_trap",

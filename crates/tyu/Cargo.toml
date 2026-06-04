@@ -1,0 +1,14 @@
+[package]
+name = "tyu"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "tyu"
+path = "src/main.rs"
+
+[dependencies]
+codegen-core = { path = "../codegen-core" }
+frontend = { path = "../frontend" }
+harness-core = { path = "../harness-core" }
+lmod = { path = "../lmod" }

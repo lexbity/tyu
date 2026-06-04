@@ -418,7 +418,7 @@ fn pack(input: &str, output: &str) -> Result<(), String> {
     let reloc_count = import_relocs.len() as u32;
     let bss_len = 0u32;
     let layout = lmod::header::compute_layout(
-        abi_hash, modinfo_len, code_len, rodata_len, data_len, bss_len, reloc_count,
+        abi_hash, modinfo_len, code_len, rodata_len, data_len, bss_len, reloc_count, 0,
     );
 
     // 6. Build the container in a buffer.

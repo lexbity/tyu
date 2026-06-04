@@ -1,0 +1,10 @@
+[package]
+name = "harness-core"
+version = "0.1.0"
+edition = "2021"
+
+# no_std, no alloc — pure byte-level analysis shared by the on-device loader
+# (via loader-core) and the host harness (tyu, execution-tests).
+# Covers the serial completion protocol parser and ELF code-section scan.
+[dependencies]
+loader-core = { path = "../loader-core" }

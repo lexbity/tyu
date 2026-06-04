@@ -14,11 +14,12 @@ use loader_core::load::{load_module, LoadedSet};
 use loader_core::symbols::SymMap;
 use common::*;
 
-/// ARM Thumb code containing `subs r4, r4, #4` — detectable by Arch scanner.
-/// Encoding: 0001 1110 0100 0100 = 0x1E44, LE = [0x44, 0x1E].
+/// ARM Thumb code containing `adds r4, r4, #4` — detectable by Arch scanner.
+/// Encoding: 0001 1010 0100 0100 = 0x1A44, LE = [0x44, 0x1A].
 /// The 00011 prefix at bits 15:11 is what the scanner looks for.
-const ARM_CODE_WITH_SUBS_R4: &[u8] = &[
-    0x44, 0x1e,              // subs r4, r4, #4
+/// `adds` is a push (DS grows upward); `subs` would be a pop (DS shrinks).
+const ARM_CODE_WITH_ADDS_R4: &[u8] = &[
+    0x44, 0x1a,              // adds r4, r4, #4
     0x70, 0x47,              // bx lr
 ];
 
@@ -40,7 +41,7 @@ fn make_arm_lmod(code: &[u8], imports: &[(&str, u8)]) -> Vec<u8> {
     let reloc_count = imports.len() as u32;
 
     let layout = compute_layout(
-        ARM_ABI_HASH, modinfo_len, code_len, 0, 0, 0, reloc_count,
+        ARM_ABI_HASH, modinfo_len, code_len, 0, 0, 0, reloc_count, 0,
     );
     let total = layout.total_len as usize;
     let mut out = vec![0u8; total];
@@ -89,7 +90,7 @@ fn make_arm_platform() -> HostedLoaderPlatform {
 /// Test that an ARM `.lmod` with a simple (no-import) function can be loaded.
 #[test]
 fn arm_load_no_imports() {
-    let raw = make_arm_lmod(ARM_CODE_WITH_SUBS_R4, &[]);
+    let raw = make_arm_lmod(ARM_CODE_WITH_ADDS_R4, &[]);
     let container = Container::parse(&raw).unwrap();
     let mut plat = make_arm_platform();
     plat.reserve(4096).unwrap();
@@ -133,7 +134,7 @@ fn arm_load_with_import() {
 /// Test that an abi_hash mismatch is correctly rejected.
 #[test]
 fn arm_load_abi_hash_mismatch_rejected() {
-    let mut raw = make_arm_lmod(ARM_CODE_WITH_SUBS_R4, &[]);
+    let mut raw = make_arm_lmod(ARM_CODE_WITH_ADDS_R4, &[]);
     // Corrupt abi_hash in the header (offset 8 in the .lmod header)
     raw[8..16].copy_from_slice(&[0u8; 8]);
     let container = Container::parse(&raw).unwrap();
@@ -152,19 +153,19 @@ fn arm_load_abi_hash_mismatch_rejected() {
 /// Test that ARM architecture detection works via code bytes.
 #[test]
 fn arm_arch_detected_from_thumb_code() {
-    let arch = loader_core::rederive::Arch::detect_from_code(ARM_CODE_WITH_SUBS_R4);
+    let arch = loader_core::rederive::Arch::detect_from_code(ARM_CODE_WITH_ADDS_R4);
     assert_eq!(arch, loader_core::rederive::Arch::ArmThumb,
         "should detect ARM Thumb from subs r4 pattern");
 }
 
 /// Test that ARM rederive works for the code with a DS push.
 #[test]
-fn arm_rederive_subs_r4() {
+fn arm_rederive_adds_r4() {
     let high = loader_core::rederive::rederive_stack_high(
-        ARM_CODE_WITH_SUBS_R4,
+        ARM_CODE_WITH_ADDS_R4,
         loader_core::rederive::Arch::ArmThumb,
         4,
     );
-    // subs r4, r4, #4 → 1 slot of DS usage
-    assert_eq!(high, 1, "subs r4, #4 = 1 slot");
+    // adds r4, r4, #4 → 1 slot of DS usage (push, DS grows upward)
+    assert_eq!(high, 1, "adds r4, #4 = 1 slot");
 }

@@ -1,26 +1,37 @@
+//! RISC-V RV32 execution tests via `tyu test` driver.
+
 mod common;
 
-use codegen_core::Target;
+use std::process::Command;
+
+fn build_langc() {
+    let _ = Command::new(env!("CARGO"))
+        .current_dir(&common::workspace_root())
+        .args(["build", "-q", "-p", "langc"])
+        .status();
+}
 
 #[test]
 fn arithmetic_and_stack_pass() {
-    if !common::require_tools(&["qemu-system-riscv32", "riscv64-unknown-elf-as", "riscv64-unknown-elf-ld"]) {
+    if !common::require_tools(&["langc", "riscv64-unknown-elf-as", "riscv64-unknown-elf-ld", "qemu-system-riscv32"]) {
         return;
     }
+    build_langc();
 
-    let image = common::build_test_image(
-        Target::RiscV32UnknownNone,
-        &["arithmetic", "stack_ops", "deep_stack"],
+    let output = Command::new(common::tyu_exe())
+        .args([
+            "test",
+            "--target=riscv32-unknown-none",
+            &format!("--manifest={}", common::fixtures_manifest().display()),
+        ])
+        .output()
+        .expect("tyu test");
+
+    assert!(
+        output.status.success(),
+        "tyu test riscv32-unknown-none failed:\n{}",
+        String::from_utf8_lossy(&output.stderr),
     );
-    let result = common::qemu_run(Target::RiscV32UnknownNone, &image);
-
-    let spec = Target::RiscV32UnknownNone.spec().qemu.unwrap();
-    let summary = common::parse_output(&result.stdout);
-
-    common::assert_qemu_ok(&result, &summary, spec);
-
-    let slot_bytes = Target::RiscV32UnknownNone.spec().slot_bytes;
-    common::assert_high_water(summary.high_slots, &image, slot_bytes);
 }
 
 #[test]
@@ -29,11 +40,11 @@ fn runtime_exports_required_symbols() {
         return;
     }
 
-    let target = Target::RiscV32UnknownNone;
+    let target = codegen_core::Target::RiscV32UnknownNone;
     let out_dir = common::temp_dir("riscv_runtime_symcheck");
     let runtime_o = common::assemble_runtime(target, &out_dir);
 
-    let output = std::process::Command::new("riscv64-unknown-elf-nm")
+    let output = Command::new("riscv64-unknown-elf-nm")
         .arg("--defined-only")
         .arg("-o")
         .arg(&runtime_o)

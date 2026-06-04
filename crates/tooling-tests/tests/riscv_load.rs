@@ -14,11 +14,12 @@ use loader_core::load::{load_module, LoadedSet};
 use loader_core::symbols::SymMap;
 use common::*;
 
-/// RISC-V RV32 code with `addi s2, s2, -8` — detectable by Arch scanner.
-/// Encoding: 0xFF890913 = addi s2, s2, -8, LE = [0x13, 0x09, 0x89, 0xFF]
+/// RISC-V RV32 code with `addi s2, s2, 4` — detectable by Arch scanner.
+/// Encoding: addi s2, s2, 4 = 0x00490913, LE = [0x13, 0x09, 0x49, 0x00]
+/// Positive immediate = push (DS grows upward).
 /// ret: jalr x0, ra, 0 = 0x00008067, LE = [0x67, 0x80, 0x00, 0x00]
-const RV32_CODE_WITH_DS_POP: &[u8] = &[
-    0x13, 0x09, 0x89, 0xff,  // addi s2, s2, -8
+const RV32_CODE_WITH_DS_PUSH: &[u8] = &[
+    0x13, 0x09, 0x49, 0x00,  // addi s2, s2, 4
     0x67, 0x80, 0x00, 0x00,  // ret
 ];
 
@@ -38,7 +39,7 @@ fn make_rv32_lmod(code: &[u8], imports: &[(&str, u8)]) -> Vec<u8> {
     let msize = modinfo::encode_into(&mut mbuf, b"TestModule",
         &[], &import_entries, RV32_ABI_HASH, 0, &[]).unwrap();
 
-    let layout = compute_layout(RV32_ABI_HASH, msize as u32, code.len() as u32, 0, 0, 0, imports.len() as u32);
+    let layout = compute_layout(RV32_ABI_HASH, msize as u32, code.len() as u32, 0, 0, 0, imports.len() as u32, 0);
     let mut out = vec![0u8; layout.total_len as usize];
     encode_header(&mut out, &layout);
 
@@ -60,7 +61,7 @@ fn make_rv32_lmod(code: &[u8], imports: &[(&str, u8)]) -> Vec<u8> {
 
 #[test]
 fn riscv_load_no_imports() {
-    let raw = make_rv32_lmod(RV32_CODE_WITH_DS_POP, &[]);
+    let raw = make_rv32_lmod(RV32_CODE_WITH_DS_PUSH, &[]);
     let container = Container::parse(&raw).unwrap();
     let mut plat = HostedLoaderPlatform::new(RV32_ABI_HASH);
     plat.reserve(4096).unwrap();
@@ -99,7 +100,7 @@ fn riscv_load_with_import() {
 
 #[test]
 fn riscv_load_abi_hash_mismatch_rejected() {
-    let mut raw = make_rv32_lmod(RV32_CODE_WITH_DS_POP, &[]);
+    let mut raw = make_rv32_lmod(RV32_CODE_WITH_DS_PUSH, &[]);
     raw[8..16].copy_from_slice(&[0u8; 8]); // corrupt abi_hash
     let container = Container::parse(&raw).unwrap();
     let mut plat = HostedLoaderPlatform::new(RV32_ABI_HASH);
@@ -116,18 +117,18 @@ fn riscv_load_abi_hash_mismatch_rejected() {
 
 #[test]
 fn riscv_arch_detected_from_code() {
-    let arch = loader_core::rederive::Arch::detect_from_code(RV32_CODE_WITH_DS_POP);
+    let arch = loader_core::rederive::Arch::detect_from_code(RV32_CODE_WITH_DS_PUSH);
     assert_eq!(arch, loader_core::rederive::Arch::RiscV,
         "should detect RISC-V from addi s2 pattern");
 }
 
 #[test]
-fn riscv_rederive_ds_pop() {
+fn riscv_rederive_ds_push() {
     let high = loader_core::rederive::rederive_stack_high(
-        RV32_CODE_WITH_DS_POP,
+        RV32_CODE_WITH_DS_PUSH,
         loader_core::rederive::Arch::RiscV,
         4,
     );
-    // addi s2, s2, -8 = 2 slots of DS usage
-    assert_eq!(high, 2, "addi s2, -8 = 2 slots (i64)");
+    // addi s2, s2, 4 = 1 slot of DS usage (push, DS grows upward)
+    assert_eq!(high, 1, "addi s2, 4 = 1 slot");
 }

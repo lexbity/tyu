@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 codegen-core = { path = "../codegen-core" }
+harness-core = { path = "../harness-core" }
 
 [[test]]
 name    = "x86_64_none"

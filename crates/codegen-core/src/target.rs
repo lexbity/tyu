@@ -109,6 +109,17 @@ pub enum PlatformCapability {
     Channels,
 }
 
+impl PlatformCapability {
+    /// Canonical name as used in `manifest.toml` `requires` fields.
+    pub fn name(self) -> &'static str {
+        match self {
+            PlatformCapability::TaskScheduler => "TaskScheduler",
+            PlatformCapability::DynamicAlloc => "DynamicAlloc",
+            PlatformCapability::Channels => "Channels",
+        }
+    }
+}
+
 /// How QEMU signals test pass/fail back to the host.
 #[derive(Clone, Copy, Debug)]
 pub enum QemuExitConvention {

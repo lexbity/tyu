@@ -1755,7 +1755,7 @@ fn phase3_lmod_packer_produces_valid_container() {
 
     // Verify format version.
     let ver = u16::from_le_bytes(lmod[4..6].try_into().unwrap());
-    assert_eq!(ver, 2, "bad format version");
+    assert_eq!(ver, 3, "bad format version");
 
     // Verify total_len matches file size.
     let total_len = u32::from_le_bytes(lmod[16..20].try_into().unwrap());
@@ -1866,7 +1866,7 @@ fn phase4_container_reader_validates_packed_module() {
     let magic = u32::from_le_bytes(lmod[0..4].try_into().unwrap());
     assert_eq!(magic, 0x4c4d4f44, "bad magic");
     let ver = u16::from_le_bytes(lmod[4..6].try_into().unwrap());
-    assert_eq!(ver, 2, "bad version");
+    assert_eq!(ver, 3, "bad version");
     let total_len = u32::from_le_bytes(lmod[16..20].try_into().unwrap()) as usize;
     assert_eq!(total_len, lmod.len(), "total_len mismatch");
 

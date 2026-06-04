@@ -305,7 +305,7 @@ mod tests {
         let mut buf = vec![0u8; 1024];
 
         // Write a valid header using the encoder, then manually place sections.
-        let layout = header::compute_layout(42, 32, 64, 16, 8, 0, 2);
+        let layout = header::compute_layout(42, 32, 64, 16, 8, 0, 2, 0);
         header::encode_header(&mut buf, &layout);
 
         // Write section data.
@@ -455,7 +455,7 @@ mod tests {
 
     #[test]
     fn reloc_iter_empty_when_no_relocs() {
-        let h = header::compute_layout(0, 8, 16, 0, 0, 0, 0);
+        let h = header::compute_layout(0, 8, 16, 0, 0, 0, 0, 0);
         let total = h.total_len as usize;
         let mut buf = vec![0u8; total];
         header::encode_header(&mut buf, &h);
@@ -558,7 +558,7 @@ mod tests {
 
     #[test]
     fn zero_length_sections_ok() {
-        let header = header::compute_layout(0, 8, 32, 0, 0, 0, 0);
+        let header = header::compute_layout(0, 8, 32, 0, 0, 0, 0, 0);
         let total = header.total_len as usize;
         let mut buf = vec![0u8; total];
         header::encode_header(&mut buf, &header);

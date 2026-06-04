@@ -21,6 +21,8 @@ pub const E_MODULE_DECLARES_ISR: u32 = 5203;
 pub const E_RESOURCE_SHARING_MISMATCH: u32 = 5208;
 pub const E_CONTAINER_ENCRYPTED: u32 = 5212;
 pub const E_MODULE_ALREADY_LOADED: u32 = 5210;
+/// Re-derivation returned ⊤ (unverifiable) while producer claimed a finite bound.
+pub const E_STACK_BOUND_UNVERIFIABLE: u32 = 5220;
 
 /// Name of the optional per-module init word.
 const MOD_INIT_NAME: &[u8] = b"__lang_mod_init";
@@ -279,10 +281,13 @@ pub fn load_module<'a>(
     }
 
     // Phase 13: Tier-2 stack_bound re-derivation.
+    // Trust relationship: the producer's `stamped` bound must be AT LEAST the
+    // independently-re-derived bound.  Reject when `rederived > stamped`
+    // (producer under-declared) or when the scanner returns `⊤` and the
+    // producer claims a finite bound the loader cannot confirm.
     if platform.trust_tier().rank() >= crate::platform::Tier::Two.rank() {
         let code_slice = unsafe { code_region.as_mut_slice() };
         let arch = crate::rederive::Arch::detect_from_code(code_slice);
-        // slot_bytes is target-specific; we infer it from arch.
         let slot_bytes: u32 = match arch {
             crate::rederive::Arch::X86_64 => 8,
             crate::rederive::Arch::ArmThumb => 4,
@@ -295,9 +300,16 @@ pub fn load_module<'a>(
             for ei in 0..mi.export_count {
                 let exp = lmod::modinfo::read_export(modinfo_data, ei).ok_or(E_BAD_CONTAINER)?;
                 if exp.name == MOD_INIT_NAME { continue; }
-                // Read the word_meta entry's stack_bound field.
                 let stamped = read_word_meta_stack_bound(modinfo_data, exp.value_off)?;
-                if stamped == 0xFFFF_FFFF || rederived > stamped {
+                if stamped == crate::rederive::TOP_SENTINEL {
+                    // Producer could not bound either — reject (no finite bound).
+                    return Err(E_BAD_CONTAINER);
+                }
+                if rederived == crate::rederive::TOP_SENTINEL && stamped != crate::rederive::TOP_SENTINEL {
+                    // Scanner cannot confirm the producer's finite claim.
+                    return Err(E_STACK_BOUND_UNVERIFIABLE);
+                }
+                if rederived > stamped {
                     return Err(E_BAD_CONTAINER);
                 }
             }
@@ -571,7 +583,7 @@ mod tests {
     fn build_minimal_lmod_with_modinfo(modinfo: &[u8], code_size: u32) -> alloc::vec::Vec<u8> {
         let mi_len = modinfo.len() as u32;
         let reloc_count = 0u32;
-        let layout = lmod::header::compute_layout(0, mi_len, code_size, 0, 0, 0, reloc_count);
+        let layout = lmod::header::compute_layout(0, mi_len, code_size, 0, 0, 0, reloc_count, 0);
         let total = layout.total_len as usize;
         let mut buf = alloc::vec![0u8; total];
         lmod::header::encode_header(&mut buf, &layout);

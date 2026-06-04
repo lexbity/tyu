@@ -1,42 +1,50 @@
+//! ARM Cortex-M3 execution tests via `tyu test` driver.
+
 mod common;
 
-use codegen_core::Target;
+use std::process::Command;
+
+fn build_langc() {
+    let _ = Command::new(env!("CARGO"))
+        .current_dir(&common::workspace_root())
+        .args(["build", "-q", "-p", "langc"])
+        .status();
+}
 
 #[test]
 fn arithmetic_and_stack_pass() {
-    if !common::require_tools(&["qemu-system-arm", "arm-none-eabi-as", "arm-none-eabi-ld"]) {
+    if !common::require_tools(&["langc", "arm-none-eabi-as", "arm-none-eabi-ld", "qemu-system-arm"]) {
         return;
     }
+    build_langc();
 
-    let image = common::build_test_image(
-        Target::ArmV7MUnknownNone,
-        &["arithmetic", "stack_ops", "deep_stack"],
+    let output = Command::new(common::tyu_exe())
+        .args([
+            "test",
+            "--target=armv7m-unknown-none",
+            &format!("--manifest={}", common::fixtures_manifest().display()),
+        ])
+        .output()
+        .expect("tyu test");
+
+    assert!(
+        output.status.success(),
+        "tyu test armv7m-unknown-none failed:\n{}",
+        String::from_utf8_lossy(&output.stderr),
     );
-    let result = common::qemu_run(Target::ArmV7MUnknownNone, &image);
-
-    let spec = Target::ArmV7MUnknownNone.spec().qemu.unwrap();
-    let summary = common::parse_output(&result.stdout);
-
-    common::assert_qemu_ok(&result, &summary, spec);
-
-    // High-water assertion: measured peak ≤ re-derived conservative bound
-    let slot_bytes = Target::ArmV7MUnknownNone.spec().slot_bytes;
-    common::assert_high_water(summary.high_slots, &image, slot_bytes);
 }
 
-/// Verify that the ARM metal runtime exports every symbol required by the
-/// Runtime ABI contract (abi-contract.md §4.4.1).
 #[test]
 fn runtime_exports_required_symbols() {
     if !common::require_tools(&["arm-none-eabi-as", "arm-none-eabi-nm"]) {
         return;
     }
 
-    let target = Target::ArmV7MUnknownNone;
+    let target = codegen_core::Target::ArmV7MUnknownNone;
     let out_dir = common::temp_dir("arm_runtime_symcheck");
     let runtime_o = common::assemble_runtime(target, &out_dir);
 
-    let output = std::process::Command::new("arm-none-eabi-nm")
+    let output = Command::new("arm-none-eabi-nm")
         .arg("--defined-only")
         .arg("-o")
         .arg(&runtime_o)
