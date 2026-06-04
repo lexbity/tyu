@@ -12,6 +12,9 @@ const E_MPROTECT_FAILED: u32 = 2;
 
 pub struct HostedLoaderPlatform {
     expected_abi_hash: u64,
+    key: [u8; 64],
+    key_len: usize,
+    tier: Tier,
     /// Optional single-block reservation for adjacent allocations.
     /// When `Some`, all `alloc_*` calls carve from this block instead
     /// of calling `mmap`.  This guarantees PC-relative proximity.
@@ -28,8 +31,21 @@ impl HostedLoaderPlatform {
     pub fn new(expected_abi_hash: u64) -> Self {
         Self {
             expected_abi_hash,
+            key: [0u8; 64],
+            key_len: 0,
+            tier: Tier::Zero,
             block: None,
         }
+    }
+
+    /// Configure for Tier 1 operation with an HMAC key.
+    /// `key` must be 1–64 bytes.
+    pub fn with_key(mut self, key: &[u8], tier: Tier) -> Self {
+        let n = key.len().min(64);
+        self.key[..n].copy_from_slice(&key[..n]);
+        self.key_len = n;
+        self.tier = tier;
+        self
     }
 
     /// Allocate a block large enough for code + rodata + data + runtime data,
@@ -129,12 +145,20 @@ impl LoaderPlatform for HostedLoaderPlatform {
         }
     }
 
+    fn verify_sig(&self, signed: &[u8], sig: &[u8]) -> bool {
+        if self.key_len == 0 {
+            return true; // Tier 0: trust unconditionally
+        }
+        let expected = crate::hmac_sha256::hmac_sha256(&self.key[..self.key_len], signed);
+        expected.as_slice() == sig
+    }
+
     fn expected_abi_hash(&self) -> u64 {
         self.expected_abi_hash
     }
 
     fn trust_tier(&self) -> Tier {
-        Tier::Zero
+        self.tier
     }
 
     fn release(&mut self, region: &mut Region) {

@@ -13,4 +13,5 @@ pub mod io;
 pub mod mem;
 pub mod process;
 
+pub mod hmac_sha256;
 pub mod loader;

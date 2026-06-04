@@ -17,6 +17,9 @@ pub const IMPORT_ENTRY_SIZE: u32 = 12; // u64 sym_hash + u32 name_off
 pub const WORD_META_SIZE: u32 = 16;    // u64 sym_hash + u16 effects + u16 requires_caps + u32 stack_bound
 pub const RES_META_SIZE: u32 = 16;     // u64 res_hash + u8 sharing_class + u8[3] _pad + u32 lock_prim
 
+/// Flags for the `LangModInfo.flags` field.
+pub const MODINFO_FLAG_HAS_ISR: u16 = 0x0001;
+
 // ---------------------------------------------------------------------------
 // Entry types
 // ---------------------------------------------------------------------------
@@ -38,6 +41,14 @@ pub struct ImportEntry<'a> {
     pub sym_hash: u64,
     /// Name bytes (must not be empty; should not contain NUL).
     pub name: &'a [u8],
+}
+
+/// A resource sharing-class entry, as passed to the encoder.
+#[derive(Clone, Copy)]
+pub struct ResMetaEntry {
+    pub res_hash: u64,
+    pub sharing_class: u8,
+    pub lock_prim: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -84,9 +95,12 @@ pub fn encode_into<'a>(
     exports: &[ExportEntry<'a>],
     imports: &[ImportEntry<'a>],
     abi_hash_val: u64,
+    flags: u16,
+    res_metas: &[ResMetaEntry],
 ) -> Option<usize> {
     let export_count = exports.len() as u32;
     let import_count = imports.len() as u32;
+    let res_count = res_metas.len() as u32;
 
     // --- Compute total size ---
     let mut total = MODINFO_HEADER_SIZE;
@@ -104,6 +118,7 @@ pub fn encode_into<'a>(
     total += export_count * EXPORT_ENTRY_SIZE;
     total += import_count * IMPORT_ENTRY_SIZE;
     total += export_count * WORD_META_SIZE;
+    total += res_count * RES_META_SIZE;
 
     if (total as usize) > buf.len() {
         return None;
@@ -119,7 +134,7 @@ pub fn encode_into<'a>(
     // 1. Fixed header (32 bytes)
     poke_u32(buf, off, LMOD_MAGIC); off += 4;
     poke_u16(buf, off, MODINFO_VER); off += 2;
-    poke_u16(buf, off, 0);                   off += 2; // flags
+    poke_u16(buf, off, flags);               off += 2; // flags
     poke_u64(buf, off, abi_hash_val);        off += 8; // abi_hash (abi-contract §5)
     let name_off_pos = off; poke_u32(buf, off, 0); off += 4; // placeholder
     let name_len_pos = off; poke_u32(buf, off, 0); off += 4; // placeholder
@@ -182,6 +197,14 @@ pub fn encode_into<'a>(
         poke_u32(buf, off, e.stack_bound); off += 4;
     }
 
+    // 5b. Resource meta entries
+    for r in res_metas.iter() {
+        poke_u64(buf, off, r.res_hash); off += 8;
+        buf[off] = r.sharing_class; off += 1;
+        buf[off..off + 3].fill(0); off += 3;
+        poke_u32(buf, off, r.lock_prim); off += 4;
+    }
+
     // 6. Patch header offsets
     poke_u32(buf, name_off_pos, module_name_off);
     poke_u32(buf, name_len_pos, module_name.len() as u32);
@@ -201,92 +224,14 @@ pub struct ModInfo<'a> {
     pub export_count: u32,
     pub import_count: u32,
     pub abi_hash: u64,
+    pub flags: u16,
 }
 
-/// Compute the byte offset of the export entries array within the modinfo
-/// data, or `None` if the data is truncated.
-///
-/// The name table layout (re-encoded from the encoder in this same file):
-///   - header (MODINFO_HEADER_SIZE bytes)
-///   - module name bytes (name_len, padded to 4)
-///   - export names (NUL-terminated each, padded to 4)
-///   - import names (NUL-terminated each, padded to 4)
-///   - export entries follow immediately
-pub fn export_entries_offset(data: &[u8]) -> Option<usize> {
-    let hdr = decode(data)?;
-    let mut off = MODINFO_HEADER_SIZE as usize;
-
-    // Skip module name
-    off += hdr.module_name_len as usize;
-    off = (off + 3) & !3;
-
-    // Skip export names
-    for _ in 0..hdr.export_count {
-        while off < data.len() && data[off] != 0 {
-            off += 1;
-        }
-        if off >= data.len() {
-            return None;
-        }
-        off += 1; // skip NUL
+impl ModInfo<'_> {
+    /// Returns `true` if the module declares an `@interrupt` binding.
+    pub fn has_isr(&self) -> bool {
+        self.flags & MODINFO_FLAG_HAS_ISR != 0
     }
-    off = (off + 3) & !3;
-
-    // Skip import names
-    for _ in 0..hdr.import_count {
-        while off < data.len() && data[off] != 0 {
-            off += 1;
-        }
-        if off >= data.len() {
-            return None;
-        }
-        off += 1;
-    }
-    off = (off + 3) & !3;
-
-    if off + (hdr.export_count as usize) * EXPORT_ENTRY_SIZE as usize > data.len() {
-        return None;
-    }
-    Some(off)
-}
-
-/// Read one export entry by index.
-///
-/// Returns `None` if the index is out of range or the data is truncated.
-/// The `name` field borrows from `data` (a NUL-terminated string in the
-/// name table).
-pub fn read_export<'a>(data: &'a [u8], index: u32) -> Option<ParsedExport<'a>> {
-    let hdr = decode(data)?;
-    if index >= hdr.export_count {
-        return None;
-    }
-    let entries_off = export_entries_offset(data)?;
-    let entry_off = entries_off + (index as usize) * EXPORT_ENTRY_SIZE as usize;
-
-    let sym_hash = u64::from_le_bytes(data[entry_off..entry_off + 8].try_into().ok()?);
-    let name_off = u32::from_le_bytes(data[entry_off + 8..entry_off + 12].try_into().ok()?) as usize;
-    let value_off = u32::from_le_bytes(data[entry_off + 12..entry_off + 16].try_into().ok()?);
-
-    if name_off >= data.len() {
-        return None;
-    }
-    let name_bytes = &data[name_off..];
-    let end = name_bytes.iter().position(|&b| b == 0).unwrap_or(name_bytes.len());
-    let name = &data[name_off..name_off + end];
-
-    Some(ParsedExport {
-        sym_hash,
-        name,
-        value_off,
-    })
-}
-
-/// A single export entry decoded from raw bytes (name borrows from source).
-#[derive(Clone, Debug)]
-pub struct ParsedExport<'a> {
-    pub sym_hash: u64,
-    pub name: &'a [u8],
-    pub value_off: u32,
 }
 
 /// Decode a `LangModInfo` header from raw bytes.
@@ -301,6 +246,7 @@ pub fn decode(data: &[u8]) -> Option<ModInfo<'_>> {
     if magic != LMOD_MAGIC {
         return None;
     }
+    let flags = u16::from_le_bytes(data[6..8].try_into().ok()?);
     let abi_hash = u64::from_le_bytes(data[8..16].try_into().ok()?);
     let name_off = u32::from_le_bytes(data[16..20].try_into().ok()?) as usize;
     let name_len = u32::from_le_bytes(data[20..24].try_into().ok()?) as usize;
@@ -318,7 +264,94 @@ pub fn decode(data: &[u8]) -> Option<ModInfo<'_>> {
         export_count,
         import_count,
         abi_hash,
+        flags,
     })
+}
+
+/// A single export entry decoded from raw bytes (name borrows from source).
+#[derive(Clone, Debug)]
+pub struct ParsedExport<'a> {
+    pub sym_hash: u64,
+    pub name: &'a [u8],
+    pub value_off: u32,
+}
+
+/// Compute the byte offset of the export entries array within the modinfo
+/// data, or `None` if the data is truncated.
+pub fn export_entries_offset(data: &[u8]) -> Option<usize> {
+    let hdr = decode(data)?;
+    let mut off = MODINFO_HEADER_SIZE as usize;
+    off += hdr.module_name_len as usize;
+    off = (off + 3) & !3;
+    for _ in 0..hdr.export_count {
+        while off < data.len() && data[off] != 0 { off += 1; }
+        if off >= data.len() { return None; }
+        off += 1;
+    }
+    off = (off + 3) & !3;
+    for _ in 0..hdr.import_count {
+        while off < data.len() && data[off] != 0 { off += 1; }
+        if off >= data.len() { return None; }
+        off += 1;
+    }
+    off = (off + 3) & !3;
+    if off + (hdr.export_count as usize) * EXPORT_ENTRY_SIZE as usize > data.len() {
+        return None;
+    }
+    Some(off)
+}
+
+/// Read one export entry by index.
+pub fn read_export<'a>(data: &'a [u8], index: u32) -> Option<ParsedExport<'a>> {
+    let hdr = decode(data)?;
+    if index >= hdr.export_count { return None; }
+    let entries_off = export_entries_offset(data)?;
+    let entry_off = entries_off + (index as usize) * EXPORT_ENTRY_SIZE as usize;
+    let sym_hash = u64::from_le_bytes(data[entry_off..entry_off + 8].try_into().ok()?);
+    let name_off = u32::from_le_bytes(data[entry_off + 8..entry_off + 12].try_into().ok()?) as usize;
+    let value_off = u32::from_le_bytes(data[entry_off + 12..entry_off + 16].try_into().ok()?);
+    if name_off >= data.len() { return None; }
+    let name_bytes = &data[name_off..];
+    let end = name_bytes.iter().position(|&b| b == 0).unwrap_or(name_bytes.len());
+    let name = &data[name_off..name_off + end];
+    Some(ParsedExport { sym_hash, name, value_off })
+}
+
+/// Read one resource-meta entry by index.
+///
+/// Returns `None` if the index is out of range or the data is truncated.
+pub fn read_res_meta(data: &[u8], index: u32) -> Option<ResMetaEntry> {
+    let entries_off = res_meta_offset(data)?;
+    let remaining = data.len() - entries_off;
+    let count = (remaining / RES_META_SIZE as usize) as u32;
+    if index >= count {
+        return None;
+    }
+    let entry_off = entries_off + (index as usize) * RES_META_SIZE as usize;
+    Some(ResMetaEntry {
+        res_hash: u64::from_le_bytes(data[entry_off..entry_off + 8].try_into().ok()?),
+        sharing_class: data[entry_off + 8],
+        lock_prim: u32::from_le_bytes(data[entry_off + 12..entry_off + 16].try_into().ok()?),
+    })
+}
+
+/// Compute the byte offset of the res_meta entries array.
+fn res_meta_offset(data: &[u8]) -> Option<usize> {
+    let hdr = decode(data)?;
+    let export_entries_off = export_entries_offset(data)?;
+    let import_entries_off =
+        export_entries_off + (hdr.export_count as usize) * EXPORT_ENTRY_SIZE as usize;
+    let word_meta_off =
+        import_entries_off + (hdr.import_count as usize) * IMPORT_ENTRY_SIZE as usize;
+    let word_meta_end = word_meta_off + (hdr.export_count as usize) * WORD_META_SIZE as usize;
+    if word_meta_end > data.len() {
+        return None;
+    }
+    let remaining = data.len() - word_meta_end;
+    if remaining == 0 || remaining % (RES_META_SIZE as usize) != 0 {
+        return None;
+    }
+    Some(word_meta_end)
 }
 
 // ---------------------------------------------------------------------------
@@ -338,7 +371,7 @@ mod tests {
     fn encode_roundtrip_minimal() {
         let mut buf = [0u8; 256];
         let ah = test_abi_hash();
-        let n = encode_into(&mut buf, b"TestMod", &[], &[], ah).unwrap();
+        let n = encode_into(&mut buf, b"TestMod", &[], &[], ah, 0, &[]).unwrap();
         let decoded = decode(&buf[..n]).unwrap();
         assert_eq!(decoded.module_name, b"TestMod");
         assert_eq!(decoded.export_count, 0);
@@ -361,7 +394,7 @@ mod tests {
         }];
         let mut buf = [0u8; 512];
         let ah = test_abi_hash();
-        let n = encode_into(&mut buf, b"M", &exports, &imports, ah).unwrap();
+        let n = encode_into(&mut buf, b"M", &exports, &imports, ah, 0, &[]).unwrap();
         let decoded = decode(&buf[..n]).unwrap();
         assert_eq!(decoded.module_name, b"M");
         assert_eq!(decoded.export_count, 1);
@@ -379,14 +412,14 @@ mod tests {
             stack_bound: 0,
         }];
         let mut buf = [0u8; 16];
-        assert!(encode_into(&mut buf, b"X", &exports, &[], 42).is_none());
+        assert!(encode_into(&mut buf, b"X", &exports, &[], 42, 0, &[]).is_none());
     }
 
     #[test]
     fn encode_header_fields_are_little_endian() {
         let mut buf = [0u8; 256];
         let ah = test_abi_hash();
-        let n = encode_into(&mut buf, b"Abc", &[], &[], ah).unwrap();
+        let n = encode_into(&mut buf, b"Abc", &[], &[], ah, 0, &[]).unwrap();
         let data = &buf[..n];
         assert_eq!(data[0..4], [0x44, 0x4f, 0x4d, 0x4c]); // "LMOD" LE
         assert_eq!(data[4..6], [2, 0]);  // version
@@ -422,7 +455,7 @@ mod tests {
         }];
         let mut buf = [0u8; 1024];
         let ah = test_abi_hash();
-        let n = encode_into(&mut buf, b"Calc", &exports, &imports, ah).unwrap();
+        let n = encode_into(&mut buf, b"Calc", &exports, &imports, ah, 0, &[]).unwrap();
         let decoded = decode(&buf[..n]).unwrap();
         assert_eq!(decoded.module_name, b"Calc");
         assert_eq!(decoded.export_count, 2);
@@ -442,8 +475,8 @@ mod tests {
         let mut buf_a = [0u8; 512];
         let mut buf_b = [0u8; 512];
         let ah = test_abi_hash();
-        let n_a = encode_into(&mut buf_a, b"M", &e, &[], ah).unwrap();
-        let n_b = encode_into(&mut buf_b, b"M", &e, &[], ah).unwrap();
+        let n_a = encode_into(&mut buf_a, b"M", &e, &[], ah, 0, &[]).unwrap();
+        let n_b = encode_into(&mut buf_b, b"M", &e, &[], ah, 0, &[]).unwrap();
         assert_eq!(n_a, n_b);
         assert_eq!(&buf_a[..n_a], &buf_b[..n_b]);
     }
@@ -463,7 +496,7 @@ mod tests {
     fn decode_retrieves_abi_hash() {
         let mut buf = [0u8; 256];
         let expected = 0xdeadbeefcafebabeu64;
-        let n = encode_into(&mut buf, b"X", &[], &[], expected).unwrap();
+        let n = encode_into(&mut buf, b"X", &[], &[], expected, 0, &[]).unwrap();
         let decoded = decode(&buf[..n]).unwrap();
         assert_eq!(decoded.abi_hash, expected);
     }

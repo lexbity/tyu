@@ -57,7 +57,6 @@ struct Section {
 struct Symbol {
     shndx: u16,
     value: u64,
-    size: u64,
     name: String,
 }
 
@@ -171,7 +170,6 @@ impl<'a> Elf<'a> {
             let name_off = le_u32(st_data, pos) as usize;
             let st_shndx = le_u16(st_data, pos + 6);
             let st_value = le_u64(st_data, pos + 8);
-            let st_size = le_u64(st_data, pos + 16);
             let name = if name_off < self.strtab.len() {
                 let nb = &self.strtab[name_off..];
                 let end = nb.iter().position(|&b| b == 0).unwrap_or(nb.len());
@@ -182,7 +180,6 @@ impl<'a> Elf<'a> {
             syms.push(Symbol {
                 shndx: st_shndx,
                 value: st_value,
-                size: st_size,
                 name,
             });
             pos += entsize;

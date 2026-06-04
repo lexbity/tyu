@@ -14,9 +14,12 @@ use lmod::validate::Container;
 /// Error codes from the loader algorithm.
 pub const E_ABI_MISMATCH: u32 = 5200;
 pub const E_BAD_CONTAINER: u32 = 5201;
+pub const E_SIG_INVALID: u32 = 5202;
 pub const E_RELOC_UNSUPPORTED: u32 = 5204;
 pub const E_SYMBOL_UNRESOLVED: u32 = 5205;
 pub const E_SYMBOL_CONFLICT: u32 = 5206;
+pub const E_MODULE_DECLARES_ISR: u32 = 5203;
+pub const E_RESOURCE_SHARING_MISMATCH: u32 = 5208;
 pub const E_MODULE_ALREADY_LOADED: u32 = 5210;
 
 /// Name of the optional per-module init word.
@@ -155,10 +158,35 @@ pub fn load_module<'a>(
     }
 
     // --- Begin transactional section (steps 4–12) ---
-    let mut sym_guard = RollbackGuard::new(global_map);
+    let sym_guard = RollbackGuard::new(global_map);
 
-    // Step 4: signature verification — skipped for Tier 0.
-    // Step 5: ISR rejection — deferred.
+    // Step 4: Signature verification (Tier ≥ 1).
+    let raw_bytes = container.raw_bytes();
+    if platform.trust_tier().rank() >= crate::platform::Tier::One.rank() {
+        let region_len = lmod::sig::signed_region_len(hdr);
+        if region_len > raw_bytes.len() {
+            return Err(E_BAD_CONTAINER);
+        }
+        let signed_region = &raw_bytes[..region_len];
+        let trailer_data = &raw_bytes[region_len..];
+        let trailer = lmod::sig::SigTrailer::parse(trailer_data).ok_or(E_SIG_INVALID)?;
+        if trailer.scheme == lmod::sig::SCHEME_NONE {
+            return Err(E_SIG_INVALID);
+        }
+        if !platform.verify_sig(signed_region, trailer.sig_bytes) {
+            return Err(E_SIG_INVALID);
+        }
+    }
+
+    // Step 5: Static-ISR rule — reject modules that declare @interrupt bindings.
+    let modinfo_data = container.modinfo();
+    if !modinfo_data.is_empty() {
+        if let Some(mi) = lmod::modinfo::decode(modinfo_data) {
+            if mi.has_isr() {
+                return Err(E_MODULE_DECLARES_ISR);
+            }
+        }
+    }
 
     // Step 6: Place sections.
     let code_len = hdr.code_len as usize;
@@ -231,6 +259,18 @@ pub fn load_module<'a>(
             let exp = lmod::modinfo::read_export(modinfo_data, ei).ok_or(E_BAD_CONTAINER)?;
             if exp.name == MOD_INIT_NAME { continue; }
             sym_guard.map.register(exp.name, code_base as usize)?;
+        }
+    }
+
+    // Phase 11: Check sharing_class consistency.
+    let modinfo_data = container.modinfo();
+    if !modinfo_data.is_empty() {
+        let mut ri = 0u32;
+        while let Some(rm) = lmod::modinfo::read_res_meta(modinfo_data, ri) {
+            if rm.sharing_class != 0 {
+                return Err(E_RESOURCE_SHARING_MISMATCH);
+            }
+            ri += 1;
         }
     }
 
@@ -385,33 +425,31 @@ mod tests {
             },
         ];
         let mut mi_buf = [0u8; 256];
-        let size = lmod::modinfo::encode_into(&mut mi_buf, b"T", &exports, &[], 0).unwrap();
+        let size = lmod::modinfo::encode_into(&mut mi_buf, b"T", &exports, &[], 0, 0, &[]).unwrap();
         let container_bytes = build_minimal_lmod_with_modinfo(&mi_buf[..size], 64);
         let container = lmod::validate::Container::parse(&container_bytes).unwrap();
         let result = lookup_mod_init(&container, 0x2000);
         // The init function was found: returns code_base.
         assert_eq!(result, 0x2000);
     }
-}
 
-/// Build a minimal .lmod container with a given code section size.
-fn build_minimal_lmod(code_size: u32) -> alloc::vec::Vec<u8> {
-    // Create modinfo for an empty module.
-    let mut mi_buf = [0u8; 128];
-    let mi_size = lmod::modinfo::encode_into(&mut mi_buf, b"T", &[], &[], 0).unwrap();
-    build_minimal_lmod_with_modinfo(&mi_buf[..mi_size], code_size)
-}
+    /// Build a minimal .lmod container with a given code section size.
+    fn build_minimal_lmod(code_size: u32) -> alloc::vec::Vec<u8> {
+        let mut mi_buf = [0u8; 128];
+        let mi_size = lmod::modinfo::encode_into(&mut mi_buf, b"T", &[], &[], 0, 0, &[]).unwrap();
+        build_minimal_lmod_with_modinfo(&mi_buf[..mi_size], code_size)
+    }
 
-/// Build a minimal .lmod container with explicit modinfo bytes.
-fn build_minimal_lmod_with_modinfo(modinfo: &[u8], code_size: u32) -> alloc::vec::Vec<u8> {
-    let mi_len = modinfo.len() as u32;
-    let reloc_count = 0u32;
-
-    let layout = lmod::header::compute_layout(0, mi_len, code_size, 0, 0, 0, reloc_count);
-    let total = layout.total_len as usize;
-    let mut buf = alloc::vec![0u8; total];
-    lmod::header::encode_header(&mut buf, &layout);
-    let off = layout.modinfo_off as usize;
-    buf[off..off + modinfo.len()].copy_from_slice(modinfo);
-    buf
+    /// Build a minimal .lmod container with explicit modinfo bytes.
+    fn build_minimal_lmod_with_modinfo(modinfo: &[u8], code_size: u32) -> alloc::vec::Vec<u8> {
+        let mi_len = modinfo.len() as u32;
+        let reloc_count = 0u32;
+        let layout = lmod::header::compute_layout(0, mi_len, code_size, 0, 0, 0, reloc_count);
+        let total = layout.total_len as usize;
+        let mut buf = alloc::vec![0u8; total];
+        lmod::header::encode_header(&mut buf, &layout);
+        let off = layout.modinfo_off as usize;
+        buf[off..off + modinfo.len()].copy_from_slice(modinfo);
+        buf
+    }
 }

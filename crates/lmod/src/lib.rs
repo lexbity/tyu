@@ -7,4 +7,5 @@ pub mod hash;
 pub mod header;
 pub mod modinfo;
 pub mod reloc;
+pub mod sig;
 pub mod validate;

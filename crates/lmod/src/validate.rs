@@ -7,8 +7,8 @@
 //! Every method returns `Result` or `Option`; the `parse` constructor runs
 //! the full suite of checks from §9 steps 1–2 before exposing any data.
 
-use crate::header::{self, LmodHeader, HEADER_SIZE, LMOD_MAGIC, FORMAT_VER};
-use crate::reloc::{self, RelocEntry, RELOC_ENTRY_SIZE};
+use crate::header::{LmodHeader, HEADER_SIZE, LMOD_MAGIC, FORMAT_VER};
+use crate::reloc::{RelocEntry, RELOC_ENTRY_SIZE};
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -259,6 +259,12 @@ impl<'a> Container<'a> {
     /// Total container length (same as `self.header().total_len`).
     pub fn total_len(&self) -> u32 {
         self.hdr.total_len
+    }
+
+    /// The raw backing bytes of the entire container (for signature
+    /// verification and low-level access).
+    pub fn raw_bytes(&self) -> &[u8] {
+        self.data
     }
 }
 

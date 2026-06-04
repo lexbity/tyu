@@ -79,6 +79,17 @@ pub enum Tier {
     Two,
 }
 
+impl Tier {
+    /// Numeric rank: 0 = Zero, 1 = One, 2 = Two.
+    pub fn rank(self) -> u32 {
+        match self {
+            Tier::Zero => 0,
+            Tier::One => 1,
+            Tier::Two => 2,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // LoaderPlatform trait
 // ---------------------------------------------------------------------------

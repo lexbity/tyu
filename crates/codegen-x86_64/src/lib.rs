@@ -176,6 +176,8 @@ impl<'a> X86_64HostedBackend<'a> {
             &export_entries[..export_count],
             &import_entries[..import_count],
             abi_hash,
+            0, // flags (no ISR in current modules)
+            &[], // res_metas (no resources in current modules)
         ) {
             Some(s) => s,
             None => return Ok(()), // buffer too small (should not happen)
