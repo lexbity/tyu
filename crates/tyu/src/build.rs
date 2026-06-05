@@ -80,10 +80,56 @@ pub fn build(args: &BuildArgs) -> Result<PathBuf, String> {
     Ok(image)
 }
 
+/// Compile a single `.mod` file with langc, without caching.
+/// Returns the path to the produced `.o`.
+pub fn compile_simple(
+    target: Target,
+    src: &Path,
+    out_dir: &Path,
+    is_lib: bool,
+    sysroot: Option<&Path>,
+    include_dirs: &[PathBuf],
+) -> Result<PathBuf, String> {
+    let triple = std::str::from_utf8(target.triple())
+        .map_err(|_| "non-UTF-8 target triple")?;
+    let langc = find_tool("langc")?;
+
+    let mut cmd = Command::new(&langc);
+    cmd.arg("--emit=obj");
+    cmd.arg(format!("--target={}", triple));
+    cmd.arg(format!("--out-dir={}", out_dir.display()));
+    if let Some(sr) = sysroot {
+        cmd.arg(format!("--sysroot={}", sr.display()));
+    }
+    for inc in include_dirs {
+        cmd.arg("-I");
+        cmd.arg(inc);
+    }
+    if is_lib {
+        cmd.arg("--lib");
+    }
+    cmd.arg(src);
+
+    let status = cmd.status()
+        .map_err(|e| format!("running langc: {}", e))?;
+    if !status.success() {
+        return Err(format!("langc failed on '{}'", src.display()));
+    }
+
+    let obj_name = src.file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("module");
+    let obj_path = out_dir.join(format!("{}.o", obj_name));
+    if !obj_path.exists() {
+        return Err(format!(".o not produced at '{}'", obj_path.display()));
+    }
+    Ok(obj_path)
+}
+
 /// Find a tool binary by name.  Checks PATH and the workspace target dir.
 fn find_tool(name: &str) -> Result<PathBuf, String> {
     // First check PATH.
-    if let Ok(path) = which(name) {
+    if let Some(path) = crate::toolchain::find_in_path(name) {
         return Ok(path);
     }
     // Check workspace target/debug for workspace-local tools.
@@ -99,25 +145,6 @@ fn find_tool(name: &str) -> Result<PathBuf, String> {
         return Ok(local);
     }
     Err(format!("tool '{name}' not found in PATH or workspace target/debug"))
-}
-
-/// Cross-platform `which` via `PATH` environment variable.
-fn which(name: &str) -> Result<PathBuf, String> {
-    let path = std::env::var_os("PATH").ok_or("PATH not set")?;
-    for dir in std::env::split_paths(&path) {
-        let candidate = dir.join(name);
-        if candidate.is_file() {
-            return Ok(candidate);
-        }
-        #[cfg(target_os = "windows")]
-        {
-            let candidate_exe = dir.join(format!("{}.exe", name));
-            if candidate_exe.is_file() {
-                return Ok(candidate_exe);
-            }
-        }
-    }
-    Err(format!("{name} not found in PATH"))
 }
 
 /// Compile a single module with `langc`.

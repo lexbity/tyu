@@ -10,3 +10,6 @@ pub mod reloc_arm;
 pub mod reloc_riscv;
 pub mod reloc_x86_64;
 pub mod symbols;
+
+#[cfg(feature = "encryption")]
+pub mod crypto;

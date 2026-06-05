@@ -1,8 +1,15 @@
+pub mod args;
+pub mod build;
 pub mod cache;
+pub mod deploy;
 pub mod graph;
 pub mod highwater;
 pub mod manifest;
 pub mod project;
+pub mod provision;
+pub mod run_cmd;
 pub mod runner;
+pub mod test_cmd;
+pub mod test_helpers;
 pub mod toml_parser;
 pub mod toolchain;

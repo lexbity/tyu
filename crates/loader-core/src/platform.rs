@@ -165,4 +165,17 @@ pub trait LoaderPlatform {
     fn placement_policy(&self) -> PlacementPolicy {
         PlacementPolicy::CopyToRam
     }
+
+    /// Unwrap a content-encryption key from a wrapped slot.
+    ///
+    /// `key_id` selects which KEK to use (fleet key = 0, device-specific keys
+    /// have unique IDs).  `wrapped` is the 60-byte wrapped CEK.
+    /// On success writes the 32-byte CEK into `out_cek`.
+    ///
+    /// The default implementation returns `Err` — platforms without
+    /// encryption support leave this unimplemented.
+    #[cfg(feature = "encryption")]
+    fn unwrap_cek(&self, _key_id: u64, _wrapped: &[u8], _out_cek: &mut [u8; 32]) -> Result<(), u32> {
+        Err(crate::load::E_ENC_NO_KEY)
+    }
 }

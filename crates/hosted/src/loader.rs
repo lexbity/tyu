@@ -15,6 +15,7 @@ pub struct HostedLoaderPlatform {
     key: [u8; 64],
     key_len: usize,
     tier: Tier,
+    kek: [u8; 32],
     /// Optional single-block reservation for adjacent allocations.
     /// When `Some`, all `alloc_*` calls carve from this block instead
     /// of calling `mmap`.  This guarantees PC-relative proximity.
@@ -34,6 +35,7 @@ impl HostedLoaderPlatform {
             key: [0u8; 64],
             key_len: 0,
             tier: Tier::Zero,
+            kek: [0u8; 32],
             block: None,
         }
     }
@@ -45,6 +47,12 @@ impl HostedLoaderPlatform {
         self.key[..n].copy_from_slice(&key[..n]);
         self.key_len = n;
         self.tier = tier;
+        self
+    }
+
+    /// Configure a KEK for encrypted module decryption.
+    pub fn with_kek(mut self, kek: &[u8; 32]) -> Self {
+        self.kek = *kek;
         self
     }
 
@@ -151,6 +159,18 @@ impl LoaderPlatform for HostedLoaderPlatform {
         }
         let expected = crate::hmac_sha256::hmac_sha256(&self.key[..self.key_len], signed);
         expected.as_slice() == sig
+    }
+
+    #[cfg(feature = "encryption")]
+    fn unwrap_cek(&self, _key_id: u64, wrapped: &[u8], out_cek: &mut [u8; 32]) -> Result<(), u32> {
+        use loader_core::crypto::chacha20poly1305::unwrap_cek as do_unwrap;
+        const WRAP_LEN: usize = 12 + 32 + 16; // nonce + cek_ciphertext + tag
+        let wrapped_arr: &[u8; WRAP_LEN] =
+            wrapped.try_into().map_err(|_| loader_core::load::E_ENC_BAD_HEADER)?;
+        let cek = do_unwrap(&self.kek, wrapped_arr)
+            .map_err(|_| loader_core::load::E_ENC_NO_KEY)?;
+        *out_cek = cek;
+        Ok(())
     }
 
     fn expected_abi_hash(&self) -> u64 {

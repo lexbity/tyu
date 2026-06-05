@@ -173,12 +173,12 @@ fn e_5210_already_loaded() {
 }
 
 // ---------------------------------------------------------------------------
-// 5212 — E_CONTAINER_ENCRYPTED
+// 5213 — E_ENC_UNSUPPORTED (encrypted container without encryption feature)
 // ---------------------------------------------------------------------------
 
 #[test]
-fn e_5212_encrypted_container() {
-    let dir = fresh_dir("e5212");
+fn e_5213_encrypted_container_unsupported() {
+    let dir = fresh_dir("e5213");
     let source = "module Main;\n: main ( -- i64 ) 0 ;\nend;\n";
     let lmod_path = compile_and_pack(source, &dir);
     let mut raw = std::fs::read(&lmod_path).unwrap();
@@ -190,6 +190,7 @@ fn e_5212_encrypted_container() {
     let abi_hash = lmod::abi_hash::compute_abi_hash(8, 64, lmod::modinfo::MODINFO_VER);
     let (mut plat, mut map, mut set) = setup_loader(&container, abi_hash);
     let result = load_module(&container, &mut plat, &mut map, &mut set);
-    assert!(result.is_err(), "5212: encrypted container should fail");
-    assert_eq!(result.unwrap_err(), 5212);
+    assert!(result.is_err(), "5213: encrypted container should fail without encryption feature");
+    // Without encryption feature, the error is E_ENC_UNSUPPORTED (5213).
+    assert_eq!(result.unwrap_err(), 5213);
 }

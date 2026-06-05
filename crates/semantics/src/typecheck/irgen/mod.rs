@@ -38,6 +38,7 @@ mod types;
 pub use observer::{NullObserver, StackcheckObserver, TypecheckObserver};
 pub use types::intern_type;
 
+#[allow(dead_code)]
 struct QuoteSig {
     sig: WordSig,
     performs: EffectSet,

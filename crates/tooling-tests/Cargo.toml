@@ -8,4 +8,9 @@ hosted = { path = "../hosted" }
 hosted-rt = { path = "../hosted-rt" }
 loader-core = { path = "../loader-core" }
 lmod = { path = "../lmod" }
+hex = "0.4"
+
+[features]
+default = []
+encryption = ["hosted/encryption"]
 

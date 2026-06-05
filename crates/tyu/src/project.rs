@@ -174,6 +174,7 @@ pub fn resolve_target(name: &str, manifest: &ProjectManifest) -> Option<codegen_
 
 /// Get toolchain config for a target, checking toolchain section first,
 /// then falling back to manifest target aliases.
+#[allow(dead_code)]
 pub fn toolchain_for_target<'a>(
     target: codegen_core::Target,
     manifest: &'a ProjectManifest,

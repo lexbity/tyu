@@ -11,4 +11,12 @@ path = "src/main.rs"
 codegen-core = { path = "../codegen-core" }
 frontend = { path = "../frontend" }
 harness-core = { path = "../harness-core" }
+hex = "0.4"
+libc = "0.2"
 lmod = { path = "../lmod" }
+
+[dev-dependencies]
+hex = "0.4"
+hosted = { path = "../hosted" }
+libc = "0.2"
+loader-core = { path = "../loader-core" }

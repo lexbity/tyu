@@ -5,10 +5,11 @@ mod common;
 use std::process::Command;
 
 fn build_langc() {
-    let _ = Command::new(env!("CARGO"))
+    let s = Command::new(env!("CARGO"))
         .current_dir(&common::workspace_root())
         .args(["build", "-q", "-p", "langc"])
-        .status();
+        .status().expect("cargo build");
+    assert!(s.success(), "cargo build failed");
 }
 
 #[test]

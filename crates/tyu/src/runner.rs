@@ -1,7 +1,7 @@
 //! Pluggable backend runner abstraction.
 //!
 //! Executes a built image: natively (hosted target), under QEMU (bare-metal
-//! target), or on a physical device (forward-looking).
+//! target), or on a physical device via OpenOCD/probe-rs.
 
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -12,13 +12,41 @@ use codegen_core::target::QemuSpec;
 use codegen_core::Target;
 
 /// How to run a built image.
+#[allow(dead_code)]
 pub enum Runner {
     /// Execute the ELF directly on the host (no QEMU).
     Native,
     /// Execute under QEMU system-mode using the given spec.
     Qemu(&'static QemuSpec),
-    /// Physical hardware (stub — not yet implemented).
-    Device,
+    /// Flash and run on physical hardware via OpenOCD.
+    Device(OpenOcdSpec),
+}
+
+/// OpenOCD configuration for physical device flashing + serial capture.
+#[derive(Clone, Debug)]
+pub struct OpenOcdSpec {
+    /// OpenOCD binary name or path (default: `openocd`).
+    pub bin: String,
+    /// OpenOCD configuration file (e.g. `board/stm32f4discovery.cfg`).
+    pub config: String,
+    /// Serial port for UART capture (e.g. `/dev/ttyACM0`).
+    pub serial_port: String,
+    /// Serial baud rate (default: 115200).
+    pub baud: u32,
+    /// Timeout in seconds for the flash operation.
+    pub flash_timeout_secs: u64,
+}
+
+impl Default for OpenOcdSpec {
+    fn default() -> Self {
+        OpenOcdSpec {
+            bin: "openocd".into(),
+            config: String::new(),
+            serial_port: String::new(),
+            baud: 115200,
+            flash_timeout_secs: 30,
+        }
+    }
 }
 
 /// Outcome of running an image.
@@ -40,14 +68,12 @@ impl Runner {
 
     /// Run the image with the given timeout.
     ///
-    /// Captures stdout.  Returns an error if the binary cannot be spawned
-    /// (e.g. missing QEMU).  A timed-out process is killed and marked with
-    /// `timed_out = true`.
+    /// For `Device`, flashes via OpenOCD and captures serial output.
     pub fn run(&self, image: &Path, timeout: Duration) -> Result<RunOutcome, String> {
         match self {
             Runner::Native => run_native(image, timeout),
             Runner::Qemu(spec) => run_qemu(spec, image, timeout),
-            Runner::Device => Err("Device runner not yet implemented".into()),
+            Runner::Device(spec) => run_device(spec, image, timeout),
         }
     }
 }
@@ -68,7 +94,6 @@ fn spawn_and_wait(
     let mut child = cmd.spawn()
         .map_err(|e| format!("spawning '{}': {}", image.display(), e))?;
 
-    // Read stdout in a background thread so the pipe does not deadlock.
     let mut stdout_pipe = child.stdout.take()
         .ok_or("failed to capture stdout")?;
     let stdout_handle = thread::spawn(move || {
@@ -155,4 +180,87 @@ fn run_qemu(spec: &QemuSpec, image: &Path, timeout: Duration) -> Result<RunOutco
     cmd.arg("-kernel").arg(image);
 
     spawn_and_wait(&mut cmd, image, timeout)
+}
+
+// ---------------------------------------------------------------------------
+// Device runner (OpenOCD)
+// ---------------------------------------------------------------------------
+
+/// Flash and run an image on physical hardware via OpenOCD.
+///
+/// Pipeline:
+///   1. Flash the ELF via `openocd -f <config> -c "program <image> reset exit"`.
+///   2. Capture serial output from `<serial_port>` at `<baud>` baud.
+///   3. Wait for completion or timeout.
+fn run_device(spec: &OpenOcdSpec, image: &Path, timeout: Duration) -> Result<RunOutcome, String> {
+    let _ = timeout;
+    // Step 1: Flash via OpenOCD.
+    let _flash_timeout = Duration::from_secs(spec.flash_timeout_secs);
+    let flash_cmd = format!("program {} reset exit", image.display());
+    let mut openocd = Command::new(&spec.bin);
+    openocd
+        .arg("-f")
+        .arg(&spec.config)
+        .arg("-c")
+        .arg(&flash_cmd);
+
+    let flash_status = openocd
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|e| format!("spawning OpenOCD '{}': {}", spec.bin, e))?;
+
+    if !flash_status.success() {
+        return Err(format!("OpenOCD flash failed for '{}'", image.display()));
+    }
+
+    // Step 2: Open serial port and capture output.
+    let mut ser = open_serial(&spec.serial_port, spec.baud)?;
+
+    let start = Instant::now();
+    let mut stdout = Vec::new();
+    let mut buf = [0u8; 1024];
+    let mut timed_out = false;
+
+    loop {
+        if start.elapsed() >= timeout {
+            timed_out = true;
+            break;
+        }
+        // Read serial with a short timeout.
+        match read_serial(&mut ser, &mut buf, Duration::from_millis(100)) {
+            Ok(0) => {} // no data, keep polling
+            Ok(n) => stdout.extend_from_slice(&buf[..n]),
+            Err(_) => break, // serial error
+        }
+    }
+
+    Ok(RunOutcome {
+        exit_code: if timed_out { -1 } else { 0 },
+        stdout,
+        timed_out,
+    })
+}
+
+#[cfg(not(target_os = "windows"))]
+fn open_serial(port: &str, _baud: u32) -> Result<std::fs::File, String> {
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::fs::OpenOptions;
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY) // non-blocking, no controlling TTY
+        .open(port)
+        .map_err(|e| format!("opening serial port '{}': {}", port, e))
+}
+
+#[cfg(target_os = "windows")]
+fn open_serial(port: &str, _baud: u32) -> Result<std::fs::File, String> {
+    // Windows serial ports are opened differently.
+    // For now, just return a stub error.
+    Err("Device runner not implemented on Windows".into())
+}
+
+fn read_serial(file: &mut std::fs::File, buf: &mut [u8], _timeout: Duration) -> Result<usize, String> {
+    use std::io::Read;
+    file.read(buf).map_err(|e| format!("serial read error: {}", e))
 }

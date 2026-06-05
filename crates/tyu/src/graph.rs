@@ -11,8 +11,8 @@ use std::fs;
 
 /// A resolved module node in the dependency graph.
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct ModuleNode {
-    /// The module's declared name (e.g. `"Arithmetic"`, `"platform/testio"`).
     pub name: String,
     /// Absolute path to the source `.mod` file.
     pub path: PathBuf,

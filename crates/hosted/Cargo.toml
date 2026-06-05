@@ -12,3 +12,4 @@ lmod = { path = "../lmod" }
 
 [features]
 default = []
+encryption = ["loader-core/encryption"]

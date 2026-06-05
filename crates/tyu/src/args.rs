@@ -11,6 +11,7 @@ pub enum Command {
     Build(BuildArgs),
     Run(RunArgs),
     Test(TestArgs),
+    Deploy(DeployArgs),
     ToolchainCheck(ToolchainCheckArgs),
     Clean,
     Help,
@@ -19,8 +20,42 @@ pub enum Command {
 /// Arguments for the `toolchain check` subcommand.
 #[derive(Debug)]
 pub struct ToolchainCheckArgs {
-    /// Target triple or alias name.
     pub target: String,
+}
+
+/// Encryption mode for deploy.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum EncryptMode {
+    None,
+    Fleet,
+    Device,
+}
+
+/// Arguments for the `deploy` subcommand.
+#[derive(Debug)]
+pub struct DeployArgs {
+    pub target: Target,
+    pub input: PathBuf,
+    pub include_dirs: Vec<PathBuf>,
+    pub sysroot: Option<PathBuf>,
+    pub out_dir: PathBuf,
+    pub enc_mode: EncryptMode,
+    pub key_encrypt: Option<String>,
+    pub key_sign: Option<String>,
+    pub sign: bool,
+    pub device_keys_dir: Option<PathBuf>,
+}
+
+impl DeployArgs {
+    pub fn to_build_args(&self) -> BuildArgs {
+        BuildArgs {
+            target: self.target,
+            input: self.input.clone(),
+            include_dirs: self.include_dirs.clone(),
+            sysroot: self.sysroot.clone(),
+            out_dir: self.out_dir.clone(),
+        }
+    }
 }
 
 /// Arguments for the `build` subcommand.
@@ -77,6 +112,7 @@ pub fn parse() -> Command {
         "build" => parse_build(&args[2..]),
         "run" => parse_run(&args[2..]),
         "test" => parse_test(&args[2..]),
+        "deploy" => parse_deploy(&args[2..]),
         "toolchain" => parse_toolchain(&args[2..]),
         "clean" => Command::Clean,
         "--help" | "-h" => { print_usage(); Command::Help }
@@ -253,6 +289,55 @@ fn parse_test(args: &[String]) -> Command {
 /// Default manifest path: `fixtures/manifest.toml` relative to CWD.
 fn default_manifest() -> PathBuf {
     PathBuf::from("fixtures").join("manifest.toml")
+}
+
+fn parse_deploy(args: &[String]) -> Command {
+    let common = parse_common(args);
+    let mut enc_mode = EncryptMode::None;
+    let mut key_encrypt: Option<String> = None;
+    let mut key_sign: Option<String> = None;
+    let mut sign = false;
+    let mut device_keys_dir: Option<PathBuf> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
+        if let Some(val) = a.strip_prefix("--encrypt=") {
+            enc_mode = match val {
+                "none" => EncryptMode::None,
+                "fleet" => EncryptMode::Fleet,
+                "device" => EncryptMode::Device,
+                _ => { eprintln!("tyu: unknown encrypt mode '{}'", val); return Command::Help; }
+            };
+        } else if let Some(val) = a.strip_prefix("--key-encrypt=") {
+            key_encrypt = Some(val.to_string());
+        } else if let Some(val) = a.strip_prefix("--key-sign=") {
+            key_sign = Some(val.to_string());
+        } else if let Some(val) = a.strip_prefix("--device-keys=") {
+            device_keys_dir = Some(PathBuf::from(val));
+        } else if a == "--sign" {
+            sign = true;
+        }
+        i += 1;
+    }
+
+    let input = match common.input {
+        Some(p) => p,
+        None => { eprintln!("tyu: deploy requires an input .mod file"); return Command::Help; }
+    };
+
+    Command::Deploy(DeployArgs {
+        target: common.target,
+        input,
+        include_dirs: common.include_dirs,
+        sysroot: common.sysroot,
+        out_dir: common.out_dir,
+        enc_mode,
+        key_encrypt,
+        key_sign,
+        sign,
+        device_keys_dir,
+    })
 }
 
 fn parse_toolchain(args: &[String]) -> Command {

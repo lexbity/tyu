@@ -4,7 +4,7 @@
 //! linking.  Pipeline orchestration (build_test_image, qemu_run, assert helpers)
 //! has moved into `tyu test` — these tests call the driver binary instead.
 
-use codegen_core::{AssemblerKind, PlatformCapability, Target};
+use codegen_core::{AssemblerKind, Target};
 use std::{
     path::{Path, PathBuf},
     process::Command,
@@ -50,6 +50,7 @@ pub fn temp_dir(label: &str) -> PathBuf {
     let dir = std::env::temp_dir()
         .join("tyu_exec_tests")
         .join(format!("{}_{}", label, std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
@@ -181,17 +182,4 @@ pub fn link_image(target: Target, objs: &[PathBuf], out_dir: &Path) -> PathBuf {
     out
 }
 
-// ---------------------------------------------------------------------------
-// Capability filtering (used by tyu test manifest)
-// ---------------------------------------------------------------------------
 
-/// Parse a capability name from manifest.toml into a `PlatformCapability`.
-#[allow(dead_code)]
-pub fn parse_capability(s: &str) -> Option<PlatformCapability> {
-    match s {
-        "TaskScheduler" => Some(PlatformCapability::TaskScheduler),
-        "DynamicAlloc" => Some(PlatformCapability::DynamicAlloc),
-        "Channels" => Some(PlatformCapability::Channels),
-        _ => None,
-    }
-}

@@ -19,6 +19,8 @@ members = [
   "crates/loader-core",
   "crates/harness-core",
   "crates/tyu",
+  "crates/lmod-encrypt",
+  "crates/lmod-sign",
 ]
 
 # Panic=abort is intentional: the hosted-rt crate provides a custom panic handler

@@ -11,7 +11,7 @@ use codegen_core::Target;
 use crate::args::TestArgs;
 use crate::build;
 use crate::highwater::check_high_water;
-use crate::manifest::{parse_manifest, FixtureEntry, Manifest};
+use crate::manifest::{parse_manifest, FixtureEntry};
 use crate::runner::Runner;
 
 /// All known targets for `--all-targets`.
@@ -261,56 +261,22 @@ fn fixture_module_name(fixture: &str) -> String {
 
 /// Compile a .mod file with langc.
 fn compile_mod(target: Target, src: &Path, out_dir: &Path, is_lib: bool) -> Result<PathBuf, String> {
-    let triple = std::str::from_utf8(target.triple()).unwrap();
-    let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap()
-        .parent().unwrap()
-        .to_path_buf();
-    let sysroot = workspace.join("sysroot");
-    let langc = workspace.join("target").join("debug").join("langc");
-
-    let mut cmd = Command::new(&langc);
-    cmd.arg("--emit=obj");
-    cmd.arg(format!("--target={}", triple));
-    cmd.arg(format!("--sysroot={}", sysroot.display()));
-    cmd.arg(format!("--out-dir={}", out_dir.display()));
-    cmd.arg("-I");
-    cmd.arg(fixtures_dir());
-    if is_lib {
-        cmd.arg("--lib");
-    }
-    cmd.arg(src);
-
-    let status = cmd.status()
-        .map_err(|e| format!("running langc: {}", e))?;
-    if !status.success() {
-        return Err(format!("langc failed on '{}'", src.display()));
-    }
-
-    // Find the produced .o file.
-    let obj_name = src.file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("module");
-    let obj_path = out_dir.join(format!("{}.o", obj_name));
-    if !obj_path.exists() {
-        return Err(format!(".o not produced at '{}'", obj_path.display()));
-    }
-    Ok(obj_path)
+    let sysroot = workspace_root().join("sysroot");
+    let include_dirs = vec![fixtures_dir()];
+    build::compile_simple(target, src, out_dir, is_lib, Some(&sysroot), &include_dirs)
 }
 
-fn fixtures_dir() -> PathBuf {
+fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent().unwrap()
         .parent().unwrap()
-        .join("crates")
-        .join("execution-tests")
-        .join("fixtures")
+        .to_path_buf()
+}
+
+fn fixtures_dir() -> PathBuf {
+    workspace_root().join("crates").join("execution-tests").join("fixtures")
 }
 
 fn tool_available(name: &str) -> bool {
-    Command::new("which")
-        .arg(name)
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    crate::toolchain::find_in_path(name).is_some()
 }

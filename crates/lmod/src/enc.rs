@@ -25,8 +25,8 @@ pub const CEK_LEN: usize = 32;
 /// Wrapped CEK length: nonce(12) + ciphertext(32) + tag(16) = 60 bytes.
 pub const WRAP_LEN: usize = NONCE_LEN + CEK_LEN + TAG_LEN;
 
-/// Size of one wrapped-CEK slot: key_id(8) + wrapped(60) = 68 bytes.
-pub const WRAPPED_SLOT_SIZE: usize = 8 + WRAP_LEN;
+/// Size of one wrapped-CEK slot: key_id(8) + wrap_scheme(1) + pad(7) + wrapped(60) = 76 bytes.
+pub const WRAPPED_SLOT_SIZE: usize = 8 + 1 + 7 + WRAP_LEN;
 
 // ---------------------------------------------------------------------------
 // Encryption mode
@@ -57,6 +57,16 @@ impl EncMode {
 }
 
 // ---------------------------------------------------------------------------
+// Wrap scheme
+// ---------------------------------------------------------------------------
+
+/// Symmetric ChaCha20-Poly1305 CEK wrapping (deterministic zero-nonce).
+pub const WRAP_SCHEME_SYMMETRIC_CHACHA20POLY1305: u8 = 1;
+
+/// Reserved for future asymmetric ECIES-style wrapping.
+pub const _WRAP_SCHEME_ASYMMETRIC_ECIES: u8 = 2;
+
+// ---------------------------------------------------------------------------
 // Wrapped CEK slot
 // ---------------------------------------------------------------------------
 
@@ -65,6 +75,8 @@ impl EncMode {
 pub struct WrappedCekSlot {
     /// Key identifier for the KEK that wraps this CEK.
     pub key_id: u64,
+    /// Wrap scheme (1 = symmetric ChaCha20-Poly1305, 2 = asymmetric ECIES reserved).
+    pub wrap_scheme: u8,
     /// Wrapped CEK: nonce(12) + ciphertext(32) + tag(16).
     pub wrapped: [u8; WRAP_LEN],
 }
@@ -149,6 +161,11 @@ pub fn encode_enc_header(buf: &mut [u8], eh: &EncHeader) -> Result<usize, ()> {
     for slot in &eh.wrapped_slots {
         buf[off..off + 8].copy_from_slice(&slot.key_id.to_le_bytes());
         off += 8;
+        buf[off] = slot.wrap_scheme;
+        off += 1;
+        // 7 bytes pad (zero)
+        buf[off..off + 7].fill(0);
+        off += 7;
         buf[off..off + WRAP_LEN].copy_from_slice(&slot.wrapped);
         off += WRAP_LEN;
     }
@@ -209,10 +226,13 @@ pub fn decode_enc_header(bytes: &[u8]) -> Option<EncHeader> {
             bytes[off..off + 8].try_into().ok()?,
         );
         off += 8;
+        let wrap_scheme = bytes[off];
+        off += 1;
+        off += 7; // skip padding
         let mut wrapped = [0u8; WRAP_LEN];
         wrapped.copy_from_slice(&bytes[off..off + WRAP_LEN]);
         off += WRAP_LEN;
-        wrapped_slots.push(WrappedCekSlot { key_id, wrapped });
+        wrapped_slots.push(WrappedCekSlot { key_id, wrap_scheme, wrapped });
     }
 
     Some(EncHeader {
@@ -238,7 +258,7 @@ mod tests {
         for (i, b) in wrapped.iter_mut().enumerate() {
             *b = seed.wrapping_add(i as u8);
         }
-        WrappedCekSlot { key_id, wrapped }
+        WrappedCekSlot { key_id, wrap_scheme: WRAP_SCHEME_SYMMETRIC_CHACHA20POLY1305, wrapped }
     }
 
     fn make_eh(enc_mode: EncMode, slot_count: usize) -> EncHeader {
@@ -338,8 +358,8 @@ mod tests {
     #[test]
     fn enc_header_len_formula() {
         assert_eq!(enc_header_len(0), 36);
-        assert_eq!(enc_header_len(1), 36 + 68);
-        assert_eq!(enc_header_len(3), 36 + 3 * 68);
+        assert_eq!(enc_header_len(1), 36 + 76);
+        assert_eq!(enc_header_len(3), 36 + 3 * 76);
     }
 
     #[test]
@@ -357,5 +377,140 @@ mod tests {
         encode_enc_header(&mut buf, &eh).unwrap();
         let decoded = decode_enc_header(&buf).unwrap();
         assert_eq!(decoded.enc_mode, EncMode::None);
+    }
+
+    // -----------------------------------------------------------------------
+    // U-ENC-1: Fleet roundtrip with key_id=0 (CT-6 convention)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn enc_header_roundtrip_fleet() {
+        let slot = WrappedCekSlot {
+            key_id: 0,
+            wrap_scheme: WRAP_SCHEME_SYMMETRIC_CHACHA20POLY1305,
+            wrapped: [0x42u8; WRAP_LEN],
+        };
+        let eh = EncHeader {
+            enc_mode: EncMode::Fleet,
+            aead_id: AEAD_CHACHA20POLY1305,
+            nonce: [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c],
+            tag: [0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f],
+            wrapped_slots: vec![slot],
+        };
+        let mut buf = vec![0u8; eh.wire_len()];
+        let written = encode_enc_header(&mut buf, &eh).unwrap();
+        assert_eq!(written, enc_header_len(1));
+
+        let decoded = decode_enc_header(&buf).unwrap();
+        assert_eq!(decoded.enc_mode, EncMode::Fleet);
+        assert_eq!(decoded.aead_id, AEAD_CHACHA20POLY1305);
+        assert_eq!(decoded.nonce, eh.nonce);
+        assert_eq!(decoded.tag, eh.tag);
+        assert_eq!(decoded.wrapped_slots.len(), 1);
+        assert_eq!(decoded.wrapped_slots[0].key_id, 0);
+        assert_eq!(decoded.wrapped_slots[0].wrapped, [0x42u8; WRAP_LEN]);
+    }
+
+    // -----------------------------------------------------------------------
+    // U-ENC-2: Device roundtrip with N=3 slots, key_ids 0,1,2 (CT-6)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn enc_header_roundtrip_device_n() {
+        let slots = vec![
+            WrappedCekSlot { key_id: 0, wrap_scheme: WRAP_SCHEME_SYMMETRIC_CHACHA20POLY1305, wrapped: [0u8; WRAP_LEN] },
+            WrappedCekSlot { key_id: 1, wrap_scheme: WRAP_SCHEME_SYMMETRIC_CHACHA20POLY1305, wrapped: [1u8; WRAP_LEN] },
+            WrappedCekSlot { key_id: 2, wrap_scheme: WRAP_SCHEME_SYMMETRIC_CHACHA20POLY1305, wrapped: [2u8; WRAP_LEN] },
+        ];
+        let eh = EncHeader {
+            enc_mode: EncMode::Device,
+            aead_id: AEAD_CHACHA20POLY1305,
+            nonce: [0u8; 12],
+            tag: [0u8; 16],
+            wrapped_slots: slots,
+        };
+        let mut buf = vec![0u8; eh.wire_len()];
+        encode_enc_header(&mut buf, &eh).unwrap();
+        let decoded = decode_enc_header(&buf).unwrap();
+        assert_eq!(decoded.enc_mode, EncMode::Device);
+        assert_eq!(decoded.wrapped_slots.len(), 3);
+        for i in 0..3 {
+            assert_eq!(decoded.wrapped_slots[i].key_id, i as u64);
+            assert_eq!(decoded.wrapped_slots[i].wrapped, [i as u8; WRAP_LEN]);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // U-ENC-3: enc_header_len formula matches bytes written for N∈{1,2,8}
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn enc_header_len_matches_encoded() {
+        for n in &[1usize, 2, 8] {
+            let slot = WrappedCekSlot {
+                key_id: 0,
+                wrap_scheme: WRAP_SCHEME_SYMMETRIC_CHACHA20POLY1305,
+                wrapped: [0u8; WRAP_LEN],
+            };
+            let eh = EncHeader {
+                enc_mode: EncMode::Device,
+                aead_id: AEAD_CHACHA20POLY1305,
+                nonce: [0u8; 12],
+                tag: [0u8; 16],
+                wrapped_slots: vec![slot; *n],
+            };
+            let expected = enc_header_len(*n);
+            let mut buf = vec![0u8; expected];
+            let written = encode_enc_header(&mut buf, &eh).unwrap();
+            assert_eq!(written, expected, "enc_header_len({}) does not match encoded size", n);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // U-ENC-4: Reserved enc_mode=3 is rejected (CT-4, first reserved value)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn reserved_enc_mode_rejected() {
+        let mut buf = vec![0u8; 36];
+        buf[0] = 3; // first reserved enc_mode value
+        assert!(decode_enc_header(&buf).is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // U-ENC-5: aead_id=2 is rejected (CT-4, only AEAD_CHACHA20POLY1305=1 valid)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn bad_aead_id_rejected() {
+        let mut buf = vec![0u8; 36];
+        buf[0] = EncMode::Fleet as u8;
+        buf[1] = 2; // not AEAD_CHACHA20POLY1305
+        assert!(decode_enc_header(&buf).is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // U-ENC-6: Buffer one byte short of enc_header_len(1) is rejected (LD-7)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn truncated_header_rejected() {
+        let slot = WrappedCekSlot {
+            key_id: 0,
+            wrap_scheme: WRAP_SCHEME_SYMMETRIC_CHACHA20POLY1305,
+            wrapped: [0u8; WRAP_LEN],
+        };
+        let eh = EncHeader {
+            enc_mode: EncMode::Fleet,
+            aead_id: AEAD_CHACHA20POLY1305,
+            nonce: [0u8; 12],
+            tag: [0u8; 16],
+            wrapped_slots: vec![slot],
+        };
+        let full_len = enc_header_len(1);
+        let mut buf = vec![0u8; full_len];
+        encode_enc_header(&mut buf, &eh).unwrap();
+        // Buffer one byte short — must be rejected.
+        assert!(decode_enc_header(&buf[..full_len - 1]).is_none());
     }
 }

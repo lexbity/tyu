@@ -72,6 +72,7 @@ impl ToolRole {
 
 /// Result of resolving all tools for a target.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct ToolResolution {
     pub target: Target,
     pub compiler: Option<ResolvedTool>,
@@ -178,7 +179,7 @@ fn resolve_one(
 }
 
 /// Find a binary in PATH.
-fn find_in_path(name: &str) -> Option<PathBuf> {
+pub fn find_in_path(name: &str) -> Option<PathBuf> {
     std::env::var_os("PATH").and_then(|path| {
         for dir in std::env::split_paths(&path) {
             let candidate = dir.join(name);
