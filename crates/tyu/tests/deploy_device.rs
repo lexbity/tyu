@@ -1,11 +1,20 @@
-//! Tests for `tyu deploy` in Device mode.
+//! Tests for `tyu deploy --encrypt=device`.
 //!
-//! Creates mock device keys, deploys with device encryption,
-//! and verifies that only provisioned devices can decrypt.
+//! D-3: structural introspection (slot count matches device count).
+//! D-4: device-key isolation via the real loader.
+//! D-6: missing --device-keys errors.
+//! D-7: empty --device-keys directory errors.
 
 use std::path::PathBuf;
 use std::process::Command;
+
+use lmod::enc::EncMode;
 use tyu::test_helpers::*;
+
+use hosted::loader::HostedLoaderPlatform;
+use loader_core::platform::Tier;
+use loader_core::load::{load_module, LoadedSet, E_ENC_NO_KEY};
+use loader_core::symbols::SymMap;
 
 const PASS_MOD: &str = "\
 module Main;\nimport platform/testio { testio.write-byte };\n\
@@ -19,142 +28,43 @@ fn ensure_tools() {
     assert!(status.success(), "cargo build failed");
 }
 
-fn create_device_keys(dir: &PathBuf) -> PathBuf {
+fn create_device_keys(dir: &PathBuf, ids_and_keys: &[(&str, &[u8; 32])]) -> PathBuf {
     let keys_dir = dir.join("device-keys");
     std::fs::create_dir_all(&keys_dir).unwrap();
-    // Device A key
-    std::fs::write(keys_dir.join("device-a.key"), hex::encode([0xaa; 32])).unwrap();
-    // Device B key
-    std::fs::write(keys_dir.join("device-b.key"), hex::encode([0xbb; 32])).unwrap();
+    for (id, key) in ids_and_keys {
+        std::fs::write(keys_dir.join(format!("{}.key", id)), hex::encode(key)).unwrap();
+    }
     keys_dir
 }
 
-#[test]
-fn deploy_device_qemu() {
-    if !require_tools(&["langc", "fasm", "ld", "qemu-system-x86_64", "lmod-pack", "lmod-encrypt", "lmod-sign"]) {
-        return;
-    }
-    ensure_tools();
-
-    let dir = temp_dir("deploy_device");
-    let main_mod = dir.join("main.mod");
-    std::fs::write(&main_mod, PASS_MOD).unwrap();
-
-    let keys_dir = create_device_keys(&dir);
-    let sysroot = workspace_root().join("sysroot");
-    let out_dir = dir.join("out");
-
-    // Deploy targeting both devices.
-    let output = Command::new(tyu_exe())
-        .args([
-            "deploy",
-            "--target=x86_64-unknown-none",
-            &format!("--sysroot={}", sysroot.display()),
-            &format!("--out-dir={}", out_dir.display()),
-            "--encrypt=device",
-            &format!("--device-keys={}", keys_dir.display()),
-            "--sign",
-            &main_mod.to_string_lossy(),
-        ])
-        .output()
-        .expect("tyu deploy");
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        panic!("tyu deploy device mode failed:\n{}", stderr);
-    }
-}
-
-#[test]
-fn device_b_key_cannot_decrypt_a_artifact() {
-    if !require_tools(&["langc", "fasm", "ld", "qemu-system-x86_64", "lmod-pack", "lmod-encrypt", "lmod-sign"]) {
-        return;
-    }
-    ensure_tools();
-
-    let dir = temp_dir("cross_decrypt");
-    let main_mod = dir.join("main.mod");
-    std::fs::write(&main_mod, PASS_MOD).unwrap();
-
-    // Create keys for device-a and device-b only.
-    let keys_dir = dir.join("keys");
-    std::fs::create_dir_all(&keys_dir).unwrap();
-    std::fs::write(keys_dir.join("device-a.key"), hex::encode([0xaa; 32])).unwrap();
-    std::fs::write(keys_dir.join("device-b.key"), hex::encode([0xbb; 32])).unwrap();
-
-    let sysroot = workspace_root().join("sysroot");
-    let build_dir = dir.join("build");
-
-    // Build: produce the .o and .lmod.
-    let build_out = Command::new(tyu_exe())
-        .args([
-            "build",
-            "--target=x86_64-unknown-none",
-            &format!("--sysroot={}", sysroot.display()),
-            &format!("--out-dir={}", build_dir.display()),
-            &main_mod.to_string_lossy(),
-        ])
-        .output().expect("tyu build");
-    assert!(build_out.status.success(), "build failed");
-
-    // Manually run lmod-encrypt with only device-a as the target.
-    let lmod_obj = build_dir.join("main.o");
-    let lmod_packed = dir.join("packed.lmod");
-    assert!(Command::new(workspace_root().join("target").join("debug").join("lmod-pack"))
-        .args([lmod_obj.to_str().unwrap(), lmod_packed.to_str().unwrap()])
-        .status().unwrap().success());
-
-    let lmod_enc = dir.join("encrypted.lmod");
-    assert!(Command::new(workspace_root().join("target").join("debug").join("lmod-encrypt"))
-        .args([
-            lmod_packed.to_str().unwrap(), lmod_enc.to_str().unwrap(),
-            "--mode=device",
-            &format!("--device-keys={}", keys_dir.display()),
-            "--devices=device-a",  // Only device-a
-        ])
-        .status().unwrap().success());
-
-    let lmod_signed = dir.join("signed.lmod");
-    assert!(Command::new(workspace_root().join("target").join("debug").join("lmod-sign"))
-        .args([lmod_enc.to_str().unwrap(), lmod_signed.to_str().unwrap()])
-        .status().unwrap().success());
-
-    // Load with device-a's key — should succeed.
-    let raw = std::fs::read(&lmod_signed).unwrap();
+/// Minimal loader setup for inspecting a signed .lmod.
+fn load_with_kek(signed_path: &PathBuf, kek: &[u8; 32]) -> Result<(), u32> {
+    let raw = std::fs::read(signed_path).unwrap();
     let container = lmod::validate::Container::parse(&raw).unwrap();
     let abi_hash = container.header().abi_hash;
+    let bsize = (container.code().len() + 4095) & !4095;
 
-    let mut plat_a = hosted::loader::HostedLoaderPlatform::new(abi_hash)
-        .with_key(&[0xab; 32], loader_core::platform::Tier::One)
-        .with_kek(&[0xaa; 32]);
-    plat_a.reserve(65536).unwrap();
-    let ds_high_a = allocate_ds_page();
-    let mut map_a = loader_core::symbols::SymMap::new();
-    register_test_symbols(&mut map_a, ds_high_a);
-    let mut set_a = loader_core::load::LoadedSet::<64>::new();
-    assert!(
-        loader_core::load::load_module(&container, &mut plat_a, &mut map_a, &mut set_a).is_ok(),
-        "device-a should load its own artifact"
-    );
+    let mut plat = HostedLoaderPlatform::new(abi_hash)
+        .with_key(&[0xab; 32], Tier::One)
+        .with_kek(kek);
+    plat.reserve(bsize).map_err(|_| 1u32)?;
 
-    // Try with device-b's key — should fail with E_ENC_NO_KEY.
-    let mut plat_b = hosted::loader::HostedLoaderPlatform::new(abi_hash)
-        .with_key(&[0xab; 32], loader_core::platform::Tier::One)
-        .with_kek(&[0xbb; 32]);
-    plat_b.reserve(65536).unwrap();
-    let ds_high_b = allocate_ds_page();
-    let mut map_b = loader_core::symbols::SymMap::new();
-    register_test_symbols(&mut map_b, ds_high_b);
-    let mut set_b = loader_core::load::LoadedSet::<64>::new();
-    let result_b = loader_core::load::load_module(&container, &mut plat_b, &mut map_b, &mut set_b);
-    assert_eq!(
-        result_b.unwrap_err(),
-        loader_core::load::E_ENC_NO_KEY,
-        "device-b should not decrypt device-a's artifact"
-    );
+    let stub = stub_fn as *const () as usize;
+    let ds_high = allocate_runtime_page();
+    let mut map: SymMap<'_, 256> = SymMap::new();
+    map.register(b"__stack_overflow", stub).unwrap();
+    map.register(b"__lang_ds_high", ds_high).unwrap();
+    map.register(b"__lang_trap", stub).ok();
+    map.register(b"__lang_trap_loc", stub).ok();
+
+    let mut set = LoadedSet::<64>::new();
+    load_module(&container, &mut plat, &mut map, &mut set)?;
+    Ok(())
 }
 
-fn allocate_ds_page() -> usize {
+pub extern "C" fn stub_fn() {}
+
+fn allocate_runtime_page() -> usize {
     let page = unsafe {
         libc::mmap(
             std::ptr::null_mut(), 4096,
@@ -166,12 +76,155 @@ fn allocate_ds_page() -> usize {
     page as usize
 }
 
-fn register_test_symbols<'a>(map: &mut loader_core::symbols::SymMap<'a, 256>, ds_high_addr: usize) {
-    let stub = stub_fn as usize;
-    map.register(b"__stack_overflow", stub).unwrap();
-    map.register(b"__lang_trap", stub).ok();
-    map.register(b"__lang_trap_loc", stub).ok();
-    map.register(b"__lang_ds_high", ds_high_addr).unwrap();
+// ---------------------------------------------------------------------------
+// D-3: Device-mode artifact has N slots matching device count
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deploy_device_produces_n_slots() {
+    if !require_tools(&["langc", "fasm", "ld", "lmod-pack", "lmod-encrypt", "lmod-sign"]) { return; }
+    ensure_tools();
+
+    let dir = temp_dir("d3");
+    let main_mod = dir.join("main.mod");
+    std::fs::write(&main_mod, PASS_MOD).unwrap();
+    let keys_dir = create_device_keys(&dir, &[
+        ("device-a", &[0xaa; 32]),
+        ("device-b", &[0xbb; 32]),
+    ]);
+    let sysroot = workspace_root().join("sysroot");
+    let out_dir = dir.join("out");
+
+    let output = Command::new(tyu_exe())
+        .args([
+            "deploy",
+            "--target=x86_64-unknown-none",
+            &format!("--sysroot={}", sysroot.display()),
+            &format!("--out-dir={}", out_dir.display()),
+            "--encrypt=device",
+            &format!("--device-keys={}", keys_dir.display()),
+            "--sign",
+            &main_mod.to_string_lossy(),
+        ])
+        .output().expect("tyu deploy");
+    assert!(output.status.success(), "deploy device failed:\n{}", String::from_utf8_lossy(&output.stderr));
+
+    let facts = introspect_lmod(&out_dir.join("deploy").join("signed.lmod"));
+    assert!(facts.encrypted, "D-3: device artifact must be encrypted");
+    assert!(facts.signed,    "D-3: device artifact must be signed");
+    assert_eq!(facts.enc_mode, Some(EncMode::Device), "D-3: enc_mode must be Device");
+    assert_eq!(facts.slot_count, 2, "D-3: must have 2 slots for 2 device keys");
 }
 
-pub extern "C" fn stub_fn() {}
+// ---------------------------------------------------------------------------
+// D-4: Device-key isolation via the real loader
+// ---------------------------------------------------------------------------
+//
+// Deploy device-mode for {a, b}.  Load with a's KEK → Ok (a is targeted).
+// Load with c's KEK → E_ENC_NO_KEY (c has no slot in the artifact).
+
+#[test]
+fn deploy_device_isolation_via_loader() {
+    if !require_tools(&["langc", "fasm", "ld", "lmod-pack", "lmod-encrypt", "lmod-sign"]) { return; }
+    ensure_tools();
+
+    let dir = temp_dir("d4");
+    let main_mod = dir.join("main.mod");
+    std::fs::write(&main_mod, PASS_MOD).unwrap();
+    let keys_dir = create_device_keys(&dir, &[
+        ("device-a", &[0xaa; 32]),
+        ("device-b", &[0xbb; 32]),
+    ]);
+    let sysroot = workspace_root().join("sysroot");
+    let out_dir = dir.join("out");
+
+    let output = Command::new(tyu_exe())
+        .args([
+            "deploy",
+            "--target=x86_64-unknown-none",
+            &format!("--sysroot={}", sysroot.display()),
+            &format!("--out-dir={}", out_dir.display()),
+            "--encrypt=device",
+            &format!("--device-keys={}", keys_dir.display()),
+            "--sign",
+            &main_mod.to_string_lossy(),
+        ])
+        .output().expect("tyu deploy");
+    assert!(output.status.success(), "deploy device failed:\n{}", String::from_utf8_lossy(&output.stderr));
+
+    let signed = out_dir.join("deploy").join("signed.lmod");
+
+    // Loading with a's key must succeed.
+    assert!(load_with_kek(&signed, &[0xaa; 32]).is_ok(),
+        "D-4: device-a's KEK must decrypt the artifact");
+
+    // Loading with c's key (not in the device set) must fail.
+    let result = load_with_kek(&signed, &[0xcc; 32]);
+    assert_eq!(result.unwrap_err(), E_ENC_NO_KEY,
+        "D-4: device-c's KEK must not decrypt device-a/b artifact");
+}
+
+// ---------------------------------------------------------------------------
+// D-6: Missing --device-keys errors
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deploy_device_missing_keysdir_errors() {
+    if !require_tools(&["langc", "fasm", "ld", "lmod-pack", "lmod-encrypt", "lmod-sign"]) { return; }
+    ensure_tools();
+
+    let dir = temp_dir("d6");
+    let main_mod = dir.join("main.mod");
+    std::fs::write(&main_mod, PASS_MOD).unwrap();
+    let sysroot = workspace_root().join("sysroot");
+    let out_dir = dir.join("out");
+
+    let output = Command::new(tyu_exe())
+        .args([
+            "deploy",
+            "--target=x86_64-unknown-none",
+            &format!("--sysroot={}", sysroot.display()),
+            &format!("--out-dir={}", out_dir.display()),
+            "--encrypt=device",
+            // Intentionally omit --device-keys.
+            "--sign",
+            &main_mod.to_string_lossy(),
+        ])
+        .output().expect("tyu deploy");
+    assert!(!output.status.success(), "D-6: deploy must fail without --device-keys");
+}
+
+// ---------------------------------------------------------------------------
+// D-7: Empty --device-keys directory errors
+// ---------------------------------------------------------------------------
+
+#[test]
+fn deploy_device_empty_keysdir_errors() {
+    if !require_tools(&["langc", "fasm", "ld", "lmod-pack", "lmod-encrypt", "lmod-sign"]) { return; }
+    ensure_tools();
+
+    let dir = temp_dir("d7");
+    let main_mod = dir.join("main.mod");
+    std::fs::write(&main_mod, PASS_MOD).unwrap();
+    let empty_keys = dir.join("empty-keys");
+    std::fs::create_dir_all(&empty_keys).unwrap();
+    let sysroot = workspace_root().join("sysroot");
+    let out_dir = dir.join("out");
+
+    let output = Command::new(tyu_exe())
+        .args([
+            "deploy",
+            "--target=x86_64-unknown-none",
+            &format!("--sysroot={}", sysroot.display()),
+            &format!("--out-dir={}", out_dir.display()),
+            "--encrypt=device",
+            &format!("--device-keys={}", empty_keys.display()),
+            "--sign",
+            &main_mod.to_string_lossy(),
+        ])
+        .output().expect("tyu deploy");
+    assert!(!output.status.success(), "D-7: deploy must fail with empty keys dir");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("no device keys found"),
+        "D-7: stderr must mention empty keys dir, got: {}", stderr);
+}
