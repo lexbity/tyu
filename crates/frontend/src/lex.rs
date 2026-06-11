@@ -96,6 +96,7 @@ impl<'a> Lexer<'a> {
                 }
             }
             b'\'' => TokenKind::PunctApostrophe,
+            b'/' => TokenKind::PunctSlash,
             b'>' => {
                 if self.peek() == Some(b'=') {
                     self.i += 1;
@@ -252,5 +253,5 @@ fn is_ident_start(b: u8) -> bool {
 }
 
 fn is_ident_continue(b: u8) -> bool {
-    is_ident_start(b) || is_digit(b) || matches!(b, b'-' | b'?' | b'!' | b'/' | b'[' | b']')
+    is_ident_start(b) || is_digit(b) || matches!(b, b'-' | b'?' | b'!')
 }

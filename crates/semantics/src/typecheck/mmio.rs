@@ -185,6 +185,17 @@ fn validate_regmap_body(src: &[u8], body: Span) -> Result<(), TcError> {
                 ),
             });
         }
+        // S-13: skip optional `[N]` bracket array suffix (now separate tokens)
+        {
+            let mut probe = lex;
+            let maybe_bracket = probe.next();
+            if maybe_bracket.kind == TokenKind::PunctLBracket {
+                probe.next(); // skip number
+                probe.next(); // skip ']'
+                lex = probe; // commit: advance past `[N]`
+            }
+            // else: not an array — keep lex unchanged
+        }
 
         let ty_tok = lex.next();
         if ty_tok.kind != TokenKind::Ident {
@@ -424,7 +435,29 @@ pub fn scan_regmap_for_reg(
             return Err(TcError::MmioExpectedIdent { span: place_span });
         }
         let name_bytes = &slice[name_tok.span.start..name_tok.span.end];
-        let (base_name, array_len) = parse_name_array(name_bytes);
+        let (base_name, mut array_len) = parse_name_array(name_bytes);
+        // S-13: `[` may be a separate token after the ident (old `NAME[N]` syntax
+        // was a single ident; now `[` is a separate PunctLBracket token).
+        if array_len.is_none() {
+            let probe = lex;
+            let bracket = lex.next();
+            if bracket.kind == TokenKind::PunctLBracket {
+                let num_tok = lex.next();
+                array_len = if num_tok.kind == TokenKind::Number {
+                    parse_u32_any(&slice[num_tok.span.start..num_tok.span.end])
+                } else {
+                    lex = probe; // restore — not a bracket index after all
+                    None
+                };
+                let close = lex.next(); // consume ']'
+                if close.kind != TokenKind::PunctRBracket {
+                    lex = probe; // malformed — restore and fall through
+                    array_len = None;
+                }
+            } else {
+                lex = probe; // not a bracket — restore
+            }
+        }
         let Some(reg_name) = TypeAtom::new(base_name) else {
             return Err(TcError::MmioRegNotFound { span: place_span });
         };

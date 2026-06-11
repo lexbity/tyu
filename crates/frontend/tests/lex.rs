@@ -282,12 +282,14 @@ fn ident_with_bang() {
 
 #[test]
 fn ident_with_slash() {
-    assert_eq!(kind("a/b"), [TokenKind::Ident, TokenKind::Eof]);
+    // S-13: `/` is no longer part of identifiers.
+    assert_eq!(kind("a/b"), [TokenKind::Ident, TokenKind::PunctSlash, TokenKind::Ident, TokenKind::Eof]);
 }
 
 #[test]
 fn ident_with_brackets() {
-    assert_eq!(kind("arr[0]"), [TokenKind::Ident, TokenKind::Eof]);
+    // S-13: `[` and `]` are no longer part of identifiers.
+    assert_eq!(kind("arr[0]"), [TokenKind::Ident, TokenKind::PunctLBracket, TokenKind::Number, TokenKind::PunctRBracket, TokenKind::Eof]);
 }
 
 #[test]
@@ -466,6 +468,43 @@ fn old_bang_brace_is_two_tokens() {
     // Old `!{` syntax is no longer a special token — it's Ident(!) + PunctLBrace.
     assert_eq!(kind("!{suspend}"), [TokenKind::Ident, TokenKind::PunctLBrace, TokenKind::Ident, TokenKind::PunctRBrace, TokenKind::Eof]);
 }
+
+// ---------------------------------------------------------------------------
+// FR-23 charset: [ ] / no longer part of identifiers
+// ---------------------------------------------------------------------------
+
+#[test]
+fn bracket_index_is_not_one_ident() {
+    // `buf[3]` must lex as `buf`, `[`, `3`, `]`, not one ident
+    assert_eq!(
+        kind("buf[3]"),
+        [
+            TokenKind::Ident,
+            TokenKind::PunctLBracket,
+            TokenKind::Number,
+            TokenKind::PunctRBracket,
+            TokenKind::Eof,
+        ]
+    );
+}
+
+#[test]
+fn module_path_uses_slash_token() {
+    // `platform/linux` must lex as `platform`, `/`, `linux`
+    assert_eq!(
+        kind("platform/linux"),
+        [
+            TokenKind::Ident,
+            TokenKind::PunctSlash,
+            TokenKind::Ident,
+            TokenKind::Eof,
+        ]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Regression: hyphen, question, bang in identifiers still work
+// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // Multi-token sequences

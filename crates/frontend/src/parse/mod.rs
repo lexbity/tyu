@@ -84,13 +84,28 @@ impl<'a> Parser<'a> {
             },
         )?;
         self.bump();
-        let name = self.expect(
+        let first = self.expect(
             TokenKind::Ident,
             ParseError::ExpectedModuleName {
                 span: self.look.span,
             },
         )?;
         self.bump();
+        let name = if self.look.kind == TokenKind::PunctSlash {
+            let start = first.span.start;
+            let mut end = first.span.end;
+            while self.look.kind == TokenKind::PunctSlash {
+                self.bump(); // /
+                let seg = self.expect(TokenKind::Ident, ParseError::ExpectedModuleName {
+                    span: self.look.span,
+                })?;
+                end = seg.span.end;
+                self.bump();
+            }
+            Span::new(start, end)
+        } else {
+            first.span
+        };
         self.expect(
             TokenKind::PunctSemi,
             ParseError::ExpectedSemiAfterModule {
@@ -100,7 +115,7 @@ impl<'a> Parser<'a> {
         self.bump();
 
         let mut ast = ModuleAst {
-            name: name.span,
+            name,
             imports: FixedVec::new(),
             exports: FixedVec::new(),
             decls: FixedVec::new(),
@@ -281,13 +296,34 @@ impl<'a> Parser<'a> {
 
     fn parse_import_ast(&mut self) -> Result<ImportAst, ParseError> {
         self.bump(); // import
-        let name = self.expect(
+        // Read module path: `platform/linux` → `Ident(platform) / Ident(linux)`
+        let first = self.expect(
             TokenKind::Ident,
             ParseError::ExpectedImportName {
                 span: self.look.span,
             },
         )?;
         self.bump();
+        let name = if self.look.kind == TokenKind::PunctSlash {
+            // Build a combined span covering the full module path.
+            let start = first.span.start;
+            let mut end = first.span.end;
+            while self.look.kind == TokenKind::PunctSlash {
+                self.bump(); // /
+                let seg = self.expect(TokenKind::Ident, ParseError::ExpectedImportName {
+                    span: self.look.span,
+                })?;
+                end = seg.span.end;
+                self.bump();
+            }
+            // Create a span covering the full path (e.g. platform/linux).
+            // The actual path text is reconstructed from the source.
+            // For the span, we return a span covering the whole path for diagnostics.
+            // The ImportAst module field is used for module lookup by text.
+            Span::new(start, end)
+        } else {
+            first.span
+        };
 
         let mut names: FixedVec<Span, 64> = FixedVec::new();
         if self.look.kind == TokenKind::PunctLBrace {
@@ -320,7 +356,7 @@ impl<'a> Parser<'a> {
             self.bump();
         }
         Ok(ImportAst {
-            module: name.span,
+            module: name,
             names,
         })
     }

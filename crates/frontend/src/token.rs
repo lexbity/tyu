@@ -55,6 +55,7 @@ pub enum TokenKind {
     PunctAmp,             // &
     PunctAmpBang,         // &!
     PunctAmpLBracket,     // &[
+    PunctSlash,           // /
     PunctAmpBangLBracket, // &![
 }
 
