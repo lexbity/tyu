@@ -1,4 +1,5 @@
 use crate::typecheck::error::TcError;
+use crate::typecheck::place::{PlacePath, Step};
 use crate::typecheck::util::{parse_u32_any, slice_span};
 use crate::types::TypeAtom;
 use frontend::fixed::FixedVec;
@@ -570,36 +571,53 @@ pub fn scan_regmap_for_reg(
     }
 }
 
-fn split_segments<'a>(name: &'a [u8], out: &mut [&'a [u8]; 8]) -> usize {
-    let mut count = 0usize;
-    let mut start = 0usize;
-    let mut i = 0usize;
+/// Construct a PlacePath from a qualified name (e.g. `gpio.OUT_SET`)
+/// where the caller already has the resolved byte slice and span.
+/// The root is set to the first segment; remaining segments become Field steps.
+pub fn qualname_to_placepath(name: &[u8], name_span: Span) -> PlacePath {
+    let mut steps: FixedVec<Step, 8> = FixedVec::new();
+    // Find the first dot — root is everything before it.
+    let first_dot = name.iter().position(|&b| b == b'.');
+    let (root_full, seg_off_init) = if let Some(dot_pos) = first_dot {
+        (Span::new(name_span.start, name_span.start + dot_pos), dot_pos + 1)
+    } else {
+        // No dots: the entire name is the root, no steps.
+        return PlacePath {
+            root: name_span,
+            steps,
+            full: name_span,
+        };
+    };
+    // Remaining segments after the first dot become Field steps.
+    let mut i = seg_off_init;
+    let mut seg_off = seg_off_init;
     while i <= name.len() {
         if i == name.len() || name[i] == b'.' {
-            if count < out.len() {
-                out[count] = &name[start..i];
-                count += 1;
+            if i > seg_off {
+                if let Some(atom) = TypeAtom::new(&name[seg_off..i]) {
+                    let _ = steps.push(Step::Field(atom));
+                }
             }
-            start = i + 1;
+            seg_off = i + 1;
         }
         i += 1;
     }
-    count
+    PlacePath {
+        root: root_full,
+        steps,
+        full: name_span,
+    }
 }
 
 pub fn resolve_mmio_place(
     db: &MmioDb,
     src: &[u8],
-    name: &[u8],
+    place: &PlacePath,
     place_span: Span,
 ) -> Result<Option<MmioResolved>, TcError> {
-    let mut segs: [&[u8]; 8] = [&[]; 8];
-    let seg_len = split_segments(name, &mut segs);
-    if seg_len < 2 {
-        return Ok(None);
-    }
-
-    let Some(inst_name) = TypeAtom::new(segs[0]) else {
+    // PlacePath root is the MMIO instance name.
+    let root_bytes = slice_span(src, place.root);
+    let Some(inst_name) = TypeAtom::new(root_bytes) else {
         return Ok(None);
     };
     let Some(inst) = find_instance(db, inst_name) else {
@@ -609,18 +627,43 @@ pub fn resolve_mmio_place(
         return Err(TcError::MmioMapNotFound { span: place_span });
     };
 
-    let (reg_base, reg_idx) = parse_name_array(segs[1]);
-    let Some(reg_name) = TypeAtom::new(reg_base) else {
-        return Err(TcError::MmioRegNotFound { span: place_span });
+    // Walk the steps to extract register and optional field/index.
+    // Expected pattern: root.Field(reg)[.Index(n)][.Field(field)]
+    let step_len = place.steps.len();
+    if step_len < 1 || step_len > 3 {
+        return Err(TcError::MmioPlaceTooDeep { span: place_span });
+    }
+
+    // Step 0 must be a Field: the register name.
+    let reg_step = place.steps.get(0).expect("step_len >= 1");
+    let (reg_name, reg_idx) = match *reg_step {
+        Step::Field(f) => {
+            // Register name, possibly followed by an Index.
+            let idx = if step_len >= 2 {
+                match *place.steps.get(1).expect("step_len >= 2") {
+                    Step::Index(n) => Some(n),
+                    Step::DynamicIndex(_) => return Err(TcError::MmioArrayIndexNonArray { span: place_span }),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            (f, idx)
+        }
+        _ => return Err(TcError::MmioRegNotFound { span: place_span }),
     };
-    let want_field = if seg_len == 3 {
-        Some(TypeAtom::new(segs[2]).ok_or(TcError::MmioFieldNotFound { span: place_span })?)
+
+    // Determine step offset for the field (if any).
+    // After reg_name [+ Index], the next step (if any) is a Field.
+    let field_offset = if reg_idx.is_some() { 2 } else { 1 };
+    let want_field = if step_len > field_offset {
+        match *place.steps.get(field_offset).expect("step_len > field_offset") {
+            Step::Field(f) => Some(f),
+            _ => return Err(TcError::MmioFieldNotFound { span: place_span }),
+        }
     } else {
         None
     };
-    if seg_len > 3 {
-        return Err(TcError::MmioPlaceTooDeep { span: place_span });
-    }
 
     let reg_info = scan_regmap_for_reg(
         src,

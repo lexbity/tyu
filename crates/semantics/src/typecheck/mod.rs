@@ -3,7 +3,7 @@ pub mod error;
 pub mod irgen;
 pub mod mmio;
 pub mod parse;
-pub mod stackcheck;
+pub mod place;
 pub mod util;
 pub mod value;
 
@@ -11,7 +11,6 @@ pub mod value;
 pub use crate::typecheck::db::SubtypeInfo;
 pub use crate::typecheck::error::{ChecksMode, Output, TcError};
 pub use crate::typecheck::parse::parse_word_sig;
-pub use crate::typecheck::stackcheck::typecheck_word_body;
 
 use crate::typecheck::db::{
     build_iso_db, build_nominal_db, build_resource_db, compute_resource_sharing, ResourceDb,
@@ -225,7 +224,7 @@ where
             env,
             subtypes,
             &mmio,
-            &resources,
+            resources,
             &nominals,
             &iso,
             checks,

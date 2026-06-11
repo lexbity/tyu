@@ -2,6 +2,7 @@ use super::*;
 
 mod literals;
 mod memory;
+pub(super) mod borrow;
 mod channels;
 mod control;
 mod tasks;
@@ -47,6 +48,24 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             }
             if terminated {
                 continue;
+            }
+
+            // D-15: check for number-dot-number (reserved float literal).
+            // This check must consume the PunctDot + Number from the lexer
+            // before falling through to the normal dispatch.
+            if tok.kind == TokenKind::Number {
+                let mut probe = lex;
+                let dot = probe.next();
+                if dot.kind == TokenKind::PunctDot {
+                    let num2 = probe.next();
+                    if num2.kind == TokenKind::Number {
+                        let float_span = Span::new(
+                            span.start + tok.span.start,
+                            span.start + num2.span.end,
+                        );
+                        return Err(TcError::FloatSyntax { span: float_span });
+                    }
+                }
             }
 
             cur = match tok.kind {

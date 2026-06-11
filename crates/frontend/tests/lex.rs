@@ -444,59 +444,27 @@ fn empty_input() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn effect_set_empty() {
-    assert_eq!(kind("!{}"), [TokenKind::EffectSet, TokenKind::Eof]);
+fn performs_empty() {
+    assert_eq!(kind("performs {}"), [TokenKind::KwPerforms, TokenKind::PunctLBrace, TokenKind::PunctRBrace, TokenKind::Eof]);
 }
 
 #[test]
-fn effect_set_with_content() {
-    assert_eq!(kind("!{suspend}"), [TokenKind::EffectSet, TokenKind::Eof]);
+fn performs_with_effect() {
+    assert_eq!(kind("performs {suspend}"), [TokenKind::KwPerforms, TokenKind::PunctLBrace, TokenKind::Ident, TokenKind::PunctRBrace, TokenKind::Eof]);
 }
 
 #[test]
-fn effect_set_with_multiple() {
+fn performs_with_multiple() {
     assert_eq!(
-        kind("!{send, recv}"),
-        [TokenKind::EffectSet, TokenKind::Eof]
+        kind("performs {suspend, mmio}"),
+        [TokenKind::KwPerforms, TokenKind::PunctLBrace, TokenKind::Ident, TokenKind::PunctComma, TokenKind::Ident, TokenKind::PunctRBrace, TokenKind::Eof]
     );
 }
 
 #[test]
-fn effect_set_unterminated() {
-    assert_eq!(kind("!{open"), [TokenKind::EffectSet, TokenKind::Eof]);
-}
-
-#[test]
-fn effect_set_suspend() {
-    assert_eq!(kind("!{suspend}"), [TokenKind::EffectSet, TokenKind::Eof]);
-}
-
-#[test]
-fn effect_set_interrupt() {
-    assert_eq!(kind("!{interrupt}"), [TokenKind::EffectSet, TokenKind::Eof]);
-}
-
-#[test]
-fn effect_set_diverge() {
-    assert_eq!(kind("!{diverge}"), [TokenKind::EffectSet, TokenKind::Eof]);
-}
-
-#[test]
-fn effect_set_mmio() {
-    assert_eq!(kind("!{mmio}"), [TokenKind::EffectSet, TokenKind::Eof]);
-}
-
-#[test]
-fn effect_set_alloc() {
-    assert_eq!(kind("!{alloc}"), [TokenKind::EffectSet, TokenKind::Eof]);
-}
-
-#[test]
-fn effect_set_multiple_names() {
-    assert_eq!(
-        kind("!{suspend, mmio}"),
-        [TokenKind::EffectSet, TokenKind::Eof]
-    );
+fn old_bang_brace_is_two_tokens() {
+    // Old `!{` syntax is no longer a special token — it's Ident(!) + PunctLBrace.
+    assert_eq!(kind("!{suspend}"), [TokenKind::Ident, TokenKind::PunctLBrace, TokenKind::Ident, TokenKind::PunctRBrace, TokenKind::Eof]);
 }
 
 // ---------------------------------------------------------------------------

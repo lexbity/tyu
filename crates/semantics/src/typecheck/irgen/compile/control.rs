@@ -18,17 +18,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             return Err(TcError::ReturnWithScoped { span });
         }
         for (i, v) in stack.iter().enumerate().take(want) {
-            let got = match v {
-                Value::Plain(t) => *t,
-                Value::Scoped { ty, .. } => *ty,
-                Value::Resource(_) => TypeAtom::RESOURCE,
-                Value::Quot(_) => TypeAtom::QUOT,
-                Value::MmioPlace(_) => TypeAtom::MMIO,
-                Value::Ptr { mutable: false, .. } => TypeAtom::PTR,
-                Value::Ptr { mutable: true, .. } => TypeAtom::PTR_MUT,
-                Value::MmioPtr { mutable: false, .. } => TypeAtom::PTR,
-                Value::MmioPtr { mutable: true, .. } => TypeAtom::PTR_MUT,
-            };
+            let got = v.to_type_atom();
             if !type_compatible(got, self.sig.outputs[i], self.subtypes) {
                 return Err(TcError::ReturnTypeMismatch { span });
             }
@@ -52,7 +42,35 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             Value::Quot(s) => s,
             _ => return Err(TcError::CallPopQuot { span: name_abs }),
         };
-        let (qname, qsig, performs, qbound) = self.build_quote_word(body_span, observer)?;
+        // Build the runtime word first (with parent's lock context so
+        // resource access inside the call works correctly).
+        let (qname, qsig, performs, qbound) =
+            self.build_quote_word_with_context(body_span, true, observer)?;
+        if performs.contains(EffectSet::SUSPEND) && !allow_suspend {
+            return Err(TcError::SuspendForbidden { span: name_abs });
+        }
+
+        // S-7: call shares the live ledger.  Scan the parent's stack for
+        // borrows that would conflict with borrows in the call's quotation.
+        // For each live Ptr on the parent's stack, check if the quotation's
+        // word contains an AddrOf op with the same place root.
+        for v in stack[..*sp].iter() {
+            if let Value::Ptr { place, mutable: pm, .. } = *v {
+                if place == PLACE_NONE { continue; }
+                let idx = place.0 as usize;
+                if idx >= self.ledger_len as usize { continue; }
+                // Conservative check: if the parent has a MUTABLE borrow
+                // live, reject the call.  This is stricter than needed but
+                // sound.  A precise check would scan the quotation's ops
+                // for AddrOf with matching place.
+                if pm {
+                    return Err(TcError::BorrowAlias {
+                        span: name_abs,
+                        first: self.ledger[idx].origin,
+                    });
+                }
+            }
+        }
         if performs.contains(EffectSet::SUSPEND) && !allow_suspend {
             return Err(TcError::SuspendForbidden { span: name_abs });
         }
@@ -99,19 +117,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         if *sp == 0 {
             return Err(TcError::EmptyStackForScoped { span });
         }
-        let top = stack[*sp - 1];
-        let top_ty = match top {
-            Value::Plain(t) => t,
-            Value::Scoped { ty, .. } => ty,
-            Value::Resource(_) => TypeAtom::RESOURCE,
-            Value::Quot(_) => TypeAtom::QUOT,
-            Value::MmioPlace(_) => TypeAtom::MMIO,
-            Value::Ptr { mutable: false, .. } => TypeAtom::PTR,
-            Value::Ptr { mutable: true, .. } => TypeAtom::PTR_MUT,
-            Value::MmioPtr { mutable: false, .. } => TypeAtom::PTR,
-            Value::MmioPtr { mutable: true, .. } => TypeAtom::PTR_MUT,
-        };
-
+        let top_ty = stack[*sp - 1].to_type_atom();
         if let Some(elem) = array_elem_type(top_ty) {
             let scope_id = self
                 .enter_scope()

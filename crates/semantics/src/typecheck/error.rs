@@ -205,6 +205,12 @@ pub enum TcError {
     IndexError {
         span: Span,
     },
+    PlaceTooDeep {
+        span: Span,
+    },
+    PlaceUnknownRoot {
+        span: Span,
+    },
 
     // 3520-3522: Resources/db
     ResourceNameInvalid {
@@ -487,6 +493,21 @@ pub enum TcError {
     BorrowEscape {
         span: Span,
     },
+    BorrowAlias {
+        span: Span,
+        first: Span,
+    },
+    BorrowDupMut {
+        span: Span,
+        first: Span,
+    },
+    BorrowLocalReuse {
+        span: Span,
+        first: Span,
+    },
+    BorrowLedgerFull {
+        span: Span,
+    },
     IsrStack {
         span: Span,
     },
@@ -494,6 +515,12 @@ pub enum TcError {
         span: Span,
     },
     DivergeInBounded {
+        span: Span,
+    },
+    FloatSyntax {
+        span: Span,
+    },
+    FloatExponent {
         span: Span,
     },
 
@@ -578,6 +605,8 @@ impl TcError {
             TcError::LockNested { .. } => 3517,
             TcError::ArrayIndexOob { .. } => 3518,
             TcError::IndexError { .. } => 3519,
+            TcError::PlaceTooDeep { .. } => 3520,
+            TcError::PlaceUnknownRoot { .. } => 3523,
             TcError::ResourceNameInvalid { .. } => 3520,
             TcError::ResourceTypeInvalid { .. } => 3521,
             TcError::ResourceCapacityExceeded { .. } => 3522,
@@ -663,9 +692,15 @@ impl TcError {
             TcError::IsoDrop { .. } => 5011,
             TcError::IsoUseAfterMove { .. } => 5012,
             TcError::BorrowEscape { .. } => 5020,
+            TcError::BorrowAlias { .. } => 5021,
+            TcError::BorrowDupMut { .. } => 5022,
+            TcError::BorrowLocalReuse { .. } => 5023,
+            TcError::BorrowLedgerFull { .. } => 5024,
             TcError::IsrStack { .. } => 5030,
             TcError::ResourceSharedUnlocked { .. } => 5031,
             TcError::DivergeInBounded { .. } => 5040,
+            TcError::FloatSyntax { .. } => 5050,
+            TcError::FloatExponent { .. } => 5051,
             TcError::StackUnbounded { .. } => 5100,
             TcError::StackExceedsBudget { .. } => 5101,
             TcError::StackQuotErased { .. } => 5103,
@@ -740,6 +775,8 @@ impl TcError {
             | TcError::LockNested { span }
             | TcError::ArrayIndexOob { span }
             | TcError::IndexError { span }
+            | TcError::PlaceTooDeep { span }
+            | TcError::PlaceUnknownRoot { span }
             | TcError::ResourceNameInvalid { span }
             | TcError::ResourceTypeInvalid { span }
             | TcError::ResourceCapacityExceeded { span }
@@ -825,9 +862,15 @@ impl TcError {
             | TcError::IsoDrop { span }
             | TcError::IsoUseAfterMove { span }
             | TcError::BorrowEscape { span }
+            | TcError::BorrowAlias { span, .. }
+            | TcError::BorrowDupMut { span, .. }
+            | TcError::BorrowLocalReuse { span, .. }
+            | TcError::BorrowLedgerFull { span }
             | TcError::IsrStack { span }
             | TcError::ResourceSharedUnlocked { span }
             | TcError::DivergeInBounded { span }
+            | TcError::FloatSyntax { span }
+            | TcError::FloatExponent { span }
             | TcError::StackUnbounded { span }
             | TcError::StackExceedsBudget { span }
             | TcError::StackQuotErased { span } => span,

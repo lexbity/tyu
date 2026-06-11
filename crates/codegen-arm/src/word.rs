@@ -590,13 +590,9 @@ impl<'a> ArmThumbBackend<'a> {
                 }
                 // Apply mask and shift
                 if shift > 0 {
-                    if shift <= 255 {
-                        self.out.write(b"\tlsrs r0, r0, #");
-                        write_u32(self.out, shift as u32);
-                        self.out.write(b"\n");
-                    } else {
-                        return Err(CodegenError::UnsupportedOp { op_name: b"MmioVolLoadField" });
-                    }
+                    self.out.write(b"\tlsrs r0, r0, #");
+                    write_u32(self.out, shift as u32);
+                    self.out.write(b"\n");
                 }
                 if mask != 0 && mask != u64::MAX {
                     if mask <= 0xFFFF {

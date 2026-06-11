@@ -8,15 +8,17 @@ use crate::typecheck::mmio::{
     access_can_read, access_can_write, field_mask_shift, resolve_mmio_place, MmioDb, MmioResolved,
 };
 use crate::typecheck::parse::{
-    capture_balanced, capture_scoped_block, parse_place, read_qualified_name,
+    capture_balanced, capture_scoped_block, read_qualified_name,
 };
+use crate::typecheck::place::PlacePath;
 use crate::typecheck::util::parse_u32_any;
 use crate::typecheck::util::{
     align_up, apply_sig, array_elem_type, array_len, chan_elem_type, check_no_scoped_live,
     field_align, find_local, find_subtype, lookup, parse_i64_token, pop, push, region_ref_type,
     slice_span, slice_type_of_elem, type_compatible, type_size_bytes,
 };
-use crate::typecheck::value::Value;
+use crate::typecheck::irgen::compile::borrow::{mint_id, PlaceKey, LEDGER_CAP};
+use crate::typecheck::value::{PlaceId, Value, PARAM_BASE, PLACE_NONE};
 use crate::types::{TypeAtom, WordEntry, WordSig};
 use core::mem::MaybeUninit;
 use frontend::fixed::FixedVec;
@@ -76,6 +78,7 @@ struct IrWordGen<'a, 'r> {
     local_tys: [TypeAtom; 64],
     local_live: [bool; 64],
     local_scoped: [u16; 64],
+    local_place: [PlaceId; 64],
     local_len: usize,
 
     next_scope: u16,
@@ -84,6 +87,10 @@ struct IrWordGen<'a, 'r> {
 
     locked_resource: Option<TypeAtom>,
     in_lock: bool,
+
+    /// Borrow ledger: tracks live borrowed places for exclusivity checking (S-3).
+    ledger: [PlaceKey; LEDGER_CAP],
+    ledger_len: u8,
 
     /// Accumulated stack-bound for the word being compiled (stack-bound §2).
     acc: StackBound,
@@ -221,12 +228,15 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             local_tys: [TypeAtom::EMPTY; 64],
             local_live: [false; 64],
             local_scoped: [0u16; 64],
+            local_place: [PLACE_NONE; 64],
             local_len: 0,
             next_scope: 1,
             scope_stack: [0u16; 16],
             scope_sp: 0,
             locked_resource: None,
             in_lock: false,
+            ledger: [PlaceKey { root: TypeAtom::EMPTY, full: TypeAtom::EMPTY, origin: Span::new(0, 0) }; LEDGER_CAP],
+            ledger_len: 0,
             acc: StackBound::ID,
             terminated: false,
             word: lir::Word {
@@ -350,62 +360,38 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
 
     pub(super) fn resolve_place_pointee_ty(
         &self,
-        place_bytes: &[u8],
+        place: &PlacePath,
         place_abs: Span,
     ) -> Result<Option<TypeAtom>, TcError> {
-        let mut segs: FixedVec<(TypeAtom, bool), 8> = FixedVec::new();
-        let mut start = 0usize;
-        for i in 0..=place_bytes.len() {
-            if i == place_bytes.len() || place_bytes[i] == b'.' {
-                if i == start {
-                    return Err(TcError::PlaceSegmentEmpty { span: place_abs });
-                }
-                let seg = &place_bytes[start..i];
-                let mut has_index = false;
-                let (name_bytes, _) = if let Some(pos) = seg.iter().position(|&b| b == b'\'') {
-                    has_index = true;
-                    (&seg[..pos], &seg[pos + 1..])
-                } else {
-                    (seg, &[][..])
-                };
-                let atom = TypeAtom::new(name_bytes)
-                    .ok_or(TcError::PlaceSegmentEmpty { span: place_abs })?;
-                segs.push((atom, has_index))
-                    .map_err(|_| TcError::PlaceSegmentEmpty { span: place_abs })?;
-                start = i + 1;
-            }
-        }
-        if segs.is_empty() {
-            return Ok(None);
-        }
+        // Resolve root type from place root identifier.
+        let root_bytes = slice_span(self.src, place.root);
+        let root_atom = TypeAtom::new(root_bytes)
+            .ok_or(TcError::PlaceParseFailed { span: place.root })?;
 
-        let (root, root_index) = *segs.get(0).expect("len > 0 checked above");
-        let mut ty = if let Some(rty) = resource_ty(self.resources, root) {
+        let mut ty = if let Some(rty) = resource_ty(self.resources, root_atom) {
             rty
-        } else if let Some(idx) = find_local(&self.locals, self.local_len, root) {
+        } else if let Some(idx) = find_local(&self.locals, self.local_len, root_atom) {
             self.local_tys[idx]
         } else {
             return Ok(None);
         };
-        if root_index {
-            let Some(elem) = array_elem_type(ty) else {
-                return Err(TcError::FieldNotFound { span: place_abs });
-            };
-            ty = elem;
-        }
 
-        for i in 1..segs.len() {
-            let (field, has_index) = *segs.get(i).expect("i < segs.len() by loop guard");
-            let Some(mut next) = struct_field_ty(self.nominals, ty, field) else {
-                return Err(TcError::FieldNotFound { span: place_abs });
-            };
-            if has_index {
-                let Some(elem) = array_elem_type(next) else {
-                    return Err(TcError::FieldNotFound { span: place_abs });
-                };
-                next = elem;
+        // Walk each step, resolving through struct fields / array elements.
+        for step in place.steps.iter() {
+            match *step {
+                crate::typecheck::place::Step::Field(field) => {
+                    let Some(next) = struct_field_ty(self.nominals, ty, field) else {
+                        return Err(TcError::FieldNotFound { span: place_abs });
+                    };
+                    ty = next;
+                }
+                crate::typecheck::place::Step::Index(_) | crate::typecheck::place::Step::DynamicIndex(_) => {
+                    let Some(elem) = array_elem_type(ty) else {
+                        return Err(TcError::FieldNotFound { span: place_abs });
+                    };
+                    ty = elem;
+                }
             }
-            ty = next;
         }
 
         Ok(Some(ty))
@@ -490,6 +476,76 @@ pub fn build_ir_word<'r>(
     let mut cur = lir::BlockId(0);
     cur = gen.emit_prologue(cur, &mut stack, &mut sp, decl.requires, observer)?;
 
+    // S-11: Parse compile-time capability set from `requires {caps}`.
+    if let Some(cap_span) = decl.cap_set {
+        let cap_bytes = &src[cap_span.start + 1..cap_span.end - 1]; // strip braces
+        let mut caps = CapSet::empty();
+        let mut cap_start = 0usize;
+        while cap_start < cap_bytes.len() {
+            // Skip whitespace and commas.
+            while cap_start < cap_bytes.len()
+                && (cap_bytes[cap_start] == b' ' || cap_bytes[cap_start] == b',' || cap_bytes[cap_start] == b'\n')
+            {
+                cap_start += 1;
+            }
+            if cap_start >= cap_bytes.len() { break; }
+            // Find end of this capability name.
+            let mut cap_end = cap_start;
+            while cap_end < cap_bytes.len() && cap_bytes[cap_end] != b',' && cap_bytes[cap_end] != b' '
+                && cap_bytes[cap_end] != b'\n'
+            {
+                cap_end += 1;
+            }
+            let name = &cap_bytes[cap_start..cap_end];
+            // Map known capability names to CapSet bits.
+            if name == b"suspendable" {
+                caps = caps.union(CapSet::from_bits(CapSet::SUSPENDABLE));
+            } else if name.starts_with(b"write(") && name.ends_with(b")") {
+                caps = caps.union(CapSet::from_bits(CapSet::WRITE));
+            } else {
+                // Unknown capability — list known names.
+                let span = Span::new(cap_span.start + 1 + cap_start, cap_span.start + 1 + cap_end);
+                return Err(TcError::Internal { span });
+                // TODO: proper unknown-capability error with known list
+            }
+            cap_start = cap_end;
+        }
+        gen.word.requires = caps;
+    }
+
+    // S-8: Seed pointer-typed parameters with synthetic PlaceIds.
+    // The prologue pushes inputs as Value::Plain; we replace PTR/PTR_MUT
+    // params with Value::Ptr carrying a synthetic param PlaceId so that
+    // borrow-checking tracks aliasing through pointer parameters (D-6).
+    let stack_start = 0usize;
+    for i in 0..(sig.in_len as usize) {
+        if sig.inputs[i] == TypeAtom::PTR || sig.inputs[i] == TypeAtom::PTR_MUT {
+            let mutable = sig.inputs[i] == TypeAtom::PTR_MUT;
+            // Build a synthetic root name for the param ledger entry.
+            let mut root_buf = [0u8; 12];
+            root_buf[..7].copy_from_slice(b"_param_");
+            let mut v = i as u32;
+            let mut pos = 7;
+            loop {
+                root_buf[pos] = b'0' + (v % 10) as u8;
+                pos += 1;
+                v /= 10;
+                if v == 0 { break; }
+            }
+            let root_atom = TypeAtom::new(&root_buf[..pos]).unwrap_or(TypeAtom::EMPTY);
+            let param_id = PlaceId(PARAM_BASE + i as u16);
+            // Add to ledger so the borrow checker knows about this param.
+            let _ = mint_id(
+                &mut gen.ledger, &mut gen.ledger_len,
+                root_atom, TypeAtom::EMPTY, Span::new(0, 0),
+            );
+            let idx = stack_start + i;
+            if idx < sp {
+                stack[idx] = Value::Ptr { ty: TypeAtom::EMPTY, mutable, place: param_id };
+            }
+        }
+    }
+
     if let Some(body_span) = decl.body {
         // ISR body forbids suspend (and runs with ceiling = N_isr).
         let allow_suspend = if is_isr {
@@ -525,17 +581,7 @@ pub fn build_ir_word<'r>(
         });
     }
     for (i, v) in stack.iter().enumerate().take(sig.out_len as usize) {
-        let got = match v {
-            Value::Plain(t) => *t,
-            Value::Scoped { ty, .. } => *ty,
-            Value::Resource(_) => TypeAtom::RESOURCE,
-            Value::Quot(_) => TypeAtom::QUOT,
-            Value::MmioPlace(_) => TypeAtom::MMIO,
-            Value::Ptr { mutable: false, .. } => TypeAtom::PTR,
-            Value::Ptr { mutable: true, .. } => TypeAtom::PTR_MUT,
-            Value::MmioPtr { mutable: false, .. } => TypeAtom::PTR,
-            Value::MmioPtr { mutable: true, .. } => TypeAtom::PTR_MUT,
-        };
+        let got = v.to_type_atom();
         if !type_compatible(got, sig.outputs[i], subtypes) {
             return Err(TcError::OutputTypeMismatch {
                 span: decl.body.unwrap_or(decl.name),

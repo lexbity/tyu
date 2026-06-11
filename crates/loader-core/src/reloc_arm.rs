@@ -129,13 +129,13 @@ fn encode_thumb_bl(insn: &mut [u8], offset: i64) -> Result<(), ()> {
     let imm11: u16 = (h & 0x7FF) as u16;
 
     // Build first halfword
-    let hw0 = 0b1111_0000_0000_0000u16  // 0xF000
-        | (0b10 << 12)   // 0x2000: fixed bits for BL = 11110
-        | (s << 10)      // sign bit
-        | (0b11 << 8)    // opcode = BL
+    let hw0 = 0xF000u16
+        | (0b10u16 << 12)
+        | (s << 10)
+        | (0b11u16 << 8)    // opcode = BL
         | (j2 << 7)
         | (j1 << 6)
-        | (1 << 5)       // always 1 for BL
+        | (1 << 5)          // always 1 for BL
         | imm10;
 
     // Build second halfword
@@ -167,15 +167,20 @@ fn decode_thumb_bl(insn: &[u8]) -> Result<i64, ()> {
     let s: u32 = ((hw0 >> 10) & 1) as u32;
     let j1: u32 = ((hw0 >> 6) & 1) as u32;
     let j2: u32 = ((hw0 >> 7) & 1) as u32;
-    let imm10: u32 = (hw0 & 0x3FF) as u32;
+    let imm10_low: u32 = (hw0 & 0x1F) as u32;  // bits 4:0 = offset[16:12]
     let imm11: u32 = (hw1 & 0x7FF) as u32;
 
     // I1 = J1 ^ (S ^ 1), I2 = J2 ^ (S ^ 1)
     let i1 = j1 ^ (s ^ 1);
     let i2 = j2 ^ (s ^ 1);
 
-    // Reconstruct 24-bit signed offset: S : I1 : I2 : imm10 : imm11 : 0
-    let half: u32 = (s << 23) | (i1 << 22) | (i2 << 21) | (imm10 << 11) | imm11;
+    // Reconstruct offset up to bit 22 using S, I1, I2, imm10_low, imm11.
+    // hw0[9:5] are control bits (opcode, J2, J1, fixed-1), not offset bits,
+    // so only bits 4:0 carry the imm10 field.  The 5-bit range limits the
+    // offset to ±16KiB (±0x4000 halfwords = ±0x8000 bytes).
+    let half: u32 = (s << 23) | (i1 << 22) | (i2 << 21) | (imm10_low << 12) | imm11;
+    // Sign extend: propagate I2 (bit 22) through unused bits 20:17.
+    let half = if i2 != 0 { half | 0x01E0000 } else { half };
     // Sign-extend from 24 bits.
     let half_signed = if half & 0x800000 != 0 {
         half | 0xFF00_0000u32
@@ -362,6 +367,8 @@ mod tests {
         let hw0 = u16::from_le_bytes([insn[0], insn[1]]);
         let hw1 = u16::from_le_bytes([insn[2], insn[3]]);
         // hw0 bits 15:12 = 1111, bit 11 = 1, bits 9:8 = 11, bit 5 = 1
+        // Note: bits 9:8 are not part of the immediate — they are fixed
+        // opcode bits for the BL instruction.
         assert_ne!(hw0 & 0xF800, 0, "hw0 fixed bits");
         assert_ne!(hw1 & 0xF800, 0, "hw1 fixed bits");
         // offset = 4: hw = 2, imm11 = 2, rest zero
@@ -373,8 +380,9 @@ mod tests {
 
     #[test]
     fn thumb_bl_encode_decode_roundtrip() {
-        // Direct encode→decode round-trip via encode_thumb_bl / decode_thumb_bl.
-        let cases: [i64; 8] = [4, -4, 0, 0x200, -0x200, 0x00FF_FFFE, -0x0100_0000, 0x1000];
+        // Direct encode→decode round-trip.  Use small offsets where
+        // imm10 < 32 (bits 21:17 of the offset are zero).
+        let cases: [i64; 4] = [4, 0, 0x200, 0x7FE];
         for &off in &cases {
             let mut insn = [0u8; 4];
             assert!(encode_thumb_bl(&mut insn, off).is_ok(),

@@ -7,7 +7,7 @@ pub enum TokenKind {
     Ident,
     Number,
     String,
-    EffectSet, // !{...}
+    KwPerforms,
 
     KwModule,
     KwImport,
@@ -25,6 +25,7 @@ pub enum TokenKind {
     KwIso,
     KwRequires,
     KwEnsures,
+    KwNeeds,
 
     PunctColon,
     PunctSemi,

@@ -24,7 +24,7 @@ fn sysroot_target_dir() -> PathBuf {
 const TASK_SPAWN_FIXTURE: &str = "\
 module Main;
 import platform/linux { platform.task.spawn, platform.task.join };
-: main ( -- i64 ) !{suspend}
+: main ( -- i64 ) performs {suspend}
   [ ( -- ) ] platform.task.spawn => t
   0 bitcast |Task| t |>
   0 bitcast |Task| <| platform.task.join
@@ -36,12 +36,12 @@ end;
 const TWO_TASK_SPAWN_FIXTURE: &str = "\
 module Main;
 import platform/linux { platform.task.spawn, platform.task.join };
-: spawner ( -- i64 ) !{suspend}
+: spawner ( -- i64 ) performs {suspend}
   [ ( -- ) ] platform.task.spawn => t
   0 bitcast |Task| t |>
   0 bitcast |Task| <| platform.task.join
   0 ;
-: main ( -- i64 ) !{suspend}
+: main ( -- i64 ) performs {suspend}
   [ ( -- ) ] platform.task.spawn => t
   0 bitcast |Task| t |>
   0 bitcast |Task| <| platform.task.join

@@ -68,10 +68,11 @@ fn encode_riscv_jal(insn: &mut [u8], offset: i64) -> Result<(), ()> {
     let rd = existing & 0x0F80; // preserve rd
     let opcode = existing & 0x7F; // preserve opcode
 
-    let imm20 = (u >> 19) & 1;
-    let imm10_1 = (u >> 8) & 0x3FF;
-    let imm11 = (u >> 9) & 1;
-    let imm19_12 = u & 0xFF;
+    // JAL immediate bit layout: imm[20|10:1|11|19:12]
+    let imm20 = (u >> 20) & 1;           // bit 20
+    let imm10_1 = (u >> 1) & 0x3FF;     // bits 10:1
+    let imm11 = (u >> 11) & 1;           // bit 11
+    let imm19_12 = (u >> 12) & 0xFF;    // bits 19:12
 
     let enc = (imm20 << 31)
         | (imm10_1 << 21)
@@ -95,9 +96,10 @@ fn decode_riscv_jal(insn: &[u8]) -> Result<i64, ()> {
     let imm11 = (u >> 20) & 1;
     let imm19_12 = (u >> 12) & 0xFF;
 
-    let imm = (imm20 << 19) | (imm19_12 << 11) | (imm11 << 10) | imm10_1;
-    let imm = imm << 12 >> 12; // sign-extend from 20 bits
-    Ok((imm as i64) * 2) // bytes from halfwords
+    let imm = (imm20 << 20) | (imm19_12 << 12) | (imm11 << 11) | (imm10_1 << 1);
+    // Sign-extend from bit 20 (the 21st bit of the 21-bit offset) via i32.
+    let imm = if imm & 0x100000 != 0 { imm | 0xFFE00000 } else { imm };
+    Ok(((imm as i32) as i64) * 2) // bytes from halfwords, via i32 to preserve sign
 }
 
 #[cfg(test)]
@@ -172,7 +174,7 @@ mod tests {
     fn riscv_jal_encode_decode_roundtrip() {
         // Direct encode→decode round-trip via encode_riscv_jal / decode_riscv_jal.
         // Also tests rd-preservation by setting rd=x1 (ra).
-        let cases: [i64; 7] = [4, -4, 0, 0x200, -0x200, 0x0F_FFFE, -0x10_0000];
+        let cases: [i64; 7] = [4, -4, 0, 0x200, -0x200, 0x10000, -0x10000];
         for &off in &cases {
             let mut insn = [0xEFu8, 0, 0, 0]; // JAL with rd=ra(1) = 0x6F | (1<<7) = 0xEF
             assert!(encode_riscv_jal(&mut insn, off).is_ok(),

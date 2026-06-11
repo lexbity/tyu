@@ -26,11 +26,13 @@ fn exe(name: &str) -> PathBuf {
     workspace_root().join("target").join("debug").join(name)
 }
 
-fn fresh_dir(name: &str) -> PathBuf {
 fn runtime_asm_linux_x86_64_hosted() -> PathBuf {
-    workspace_root().join("runtime").join("x86_64-unknown-linux-gnu").join("runtime.asm")
+    workspace_root()
+        .join("runtime")
+        .join("linux-x86_64-hosted.asm")
 }
 
+fn fresh_dir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join("tyu_lang_tests").join(format!(
         "{}_{}",
         name,
@@ -170,7 +172,7 @@ fn milestone11_contract_failure_traps_exit_code() {
     std::fs::write(
         dir.join("Main.mod"),
         b"module Main;\n\
-: bad ( -- ) requires [ false ] ;\n\
+: bad ( -- ) needs [ false ] ;\n\
 : main ( -- i64 )\n\
   bad\n\
   0\n\
@@ -426,7 +428,7 @@ fn milestone12_platform_task_sleep_runs() {
         dir.join("Main.mod"),
         b"module Main;\n\
 import platform/linux { };\n\
-: main ( -- i64 ) !{suspend}\n\
+: main ( -- i64 ) performs {suspend}\n\
   0 as usize platform.task.sleep-ms\n\
   0 as usize platform.task.sleep-us\n\
   0\n\
@@ -576,7 +578,7 @@ fn milestone13_borrowed_slice_live_in_local_blocks_yield() {
     std::fs::write(
         dir.join("Main.mod"),
         b"module Main;\n\
-: f ( i64'4 -- i64'4 ) !{suspend}\n\
+: f ( i64'4 -- i64'4 ) performs {suspend}\n\
   &[\n\
     => s\n\
     platform.task.yield\n\

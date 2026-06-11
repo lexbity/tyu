@@ -55,14 +55,38 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             .map_err(|_| TcError::TypeParseFailed { span: sig_span })?;
 
         let mut performs = EffectSet::empty();
-        let next = lex.next();
-        let next = if next.kind == TokenKind::EffectSet {
-            let tok_bytes = &slice[next.span.start..next.span.end];
-            performs = Self::parse_effect_set(tok_bytes);
-            lex.next()
-        } else {
-            next
-        };
+        let mut next = lex.next();
+        // S-12: `performs {suspend}` replaces old `!{suspend}`.
+        if next.kind == TokenKind::KwPerforms {
+            let brace_tok = lex.next();
+            if brace_tok.kind == TokenKind::PunctLBrace {
+                let mut depth = 1u32;
+                let content_start = brace_tok.span.end;
+                let mut content_end = brace_tok.span.end;
+                while depth > 0 {
+                    let t = lex.next();
+                    content_end = t.span.end;
+                    if t.kind == TokenKind::PunctLBrace { depth += 1; }
+                    if t.kind == TokenKind::PunctRBrace { depth -= 1; }
+                    if t.kind == TokenKind::Eof { break; }
+                }
+                #[allow(unused_assignments)]
+                let _ = &content_end;
+                if content_end > content_start {
+                    let inner = &slice[content_start..content_end - 1];
+                    let mut buf = [0u8; 128];
+                    let mut buf_len = 0usize;
+                    buf[buf_len] = b'!'; buf_len += 1;
+                    buf[buf_len] = b'{'; buf_len += 1;
+                    for &b in inner.iter().take(125 - buf_len) {
+                        buf[buf_len] = b; buf_len += 1;
+                    }
+                    buf[buf_len] = b'}'; buf_len += 1;
+                    performs = Self::parse_effect_set(&buf[..buf_len]);
+                }
+            }
+            next = lex.next();
+        }
         let body_start = if next.kind == TokenKind::Eof {
             inner.end
         } else {
@@ -117,6 +141,17 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         quot_span: Span,
         observer: &mut dyn TypecheckObserver,
     ) -> Result<(lir::Atom, WordSig, EffectSet, StackBound), TcError> {
+        self.build_quote_word_with_context(quot_span, false, observer)
+    }
+
+    /// Build a quotation word, optionally inheriting the parent's lock state
+    /// and borrow ledger (used by `call` via `compile_call_quote`).
+    pub(super) fn build_quote_word_with_context(
+        &mut self,
+        quot_span: Span,
+        inherit_context: bool,
+        observer: &mut dyn TypecheckObserver,
+    ) -> Result<(lir::Atom, WordSig, EffectSet, StackBound), TcError> {
         let parsed = self.parse_quote_sig(quot_span)?;
         let name = self.quote_word_name();
         let sig = parsed.sig;
@@ -137,6 +172,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 sig,
                 name,
             )?;
+
+            if inherit_context {
+                qgen.locked_resource = self.locked_resource;
+                qgen.in_lock = self.in_lock;
+            }
 
             let mut stack: [Value; 256] = [Value::Plain(TypeAtom::EMPTY); 256];
             let mut sp: usize = 0;
@@ -163,17 +203,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                     return Err(TcError::OutputCountMismatch { span: quot_span });
                 }
                 for (i, v) in stack.iter().enumerate().take(sig.out_len as usize) {
-                    let got = match v {
-                        Value::Plain(t) => *t,
-                        Value::Scoped { ty, .. } => *ty,
-                        Value::Resource(_) => TypeAtom::RESOURCE,
-                        Value::Quot(_) => TypeAtom::QUOT,
-                        Value::MmioPlace(_) => TypeAtom::MMIO,
-                        Value::Ptr { mutable: false, .. } => TypeAtom::PTR,
-                        Value::Ptr { mutable: true, .. } => TypeAtom::PTR_MUT,
-                        Value::MmioPtr { mutable: false, .. } => TypeAtom::PTR,
-                        Value::MmioPtr { mutable: true, .. } => TypeAtom::PTR_MUT,
-                    };
+                    let got = v.to_type_atom();
                     if !type_compatible(got, sig.outputs[i], self.subtypes) {
                         return Err(TcError::OutputTypeMismatch { span: quot_span });
                     }

@@ -26,11 +26,13 @@ fn exe(name: &str) -> PathBuf {
     workspace_root().join("target").join("debug").join(name)
 }
 
-fn fresh_dir(name: &str) -> PathBuf {
 fn runtime_asm_linux_x86_64_hosted() -> PathBuf {
-    workspace_root().join("runtime").join("x86_64-unknown-linux-gnu").join("runtime.asm")
+    workspace_root()
+        .join("runtime")
+        .join("linux-x86_64-hosted.asm")
 }
 
+fn fresh_dir(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join("tyu_lang_tests").join(format!(
         "{}_{}",
         name,
@@ -168,7 +170,7 @@ fn milestone16_channel_task_roundtrip_exit_code() {
         b"module Main;\n\
 import platform/channel { };\n\
 import platform/linux { platform.task.spawn, platform.task.join };\n\
-: main ( -- i64 ) !{suspend}\n\
+: main ( -- i64 ) performs {suspend}\n\
   platform.channel.make drop\n\
   [ ( -- ) ] platform.task.spawn => t\n\
   0 bitcast |Task| t |>\n\
@@ -218,7 +220,7 @@ register-map GPIO\n\
   0x00 DATA[2] u32 rw\n\
 end;\n\
 const gpio = GPIO @ 0x0;\n\
-: main ( -- i64 ) !{suspend}\n\
+: main ( -- i64 ) performs {suspend}\n\
   platform.channel.make drop\n\
   0 as u32 &!gpio.DATA'0 swap !u32\n\
   0 as u32 &!gpio.DATA'1 swap !u32\n\
@@ -347,7 +349,7 @@ register-map GPIO\n\
   0x00 DATA[2] u32 rw\n\
 end;\n\
 const gpio = GPIO @ 0x0;\n\
-: main ( -- i64 ) !{suspend}\n\
+: main ( -- i64 ) performs {suspend}\n\
   platform.channel.make drop\n\
   0 as u32 &!gpio.DATA'0 swap !u32\n\
   0 as u32 &!gpio.DATA'1 swap !u32\n\
@@ -564,7 +566,7 @@ fn milestone8_effect_suspend_word_allows_yield_runs() {
         dir.join("Main.mod"),
         b"module Main;\n\
 import platform/linux { };\n\
-: main ( -- i64 ) !{suspend}\n\
+: main ( -- i64 ) performs {suspend}\n\
   platform.task.yield\n\
   0\n\
 ;\n\
@@ -710,7 +712,7 @@ register-map GPIO\n\
   0x00 DATA u32 rw\n\
 end;\n\
 const gpio = GPIO @ 0x0;\n\
-: main ( -- i64 ) !{suspend}\n\
+: main ( -- i64 ) performs {suspend}\n\
   [ ( -- ) 7 as u32 &!gpio.DATA swap !u32 ] platform.task.spawn\n\
   platform.task.join\n\
   &gpio.DATA @u32 as i64\n\
@@ -757,15 +759,15 @@ register-map GPIO\n\
   0x00 DATA[8] u32 rw\n\
 end;\n\
 const gpio = GPIO @ 0x0;\n\
-: main ( -- i64 ) !{suspend}\n\
-  [ ( -- ) !{suspend} platform.task.yield 1 as u32 &!gpio.DATA'0 swap !u32 ] platform.task.spawn\n\
-  [ ( -- ) !{suspend} platform.task.yield 2 as u32 &!gpio.DATA'1 swap !u32 ] platform.task.spawn\n\
-  [ ( -- ) !{suspend} platform.task.yield 3 as u32 &!gpio.DATA'2 swap !u32 ] platform.task.spawn\n\
-  [ ( -- ) !{suspend} platform.task.yield 4 as u32 &!gpio.DATA'3 swap !u32 ] platform.task.spawn\n\
-  [ ( -- ) !{suspend} platform.task.yield 5 as u32 &!gpio.DATA'4 swap !u32 ] platform.task.spawn\n\
-  [ ( -- ) !{suspend} platform.task.yield 6 as u32 &!gpio.DATA'5 swap !u32 ] platform.task.spawn\n\
-  [ ( -- ) !{suspend} platform.task.yield 7 as u32 &!gpio.DATA'6 swap !u32 ] platform.task.spawn\n\
-  [ ( -- ) !{suspend} platform.task.yield 8 as u32 &!gpio.DATA'7 swap !u32 ] platform.task.spawn\n\
+: main ( -- i64 ) performs {suspend}\n\
+  [ ( -- ) performs {suspend} platform.task.yield 1 as u32 &!gpio.DATA'0 swap !u32 ] platform.task.spawn\n\
+  [ ( -- ) performs {suspend} platform.task.yield 2 as u32 &!gpio.DATA'1 swap !u32 ] platform.task.spawn\n\
+  [ ( -- ) performs {suspend} platform.task.yield 3 as u32 &!gpio.DATA'2 swap !u32 ] platform.task.spawn\n\
+  [ ( -- ) performs {suspend} platform.task.yield 4 as u32 &!gpio.DATA'3 swap !u32 ] platform.task.spawn\n\
+  [ ( -- ) performs {suspend} platform.task.yield 5 as u32 &!gpio.DATA'4 swap !u32 ] platform.task.spawn\n\
+  [ ( -- ) performs {suspend} platform.task.yield 6 as u32 &!gpio.DATA'5 swap !u32 ] platform.task.spawn\n\
+  [ ( -- ) performs {suspend} platform.task.yield 7 as u32 &!gpio.DATA'6 swap !u32 ] platform.task.spawn\n\
+  [ ( -- ) performs {suspend} platform.task.yield 8 as u32 &!gpio.DATA'7 swap !u32 ] platform.task.spawn\n\
   platform.task.join\n\
   platform.task.join\n\
   platform.task.join\n\
@@ -1008,7 +1010,7 @@ fn milestone4_checks_flag_controls_insertion() {
 
     std::fs::write(
         dir.join("Main.mod"),
-        b"module Main;\nsubtype Percent = i64 range 0..100;\n: clamp ( i64 -- Percent ) as Percent ;\n: pwm_set ( Percent -- ) requires [ dup dup 0 >= swap 100 <= and ] drop ;\nend;\n",
+        b"module Main;\nsubtype Percent = i64 range 0..100;\n: clamp ( i64 -- Percent ) as Percent ;\n: pwm_set ( Percent -- ) needs [ dup dup 0 >= swap 100 <= and ] drop ;\nend;\n",
     )
     .unwrap();
 
@@ -1090,7 +1092,7 @@ fn milestone5_rejects_suspend_with_scoped_live() {
 
     std::fs::write(
         dir.join("Main.mod"),
-        b"module Main;\n: f ( i64'1 -- i64'1 ) !{suspend}\n  &[\n    platform.task.yield drop\n  ]\n;\nend;\n",
+        b"module Main;\n: f ( i64'1 -- i64'1 ) performs {suspend}\n  &[\n    platform.task.yield drop\n  ]\n;\nend;\n",
     )
     .unwrap();
 
@@ -1153,7 +1155,7 @@ fn milestone5_allows_drop_before_yield() {
 
     std::fs::write(
         dir.join("Main.mod"),
-        b"module Main;\n: f ( i64'1 -- i64'1 ) !{suspend}\n  &[\n    drop\n  ]\n  platform.task.yield\n;\nend;\n",
+        b"module Main;\n: f ( i64'1 -- i64'1 ) performs {suspend}\n  &[\n    drop\n  ]\n  platform.task.yield\n;\nend;\n",
     )
     .unwrap();
 

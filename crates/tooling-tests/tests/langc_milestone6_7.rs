@@ -189,7 +189,7 @@ fn milestone4_contracts_and_subtypes_in_ir() {
 
     std::fs::write(
         dir.join("Main.mod"),
-        b"module Main;\nsubtype Percent = i64 range 0..100;\n: clamp ( i64 -- Percent )\n  as Percent\n;\n: pwm_set ( Percent -- )\n  requires [ dup dup 0 >= swap 100 <= and ]\n  drop\n;\nend;\n",
+        b"module Main;\nsubtype Percent = i64 range 0..100;\n: clamp ( i64 -- Percent )\n  as Percent\n;\n: pwm_set ( Percent -- )\n  needs [ dup dup 0 >= swap 100 <= and ]\n  drop\n;\nend;\n",
     )
     .unwrap();
 

@@ -1,4 +1,7 @@
 use super::*;
+use super::borrow::{mint_id, scan_conflict};
+use crate::typecheck::place::parse_place_path;
+use crate::typecheck::value::PLACE_NONE;
 
 impl<'a, 'r> IrWordGen<'a, 'r> {
 
@@ -23,7 +26,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             .get(*sp - 1)
             .ok_or(TcError::StackUnderflow { span: op_span })?;
         let (struct_ty, mutable) = match base {
-            Value::Ptr { ty, mutable } => (ty, mutable),
+            Value::Ptr { ty, mutable, .. } => (ty, mutable),
             _ => return Err(TcError::FieldNotFound { span: op_span }),
         };
         let Some(sinfo) = self.nominals.structs.iter().find(|s| s.name == struct_ty) else {
@@ -60,9 +63,14 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             },
             op_span,
         )?;
+        let base_place = match stack[*sp - 1] {
+            Value::Ptr { place, .. } => place,
+            _ => PLACE_NONE,
+        };
         stack[*sp - 1] = Value::Ptr {
             ty: field_ty,
             mutable,
+            place: base_place,
         };
         Ok(cur)
     }
@@ -149,7 +157,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                     .ok_or(TcError::IndexError { span: op_span })?;
                 (elem, size, IndexOut::Value, lir::TY_PTR)
             }
-            Value::Ptr { ty, mutable } => {
+            Value::Ptr { ty, mutable, .. } => {
                 let Some(elem) = array_elem_type(ty) else {
                     return Err(TcError::IndexError { span: op_span });
                 };
@@ -187,17 +195,24 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             _ => return Err(TcError::IndexError { span: op_span }),
         };
 
+        let base_place = match stack[base_pos] {
+            Value::Ptr { place, .. } => place,
+            Value::MmioPlace(_) => PLACE_NONE,
+            _ => PLACE_NONE,
+        };
         match out_kind {
             IndexOut::Value => {
                 stack[base_pos] = Value::Ptr {
                     ty: elem_ty,
                     mutable: false,
+                    place: base_place,
                 };
             }
             IndexOut::Ptr(mutable) => {
                 stack[base_pos] = Value::Ptr {
                     ty: elem_ty,
                     mutable,
+                    place: base_place,
                 };
             }
             IndexOut::Mmio => {}
@@ -247,16 +262,20 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         lex: &mut Lexer,
     ) -> Result<lir::BlockId, TcError> {
         let mut_tok = tok.kind == TokenKind::PunctAmpBang;
-        let place = parse_place(lex, slice).ok_or(TcError::PlaceParseFailed {
+        let place_path = parse_place_path(lex, slice).map_err(|_| TcError::PlaceParseFailed {
             span: Span::new(span.start + tok.span.start, span.start + tok.span.end),
         })?;
-        let place_bytes = &slice[place.full.start..place.full.end];
-        let place_abs = Span::new(span.start + place.full.start, span.start + place.full.end);
+        // Adjust spans from slice-relative to self.src-absolute for resolve_mmio_place.
+        let base = span.start;
+        let mut abs_path = place_path;
+        abs_path.root = Span::new(base + abs_path.root.start, base + abs_path.root.end);
+        abs_path.full = Span::new(base + abs_path.full.start, base + abs_path.full.end);
+        let place_abs = abs_path.full;
         let root_atom =
-            TypeAtom::new(&slice[place.root.start..place.root.end]).unwrap_or(TypeAtom::EMPTY);
+            TypeAtom::new(&self.src[abs_path.root.start..abs_path.root.end]).unwrap_or(TypeAtom::EMPTY);
         let mut const_addr: Option<u64> = None;
 
-        if let Some(res) = resolve_mmio_place(self.mmio, self.src, place_bytes, place_abs)? {
+        if let Some(res) = resolve_mmio_place(self.mmio, self.src, &abs_path, place_abs)? {
             match res {
                 MmioResolved::Reg(reg) => {
                     if mut_tok && !access_can_write(reg.access) {
@@ -285,32 +304,39 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                     return Err(TcError::CapMissing { span: place_abs });
                 }
             } else if mut_tok {
-                let root = TypeAtom::new(&slice[place.root.start..place.root.end]).unwrap();
+                let root = root_atom;
                 if find_local(&self.locals, self.local_len, root).is_some() {
                     return Err(TcError::MutRefToLocal {
-                        span: place.root_abs(span.start),
+                        span: abs_path.root_abs(0),
                     });
                 }
             }
-            if let Some(pointee) = self.resolve_place_pointee_ty(place_bytes, place_abs)? {
+            if let Some(pointee) = self.resolve_place_pointee_ty(&abs_path, place_abs)? {
+                // S-3: mint a borrow ledger entry; scan for conflicts.
+                scan_conflict(
+                    stack, *sp, &self.ledger, self.ledger_len,
+                    &self.local_place, &self.local_live, &self.local_tys, self.local_len,
+                    root_atom, mut_tok, place_abs,
+                )?;
+                let place = mint_id(
+                    &mut self.ledger, &mut self.ledger_len,
+                    root_atom, pointee, place_abs,
+                )?;
                 push(
                     stack,
                     sp,
                     Value::Ptr {
                         ty: pointee,
                         mutable: mut_tok,
+                        place,
                     },
                 )?;
             } else {
-                let ty = if mut_tok {
-                    TypeAtom::PTR_MUT
-                } else {
-                    TypeAtom::PTR
-                };
-                push(stack, sp, Value::Plain(ty))?;
+                return Err(TcError::PlaceUnknownRoot { span: place_abs });
             }
         }
 
+        let place_bytes = &self.src[abs_path.full.start..abs_path.full.end];
         self.emit_op(
             cur,
             lir::OpKind::AddrOf {
@@ -418,24 +444,14 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                         return Err(TcError::MmioTypedNotAllowed { span: name_abs });
                     }
                     let want = ty_atom.expect("typed => ty_atom is Some");
-                    if want != ty {
+                    // Allow EMPTY pointee (raw pointer casts, S-8): the
+                    // asserted type wins.
+                    let resolved = if ty == TypeAtom::EMPTY { want } else { ty };
+                    if want != resolved {
                         return Err(TcError::TypedLoadStoreTypeMismatch { span: name_abs });
                     }
-                    push(stack, sp, Value::Plain(ty))?;
-                    let tid = self.ty_id_of_type(ty, name_abs)?;
-                    self.emit_op(cur, lir::OpKind::Load { ty: tid }, name_abs)?;
-                    Ok(cur)
-                }
-                Value::Plain(t) => {
-                    if !typed {
-                        return Err(TcError::MmioTypedNotAllowed { span: name_abs });
-                    }
-                    if t != TypeAtom::PTR && t != TypeAtom::PTR_MUT {
-                        return Err(TcError::MmioTypedNotAllowed { span: name_abs });
-                    }
-                    let ty_atom = ty_atom.expect("typed => ty_atom is Some");
-                    push(stack, sp, Value::Plain(ty_atom))?;
-                    let tid = self.ty_id_of_type(ty_atom, name_abs)?;
+                    push(stack, sp, Value::Plain(resolved))?;
+                    let tid = self.ty_id_of_type(resolved, name_abs)?;
                     self.emit_op(cur, lir::OpKind::Load { ty: tid }, name_abs)?;
                     Ok(cur)
                 }
@@ -444,17 +460,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         } else {
             let v = pop(stack, sp).ok_or(TcError::ReturnStackDepth { span: name_abs })?;
             let addr = pop(stack, sp).ok_or(TcError::ReturnStackDepth { span: name_abs })?;
-            let vty = match v {
-                Value::Plain(t) => t,
-                Value::Scoped { ty, .. } => ty,
-                Value::Resource(_) => TypeAtom::RESOURCE,
-                Value::Quot(_) => TypeAtom::QUOT,
-                Value::MmioPlace(_) => TypeAtom::MMIO,
-                Value::Ptr { mutable: false, .. } => TypeAtom::PTR,
-                Value::Ptr { mutable: true, .. } => TypeAtom::PTR_MUT,
-                Value::MmioPtr { mutable: false, .. } => TypeAtom::PTR,
-                Value::MmioPtr { mutable: true, .. } => TypeAtom::PTR_MUT,
-            };
+            let vty = v.to_type_atom();
             match (addr, v) {
                 (
                     Value::MmioPtr {
@@ -551,7 +557,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                     )?;
                     Ok(cur)
                 }
-                (Value::Ptr { ty, mutable }, Value::Plain(_)) => {
+                (Value::Ptr { ty, mutable, .. }, Value::Plain(_)) => {
                     if !typed {
                         return Err(TcError::MmioTypedNotAllowed { span: name_abs });
                     }
@@ -559,28 +565,14 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                         return Err(TcError::MmioTypedNotAllowed { span: name_abs });
                     }
                     let want = ty_atom.expect("typed => ty_atom is Some");
-                    if want != ty {
+                    let resolved = if ty == TypeAtom::EMPTY { want } else { ty };
+                    if want != resolved {
                         return Err(TcError::TypedLoadStoreTypeMismatch { span: name_abs });
                     }
-                    if vty != ty {
+                    if vty != resolved {
                         return Err(TcError::ReturnTypeMismatch { span: name_abs });
                     }
-                    let tid = self.ty_id_of_type(ty, name_abs)?;
-                    self.emit_op(cur, lir::OpKind::Store { ty: tid }, name_abs)?;
-                    Ok(cur)
-                }
-                (Value::Plain(t), Value::Plain(_)) => {
-                    if !typed {
-                        return Err(TcError::MmioTypedNotAllowed { span: name_abs });
-                    }
-                    if t != TypeAtom::PTR_MUT {
-                        return Err(TcError::MmioTypedNotAllowed { span: name_abs });
-                    }
-                    let ty_atom = ty_atom.expect("typed => ty_atom is Some");
-                    if vty != ty_atom {
-                        return Err(TcError::ReturnTypeMismatch { span: name_abs });
-                    }
-                    let tid = self.ty_id_of_type(ty_atom, name_abs)?;
+                    let tid = self.ty_id_of_type(resolved, name_abs)?;
                     self.emit_op(cur, lir::OpKind::Store { ty: tid }, name_abs)?;
                     Ok(cur)
                 }

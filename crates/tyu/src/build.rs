@@ -226,6 +226,16 @@ fn compile_module(
         cmd.arg(format!("--features={}", flag_buf[..n].join(",")));
     }
 
+    // Record .o files present before compilation (langc names the .o
+    // after the module declaration, e.g. "module Main;" → "Main.o").
+    let before: std::collections::HashSet<PathBuf> = std::fs::read_dir(out_dir)
+        .ok()
+        .into_iter()
+        .flat_map(|rd| rd.filter_map(|e| e.ok()))
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("o"))
+        .collect();
+
     cmd.arg(&module.path);
 
     let status = cmd.status()
@@ -238,19 +248,20 @@ fn compile_module(
         )));
     }
 
-
-    // Find the produced .o file (langc names it after the module name).
-    let obj_name = module.path.file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("module");
-    let obj_path = out_dir.join(format!("{}.o", obj_name));
-
-    if !obj_path.exists() {
-        return Err(TyuError::Build(format!(
-            "langc did not produce expected .o at '{}'",
-            obj_path.display(),
-        )));
-    }
+    // Find the .o that wasn't there before.
+    let obj_path = std::fs::read_dir(out_dir)
+        .map_err(|e| TyuError::Build(format!("reading out_dir: {}", e)))?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("o") && !before.contains(p))
+        .next()
+        .ok_or_else(|| {
+            TyuError::Build(format!(
+                "langc produced no .o file for '{}' in '{}'",
+                module.path.display(),
+                out_dir.display(),
+            ))
+        })?;
 
 
     cache.insert(compiler_fp, inputs_fp, abi_hash, triple, &obj_path)?;

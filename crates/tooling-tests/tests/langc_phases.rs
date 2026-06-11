@@ -22,11 +22,13 @@ fn build_tools() {
     });
 }
 
-fn exe(name: &str) -> PathBuf {
 fn runtime_asm_linux_x86_64_hosted() -> PathBuf {
-    workspace_root().join("runtime").join("x86_64-unknown-linux-gnu").join("runtime.asm")
+    workspace_root()
+        .join("runtime")
+        .join("linux-x86_64-hosted.asm")
 }
 
+fn exe(name: &str) -> PathBuf {
     workspace_root().join("target").join("debug").join(name)
 }
 

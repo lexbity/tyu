@@ -2,6 +2,18 @@ use super::*;
 
 impl<'a, 'r> IrWordGen<'a, 'r> {
 
+    /// Check if a number token contains `e`/`E` (reserved float exponent syntax).
+    /// Returns an error if found, unless the token is `0x`-prefixed (hex).
+    fn check_float_exponent(bytes: &[u8], span: Span) -> Result<(), TcError> {
+        if bytes.len() > 2 && bytes[0] == b'0' && (bytes[1] == b'x' || bytes[1] == b'X') {
+            return Ok(()); // hex prefix — `e` is a valid hex digit
+        }
+        if bytes.iter().any(|&b| b == b'e' || b == b'E') {
+            return Err(TcError::FloatExponent { span });
+        }
+        Ok(())
+    }
+
     pub(super) fn compile_number(
         &mut self,
         cur: lir::BlockId,
@@ -11,13 +23,13 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         slice: &[u8],
         tok: Token,
     ) -> Result<lir::BlockId, TcError> {
+        let tok_span = Span::new(span.start + tok.span.start, span.start + tok.span.end);
+        let bytes = &slice[tok.span.start..tok.span.end];
+        // D-15: reject `e`/`E` in non-hex number tokens (reserved float exponent).
+        Self::check_float_exponent(bytes, tok_span)?;
         push(stack, sp, Value::Plain(TypeAtom::I64))?;
-        let num = parse_i64_token(&slice[tok.span.start..tok.span.end]).unwrap_or(0);
-        self.emit_op(
-            cur,
-            lir::OpKind::ConstI64(num),
-            Span::new(span.start + tok.span.start, span.start + tok.span.end),
-        )?;
+        let num = parse_i64_token(bytes).unwrap_or(0);
+        self.emit_op(cur, lir::OpKind::ConstI64(num), tok_span)?;
         Ok(cur)
     }
 

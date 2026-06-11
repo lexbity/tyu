@@ -2,6 +2,18 @@ use crate::typecheck::mmio::{MmioResolved, MmioResolvedReg};
 use crate::types::TypeAtom;
 use frontend::span::Span;
 
+/// A unique identifier for a borrowed place within a single word compilation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PlaceId(pub u16);
+
+/// Sentinel meaning "no provenance" — used for unresolved or synthetic borrows.
+pub const PLACE_NONE: PlaceId = PlaceId(u16::MAX);
+
+/// Base for synthetic parameter PlaceIds (D-6).
+/// Parameters get `PlaceId(PARAM_BASE + i)` so they never collide with
+/// normal borrows minted inside the word body (0..63).
+pub const PARAM_BASE: u16 = 0xFF00;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Value {
     Plain(TypeAtom),
@@ -9,7 +21,7 @@ pub enum Value {
     Resource(TypeAtom),
     Quot(Span),
     MmioPlace(MmioResolved),
-    Ptr { ty: TypeAtom, mutable: bool },
+    Ptr { ty: TypeAtom, mutable: bool, place: PlaceId },
     MmioPtr { reg: MmioResolvedReg, mutable: bool },
 }
 

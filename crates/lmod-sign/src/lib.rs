@@ -50,7 +50,12 @@ pub fn sign(input: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, SignError> {
         .ok_or(SignError::InvalidHeader)?;
 
     header.flags |= lmod::header::LMOD_FLAG_SIGNED;
-    let region_len = signed_region_len(&header);
+    // The signed region covers everything up to the existing total_len
+    // (which may already include a previous signature trailer).  Use
+    // total_len directly rather than signed_region_len, because that
+    // function returns sig_off (pre-trailer) when sig_len > 0,
+    // which would drop the first trailer on re-sign.
+    let region_len = header.total_len as usize;
     let sig_off = region_len as u32;
     let sig_len = TRAILER_HEADER_SIZE + sig_len_for_scheme(SCHEME_HMAC_SHA256)
         .expect("HMAC-SHA256 sig length must be known");
@@ -173,7 +178,7 @@ mod tests {
         let hdr = lmod::header::decode_header(&input).unwrap();
         assert_eq!(hdr.sig_len, 0, "pre-sign: sig_len must be 0");
 
-        let before = lmod::sig::signed_region_len(hdr);
+        let before = lmod::sig::signed_region_len(&hdr);
         assert_eq!(before, hdr.total_len as usize,
             "without trailer, signed_region_len == total_len");
 
@@ -182,7 +187,7 @@ mod tests {
         let hdr2 = lmod::header::decode_header(&out).unwrap();
         assert_ne!(hdr2.sig_len, 0, "post-sign: sig_len must be non-zero");
 
-        let after = lmod::sig::signed_region_len(hdr2);
+        let after = lmod::sig::signed_region_len(&hdr2);
         assert_eq!(after, hdr2.sig_off as usize,
             "with trailer, signed_region_len == sig_off");
         assert!(after < out.len(), "signed_region must fit within output");

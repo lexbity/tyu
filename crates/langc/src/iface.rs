@@ -98,7 +98,7 @@ pub fn sig_eq(a: &[u8], b: &[u8]) -> bool {
             return true;
         }
         match ta.kind {
-            TokenKind::Ident | TokenKind::Number | TokenKind::String | TokenKind::EffectSet => {
+            TokenKind::Ident | TokenKind::Number | TokenKind::String | TokenKind::KwPerforms => {
                 let sa = &a[ta.span.start..ta.span.end];
                 let sb = &b[tb.span.start..tb.span.end];
                 if sa != sb {

@@ -1,7 +1,7 @@
 use frontend::{fixed::FixedVec, span::Span};
 
 use ir::{
-    Atom, Block, BlockId, CapSet, EffectSet, MmioAccess, Op, OpKind, Sig, StackBound, TypeId, Word,
+    Atom, Block, BlockId, CapSet, EffectSet, Op, OpKind, Sig, StackBound, TypeId, Word,
     TY_BOOL, TY_EMPTY, TY_I64, TY_MMIO, TY_PTR, TY_PTR_MUT, TY_STR,
 };
 
@@ -310,7 +310,7 @@ fn verify_block_rejects_ops_after_br() {
             ops: FixedVec::new(),
         })
         .unwrap();
-    let mut sig = Sig::empty();
+    let sig = Sig::empty();
     let w = Word {
         name: atom(b"w"),
         sig,
@@ -1188,7 +1188,7 @@ fn verify_accepts_check_subtype() {
 
 #[cfg(test)]
 mod proptests {
-    use ir::{CapSet, EffectSet, OpKind, StackBound, TY_BOOL, TY_I64};
+    use ir::{CapSet, EffectSet, OpKind, StackBound, TY_I64};
     use proptest::prelude::*;
 
     fn make_word(ops: &[OpKind]) -> ir::Word {

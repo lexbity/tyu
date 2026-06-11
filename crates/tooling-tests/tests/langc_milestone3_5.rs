@@ -188,7 +188,7 @@ fn milestone4_contract_fail_traps_with_code() {
         dir.join("Main.mod"),
         b"module Main;\n\
 : main ( -- i64 )\n\
-  requires [ false ]\n\
+  needs [ false ]\n\
   0\n\
 ;\n\
 end;\n",

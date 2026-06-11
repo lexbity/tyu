@@ -23,19 +23,19 @@ type Task;
   # hosted: runtime-provided task spawn
 ;
 
-: platform.task.join ( Task -- ) !{suspend}
+: platform.task.join ( Task -- ) performs {suspend}
   # hosted: runtime-provided task join
 ;
 
-: platform.task.yield ( -- ) !{suspend}
+: platform.task.yield ( -- ) performs {suspend}
   # hosted: `sched_yield` syscall (cooperative yield)
 ;
 
-: platform.task.sleep-ms ( usize -- ) !{suspend}
+: platform.task.sleep-ms ( usize -- ) performs {suspend}
   # hosted: runtime-provided sleep (milliseconds)
 ;
 
-: platform.task.sleep-us ( usize -- ) !{suspend}
+: platform.task.sleep-us ( usize -- ) performs {suspend}
   # hosted: runtime-provided sleep (microseconds)
 ;
 

@@ -109,7 +109,7 @@ impl<'a> X86_64HostedBackend<'a> {
             }
             AsmMode::Object => {
                 if self.str_len > 0 {
-                    self.out.write(b"\nsegment readable\n");
+                    self.out.write(b"\nsection '.rodata'\n");
                     self.emit_string_table()?;
                 }
                 X86_64HostedBackend::emit_modinfo_section(self)?;

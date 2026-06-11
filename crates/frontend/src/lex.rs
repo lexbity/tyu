@@ -120,11 +120,8 @@ impl<'a> Lexer<'a> {
                 }
                 _ => TokenKind::PunctAmp,
             },
-            b'!' => {
-                if self.peek() == Some(b'{') {
-                    return self.lex_effect_set(start);
-                }
-                if self.peek() == Some(b'=') {
+        b'!' => {
+            if self.peek() == Some(b'=') {
                     self.i += 1;
                     return Token::new(TokenKind::PunctNe, Span::new(start, self.i));
                 }
@@ -201,22 +198,12 @@ impl<'a> Lexer<'a> {
             b"owned" => TokenKind::KwOwned,
             b"iso" => TokenKind::KwIso,
             b"requires" => TokenKind::KwRequires,
-            b"ensures" => TokenKind::KwEnsures,
+            b"ensures"  => TokenKind::KwEnsures,
+            b"needs"    => TokenKind::KwNeeds,
+            b"performs" => TokenKind::KwPerforms,
             _ => TokenKind::Ident,
         };
         Token::new(kind, span)
-    }
-
-    fn lex_effect_set(&mut self, start: usize) -> Token {
-        // We have already consumed '!' and peeked '{'
-        self.i += 1; // consume '{'
-        while let Some(b) = self.peek() {
-            self.i += 1;
-            if b == b'}' {
-                break;
-            }
-        }
-        Token::new(TokenKind::EffectSet, Span::new(start, self.i))
     }
 
     fn slice(&self, span: Span) -> &'a [u8] {

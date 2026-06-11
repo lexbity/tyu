@@ -202,18 +202,24 @@ pub fn decode_enc_header(bytes: &[u8]) -> Option<EncHeader> {
     ) as usize;
 
     let fixed_len = 36;
+    // Cap pathological wrapped-slot counts (defense-in-depth).
+    if wrapped_count > 64 {
+        return None;
+    }
     let expected_len = fixed_len + wrapped_count * WRAPPED_SLOT_SIZE;
     if bytes.len() < expected_len {
         return None;
     }
 
     // Validate aead_id.
-    if aead_id != AEAD_CHACHA20POLY1305 && aead_id != 0 {
-        // 0 is reserved; 1 is the only assigned value.
-        // Future values are accepted for forward compatibility but the
-        // payload cannot be decrypted without a matching implementation.
-        // For codec purposes, we only reject unreserved values.
-        return None;
+    if aead_id == 0 {
+        return None; // 0 is reserved/unset — must be rejected.
+    }
+    if aead_id != AEAD_CHACHA20POLY1305 {
+        // 1 is the only assigned value.  Future values are accepted for
+        // forward compatibility but the payload cannot be decrypted without
+        // a matching implementation.  For codec purposes, we only reject
+        // the reserved zero value.
     }
 
     let mut wrapped_slots = crate::alloc::vec::Vec::with_capacity(wrapped_count);
@@ -340,12 +346,16 @@ mod tests {
     }
 
     #[test]
-    fn unknown_aead_id_rejected() {
+    fn unknown_aead_id_accepted_for_forward_compat() {
+        // Future aead_id values are accepted for forward compatibility
+        // (the payload cannot be decrypted without the matching impl).
         let mut eh = make_eh(EncMode::Fleet, 1);
-        eh.aead_id = 0xff; // unreserved
+        eh.aead_id = 0xff;
         let mut buf = vec![0u8; eh.wire_len()];
         encode_enc_header(&mut buf, &eh).unwrap();
-        assert!(decode_enc_header(&buf).is_none());
+        let decoded = decode_enc_header(&buf);
+        assert!(decoded.is_some(), "future aead_id must be accepted");
+        assert_eq!(decoded.unwrap().aead_id, 0xff);
     }
 
     #[test]
@@ -482,11 +492,14 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn bad_aead_id_rejected() {
+    fn bad_aead_id_accepted_for_forward_compat() {
+        // Future aead_id values (neither 0 nor 1) are accepted for
+        // forward compatibility per the codec spec.
         let mut buf = vec![0u8; 36];
         buf[0] = EncMode::Fleet as u8;
-        buf[1] = 2; // not AEAD_CHACHA20POLY1305
-        assert!(decode_enc_header(&buf).is_none());
+        buf[1] = 2; // not AEAD_CHACHA20POLY1305, not 0 — forward compat
+        assert!(decode_enc_header(&buf).is_some(),
+            "future aead_id must be accepted for forward compat");
     }
 
     // -----------------------------------------------------------------------
@@ -572,29 +585,20 @@ mod tests {
 
     #[test]
     fn wrapped_count_overflow_rejected() {
-        // An impossibly large wrapped_slots count should be rejected.
-        // Build a buffer with wrapped_count = 0xFF and verify decode fails.
+        // An impossibly large wrapped_slots count must be rejected.
         let slot = make_slot(0, 0xAB);
         let eh = EncHeader {
             enc_mode: EncMode::Fleet,
             aead_id: AEAD_CHACHA20POLY1305,
             nonce: [0u8; 12],
             tag: [0u8; 16],
-            wrapped_slots: vec![slot; 255], // 255 slots — unrealistically large
+            wrapped_slots: vec![slot; 255],
         };
         let full_len = enc_header_len(255);
         let mut buf = vec![0u8; full_len];
         encode_enc_header(&mut buf, &eh).unwrap();
-        // Decode should reject (wire size check in decode_enc_header).
-        // The decoder may accept a large count if the buffer is big enough.
-        // At minimum, the header must be parseable; the decoder may cap slots.
-        let decoded = decode_enc_header(&buf);
-        // The decoder may or may not accept this — document the current behavior.
-        // If it accepts, wrapped_slots.len() must match.
-        if let Some(eh) = decoded {
-            assert!(eh.wrapped_slots.len() <= 64,
-                "decoder should cap wrapped_slots count");
-        }
+        assert!(decode_enc_header(&buf).is_none(),
+            "wrapped_count > 64 must be rejected");
     }
 
     #[test]

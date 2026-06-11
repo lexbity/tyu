@@ -14,17 +14,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         let val = pop(stack, sp).ok_or(TcError::ChanSendPop { span: op_span })?;
         let ch = pop(stack, sp).ok_or(TcError::ChanSendPop { span: op_span })?;
 
-        let val_ty = match val {
-            Value::Plain(t) => t,
-            Value::Scoped { ty, .. } => ty,
-            Value::Resource(_) => TypeAtom::RESOURCE,
-            Value::Quot(_) => TypeAtom::QUOT,
-            Value::MmioPlace(_) => TypeAtom::MMIO,
-            Value::Ptr { mutable: false, .. } => TypeAtom::PTR,
-            Value::Ptr { mutable: true, .. } => TypeAtom::PTR_MUT,
-            Value::MmioPtr { mutable: false, .. } => TypeAtom::PTR,
-            Value::MmioPtr { mutable: true, .. } => TypeAtom::PTR_MUT,
-        };
+        let val_ty = val.to_type_atom();
         let ch_ty = match ch {
             Value::Plain(t) => t,
             _ => return Err(TcError::ChanSendType { span: op_span }),

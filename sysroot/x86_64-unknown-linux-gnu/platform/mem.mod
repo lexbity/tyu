@@ -6,7 +6,7 @@ type RegionRefMut;
 : platform.mem.region-create ( usize -- Region )
   # hosted: runtime-provided (region allocator)
 ;
-: platform.mem.region-alloc ( Region usize -- ptr_mut ) !{alloc}
+: platform.mem.region-alloc ( Region usize -- ptr_mut ) performs {alloc}
   # hosted: runtime-provided (region allocator)
 ;
 : platform.mem.region-reset ( Region -- )

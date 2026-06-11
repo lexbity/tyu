@@ -112,7 +112,7 @@ fn word_with_sig_and_body() {
 
 #[test]
 fn word_with_requires() {
-    let ast = assert_parse_ok("module m; : foo requires [ 0 > ] ; end;");
+    let ast = assert_parse_ok("module m; : foo needs [ 0 > ] ; end;");
     let d = &ast.decls.get(0).unwrap();
     assert!(d.requires.is_some());
 }
@@ -126,10 +126,17 @@ fn word_with_ensures() {
 
 #[test]
 fn word_with_requires_ensures() {
-    let ast = assert_parse_ok("module m; : foo requires [ true ] ensures [ true ] ; end;");
+    let ast = assert_parse_ok("module m; : foo needs [ true ] ensures [ true ] ; end;");
     let d = &ast.decls.get(0).unwrap();
     assert!(d.requires.is_some());
     assert!(d.ensures.is_some());
+}
+
+#[test]
+fn word_with_cap_requires() {
+    let ast = assert_parse_ok("module m; : foo requires {suspendable} ; end;");
+    let d = &ast.decls.get(0).unwrap();
+    assert!(d.cap_set.is_some());
 }
 
 #[test]
@@ -433,37 +440,37 @@ fn word_no_effect() {
 
 #[test]
 fn word_effect_suspend() {
-    let ast = assert_parse_ok("module m; : foo !{suspend} ; end;");
+    let ast = assert_parse_ok("module m; : foo performs {suspend} ; end;");
     assert_eq!(ast.decls.get(0).unwrap().effect_bits & 1, 1);
 }
 
 #[test]
 fn word_effect_interrupt() {
-    let ast = assert_parse_ok("module m; : foo !{interrupt} ; end;");
+    let ast = assert_parse_ok("module m; : foo performs {interrupt} ; end;");
     assert_eq!(ast.decls.get(0).unwrap().effect_bits & 2, 2);
 }
 
 #[test]
 fn word_effect_diverge() {
-    let ast = assert_parse_ok("module m; : foo !{diverge} ; end;");
+    let ast = assert_parse_ok("module m; : foo performs {diverge} ; end;");
     assert_eq!(ast.decls.get(0).unwrap().effect_bits & 4, 4);
 }
 
 #[test]
 fn word_effect_mmio() {
-    let ast = assert_parse_ok("module m; : foo !{mmio} ; end;");
+    let ast = assert_parse_ok("module m; : foo performs {mmio} ; end;");
     assert_eq!(ast.decls.get(0).unwrap().effect_bits & 8, 8);
 }
 
 #[test]
 fn word_effect_alloc() {
-    let ast = assert_parse_ok("module m; : foo !{alloc} ; end;");
+    let ast = assert_parse_ok("module m; : foo performs {alloc} ; end;");
     assert_eq!(ast.decls.get(0).unwrap().effect_bits & 16, 16);
 }
 
 #[test]
 fn word_effect_multiple() {
-    let ast = assert_parse_ok("module m; : foo !{suspend, mmio} ; end;");
+    let ast = assert_parse_ok("module m; : foo performs {suspend, mmio} ; end;");
     let bits = ast.decls.get(0).unwrap().effect_bits;
     assert_eq!(bits & 1, 1); // suspend
     assert_eq!(bits & 8, 8); // mmio
@@ -472,14 +479,15 @@ fn word_effect_multiple() {
 
 #[test]
 fn word_effect_unknown_name() {
-    let ast = assert_parse_ok("module m; : foo !{unknown} ; end;");
-    // unknown effect names are silently ignored (no bit set)
+    // Unknown effect names are silently ignored (no bit set).
+    // The parser accepts performs {unknown} (future-proof).
+    let ast = assert_parse_ok("module m; : foo performs {unknown} ; end;");
     assert_eq!(ast.decls.get(0).unwrap().effect_bits, 0);
 }
 
 #[test]
 fn word_effect_empty() {
-    let ast = assert_parse_ok("module m; : foo !{} ; end;");
+    let ast = assert_parse_ok("module m; : foo performs {} ; end;");
     assert_eq!(ast.decls.get(0).unwrap().effect_bits, 0);
 }
 

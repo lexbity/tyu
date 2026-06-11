@@ -22,29 +22,94 @@ impl<'a> Parser<'a> {
             None
         };
 
+        // S-12: `performs {effect, ...}` replaces old `!{effect, ...}`.
+        // Detect old `!{` syntax for migration hint.
         let mut effect_bits = 0u16;
         let mut effect_net: i16 = 0;
         let mut effect_high: u32 = 0;
-        if self.look.kind == TokenKind::EffectSet {
-            let (bits, net, high) = parse_effect_bits(self.slice(self.look.span));
-            effect_bits = bits;
-            effect_net = net;
-            effect_high = high;
+        if self.look.kind == TokenKind::Ident && self.slice(self.look.span) == b"!" {
+            let mut lex2 = self.lex;
+            let next = lex2.next();
+            if next.kind == TokenKind::PunctLBrace {
+                // Old `!{` syntax — produce a migration hint.
+                // Consume tokens until matching `}` to keep parser in sync.
+                let mut depth = 1u32;
+                while depth > 0 {
+                    let t = lex2.next();
+                    if t.kind == TokenKind::Eof { break; }
+                    if t.kind == TokenKind::PunctLBrace { depth += 1; }
+                    if t.kind == TokenKind::PunctRBrace { depth -= 1; }
+                }
+                self.lex = lex2;
+                // Error: migration hint
+                return Err(ParseError::ExpectedModule { span: self.look.span });
+                // TODO: proper error message when ParseError gets a migration-hint variant
+            }
+        }
+        if self.look.kind == TokenKind::KwPerforms {
             self.bump();
+            if self.look.kind == TokenKind::PunctLBrace {
+                let brace_span = self.capture_balanced(
+                    TokenKind::PunctLBrace,
+                    TokenKind::PunctRBrace,
+                    ParseError::ExpectedRBrace { span: self.look.span },
+                )?;
+                let inner = &self.slice(brace_span)[1..brace_span.end - brace_span.start - 1];
+                // Build a fixed buffer mimicking `!{content}` for parse_effect_bits.
+                let mut buf = [0u8; 128];
+                let mut buf_len = 0usize;
+                buf[buf_len] = b'!'; buf_len += 1;
+                buf[buf_len] = b'{'; buf_len += 1;
+                for &b in inner.iter().take(125 - buf_len) {
+                    buf[buf_len] = b; buf_len += 1;
+                }
+                buf[buf_len] = b'}'; buf_len += 1;
+                let (bits, net, high) = parse_effect_bits(&buf[..buf_len]);
+                effect_bits = bits;
+                effect_net = net;
+                effect_high = high;
+            } else {
+                return Err(ParseError::ExpectedRBrace { span: self.look.span });
+            }
         }
 
-        let mut requires: Option<Span> = None;
+        // S-11: `needs [...]` replaces old `requires [...]` (contract precondition).
+        // `requires {...}` introduces compile-time capability sets.
+        // `requires [...]` is a migration hint error.
+        // `ensures [...]` is unchanged.
+        let mut contract_needs: Option<Span> = None;
         let mut ensures: Option<Span> = None;
-        while let TokenKind::KwRequires | TokenKind::KwEnsures = self.look.kind {
-            let is_requires = self.look.kind == TokenKind::KwRequires;
-            self.bump();
-            let q = self.capture_quotation(ParseError::ExpectedQuotation {
-                span: self.look.span,
-            })?;
-            if is_requires {
-                requires = Some(q);
-            } else {
-                ensures = Some(q);
+        let mut cap_set: Option<Span> = None;
+        loop {
+            match self.look.kind {
+                TokenKind::KwNeeds => {
+                    self.bump();
+                    contract_needs = Some(self.capture_quotation(ParseError::ExpectedQuotation {
+                        span: self.look.span,
+                    })?);
+                }
+                TokenKind::KwRequires => {
+                    self.bump();
+                    if self.look.kind == TokenKind::PunctLBrace {
+                        cap_set = Some(self.capture_balanced(
+                            TokenKind::PunctLBrace,
+                            TokenKind::PunctRBrace,
+                            ParseError::ExpectedRBrace { span: self.look.span },
+                        )?);
+                    } else if self.look.kind == TokenKind::PunctLBracket {
+                        return Err(ParseError::ExpectedModule { span: self.look.span });
+                        // TODO: proper migration hint error: "use `needs [` for contracts"
+                    } else {
+                        return Err(ParseError::ExpectedQuotation { span: self.look.span });
+                    }
+                }
+                TokenKind::KwEnsures => {
+                    self.bump();
+                    ensures = Some(self.capture_quotation(ParseError::ExpectedQuotation {
+                        span: self.look.span,
+                    })?);
+                }
+                _ => break,
             }
         }
 
@@ -66,8 +131,9 @@ impl<'a> Parser<'a> {
             sig,
             attrs,
             body: Some(Span::new(body_start, body_end)),
-            requires,
+            requires: contract_needs,
             ensures,
+            cap_set,
             effect_bits,
             effect_net,
             effect_high,
@@ -169,6 +235,7 @@ impl<'a> Parser<'a> {
             body: None,
             requires: None,
             ensures: None,
+            cap_set: None,
             effect_bits: 0,
             effect_net: 0,
             effect_high: 0,
@@ -280,6 +347,7 @@ impl<'a> Parser<'a> {
             body: None,
             requires: None,
             ensures: None,
+            cap_set: None,
             effect_bits: 0,
             effect_net: 0,
             effect_high: 0,
@@ -315,6 +383,7 @@ impl<'a> Parser<'a> {
             body: None,
             requires: None,
             ensures: None,
+            cap_set: None,
             effect_bits: 0,
             effect_net: 0,
             effect_high: 0,
@@ -377,6 +446,7 @@ impl<'a> Parser<'a> {
             body: None,
             requires: None,
             ensures: None,
+            cap_set: None,
             effect_bits: 0,
             effect_net: 0,
             effect_high: 0,
@@ -431,6 +501,7 @@ impl<'a> Parser<'a> {
             body: None,
             requires: None,
             ensures: None,
+            cap_set: None,
             effect_bits: 0,
             effect_net: 0,
             effect_high: 0,
@@ -495,6 +566,7 @@ impl<'a> Parser<'a> {
             body: Some(Span::new(body_start, body_end)),
             requires: None,
             ensures: None,
+            cap_set: None,
             effect_bits: 0,
             effect_net: 0,
             effect_high: 0,
@@ -578,6 +650,7 @@ impl<'a> Parser<'a> {
             body: None,
             requires: None,
             ensures: None,
+            cap_set: None,
             effect_bits: 0,
             effect_net: 0,
             effect_high: 0,

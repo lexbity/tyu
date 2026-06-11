@@ -1,5 +1,6 @@
 use codegen_core::{AsmMode, CodegenError};
 use codegen_x86_64::X86_64HostedBackend;
+use std::thread;
 use frontend::parse::Output;
 use frontend::{fixed::FixedVec, span::Span};
 use ir::{
@@ -138,35 +139,52 @@ fn emit_err(w: &Word) -> CodegenError {
     backend.emit_word(w).unwrap_err()
 }
 
+/// Run a closure on an 8 MB thread stack to avoid stack overflow from
+/// large stack-allocated `Word`/`FixedVec`/`Block` structs (~50 KB frames).
+fn spawn_stack(f: impl FnOnce() + Send + 'static) {
+    thread::Builder::new()
+        .stack_size(8 << 20)
+        .spawn(f)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
 #[test]
 fn emit_const_i64() {
+    spawn_stack(|| {
     let out = emit(&single_block_word(
         sig_0_1(TY_I64),
         &[OpKind::ConstI64(42), OpKind::Ret],
     ));
     assert!(out.contains("42") || out.contains("2a"), "got: {out}");
+    });
 }
 
 #[test]
 fn emit_const_bool_true() {
+    spawn_stack(|| {
     let out = emit(&single_block_word(
         sig_0_1(TY_I64),
         &[OpKind::ConstBool(true), OpKind::Ret],
     ));
     assert!(out.contains("1") || out.contains("true"), "got: {out}");
+    });
 }
 
 #[test]
 fn emit_const_bool_false() {
+    spawn_stack(|| {
     let out = emit(&single_block_word(
         sig_0_1(TY_I64),
         &[OpKind::ConstBool(false), OpKind::Ret],
     ));
     assert!(out.contains("0"), "got: {out}");
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -175,6 +193,7 @@ fn emit_const_bool_false() {
 
 #[test]
 fn emit_dup() {
+    spawn_stack(|| {
     let out = emit(&single_block_word(
         sig_0_2(TY_I64, TY_I64),
         &[OpKind::ConstI64(7), OpKind::Dup { ty: TY_I64 }, OpKind::Ret],
@@ -183,10 +202,12 @@ fn emit_dup() {
         out.contains("push rax") || out.contains("[r15]"),
         "got: {out}"
     );
+    });
 }
 
 #[test]
 fn emit_drop() {
+    spawn_stack(|| {
     // drop with sig ( i64 -- )
     let out = emit(&single_block_word(
         sig_1_0(TY_I64),
@@ -196,10 +217,12 @@ fn emit_drop() {
         out.contains("add r15, 8") || out.contains("sub r15"),
         "got: {out}"
     );
+    });
 }
 
 #[test]
 fn emit_swap() {
+    spawn_stack(|| {
     let out = emit(&single_block_word(
         sig_0_2(TY_I64, TY_I64),
         &[
@@ -214,6 +237,7 @@ fn emit_swap() {
         ],
     ));
     assert!(out.contains("xchg") || out.contains("mov"), "got: {out}");
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -222,6 +246,7 @@ fn emit_swap() {
 
 #[test]
 fn emit_add() {
+    spawn_stack(|| {
     let out = emit(&single_block_word(
         sig_0_1(TY_I64),
         &[
@@ -232,10 +257,12 @@ fn emit_add() {
         ],
     ));
     assert!(out.contains("add"), "got: {out}");
+    });
 }
 
 #[test]
 fn emit_sub() {
+    spawn_stack(|| {
     let out = emit(&single_block_word(
         sig_0_1(TY_I64),
         &[
@@ -246,10 +273,12 @@ fn emit_sub() {
         ],
     ));
     assert!(out.contains("sub"), "got: {out}");
+    });
 }
 
 #[test]
 fn emit_mul() {
+    spawn_stack(|| {
     let out = emit(&single_block_word(
         sig_0_1(TY_I64),
         &[
@@ -260,6 +289,7 @@ fn emit_mul() {
         ],
     ));
     assert!(out.contains("imul") || out.contains("mul"), "got: {out}");
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -281,27 +311,39 @@ fn compare_op(kind: CmpKind, asm: &str) {
 
 #[test]
 fn emit_cmp_lt() {
+    spawn_stack(|| {
     compare_op(CmpKind::Lt, "setl");
+    });
 }
 #[test]
 fn emit_cmp_le() {
+    spawn_stack(|| {
     compare_op(CmpKind::Le, "setle");
+    });
 }
 #[test]
 fn emit_cmp_gt() {
+    spawn_stack(|| {
     compare_op(CmpKind::Gt, "setg");
+    });
 }
 #[test]
 fn emit_cmp_ge() {
+    spawn_stack(|| {
     compare_op(CmpKind::Ge, "setge");
+    });
 }
 #[test]
 fn emit_cmp_eq() {
+    spawn_stack(|| {
     compare_op(CmpKind::Eq, "sete");
+    });
 }
 #[test]
 fn emit_cmp_ne() {
+    spawn_stack(|| {
     compare_op(CmpKind::Ne, "setne");
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -310,6 +352,7 @@ fn emit_cmp_ne() {
 
 #[test]
 fn emit_and() {
+    spawn_stack(|| {
     let out = emit(&single_block_word(
         sig_0_1(TY_I64),
         &[
@@ -320,10 +363,12 @@ fn emit_and() {
         ],
     ));
     assert!(out.contains("and"), "got: {out}");
+    });
 }
 
 #[test]
 fn emit_or() {
+    spawn_stack(|| {
     let out = emit(&single_block_word(
         sig_0_1(TY_I64),
         &[
@@ -334,16 +379,19 @@ fn emit_or() {
         ],
     ));
     assert!(out.contains("or"), "got: {out}");
+    });
 }
 
 #[test]
 fn emit_not() {
+    spawn_stack(|| {
     let out = emit(&single_block_word(
         sig_0_1(TY_I64),
         &[OpKind::ConstI64(0), OpKind::NotBool, OpKind::Ret],
     ));
     // NotBool compares with 0, sets al=1 if equal (false→true, true→false)
     assert!(out.contains("cmp") || out.contains("sete"), "got: {out}");
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -352,6 +400,7 @@ fn emit_not() {
 
 #[test]
 fn emit_br_if() {
+    spawn_stack(|| {
     // block 0: push bool, br_if to block 1 else block 2
     let mut b0_ops: FixedVec<Op, 96> = FixedVec::new();
     b0_ops
@@ -405,15 +454,18 @@ fn emit_br_if() {
     };
     let out = emit(&w);
     assert!(out.contains("j") || out.contains("cmp"), "got: {out}");
+    });
 }
 
 #[test]
 fn emit_ret() {
+    spawn_stack(|| {
     let out = emit(&single_block_word(
         sig_0_0(),
         &[OpKind::ConstI64(0), OpKind::Drop { ty: TY_I64 }],
     ));
     assert!(out.contains("ret"), "got: {out}");
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -422,6 +474,7 @@ fn emit_ret() {
 
 #[test]
 fn emit_trap_if_false() {
+    spawn_stack(|| {
     let out = emit(&single_block_word(
         sig_0_1(TY_I64),
         &[
@@ -433,6 +486,7 @@ fn emit_trap_if_false() {
         ],
     ));
     assert!(out.contains("__lang_trap"), "got: {out}");
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -441,6 +495,7 @@ fn emit_trap_if_false() {
 
 #[test]
 fn emit_load() {
+    spawn_stack(|| {
     let w = single_block_word(
         sig_0_1(TY_I64),
         &[
@@ -455,10 +510,12 @@ fn emit_load() {
     );
     let out = emit(&w);
     assert!(out.contains("mov"), "got: {out}");
+    });
 }
 
 #[test]
 fn emit_store() {
+    spawn_stack(|| {
     let w = single_block_word(
         sig_0_1(TY_I64),
         &[
@@ -475,6 +532,7 @@ fn emit_store() {
     );
     let out = emit(&w);
     assert!(out.contains("mov"), "got: {out}");
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -483,6 +541,7 @@ fn emit_store() {
 
 #[test]
 fn emit_ptr_add_const() {
+    spawn_stack(|| {
     let w = single_block_word(
         sig_0_1(TY_I64),
         &[
@@ -502,6 +561,7 @@ fn emit_ptr_add_const() {
     );
     let out = emit(&w);
     assert!(out.contains("add") || out.contains("lea"), "got: {out}");
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -510,6 +570,7 @@ fn emit_ptr_add_const() {
 
 #[test]
 fn emit_cast() {
+    spawn_stack(|| {
     let out = emit(&single_block_word(
         sig_0_1(TY_I64),
         &[
@@ -522,10 +583,12 @@ fn emit_cast() {
         ],
     ));
     assert!(out.contains("push") || out.contains("mov"), "got: {out}");
+    });
 }
 
 #[test]
 fn emit_bitcast() {
+    spawn_stack(|| {
     let out = emit(&single_block_word(
         sig_0_1(TY_I64),
         &[
@@ -538,6 +601,7 @@ fn emit_bitcast() {
         ],
     ));
     assert!(!out.is_empty(), "got: {out}");
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -546,6 +610,7 @@ fn emit_bitcast() {
 
 #[test]
 fn emit_addr_of_unsupported() {
+    spawn_stack(|| {
     // Without const_addr, AddrOf is not supported.
     let w = single_block_word(
         sig_0_1(TY_PTR),
@@ -563,10 +628,12 @@ fn emit_addr_of_unsupported() {
         matches!(err, CodegenError::UnsupportedAddrOf),
         "got: {err:?}"
     );
+    });
 }
 
 #[test]
 fn emit_check_subtype_unsupported() {
+    spawn_stack(|| {
     let w = single_block_word(
         sig_0_1(TY_I64),
         &[
@@ -581,4 +648,5 @@ fn emit_check_subtype_unsupported() {
         matches!(err, CodegenError::UnsupportedCheckSubtype),
         "got: {err:?}"
     );
+    });
 }

@@ -7,9 +7,9 @@ type Task;
 : platform.critical.exit ( -- ) ;
 : platform.task.run ( quot -- ) ;
 : platform.task.spawn ( quot -- Task ) ;
-: platform.task.join ( Task -- ) !{suspend} ;
-: platform.task.yield ( -- ) !{suspend} ;
-: platform.task.sleep-ms ( usize -- ) !{suspend} ;
-: platform.task.sleep-us ( usize -- ) !{suspend} ;
+: platform.task.join ( Task -- ) performs {suspend} ;
+: platform.task.yield ( -- ) performs {suspend} ;
+: platform.task.sleep-ms ( usize -- ) performs {suspend} ;
+: platform.task.sleep-us ( usize -- ) performs {suspend} ;
 
 end;

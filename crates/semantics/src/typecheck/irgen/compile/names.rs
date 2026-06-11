@@ -1,4 +1,5 @@
 use super::*;
+use crate::typecheck::value::PLACE_NONE;
 
 impl<'a, 'r> IrWordGen<'a, 'r> {
 
@@ -53,7 +54,8 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         }
 
         if tok.kind == TokenKind::Ident {
-            if let Some(res) = resolve_mmio_place(self.mmio, self.src, name, name_abs)? {
+            let place = crate::typecheck::mmio::qualname_to_placepath(name, name_abs);
+            if let Some(res) = resolve_mmio_place(self.mmio, self.src, &place, name_abs)? {
                 push(stack, sp, Value::MmioPlace(res))?;
                 let addr = match res {
                     MmioResolved::Reg(reg) => reg.addr,
@@ -151,12 +153,42 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             if is_iso_type(self.iso, self.local_tys[idx]) {
                 return Err(TcError::IsoUseAfterMove { span: name_abs });
             }
+            // If this is a borrow-typed local that was already consumed,
+            // reject with E5023 (reuse of linear borrow local).
+            if self.local_place[idx] != PLACE_NONE {
+                let origin = if (self.ledger_len as usize) > self.local_place[idx].0 as usize {
+                    self.ledger[self.local_place[idx].0 as usize].origin
+                } else {
+                    name_abs
+                };
+                return Err(TcError::BorrowLocalReuse { span: name_abs, first: origin });
+            }
             return Err(TcError::LocalNotLive { span: name_abs });
+        }
+
+        // Linear borrow-typed locals (PTR_MUT): consume on first ref.
+        let is_mut_borrow = self.local_tys[idx] == TypeAtom::PTR_MUT
+            && self.local_place[idx] != PLACE_NONE;
+        if is_mut_borrow {
+            self.local_live[idx] = false;
         }
         if is_iso_type(self.iso, self.local_tys[idx]) {
             self.local_live[idx] = false;
         }
-        if self.local_scoped[idx] != 0 {
+
+        // Push the value — for borrow locals, reconstruct Value::Ptr.
+        if self.local_place[idx] != PLACE_NONE {
+            let mutable = self.local_tys[idx] == TypeAtom::PTR_MUT;
+            push(
+                stack,
+                sp,
+                Value::Ptr {
+                    ty: self.local_tys[idx],
+                    mutable,
+                    place: self.local_place[idx],
+                },
+            )?;
+        } else if self.local_scoped[idx] != 0 {
             push(
                 stack,
                 sp,
@@ -273,17 +305,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         )?;
         lex.set_pos(next);
         let v = pop(stack, sp).ok_or(TcError::CastPopValue { span })?;
-        let from_ty = match v {
-            Value::Plain(t) => t,
-            Value::Scoped { ty, .. } => ty,
-            Value::Resource(_) => TypeAtom::RESOURCE,
-            Value::Quot(_) => TypeAtom::QUOT,
-            Value::MmioPlace(_) => TypeAtom::MMIO,
-            Value::Ptr { mutable: false, .. } => TypeAtom::PTR,
-            Value::Ptr { mutable: true, .. } => TypeAtom::PTR_MUT,
-            Value::MmioPtr { mutable: false, .. } => TypeAtom::PTR,
-            Value::MmioPtr { mutable: true, .. } => TypeAtom::PTR_MUT,
-        };
+        let from_ty = v.to_type_atom();
         let subtype = find_subtype(self.subtypes, to_ty);
         if let Some(st) = subtype {
             if !type_compatible(from_ty, st.base, self.subtypes) {
@@ -334,8 +356,15 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 name_abs,
             )?;
         }
+        // S-8: raw pointer casts (as ptr / as ptr_mut) produce Value::Ptr
+        // with PLACE_NONE (untyped — the provenance is lost in the cast).
+        let push_val = if to_ty == TypeAtom::PTR || to_ty == TypeAtom::PTR_MUT {
+            Value::Ptr { ty: TypeAtom::EMPTY, mutable: to_ty == TypeAtom::PTR_MUT, place: PLACE_NONE }
+        } else {
+            Value::Plain(to_ty)
+        };
         if name == b"as?" {
-            push(stack, sp, Value::Plain(to_ty))?;
+            push(stack, sp, push_val)?;
             if let Some(st) = subtype {
                 let tmp = self.temp_base_slot();
                 self.emit_op(cur, lir::OpKind::Dup { ty: to_id }, name_abs)?;
@@ -390,7 +419,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             }
             return Ok(cur);
         }
-        push(stack, sp, Value::Plain(to_ty))?;
+        push(stack, sp, push_val)?;
         if name == b"as" {
             if let Some(st) = subtype {
                 if self.checks == ChecksMode::All {
@@ -423,17 +452,13 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
     ) -> Result<lir::BlockId, TcError> {
         if name == b"dup" {
             let top = pop(stack, sp).ok_or(TcError::StackUnderflow { span })?;
-            let top_ty = match top {
-                Value::Plain(t) => t,
-                Value::Scoped { ty, .. } => ty,
-                Value::Resource(_) => TypeAtom::RESOURCE,
-                Value::Quot(_) => TypeAtom::QUOT,
-                Value::MmioPlace(_) => TypeAtom::MMIO,
-                Value::Ptr { mutable: false, .. } => TypeAtom::PTR,
-                Value::Ptr { mutable: true, .. } => TypeAtom::PTR_MUT,
-                Value::MmioPtr { mutable: false, .. } => TypeAtom::PTR,
-                Value::MmioPtr { mutable: true, .. } => TypeAtom::PTR_MUT,
-            };
+            let top_ty = top.to_type_atom();
+            // Reject dup of mutable borrow (E5022) before iso check.
+            if matches!(top, Value::Ptr { mutable: true, place: p, .. } if p != PLACE_NONE)
+                || matches!(top, Value::MmioPtr { mutable: true, .. })
+            {
+                return Err(TcError::BorrowDupMut { span: name_abs, first: name_abs });
+            }
             if is_iso_type(self.iso, top_ty) {
                 return Err(TcError::IsoDup { span: name_abs });
             }
@@ -449,17 +474,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         }
         if name == b"drop" {
             let top = pop(stack, sp).ok_or(TcError::StackUnderflow { span })?;
-            let top_ty = match top {
-                Value::Plain(t) => t,
-                Value::Scoped { ty, .. } => ty,
-                Value::Resource(_) => TypeAtom::RESOURCE,
-                Value::Quot(_) => TypeAtom::QUOT,
-                Value::MmioPlace(_) => TypeAtom::MMIO,
-                Value::Ptr { mutable: false, .. } => TypeAtom::PTR,
-                Value::Ptr { mutable: true, .. } => TypeAtom::PTR_MUT,
-                Value::MmioPtr { mutable: false, .. } => TypeAtom::PTR,
-                Value::MmioPtr { mutable: true, .. } => TypeAtom::PTR_MUT,
-            };
+            let top_ty = top.to_type_atom();
             if is_iso_type(self.iso, top_ty) {
                 return Err(TcError::IsoDrop { span: name_abs });
             }
@@ -571,8 +586,12 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             }
             let base = *stack.get(*sp - 1).ok_or(TcError::StackUnderflow { span })?;
             let has_borrow = binds.iter().any(|b| b.borrow);
+            let base_place = match base {
+                Value::Ptr { place, .. } => place,
+                _ => PLACE_NONE,
+            };
             let (struct_ty, base_mut, _base_is_value) = match base {
-                Value::Ptr { ty, mutable } => (ty, mutable, false),
+                Value::Ptr { ty, mutable, .. } => (ty, mutable, false),
                 Value::Plain(t) if !has_borrow => (t, false, true),
                 _ => return Err(TcError::DestructNotStruct { span }),
             };
@@ -629,6 +648,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                     Value::Ptr {
                         ty: struct_ty,
                         mutable: base_mut,
+                        place: base_place,
                     },
                 )?;
                 self.emit_op(
@@ -654,6 +674,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                     self.local_tys[self.local_len] = ptr_ty;
                     self.local_live[self.local_len] = true;
                     self.local_scoped[self.local_len] = 0u16;
+                    self.local_place[self.local_len] = base_place;
                     self.local_len += 1;
                     let tid = if bind.mutable {
                         lir::TY_PTR_MUT
@@ -693,17 +714,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             if v == Value::Plain(TypeAtom::SCOPED) {
                 return Err(TcError::BorrowEscape { span });
             }
-            let ty = match v {
-                Value::Plain(t) => t,
-                Value::Scoped { ty, .. } => ty,
-                Value::Resource(_) => TypeAtom::RESOURCE,
-                Value::Quot(_) => TypeAtom::QUOT,
-                Value::MmioPlace(_) => TypeAtom::MMIO,
-                Value::Ptr { mutable: false, .. } => TypeAtom::PTR,
-                Value::Ptr { mutable: true, .. } => TypeAtom::PTR_MUT,
-                Value::MmioPtr { mutable: false, .. } => TypeAtom::PTR,
-                Value::MmioPtr { mutable: true, .. } => TypeAtom::PTR_MUT,
-            };
+            let ty = v.to_type_atom();
             let lname = TypeAtom::new(&slice[name.span.start..name.span.end]).ok_or(
                 TcError::TypeParseFailed {
                     span: Span::new(span.start + name.span.start, span.start + name.span.end),
@@ -724,6 +735,10 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             self.local_scoped[self.local_len] = match v {
                 Value::Scoped { scope, .. } => scope,
                 _ => 0u16,
+            };
+            self.local_place[self.local_len] = match v {
+                Value::Ptr { place, .. } => place,
+                _ => PLACE_NONE,
             };
             self.local_len += 1;
             let tid = self.ty_id_of_type(ty, span)?;

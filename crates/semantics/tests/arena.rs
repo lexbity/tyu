@@ -10,7 +10,7 @@ use std::thread;
 use frontend::fixed::FixedVec;
 use frontend::span::Span;
 use ir::{
-    Atom, Block, BlockId, CapSet, EffectSet, Sig, StackBound, TypeId, Word, TY_EMPTY, TY_I64,
+    CapSet, EffectSet, StackBound,
 };
 use semantics::typecheck::irgen::arena::ArenaAllocator;
 

@@ -4,7 +4,7 @@ type RegionRef;
 type RegionRefMut;
 
 : platform.mem.region-create ( usize -- Region ) ;
-: platform.mem.region-alloc ( Region usize -- ptr_mut ) !{alloc} ;
+: platform.mem.region-alloc ( Region usize -- ptr_mut ) performs {alloc} ;
 : platform.mem.region-reset ( Region -- ) ;
 : platform.mem.region-destroy ( Region -- ) ;
 

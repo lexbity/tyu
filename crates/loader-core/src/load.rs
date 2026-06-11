@@ -1129,6 +1129,7 @@ mod tests {
     #[test]
     fn isr_module_rejected() {
         let code = [0xC3u8];
+        let key = [0xabu8; 32];
         let abi_hash = lmod::abi_hash::compute_abi_hash(8, 64, lmod::modinfo::MODINFO_VER);
         // Build modinfo with HAS_ISR flag set.
         let exports = [];
@@ -1148,8 +1149,10 @@ mod tests {
         let co = layout.code_off as usize;
         raw[co..co + code.len()].copy_from_slice(&code);
 
-        let container = lmod::validate::Container::parse(&raw).unwrap();
-        let mut plat = FullPlatform::new(abi_hash, [0; 32]);
+        // FullPlatform is Tier One — sign the module before loading.
+        let signed = sign_lmod(&raw, &key);
+        let container = lmod::validate::Container::parse(&signed).unwrap();
+        let mut plat = FullPlatform::new(abi_hash, key);
         let mut map: SymMap<'_, 256> = SymMap::new();
         let mut set = LoadedSet::<64>::new();
         let result = load_module(&container, &mut plat, &mut map, &mut set);
@@ -1183,8 +1186,11 @@ mod tests {
         let co = layout.code_off as usize;
         raw[co..co + code.len()].copy_from_slice(&code);
 
-        let container = lmod::validate::Container::parse(&raw).unwrap();
-        let mut plat = FullPlatform::new(abi_hash, [0; 32]);
+        // FullPlatform is Tier One — sign the module before loading.
+        let key = [0xabu8; 32];
+        let signed = sign_lmod(&raw, &key);
+        let container = lmod::validate::Container::parse(&signed).unwrap();
+        let mut plat = FullPlatform::new(abi_hash, key);
         let mut map: SymMap<'_, 256> = SymMap::new();
         let mut set = LoadedSet::<64>::new();
         let result = load_module(&container, &mut plat, &mut map, &mut set);
@@ -1198,10 +1204,12 @@ mod tests {
     #[test]
     fn double_load_rejected() {
         let code = [0xC3u8];
+        let key = [0xabu8; 32];
         let abi_hash = lmod::abi_hash::compute_abi_hash(8, 64, lmod::modinfo::MODINFO_VER);
         let plain = build_lmod_with_code(&code, abi_hash, false);
-        let container = lmod::validate::Container::parse(&plain).unwrap();
-        let mut plat = FullPlatform::new(abi_hash, [0; 32]);
+        let signed = sign_lmod(&plain, &key);
+        let container = lmod::validate::Container::parse(&signed).unwrap();
+        let mut plat = FullPlatform::new(abi_hash, key);
         let mut map: SymMap<'_, 256> = SymMap::new();
         let mut set = LoadedSet::<64>::new();
 

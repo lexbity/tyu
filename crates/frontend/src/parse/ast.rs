@@ -282,6 +282,7 @@ pub struct DeclAst {
     pub body: Option<Span>,
     pub requires: Option<Span>,
     pub ensures: Option<Span>,
+    pub cap_set: Option<Span>,
     pub effect_bits: u16,
     pub effect_net: i16,
     pub effect_high: u32,

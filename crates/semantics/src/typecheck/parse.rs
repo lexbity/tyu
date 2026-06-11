@@ -333,50 +333,8 @@ pub fn capture_balanced(
     Ok(Span::new(open_start, end))
 }
 
-pub struct PlaceSpans {
-    pub full: Span,
-    pub root: Span,
-}
+pub use crate::typecheck::place::{parse_place_path, PlacePath};
 
-impl PlaceSpans {
-    pub fn root_abs(&self, base: usize) -> Span {
-        Span::new(base + self.root.start, base + self.root.end)
-    }
-}
-
-pub fn parse_place(lex: &mut Lexer<'_>, slice: &[u8]) -> Option<PlaceSpans> {
-    let mut probe = *lex;
-    let first = probe.next();
-    if first.kind != TokenKind::Ident {
-        return None;
-    }
-    let root = first.span;
-    let mut end = first.span.end;
-    loop {
-        let mut probe2 = probe;
-        let next = probe2.next();
-        if next.kind == TokenKind::PunctDot {
-            let seg = probe2.next();
-            if seg.kind != TokenKind::Ident {
-                return None;
-            }
-            end = seg.span.end;
-            probe = probe2;
-            continue;
-        }
-        if next.kind == TokenKind::PunctApostrophe {
-            let num = probe2.next();
-            if num.kind != TokenKind::Number {
-                return None;
-            }
-            end = num.span.end;
-            probe = probe2;
-            continue;
-        }
-        let _ = slice;
-        break;
-    }
-    *lex = probe;
-    let full = Span::new(root.start, end);
-    Some(PlaceSpans { root, full })
+pub fn parse_place(lex: &mut Lexer<'_>, slice: &[u8]) -> Option<PlacePath> {
+    parse_place_path(lex, slice).ok()
 }

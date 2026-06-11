@@ -6,7 +6,7 @@ type RegionRefMut;
 : platform.mem.region-create ( usize -- Region )
   # bare-metal: stub — wire a static arena to activate
 ;
-: platform.mem.region-alloc ( Region usize -- ptr_mut ) !{alloc}
+: platform.mem.region-alloc ( Region usize -- ptr_mut ) performs {alloc}
    # bare-metal: stub
 ;
 : platform.mem.region-reset ( Region -- )

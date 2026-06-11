@@ -6,7 +6,7 @@ type RegionRefMut;
 : platform.mem.region-create ( usize -- Region )
   # ARM: wire a static arena to activate
 ;
-: platform.mem.region-alloc ( Region usize -- ptr_mut ) !{alloc}
+: platform.mem.region-alloc ( Region usize -- ptr_mut ) performs {alloc}
    # ARM: allocation within a region arena
 ;
 : platform.mem.region-reset ( Region -- )

@@ -6,7 +6,7 @@ type RegionRefMut;
 : platform.mem.region-create ( usize -- Region )
   # RISC-V: wire a static arena to activate
 ;
-: platform.mem.region-alloc ( Region usize -- ptr_mut ) !{alloc}
+: platform.mem.region-alloc ( Region usize -- ptr_mut ) performs {alloc}
    # RISC-V: allocation within a region arena
 ;
 : platform.mem.region-reset ( Region -- )

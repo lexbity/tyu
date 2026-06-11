@@ -155,7 +155,7 @@ fn tcerror_codes_are_distinct() {
 
 #[test]
 fn e5001_suspend_forbidden() {
-    // A word NOT declared with !{suspend} that calls a suspend word.
+    // A word NOT declared with performs {suspend} that calls a suspend word.
     // The stack checker (--emit=tc) gives the body a context where
     // SUSPEND is forbidden, triggering SuspendForbidden (5001).
     assert_tc_fails_with(
@@ -415,17 +415,17 @@ fn e5031_resource_shared_unlocked() {
 
 #[test]
 fn e5040_diverge_in_bounded() {
-    // A word annotated with !{diverge} compiles successfully (no bounded context yet).
+    // A word annotated with performs {diverge} compiles successfully (no bounded context yet).
     // The DivergeInBounded (5040) error requires a bounded-stack context which
     // is not yet implemented for regular words. This positive test verifies that
-    // !{diverge} is parsed and tracked.
+    // performs {diverge} is parsed and tracked.
     build_langc();
     let dir = fresh_dir("e5040");
     let path = dir.join("test.mod");
     std::fs::write(
         &path,
         b"module Main;\n\
-          : may_diverge ( -- i64 ) !{diverge}\n\
+          : may_diverge ( -- i64 ) performs {diverge}\n\
             0\n\
           ;\n\
           end;\n",
