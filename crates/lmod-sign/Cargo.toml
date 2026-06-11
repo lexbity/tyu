@@ -3,6 +3,10 @@ name = "lmod-sign"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "lmod_sign"
+path = "src/lib.rs"
+
 [[bin]]
 name = "lmod-sign"
 path = "src/main.rs"

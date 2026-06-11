@@ -36,12 +36,16 @@ pub struct RiscVBackend<'a> {
     pub str_spans: [Span; 128],
     pub str_ids: [u32; 128],
     pub debug_trap_loc: bool,
-    pub cur_word_id: u32,
+    pub cur_word_id: u64,
     pub(crate) mi_exports: [ModInfoExport; 64],
     pub(crate) mi_export_count: usize,
     pub(crate) mi_imports: [ModInfoImport; 64],
     pub(crate) mi_import_count: usize,
     pub expected_abi_hash: u64,
+    pub uses_tasks: bool,
+    pub scoped_base: u32,
+    pub scoped_slots: u32,
+    pub scoped_next: u32,
 }
 
 impl<'a> RiscVBackend<'a> {
@@ -65,6 +69,10 @@ impl<'a> RiscVBackend<'a> {
             mi_imports: [ModInfoImport { name: lir::AT_EMPTY }; 64],
             mi_import_count: 0,
             expected_abi_hash: 0,
+            uses_tasks: false,
+            scoped_base: 0,
+            scoped_slots: 0,
+            scoped_next: 0,
         }
     }
 

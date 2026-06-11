@@ -4,14 +4,14 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-test = false
 doctest = false
 
 [dependencies]
-frontend = { path = "../frontend" }
 ir = { path = "../ir" }
+frontend = { path = "../frontend" }
 lmod = { path = "../lmod" }
 
 [dev-dependencies]
 ir = { path = "../ir" }
+frontend = { path = "../frontend" }
 lmod = { path = "../lmod" }

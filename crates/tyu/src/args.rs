@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use codegen_core::Target;
+use codegen_core::{FeatureSet, Target};
 
 /// Top-level subcommands.
 #[derive(Debug)]
@@ -44,6 +44,8 @@ pub struct DeployArgs {
     pub key_sign: Option<String>,
     pub sign: bool,
     pub device_keys_dir: Option<PathBuf>,
+    pub profile: Option<String>,
+    pub feature_set: FeatureSet,
 }
 
 impl DeployArgs {
@@ -54,6 +56,8 @@ impl DeployArgs {
             include_dirs: self.include_dirs.clone(),
             sysroot: self.sysroot.clone(),
             out_dir: self.out_dir.clone(),
+            profile: self.profile.clone(),
+            feature_set: self.feature_set,
         }
     }
 }
@@ -66,6 +70,10 @@ pub struct BuildArgs {
     pub include_dirs: Vec<PathBuf>,
     pub sysroot: Option<PathBuf>,
     pub out_dir: PathBuf,
+    /// Profile name from `--profile=<name>`, resolved to `feature_set` in main.rs.
+    pub profile: Option<String>,
+    /// Resolved feature set (set by main.rs after profile resolution).
+    pub feature_set: FeatureSet,
 }
 
 /// Arguments for the `run` subcommand.
@@ -76,6 +84,8 @@ pub struct RunArgs {
     pub include_dirs: Vec<PathBuf>,
     pub sysroot: Option<PathBuf>,
     pub out_dir: PathBuf,
+    pub profile: Option<String>,
+    pub feature_set: FeatureSet,
     pub timeout: Duration,
     pub runner_override: Option<String>,
 }
@@ -88,6 +98,8 @@ impl RunArgs {
             include_dirs: self.include_dirs.clone(),
             sysroot: self.sysroot.clone(),
             out_dir: self.out_dir.clone(),
+            profile: self.profile.clone(),
+            feature_set: self.feature_set,
         }
     }
 }
@@ -99,6 +111,8 @@ pub struct TestArgs {
     pub all_targets: bool,
     pub filter: Option<String>,
     pub manifest_path: PathBuf,
+    pub profile: Option<String>,
+    pub feature_set: FeatureSet,
 }
 
 pub fn parse() -> Command {
@@ -134,6 +148,7 @@ fn print_usage() {
     eprintln!();
     eprintln!("Build/Run options:");
     eprintln!("  --target=<triple>   Target triple");
+    eprintln!("  --profile=<name>    Build profile from tyu.toml [profile.<name>]");
     eprintln!("  --sysroot=<dir>     Sysroot directory");
     eprintln!("  --out-dir=<dir>     Output directory");
     eprintln!("  -I <dir>            Add include directory");
@@ -158,6 +173,7 @@ fn parse_common(args: &[String]) -> CommonArgs {
     let mut include_dirs: Vec<PathBuf> = Vec::new();
     let mut sysroot: Option<PathBuf> = None;
     let mut out_dir: Option<PathBuf> = None;
+    let mut profile: Option<String> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -168,6 +184,8 @@ fn parse_common(args: &[String]) -> CommonArgs {
             if target.is_none() {
                 eprintln!("tyu: unknown target '{}'", val);
             }
+        } else if let Some(val) = a.strip_prefix("--profile=") {
+            profile = Some(val.to_string());
         } else if let Some(val) = a.strip_prefix("--sysroot=") {
             sysroot = Some(PathBuf::from(val));
         } else if let Some(val) = a.strip_prefix("--out-dir=") {
@@ -193,7 +211,7 @@ fn parse_common(args: &[String]) -> CommonArgs {
         PathBuf::from("target").join("tyu").join(triple)
     });
 
-    CommonArgs { target, input, include_dirs, sysroot, out_dir }
+    CommonArgs { target, input, include_dirs, sysroot, out_dir, profile }
 }
 
 struct CommonArgs {
@@ -202,6 +220,7 @@ struct CommonArgs {
     include_dirs: Vec<PathBuf>,
     sysroot: Option<PathBuf>,
     out_dir: PathBuf,
+    profile: Option<String>,
 }
 
 fn parse_build(args: &[String]) -> Command {
@@ -216,6 +235,8 @@ fn parse_build(args: &[String]) -> Command {
         include_dirs: common.include_dirs,
         sysroot: common.sysroot,
         out_dir: common.out_dir,
+        profile: common.profile,
+        feature_set: FeatureSet::default(), // resolved in main.rs
     })
 }
 
@@ -247,6 +268,7 @@ fn parse_run(args: &[String]) -> Command {
     Command::Run(RunArgs {
         target: common.target, input, include_dirs: common.include_dirs,
         sysroot: common.sysroot, out_dir: common.out_dir,
+        profile: common.profile, feature_set: FeatureSet::default(),
         timeout, runner_override,
     })
 }
@@ -256,6 +278,8 @@ fn parse_test(args: &[String]) -> Command {
     let mut all_targets = false;
     let mut filter: Option<String> = None;
     let mut manifest_path: Option<PathBuf> = None;
+    let mut profile: Option<String> = None;
+    let mut features: Option<FeatureSet> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -267,6 +291,21 @@ fn parse_test(args: &[String]) -> Command {
                 eprintln!("tyu: unknown target '{}'", val);
                 return Command::Help;
             }
+        } else if let Some(val) = a.strip_prefix("--profile=") {
+            profile = Some(val.to_string());
+        } else if let Some(val) = a.strip_prefix("--features=") {
+            let mut set = FeatureSet::empty();
+            for chunk in val.split(',') {
+                let f = codegen_core::Feature::parse(chunk)
+                    .unwrap_or_else(|| {
+                        eprintln!("tyu: unknown feature '{}'", chunk);
+                        std::process::exit(1);
+                    });
+                set = set.with(f);
+            }
+            features = Some(set);
+        } else if let Some(val) = a.strip_prefix("--profile=") {
+            profile = Some(val.to_string());
         } else if let Some(val) = a.strip_prefix("--filter=") {
             filter = Some(val.to_string());
         } else if let Some(val) = a.strip_prefix("--manifest=") {
@@ -283,7 +322,10 @@ fn parse_test(args: &[String]) -> Command {
     let target = target.unwrap_or(Target::X86_64UnknownLinuxGnu);
     let manifest_path = manifest_path.unwrap_or_else(default_manifest);
 
-    Command::Test(TestArgs { target, all_targets, filter, manifest_path })
+    Command::Test(TestArgs {
+        target, all_targets, filter, manifest_path, profile,
+        feature_set: features.unwrap_or(FeatureSet::all()),
+    })
 }
 
 /// Default manifest path: `fixtures/manifest.toml` relative to CWD.
@@ -337,6 +379,8 @@ fn parse_deploy(args: &[String]) -> Command {
         key_sign,
         sign,
         device_keys_dir,
+        profile: common.profile,
+        feature_set: FeatureSet::default(),
     })
 }
 

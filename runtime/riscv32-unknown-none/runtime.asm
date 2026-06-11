@@ -65,6 +65,9 @@ __lang_start:
     # Initialize high-water to DS base
     la a0, __lang_ds_high
     sw s2, 0(a0)
+    # Initialize V-once flag
+    la a0, __lang_v_emitted
+    sw zero, 0(a0)
 
     jal w_1f5962a2ce9803c8          # call main ( -- i64 )
 
@@ -94,33 +97,202 @@ __lang_start:
     j __lang_fail_exit
 
 # -----------------------------------------------------------------
-# Trap handlers
+# Diagnostic D record emitter (shared)
+#
+# Emits V (once) + framed D header via __lang_writec, then
+# falls through to __lang_fail_exit.
+#
+# Input registers (preserved by __lang_writec, s2-s11 callee-saved):
+#   s4 = ds_depth (u32, in slots)
+#   s5 = trap_code (u32, low 16 bits used)
+#   s6 = valid (0 or 1)
+#   s7 = source_line (u32)
+#   s8 = word_hash low 32 bits
+#   s9 = word_hash high 32 bits
 # -----------------------------------------------------------------
+emit_diag:
+    # Emit V version record at most once.
+    la t0, __lang_v_emitted
+    lw t0, 0(t0)
+    bnez t0, emit_diag_header
+    li a0, 0x56                  # 'V'
+    jal __lang_writec
+    li a0, 1                     # len = 1 (u16-le)
+    jal __lang_writec
+    li a0, 0                     # len high byte
+    jal __lang_writec
+    li a0, 1                     # version = 1
+    jal __lang_writec
+    la t0, __lang_v_emitted
+    li t1, 1
+    sw t1, 0(t0)
 
+emit_diag_header:
+    # D marker
+    li a0, 0x44
+    jal __lang_writec
+
+    # Total payload length = 35 (u16-le, header-only, slot_count=0)
+    li a0, 35
+    jal __lang_writec
+    li a0, 0
+    jal __lang_writec
+
+    # Byte 0: DiagRecord.version = 1
+    li a0, 1
+    jal __lang_writec
+
+    # Byte 1: origin = IN_GUEST (1)
+    li a0, 1
+    jal __lang_writec
+
+    # Byte 2: valid = s6
+    mv a0, s6
+    jal __lang_writec
+
+    # Bytes 3-4: trap_code (u16-le) from s5
+    mv a0, s5
+    jal __lang_writec
+    srli a0, s5, 8
+    jal __lang_writec
+
+    # Bytes 5-8: source_line (u32-le) from s7
+    mv a0, s7
+    jal __lang_writec
+    srli a0, s7, 8
+    jal __lang_writec
+    srli a0, s7, 16
+    jal __lang_writec
+    srli a0, s7, 24
+    jal __lang_writec
+
+    # Bytes 9-16: word_hash (u64-le) from s8 (low) : s9 (high)
+    mv a0, s8
+    jal __lang_writec
+    srli a0, s8, 8
+    jal __lang_writec
+    srli a0, s8, 16
+    jal __lang_writec
+    srli a0, s8, 24
+    jal __lang_writec
+    mv a0, s9
+    jal __lang_writec
+    srli a0, s9, 8
+    jal __lang_writec
+    srli a0, s9, 16
+    jal __lang_writec
+    srli a0, s9, 24
+    jal __lang_writec
+
+    # Bytes 17-24: trap_pc (u64-le) = 0 (not available on header-only path)
+    li a0, 0
+    jal __lang_writec
+    jal __lang_writec
+    jal __lang_writec
+    jal __lang_writec
+    jal __lang_writec
+    jal __lang_writec
+    jal __lang_writec
+    jal __lang_writec
+
+    # Bytes 25-28: ds_depth (u32-le) from s4
+    mv a0, s4
+    jal __lang_writec
+    srli a0, s4, 8
+    jal __lang_writec
+    srli a0, s4, 16
+    jal __lang_writec
+    srli a0, s4, 24
+    jal __lang_writec
+
+    # Bytes 29-32: ds_declared = 0xFFFFFFFF (unknown / T)
+    li a0, 0xFF
+    jal __lang_writec
+    jal __lang_writec
+    jal __lang_writec
+    jal __lang_writec
+
+    # Bytes 33-34: slot_count = 0 (header-only)
+    li a0, 0
+    jal __lang_writec
+    jal __lang_writec
+
+    j __lang_fail_exit
+
+# -----------------------------------------------------------------
+# __lang_trap_loc — trap with source location (debug_trap_loc=true)
+#
+# Register contract:
+#   a0 = trap_code
+#   a1 = valid (1)
+#   a2 = source_line
+#   a3 = word_hash low 32 bits
+#   a4 = word_hash high 32 bits
+# -----------------------------------------------------------------
+.globl __lang_trap_loc
+.type __lang_trap_loc, @function
+__lang_trap_loc:
+    # Compute ds_depth from s2 (DS pointer, preserved).
+    mv s4, s2
+    la t0, __lang_ds_base
+    sub s4, s4, t0
+    srli s4, s4, 2                   # s4 = ds_depth (slots)
+
+    # Save trap payload to callee-saved registers.
+    mv s5, a0                         # trap_code
+    mv s6, a1                         # valid
+    mv s7, a2                         # source_line
+    mv s8, a3                         # word_hash low
+    mv s9, a4                         # word_hash high
+
+    j emit_diag
+
+# -----------------------------------------------------------------
+# __lang_trap — generic trap from compiled code
+#
+# Entered via:  j __lang_trap
+# Register contract:
+#   a0 = trap_code (set by compiler), a1/a2/a3/a4 = undefined
+# -----------------------------------------------------------------
 .globl __lang_trap
 .type __lang_trap, %function
-.globl __lang_trap_loc
-.type __lang_trap_loc, %function
+__lang_trap:
+    mv s4, s2
+    la t0, __lang_ds_base
+    sub s4, s4, t0
+    srli s4, s4, 2
+
+    mv s5, a0                         # trap_code
+    li s6, 0                           # valid = 0
+    li s7, 0                           # source_line = 0
+    li s8, 0                           # word_hash low = 0
+    li s9, 0                           # word_hash high = 0
+
+    j emit_diag
+
+# -----------------------------------------------------------------
+# __stack_overflow — data-stack overflow detected at runtime
+# -----------------------------------------------------------------
 .globl __stack_overflow
 .type __stack_overflow, %function
-__lang_trap:
-__lang_trap_loc:
 __stack_overflow:
-    j __lang_fail_exit
+    mv s4, s2
+    la t0, __lang_ds_base
+    sub s4, s4, t0
+    srli s4, s4, 2
+
+    li s5, 10                          # trap_code = STACK_OVERFLOW
+    li s6, 0                           # valid = 0
+    li s7, 0                           # source_line = 0
+    li s8, 0                           # word_hash low = 0
+    li s9, 0                           # word_hash high = 0
+
+    j emit_diag
 
 # -----------------------------------------------------------------
 # testio words — RISC-V semihosting via shared snippet
 # -----------------------------------------------------------------
 .include "../include/semihosting-riscv.s"
-
-# -----------------------------------------------------------------
-# Module modpack section (S2 Phase 14)
-# -----------------------------------------------------------------
-.section .modpack
-.globl __lang_modpack_start
-__lang_modpack_start:
-.globl __lang_modpack_end
-__lang_modpack_end:
 
 # -----------------------------------------------------------------
 # BSS — DS region, high-water, native stack
@@ -137,6 +309,10 @@ __lang_ds_limit:
 
 .globl __lang_ds_high
 __lang_ds_high:
+    .word 0
+
+.globl __lang_v_emitted
+__lang_v_emitted:
     .word 0
 
 .globl __lang_expected_abi_hash

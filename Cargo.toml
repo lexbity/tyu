@@ -18,6 +18,8 @@ members = [
   "crates/lmod-pack",
   "crates/loader-core",
   "crates/harness-core",
+  "crates/diag-core",
+  "crates/rsp-client",
   "crates/tyu",
   "crates/lmod-encrypt",
   "crates/lmod-sign",
@@ -26,8 +28,13 @@ members = [
 # Panic=abort is intentional: the hosted-rt crate provides a custom panic handler
 # and the compiler pipeline uses manual Drop (assume_init_drop) in several places.
 # A panic that unwinds could double-free or leave memory in an inconsistent state.
-# The test profile inherits from dev (panic=abort) but Cargo ignores this setting
-# for test targets; tests run with panic=unwind regardless.
+#
+# Ideally host tool binaries (tyu, lmod-*, langc) would use panic=unwind to allow
+# clean ?-based error teardown, but Cargo does not support per-package panic
+# profile overrides (panic is a codegen-level setting that must be consistent
+# across a crate's dependency graph).  The test profile inherits from dev
+# (panic=abort) but Cargo ignores this setting for test targets; tests run with
+# panic=unwind regardless, so error-propagation tests work in the test suite.
 [profile.dev]
 panic = "abort"
 

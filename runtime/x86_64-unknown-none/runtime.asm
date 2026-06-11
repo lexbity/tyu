@@ -113,6 +113,8 @@ __lang_start:
     mov r14, __lang_ds_limit
     ; Initialize high-water mark to DS base
     mov qword [__lang_ds_high], r15
+    ; Initialize V-once flag (BSS is not pre-zeroed under PVH)
+    mov qword [__lang_v_emitted], 0
     xor rbp, rbp
 
     call w_1f5962a2ce9803c8          ; call main
@@ -151,26 +153,237 @@ __lang_start:
     hlt
 
 ; ---------------------------------------------------------------------------
-; Trap / overflow handlers (same public names as hosted runtime)
+; Trap / overflow handlers
+;
+; Each handler emits a framed D diagnostic record (with data-stack slot dump)
+; over port 0xe9, then signals exit via isa-debug-exit port 0x501.
+;
+; __lang_trap_loc     — trap with source location (rdi=trap_code, rsi=valid,
+;                       rdx=line, rcx=word_hash)
+; __lang_trap         — generic trap (rdi=trap_code, no payload -> valid=0)
+; __stack_overflow    — data-stack overflow detected at runtime
+;
+; Register convention for emit_diag:
+;   r8  = original DS pointer (for slot dump, r15 at trap time)
+;   r12 = trap_code          (u64, low 16 bits used)
+;   r13 = valid flag         (0 or 1)
+;   r14 = source_line        (u64, low 32 bits used)
+;   r15 = word_hash          (full u64)
+;   rbp = slot_count         (capped at 16, also used as ds_depth in header)
 ; ---------------------------------------------------------------------------
 
-public __lang_trap
-__lang_trap:
-public __lang_trap_loc
-__lang_trap_loc:
+; ---- isa-debug-exit tail (shared) ----
+; Writes 0xff to port 0x501 and halts.
+trap_exit:
     mov ax, 0xff
     mov dx, 0x501
     out dx, ax
     cli
     hlt
 
+; ---- Shared D record + slot dump emitter ----
+; Jumped to from each handler after setting r8, r12-r15, rbp per convention
+; above.  Emits V (once) + framed D record (header + slot data).
+slot_emit_max equ 16               ; cap: never dump more than 16 slots
+
+emit_diag:
+    ; Emit V version record at most once.
+    cmp qword [__lang_v_emitted], 0
+    jne emit_diag_header
+    mov al, 'V'
+    out 0xe9, al
+    mov al, 1
+    out 0xe9, al
+    xor al, al
+    out 0xe9, al
+    mov al, 1
+    out 0xe9, al
+    mov qword [__lang_v_emitted], 1
+
+emit_diag_header:
+    ; D marker (0x44)
+    mov al, 'D'
+    out 0xe9, al
+
+    ; Total payload length = 35 (header) + slot_count * 8.
+    mov r9, rbp
+    shl r9, 3           ; r9 = slot_count * 8
+    add r9, 35          ; r9 = total length (fits in u16)
+    mov rax, r9
+    out 0xe9, al        ; length byte 0 (LSB)
+    shr rax, 8
+    out 0xe9, al        ; length byte 1 (MSB)
+
+    ; Byte  0: DiagRecord.version = 1
+    mov al, 1
+    out 0xe9, al
+
+    ; Byte  1: origin = IN_GUEST (1)
+    mov al, 1
+    out 0xe9, al
+
+    ; Byte  2: valid = r13 (0 or 1)
+    mov al, r13b
+    out 0xe9, al
+
+    ; Bytes 3-4: trap_code (u16-le) from r12
+    mov rax, r12
+    out 0xe9, al
+    shr rax, 8
+    out 0xe9, al
+
+    ; Bytes 5-8: source_line (u32-le) from r14
+    mov rax, r14
+    out 0xe9, al
+    shr rax, 8
+    out 0xe9, al
+    shr rax, 8
+    out 0xe9, al
+    shr rax, 8
+    out 0xe9, al
+
+    ; Bytes 9-16: word_hash (u64-le) from r15
+    mov rax, r15
+    out 0xe9, al
+    shr rax, 8
+    out 0xe9, al
+    shr rax, 8
+    out 0xe9, al
+    shr rax, 8
+    out 0xe9, al
+    shr rax, 8
+    out 0xe9, al
+    shr rax, 8
+    out 0xe9, al
+    shr rax, 8
+    out 0xe9, al
+    shr rax, 8
+    out 0xe9, al
+
+    ; Bytes 17-24: trap_pc (u64-le) = 0 (not available in-guest)
+    xor al, al
+    out 0xe9, al
+    out 0xe9, al
+    out 0xe9, al
+    out 0xe9, al
+    out 0xe9, al
+    out 0xe9, al
+    out 0xe9, al
+    out 0xe9, al
+
+    ; Bytes 25-28: ds_depth (u32-le) from rbp (same as slot_count)
+    mov rax, rbp
+    out 0xe9, al
+    shr rax, 8
+    out 0xe9, al
+    shr rax, 8
+    out 0xe9, al
+    shr rax, 8
+    out 0xe9, al
+
+    ; Bytes 29-32: ds_declared = 0xFFFFFFFF (unknown / ⊤)
+    mov al, 0xFF
+    out 0xe9, al
+    out 0xe9, al
+    out 0xe9, al
+    out 0xe9, al
+
+    ; Bytes 33-34: slot_count (u16-le) from rbp
+    mov rax, rbp
+    out 0xe9, al
+    shr rax, 8
+    out 0xe9, al
+
+    ; ---- Data-stack slot dump (deepest-last order) ----
+    ; rbp = slot_count, r8 = original DS pointer (top of live area).
+    ; Iterate downward: each slot is 8 bytes, read at [r8 - 8*k].
+    mov rcx, rbp        ; remaining slot count
+    test rcx, rcx
+    jz slot_emit_done
+
+slot_emit_loop:
+    sub r8, 8           ; move down one slot (toward base)
+    mov rax, [r8]       ; read slot value (u64)
+    ; emit 8 bytes LE
+    out 0xe9, al
+    shr rax, 8
+    out 0xe9, al
+    shr rax, 8
+    out 0xe9, al
+    shr rax, 8
+    out 0xe9, al
+    shr rax, 8
+    out 0xe9, al
+    shr rax, 8
+    out 0xe9, al
+    shr rax, 8
+    out 0xe9, al
+    shr rax, 8
+    out 0xe9, al
+    dec rcx
+    jnz slot_emit_loop
+
+slot_emit_done:
+    jmp trap_exit
+
+; ---- __lang_trap_loc: trap with payload (debug_trap_loc=true) ----
+; Register contract:
+;   rdi = trap_code, rsi = valid (1), rdx = line, rcx = word_hash
+public __lang_trap_loc
+__lang_trap_loc:
+    ; Save original DS pointer and compute capped slot_count.
+    mov r8, r15          ; save DS pointer for slot dump
+    mov rax, r15
+    sub rax, __lang_ds_base
+    shr rax, 3           ; rax = live slots
+    cmp rax, slot_emit_max
+    jbe .slot_cap_loc
+    mov rax, slot_emit_max
+.slot_cap_loc:
+    mov rbp, rax          ; rbp = capped slot_count
+    ; Save payload registers.
+    mov r12, rdi          ; trap_code
+    mov r13, rsi          ; valid
+    mov r14, rdx          ; line
+    mov r15, rcx          ; word_hash
+    jmp emit_diag
+
+; ---- __lang_trap: generic trap (no payload) ----
+; rdi = trap_code (set by codegen), rsi/rdx/rcx = undefined.
+public __lang_trap
+__lang_trap:
+    mov r8, r15
+    mov rax, r15
+    sub rax, __lang_ds_base
+    shr rax, 3
+    cmp rax, slot_emit_max
+    jbe .slot_cap_trap
+    mov rax, slot_emit_max
+.slot_cap_trap:
+    mov rbp, rax
+    mov r12, rdi
+    xor r13, r13          ; valid = 0
+    xor r14, r14          ; line = 0
+    xor r15, r15          ; word_hash = 0
+    jmp emit_diag
+
+; ---- __stack_overflow: data-stack overflow ----
 public __stack_overflow
 __stack_overflow:
-    mov ax, 0x0a
-    mov dx, 0x501
-    out dx, ax
-    cli
-    hlt
+    mov r8, r15
+    mov rax, r15
+    sub rax, __lang_ds_base
+    shr rax, 3
+    cmp rax, slot_emit_max
+    jbe .slot_cap_stk
+    mov rax, slot_emit_max
+.slot_cap_stk:
+    mov rbp, rax
+    mov r12, 10           ; trap_code = STACK_OVERFLOW
+    xor r13, r13          ; valid = 0
+    xor r14, r14          ; line = 0
+    xor r15, r15          ; word_hash = 0
+    jmp emit_diag
 
 ; ---------------------------------------------------------------------------
 ; testio words — called by compiled tyu_lang code via normal ABI
@@ -263,13 +476,7 @@ public __lang_expected_abi_hash
 __lang_expected_abi_hash:
     dq 0x7ff852243aa7202b
 
-; ---------------------------------------------------------------------------
-; Module modpack section (S2 Phase 14)
-; ---------------------------------------------------------------------------
-; Embedded .lmod images live in their own section, each prefixed with a
-; u32 length.  The loader scans [__lang_modpack_start .. __lang_modpack_end).
-section '.modpack' writeable
-public __lang_modpack_start
-__lang_modpack_start:
-public __lang_modpack_end
-__lang_modpack_end:
+    ; V-once flag — 0 before V is emitted, 1 after.
+public __lang_v_emitted
+__lang_v_emitted:
+    dq 0

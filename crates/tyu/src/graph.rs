@@ -8,16 +8,19 @@ use frontend::parse::Parser;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::fs;
+use crate::error::TyuError;
 
 /// A resolved module node in the dependency graph.
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
 pub struct ModuleNode {
     pub name: String,
     /// Absolute path to the source `.mod` file.
     pub path: PathBuf,
     /// Whether this module is a library (no `main` word).
     pub is_lib: bool,
+    /// Resolved file paths of modules that this module directly imports
+    /// (only those that were found on disk — platform imports excluded).
+    pub dep_paths: Vec<PathBuf>,
 }
 
 /// Resolve the full dependency graph starting from `main_path`.
@@ -32,7 +35,7 @@ pub fn resolve_graph(
     let main_abs = if main_path.is_absolute() {
         main_path.to_path_buf()
     } else {
-        std::env::current_dir().map_err(|e| format!("current_dir: {}", e))?
+        std::env::current_dir().map_err(|e| TyuError::Build(format!("current_dir: {}", e)))?
             .join(main_path)
     };
 
@@ -58,10 +61,13 @@ pub fn resolve_graph(
 
     while let Some((mod_path, containing_dir)) = pending.pop_front() {
         let src_bytes = fs::read(&mod_path)
-            .map_err(|e| format!("reading '{}': {}", mod_path.display(), e))?;
-        let module = Parser::new(&src_bytes)
-            .parse_module_ast()
-            .map_err(|e| format!("parsing '{}': error {}", mod_path.display(), e.code()))?;
+            .map_err(|e| TyuError::Build(format!("reading '{}': {}", mod_path.display(), e)))?;
+        // Box the ModuleAst to avoid ~156KB stack frame from FixedVec inline storage.
+        let module = Box::new(
+            Parser::new(&src_bytes)
+                .parse_module_ast()
+                .map_err(|e| TyuError::Build(format!("parsing '{}': error {}", mod_path.display(), e.code())))?
+        );
 
         let mod_name = String::from_utf8_lossy(
             &src_bytes[module.name.start..module.name.end]
@@ -103,12 +109,18 @@ pub fn resolve_graph(
                         pending.push_back((p, parent));
                     }
                     None => {
-                        // If not found as .mod, try .def.
-                        // .def files have no word bodies — they declare the
-                        // interface but don't need compilation.
-                        // We skip unresolved .def-only modules — they are
-                        // assumed to be provided by the runtime/linker.
-                        // This is the same convention as langc.
+                        // Platform modules (import platform/...) that are not
+                        // found on disk are resolved by the sysroot at build
+                        // time — skip silently (GR-5).
+                        if import_name.starts_with("platform/") {
+                            continue;
+                        }
+                        // Non-platform modules that are neither .mod nor .def
+                        // are genuine missing-user-module errors (GR-6).
+                        return Err(TyuError::Build(format!(
+                            "module '{}' imported by '{}' not found",
+                            import_name, mod_name,
+                        )).into());
                     }
                 }
             }
@@ -162,10 +174,20 @@ pub fn resolve_graph(
             let is_root = path == &main_abs;
             let is_lib = !is_root;
 
+            let dep_paths: Vec<PathBuf> = deps.get(name)
+                .map(|dep_names| {
+                    dep_names.iter()
+                        .filter_map(|dn| mod_paths.get(dn.as_str()))
+                        .cloned()
+                        .collect()
+                })
+                .unwrap_or_default();
+
             order.push(ModuleNode {
                 name: name.to_string(),
                 path: path.clone(),
                 is_lib,
+                dep_paths,
             });
         }
 
@@ -183,7 +205,7 @@ pub fn resolve_graph(
     }
 
     if sorted_set.len() != deps.len() {
-        return Err("circular dependency detected in module graph".to_string());
+        return Err(TyuError::Build("circular dependency detected in module graph".to_string()).into());
     }
 
     Ok(order)

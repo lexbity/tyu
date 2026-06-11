@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use lmod::enc::{self, EncMode, decode_enc_header};
+use lmod::enc::{EncMode, decode_enc_header};
 use lmod::header::{LMOD_FLAG_ENCRYPTED, LMOD_FLAG_SIGNED, HEADER_SIZE};
 use lmod::validate::Container;
 
@@ -18,6 +18,11 @@ pub fn workspace_root() -> PathBuf {
         .parent().unwrap()
         .parent().unwrap()
         .to_path_buf()
+}
+
+/// Path to the `test-goldens/` directory at the workspace root.
+pub fn golden_dir() -> PathBuf {
+    workspace_root().join("test-goldens")
 }
 
 /// The `tyu` driver binary.
@@ -30,10 +35,18 @@ pub fn langc_exe() -> PathBuf {
     workspace_root().join("target").join("debug").join("langc")
 }
 
-/// Returns true if a named binary exists somewhere in `PATH`.
+/// Returns true if a named binary exists — either on `PATH` or in
+/// `target/debug/` (for workspace-built binaries like `langc`, `tyu`).
 pub fn tool_available(name: &str) -> bool {
-    Command::new("which").arg(name).output()
+    // Check PATH via which.
+    if Command::new("which").arg(name).output()
         .map(|o| o.status.success()).unwrap_or(false)
+    {
+        return true;
+    }
+    // Check target/debug/ for workspace-built binaries.
+    let target = workspace_root().join("target").join("debug").join(name);
+    target.exists()
 }
 
 /// Environment-aware tool gating: requires all named tools, panics under CI

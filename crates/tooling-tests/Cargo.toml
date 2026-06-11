@@ -4,11 +4,15 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+codegen-core = { path = "../codegen-core" }
+diag-core = { path = "../diag-core", features = ["std"] }
+harness-core = { path = "../harness-core" }
+hex = "0.4"
 hosted = { path = "../hosted" }
 hosted-rt = { path = "../hosted-rt" }
 loader-core = { path = "../loader-core" }
 lmod = { path = "../lmod" }
-hex = "0.4"
+tyu = { path = "../tyu" }
 
 [features]
 default = []

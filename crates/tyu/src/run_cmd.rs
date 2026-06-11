@@ -26,6 +26,7 @@ pub fn run(args: &RunArgs) -> Result<(), String> {
                 Runner::Qemu(spec)
             }
             other => return Err(format!("unknown runner '{}'", other)),
+
         }
     } else {
         Runner::for_target(args.target)

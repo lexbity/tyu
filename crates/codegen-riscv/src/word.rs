@@ -1,11 +1,52 @@
 use codegen_core::{AsmMode, CodegenError};
+use codegen_core::strings::{decode_string_bytes, STR_TABLE_CAP};
+use frontend::span::Span;
 use ir as lir;
 use crate::ophelpers::{fnv1a_u64, slice_span, write_hex, write_sym_label, write_u32};
 use crate::RiscVBackend;
 
+fn prim_bits_signed_ty(ty_name: &[u8]) -> Option<(u16, bool)> {
+    let (bits, signed) = match ty_name {
+        b"u8" => (8, false),
+        b"u16" => (16, false),
+        b"u32" => (32, false),
+        b"u64" => (64, false),
+        b"usize" => (32, false),
+        b"i8" => (8, true),
+        b"i16" => (16, true),
+        b"i32" => (32, true),
+        b"i64" => (64, true),
+        b"isize" => (32, true),
+        b"bool" => (8, false),
+        b"ptr" | b"ptr_mut" | b"str" | b"mmio" | b"Chan" | b"Task" => (32, false),
+        _ => return None,
+    };
+    Some((bits, signed))
+}
+
+fn prim_bits_signed(w: &lir::Word, ty: lir::TypeId) -> Option<(u16, bool)> {
+    let ty_name = w.types.get(ty.0 as usize).map(|a| a.as_bytes())?;
+    prim_bits_signed_ty(ty_name)
+}
+
+fn line_col(src: &[u8], offset: usize) -> (u32, u32) {
+    let mut line: u32 = 1;
+    let mut col: u32 = 1;
+    let end = core::cmp::min(offset, src.len());
+    for &b in &src[..end] {
+        if b == b'\n' {
+            line += 1;
+            col = 1;
+        } else {
+            col += 1;
+        }
+    }
+    (line, col)
+}
+
 impl<'a> RiscVBackend<'a> {
     pub fn emit_word(&mut self, w: &lir::Word) -> Result<(), CodegenError> {
-        self.cur_word_id = fnv1a_u64(w.name.as_bytes()) as u32;
+        self.cur_word_id = fnv1a_u64(w.name.as_bytes());
         self.out.write(b"\n");
         if self.mode == AsmMode::Object {
             if is_exported(self.module, self.src, w.name.as_bytes()) {
@@ -26,7 +67,13 @@ impl<'a> RiscVBackend<'a> {
         self.out.write(b":\n");
 
         let slots = max_local_slot(w).map(|m| (m as u32) + 1).unwrap_or(0);
-        let frame_bytes = slots * 8;
+        let locals_bytes = slots * 8;
+        let scoped_count = count_scoped_slices(w);
+        let scoped_bytes = scoped_count * 8;
+        self.scoped_base = locals_bytes;
+        self.scoped_slots = scoped_count;
+        self.scoped_next = 0;
+        let frame_bytes = locals_bytes + scoped_bytes;
         if frame_bytes > 0 {
             self.out.write(b"\taddi sp, sp, -");
             write_u32(self.out, frame_bytes);
@@ -62,7 +109,15 @@ impl<'a> RiscVBackend<'a> {
                 self.emit_ds_high_update();
                 Ok(())
             }
-            lir::OpKind::ConstStr(_) => Err(CodegenError::UnsupportedOp { op_name: b"ConstStr" }),
+            lir::OpKind::ConstStr(span) => {
+                let id = self.intern_str(span)?;
+                self.out.write(b"\tla a0, __lang_str_");
+                write_u32(self.out, id);
+                self.out.write(b"\n\tli a1, 0\n");
+                self.out.write(b"\tsw a0, 0(s2)\n\tsw a1, 4(s2)\n\taddi s2, s2, 8\n");
+                self.emit_ds_high_update();
+                Ok(())
+            }
             lir::OpKind::Dup { .. } => {
                 self.out.write(b"\taddi s2, s2, -8\n\tlw a0, 0(s2)\n\tlw a1, 4(s2)\n");
                 self.out.write(b"\tsw a0, 0(s2)\n\tsw a1, 4(s2)\n\taddi s2, s2, 8\n");
@@ -140,12 +195,311 @@ impl<'a> RiscVBackend<'a> {
             lir::OpKind::TrapIfFalse { code } => {
                 let ok = self.fresh_label();
                 self.out.write(b"\taddi s2, s2, -8\n\tlw a0, 0(s2)\n\tbnez a0, .trap_ok_"); write_u32(self.out, ok); self.out.write(b"\n");
-                self.out.write(b"\tli a0, "); write_u32(self.out, lir::trap_code_u32(code)); self.out.write(b"\n\tj __lang_trap\n");
+                self.emit_trap_with_loc(lir::trap_code_u32(code), op.span);
                 self.out.write(b".trap_ok_"); write_u32(self.out, ok); self.out.write(b":\n");
                 Ok(())
             }
-            _ => Err(CodegenError::UnsupportedOp { op_name: b"RISC-V unsupported op" }),
-        }
+            lir::OpKind::Load { ty } => {
+                let (bits, signed) = prim_bits_signed(_w, ty)
+                    .ok_or(CodegenError::UnsupportedOp { op_name: b"Load" })?;
+                // Pop address (low word, discard high)
+                self.out.write(b"\taddi s2, s2, -8\n\tlw a0, 0(s2)\n");
+                // Load from address
+                match (bits, signed) {
+                    (8, true) => self.out.write(b"\tlb a0, 0(a0)\n"),
+                    (8, false) => self.out.write(b"\tlbu a0, 0(a0)\n"),
+                    (16, true) => self.out.write(b"\tlh a0, 0(a0)\n"),
+                    (16, false) => self.out.write(b"\tlhu a0, 0(a0)\n"),
+                    (32, _) => self.out.write(b"\tlw a0, 0(a0)\n"),
+                    (64, _) => { self.out.write(b"\tlw a0, 0(a0)\n\tlw a1, 4(a0)\n"); },
+                    _ => return Err(CodegenError::UnsupportedOp { op_name: b"Load" }),
+                }
+                if bits < 64 {
+                    if signed && bits < 32 {
+                        // a0 already sign-extended by lb/lh; set a1
+                        self.out.write(b"\tsrai a1, a0, 31\n");
+                    } else {
+                        self.out.write(b"\tli a1, 0\n");
+                    }
+                }
+                self.out.write(b"\tsw a0, 0(s2)\n\tsw a1, 4(s2)\n\taddi s2, s2, 8\n");
+                self.emit_ds_high_update();
+                Ok(())
+            }
+            lir::OpKind::Store { ty } => {
+                let (bits, _signed) = prim_bits_signed(_w, ty)
+                    .ok_or(CodegenError::UnsupportedOp { op_name: b"Store" })?;
+                // Pop value (a0:a1), then address
+                self.out.write(b"\taddi s2, s2, -8\n\tlw a0, 0(s2)\n\tlw a1, 4(s2)\n");
+                self.out.write(b"\taddi s2, s2, -8\n\tlw a2, 0(s2)\n");
+                match bits {
+                    8 => self.out.write(b"\tsb a0, 0(a2)\n"),
+                    16 => self.out.write(b"\tsh a0, 0(a2)\n"),
+                    32 => self.out.write(b"\tsw a0, 0(a2)\n"),
+                    64 => { self.out.write(b"\tsw a0, 0(a2)\n\tsw a1, 4(a2)\n"); },
+                    _ => return Err(CodegenError::UnsupportedOp { op_name: b"Store" }),
+                }
+                Ok(())
+            }
+            lir::OpKind::AddrOf { const_addr: Some(addr), .. } => {
+                let low = addr as u32;
+                let high = (addr >> 32) as u32;
+                self.emit_const32(low);
+                self.out.write(b"\tsw a0, 0(s2)\n\taddi s2, s2, 4\n");
+                self.emit_const32(high);
+                self.out.write(b"\tsw a0, 0(s2)\n\taddi s2, s2, 4\n");
+                self.emit_ds_high_update();
+                Ok(())
+            }
+            lir::OpKind::AddrOf { const_addr: None, .. } => {
+                Err(CodegenError::UnsupportedAddrOf)
+            }
+            lir::OpKind::PtrAddConst { offset, .. } => {
+                self.out.write(b"\taddi s2, s2, -8\n\tlw a0, 0(s2)\n");
+                if offset <= 2047 {
+                    self.out.write(b"\taddi a0, a0, "); write_u32(self.out, offset); self.out.write(b"\n");
+                } else {
+                    self.out.write(b"\tli a1, "); write_u32(self.out, offset);
+                    self.out.write(b"\n\tadd a0, a0, a1\n");
+                }
+                self.out.write(b"\tli a1, 0\n");
+                self.out.write(b"\tsw a0, 0(s2)\n\tsw a1, 4(s2)\n\taddi s2, s2, 8\n");
+                self.emit_ds_high_update();
+                Ok(())
+            }
+            lir::OpKind::PtrAddIndex { scale, .. } => {
+                // Pop index (low word), then base (low word)
+                self.out.write(b"\taddi s2, s2, -8\n\tlw a0, 0(s2)\n");    // idx
+                self.out.write(b"\taddi s2, s2, -8\n\tlw a1, 0(s2)\n");    // base
+                if scale == 0 {
+                    // base is the result
+                } else if scale.is_power_of_two() {
+                    let shift = scale.trailing_zeros();
+                    self.out.write(b"\tslli a0, a0, "); write_u32(self.out, shift); self.out.write(b"\n");
+                    self.out.write(b"\tadd a0, a1, a0\n");
+                } else {
+                    self.out.write(b"\tli a2, "); write_u32(self.out, scale);
+                    self.out.write(b"\n\tmul a0, a0, a2\n\tadd a0, a1, a0\n");
+                }
+                self.out.write(b"\tli a1, 0\n");
+                self.out.write(b"\tsw a0, 0(s2)\n\tsw a1, 4(s2)\n\taddi s2, s2, 8\n");
+                self.emit_ds_high_update();
+                Ok(())
+            }
+            lir::OpKind::Cast { from, to } => {
+                let from_name = match _w.types.get(from.0 as usize).map(|a| a.as_bytes()) {
+                    Some(n) => n, None => return Ok(()),
+                };
+                let to_name = match _w.types.get(to.0 as usize).map(|a| a.as_bytes()) {
+                    Some(n) => n, None => return Ok(()),
+                };
+                if from_name == to_name { return Ok(()); }
+                let Some((from_bits, from_signed)) = prim_bits_signed_ty(from_name) else { return Ok(()); };
+                let Some((to_bits, to_signed)) = prim_bits_signed_ty(to_name) else { return Ok(()); };
+                // Pop value
+                self.out.write(b"\taddi s2, s2, -8\n\tlw a0, 0(s2)\n\tlw a1, 4(s2)\n");
+                // Mask/sign-extend from source width
+                if from_bits < 64 {
+                    let mask = ((1u64 << from_bits) - 1) as u32;
+                    if mask <= 0xFFFF {
+                        self.out.write(b"\tli a2, "); write_hex(self.out, mask); self.out.write(b"\n\tand a0, a0, a2\n");
+                    } else {
+                        self.out.write(b"\tli a2, "); write_hex(self.out, mask & 0xFFFF); self.out.write(b"\n");
+                        self.out.write(b"\tlui a3, "); write_hex(self.out, (mask >> 16) & 0xFFFF); self.out.write(b"\n");
+                        self.out.write(b"\tor a2, a2, a3\n\tand a0, a0, a2\n");
+                    }
+                    if from_signed {
+                        let sh = 32 - from_bits;
+                        self.out.write(b"\tslli a0, a0, "); write_u32(self.out, sh as u32);
+                        self.out.write(b"\n\tsrai a0, a0, "); write_u32(self.out, sh as u32); self.out.write(b"\n");
+                        self.out.write(b"\tsrai a1, a0, 31\n");
+                    } else {
+                        self.out.write(b"\tli a1, 0\n");
+                    }
+                }
+                // Normalize to bool if target is bool
+                if to_name == b"bool" && from_name != b"bool" {
+                    self.out.write(b"\tsnez a0, a0\n\tli a1, 0\n");
+                }
+                // Mask/sign-extend to target width
+                if to_bits < 64 && to_name != b"bool" {
+                    let mask = ((1u64 << to_bits) - 1) as u32;
+                    if mask <= 0xFFFF {
+                        self.out.write(b"\tli a2, "); write_hex(self.out, mask); self.out.write(b"\n\tand a0, a0, a2\n");
+                    } else {
+                        self.out.write(b"\tli a2, "); write_hex(self.out, mask & 0xFFFF); self.out.write(b"\n");
+                        self.out.write(b"\tlui a3, "); write_hex(self.out, (mask >> 16) & 0xFFFF); self.out.write(b"\n");
+                        self.out.write(b"\tor a2, a2, a3\n\tand a0, a0, a2\n");
+                    }
+                    if to_signed {
+                        let sh = 32 - to_bits;
+                        self.out.write(b"\tslli a0, a0, "); write_u32(self.out, sh as u32);
+                        self.out.write(b"\n\tsrai a0, a0, "); write_u32(self.out, sh as u32); self.out.write(b"\n");
+                        self.out.write(b"\tsrai a1, a0, 31\n");
+                    } else {
+                        self.out.write(b"\tli a1, 0\n");
+                    }
+                }
+                self.out.write(b"\tsw a0, 0(s2)\n\tsw a1, 4(s2)\n\taddi s2, s2, 8\n");
+                self.emit_ds_high_update();
+                Ok(())
+            }
+            lir::OpKind::Bitcast { .. } => {
+                // No-op: bit pattern unchanged
+                Ok(())
+            }
+            lir::OpKind::TaskSpawn { name, .. } => {
+                self.uses_tasks = true;
+                self.out.write(b"\tla a0, "); write_sym_label(self.out, name.as_bytes()); self.out.write(b"\n");
+                self.out.write(b"\tcall __task_spawn\n");
+                self.out.write(b"\tsw a0, 0(s2)\n\taddi s2, s2, 4\n");
+                self.out.write(b"\tsw zero, 0(s2)\n\taddi s2, s2, 4\n");
+                self.emit_ds_high_update();
+                Ok(())
+            }
+            lir::OpKind::ScopedEnter { ty, len } => {
+                let ty_name = _w
+                    .types
+                    .get(ty.0 as usize)
+                    .map(|a| a.as_bytes())
+                    .unwrap_or(b"");
+                if ty_name.starts_with(b"Slice(") || ty_name.starts_with(b"SliceMut(") {
+                    if self.scoped_next >= self.scoped_slots {
+                        return Err(CodegenError::ScopedAllocationOverflow);
+                    }
+                    let slot = self.scoped_next;
+                    self.scoped_next = self.scoped_next.wrapping_add(1);
+                    let offset = self.scoped_base + (slot * 8);
+                    // Pop data pointer from DS (low word), store at [sp+offset]
+                    self.out.write(b"\taddi s2, s2, -8\n\tlw a0, 0(s2)\n");
+                    self.out.write(b"\tsw a0, "); write_u32(self.out, offset);
+                    self.out.write(b"(sp)\n");
+                    // Store length at [sp+offset+4]
+                    self.out.write(b"\tli a0, "); write_u32(self.out, len);
+                    self.out.write(b"\n\tsw a0, "); write_u32(self.out, offset + 4);
+                    self.out.write(b"(sp)\n");
+                    // Push address of slot as result pointer
+                    self.out.write(b"\taddi a0, sp, "); write_u32(self.out, offset);
+                    self.out.write(b"\n\tli a1, 0\n");
+                    self.out.write(b"\tsw a0, 0(s2)\n\tsw a1, 4(s2)\n\taddi s2, s2, 8\n");
+                    self.emit_ds_high_update();
+                } else if ty_name == b"RegionRef" || ty_name == b"RegionRefMut" {
+                    self.out.write(b"\taddi s2, s2, -8\n\tlw a0, 0(s2)\n\tlw a1, 4(s2)\n");
+                    self.out.write(b"\tsw a0, 0(s2)\n\tsw a1, 4(s2)\n\taddi s2, s2, 8\n");
+                    self.out.write(b"\tsw a0, 0(s2)\n\tsw a1, 4(s2)\n\taddi s2, s2, 8\n");
+                    self.emit_ds_high_update();
+                }
+                Ok(())
+            }
+            lir::OpKind::MmioPlace { addr, .. } => {
+                let low = addr as u32;
+                let high = (addr >> 32) as u32;
+                self.emit_const32(low);
+                self.out.write(b"\tsw a0, 0(s2)\n\taddi s2, s2, 4\n");
+                self.emit_const32(high);
+                self.out.write(b"\tsw a0, 0(s2)\n\taddi s2, s2, 4\n");
+                self.emit_ds_high_update();
+                Ok(())
+            }
+            lir::OpKind::MmioVolLoad { ty, place: _ } => {
+                let (bits, _signed) = prim_bits_signed(_w, ty)
+                    .ok_or(CodegenError::UnsupportedOp { op_name: b"MmioVolLoad" })?;
+                // Pop address (low word, discard high)
+                self.out.write(b"\taddi s2, s2, -8\n\tlw a0, 0(s2)\n");
+                match bits {
+                    8 => self.out.write(b"\tlbu a0, 0(a0)\n"),
+                    16 => self.out.write(b"\tlhu a0, 0(a0)\n"),
+                    32 => self.out.write(b"\tlw a0, 0(a0)\n"),
+                    64 => { self.out.write(b"\tlw a0, 0(a0)\n\tlw a1, 4(a0)\n"); },
+                    _ => return Err(CodegenError::UnsupportedOp { op_name: b"MmioVolLoad" }),
+                }
+                if bits < 64 {
+                    self.out.write(b"\tli a1, 0\n");
+                }
+                self.out.write(b"\tsw a0, 0(s2)\n\tsw a1, 4(s2)\n\taddi s2, s2, 8\n");
+                self.emit_ds_high_update();
+                Ok(())
+            }
+            lir::OpKind::MmioVolStore { ty, place: _, access: _ } => {
+                let (bits, _signed) = prim_bits_signed(_w, ty)
+                    .ok_or(CodegenError::UnsupportedOp { op_name: b"MmioVolStore" })?;
+                // Pop value (a0:a1), pop address (a2)
+                self.out.write(b"\taddi s2, s2, -8\n\tlw a0, 0(s2)\n\tlw a1, 4(s2)\n");
+                self.out.write(b"\taddi s2, s2, -8\n\tlw a2, 0(s2)\n");
+                match bits {
+                    8 => self.out.write(b"\tsb a0, 0(a2)\n"),
+                    16 => self.out.write(b"\tsh a0, 0(a2)\n"),
+                    32 => self.out.write(b"\tsw a0, 0(a2)\n"),
+                    64 => { self.out.write(b"\tsw a0, 0(a2)\n\tsw a1, 4(a2)\n"); },
+                    _ => return Err(CodegenError::UnsupportedOp { op_name: b"MmioVolStore" }),
+                }
+                Ok(())
+            }
+            lir::OpKind::MmioVolLoadField { reg_ty, field_ty, place: _, mask, shift } => {
+                let (rbits, _) = prim_bits_signed(_w, reg_ty)
+                    .ok_or(CodegenError::UnsupportedOp { op_name: b"MmioVolLoadField" })?;
+                let (fbits, f_signed) = prim_bits_signed(_w, field_ty)
+                    .ok_or(CodegenError::UnsupportedOp { op_name: b"MmioVolLoadField" })?;
+                // Pop address
+                self.out.write(b"\taddi s2, s2, -8\n\tlw a0, 0(s2)\n");
+                match rbits {
+                    32 => self.out.write(b"\tlw a0, 0(a0)\n"),
+                    64 => self.out.write(b"\tlw a0, 0(a0)\n\tlw a1, 4(a0)\n"),
+                    _ => return Err(CodegenError::UnsupportedOp { op_name: b"MmioVolLoadField" }),
+                }
+                // Apply shift (right-shift field to LSB)
+                if shift > 0 {
+                    self.out.write(b"\tsrli a0, a0, "); write_u32(self.out, shift as u32); self.out.write(b"\n");
+                    if rbits == 64 {
+                        self.out.write(b"\tslli a1, a1, "); write_u32(self.out, (32 - shift) as u32);
+                        self.out.write(b"\n\tslli a1, a1, "); write_u32(self.out, shift as u32);
+                        self.out.write(b"\n\tsrli a1, a1, "); write_u32(self.out, shift as u32); self.out.write(b"\n");
+                    }
+                }
+                // Apply mask
+                if rbits == 32 {
+                    let mask32 = (mask as u32) >> shift;
+                    if mask32 != 0xFFFFFFFF {
+                        self.out.write(b"\tli a2, "); write_hex(self.out, mask32); self.out.write(b"\n\tand a0, a0, a2\n");
+                    }
+                }
+                // Sign-extend field value if needed
+                if fbits < 64 {
+                    if f_signed {
+                        let sh = 32 - fbits;
+                        self.out.write(b"\tslli a0, a0, "); write_u32(self.out, sh as u32);
+                        self.out.write(b"\n\tsrai a0, a0, "); write_u32(self.out, sh as u32); self.out.write(b"\n");
+                        self.out.write(b"\tsrai a1, a0, 31\n");
+                    } else {
+                        self.out.write(b"\tli a1, 0\n");
+                    }
+                }
+                self.out.write(b"\tsw a0, 0(s2)\n\tsw a1, 4(s2)\n\taddi s2, s2, 8\n");
+                self.emit_ds_high_update();
+                Ok(())
+            }
+            lir::OpKind::MmioVolStoreField { reg_ty: _, field_ty, place: _, mask, shift } => {
+                let (fbits, _) = prim_bits_signed(_w, field_ty)
+                    .ok_or(CodegenError::UnsupportedOp { op_name: b"MmioVolStoreField" })?;
+                // Pop value (a0 = low word), pop address (a2)
+                self.out.write(b"\taddi s2, s2, -8\n\tlw a0, 0(s2)\n\tlw a1, 4(s2)\n");
+                let _ = fbits; // suppress warning; value in a0 (a1 is the string literal, not a rust variable)
+                self.out.write(b"\taddi s2, s2, -8\n\tlw a2, 0(s2)\n");
+                // Load current register value
+                self.out.write(b"\tlw a3, 0(a2)\n");
+                // Clear field bits
+                let shifted_mask = mask.wrapping_shl(shift as u32) & 0xFFFFFFFF;
+                let clear = (!shifted_mask) & 0xFFFFFFFF;
+                self.out.write(b"\tli a1, "); write_hex(self.out, clear as u32); self.out.write(b"\n\tand a3, a3, a1\n");
+                // Shift value to field position and OR
+                if shift > 0 {
+                    self.out.write(b"\tslli a0, a0, "); write_u32(self.out, shift as u32); self.out.write(b"\n");
+                }
+                self.out.write(b"\tor a3, a3, a0\n\tsw a3, 0(a2)\n");
+                Ok(())
+            }
+            lir::OpKind::CheckSubtype { .. } => Err(CodegenError::UnsupportedCheckSubtype),
+        } // exhaustive: adding an OpKind MUST be handled here
     }
 
     fn emit_const32(&mut self, val: u32) {
@@ -199,6 +553,52 @@ impl<'a> RiscVBackend<'a> {
         self.out.write(b"\tsnez a0, a0\n\tli a1, 0\n");
         self.out.write(b"\tsw a0, 0(s2)\n\tsw a1, 4(s2)\n\taddi s2, s2, 8\n");
     }
+
+    // ---- Trap ----
+
+    fn emit_trap_with_loc(&mut self, code: u32, span: Span) {
+        if self.debug_trap_loc {
+            // Register contract for __lang_trap_loc (RISC-V):
+            //   a0 = trap_code
+            //   a1 = valid (1)
+            //   a2 = source_line
+            //   a3 = word_hash low 32 bits
+            //   a4 = word_hash high 32 bits
+            let wh = self.cur_word_id;
+            let (line, _col) = line_col(self.src, span.start);
+
+            self.out.write(b"\tli a0, "); write_hex(self.out, code); self.out.write(b"\n");
+            self.out.write(b"\tli a1, 1\n");
+            self.out.write(b"\tli a2, "); write_u32(self.out, line); self.out.write(b"\n");
+            let lo = wh as u32;
+            let hi = (wh >> 32) as u32;
+            self.out.write(b"\tli a3, "); write_hex(self.out, lo); self.out.write(b"\n");
+            self.out.write(b"\tli a4, "); write_hex(self.out, hi); self.out.write(b"\n");
+            self.out.write(b"\tj __lang_trap_loc\n");
+        } else {
+            self.out.write(b"\tli a0, "); write_hex(self.out, code); self.out.write(b"\n\tj __lang_trap\n");
+        }
+    }
+
+    // ---- String interning ----
+
+    fn intern_str(&mut self, span: Span) -> Result<u32, CodegenError> {
+        for i in 0..self.str_len {
+            if slice_span(self.src, self.str_spans[i])
+                == slice_span(self.src, span)
+            {
+                return Ok(self.str_ids[i]);
+            }
+        }
+        if self.str_len >= STR_TABLE_CAP {
+            return Err(CodegenError::StringLiteralCapacityExceeded);
+        }
+        let id = self.fresh_label();
+        self.str_spans[self.str_len] = span;
+        self.str_ids[self.str_len] = id;
+        self.str_len += 1;
+        Ok(id)
+    }
 }
 
 fn is_exported(module: &frontend::parse::ModuleAst, src: &[u8], name: &[u8]) -> bool {
@@ -210,4 +610,23 @@ fn max_local_slot(w: &lir::Word) -> Option<u16> {
     let mut max: Option<u16> = None;
     for b in w.blocks.iter() { for op in b.ops.iter() { if let lir::OpKind::LocalSet { slot, .. } = op.kind { if max.map_or(true, |m| slot > m) { max = Some(slot); } } } }
     max
+}
+
+fn count_scoped_slices(w: &lir::Word) -> u32 {
+    let mut count = 0u32;
+    for b in w.blocks.iter() {
+        for op in b.ops.iter() {
+            if let lir::OpKind::ScopedEnter { ty, .. } = op.kind {
+                let name = w
+                    .types
+                    .get(ty.0 as usize)
+                    .map(|a| a.as_bytes())
+                    .unwrap_or(b"");
+                if name.starts_with(b"Slice(") || name.starts_with(b"SliceMut(") {
+                    count = count.wrapping_add(1);
+                }
+            }
+        }
+    }
+    count
 }

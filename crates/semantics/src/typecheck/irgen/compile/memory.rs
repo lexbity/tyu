@@ -1,0 +1,593 @@
+use super::*;
+
+impl<'a, 'r> IrWordGen<'a, 'r> {
+
+    pub(super) fn compile_field_access(
+        &mut self,
+        cur: lir::BlockId,
+        stack: &mut [Value; 256],
+        sp: &mut usize,
+        span: Span,
+        slice: &[u8],
+        tok: Token,
+        lex: &mut Lexer,
+    ) -> Result<lir::BlockId, TcError> {
+        let op_span = Span::new(span.start + tok.span.start, span.start + tok.span.end);
+        let field_tok = lex.next();
+        if field_tok.kind != TokenKind::Ident {
+            return Err(TcError::FieldNotFound { span: op_span });
+        }
+        let field_atom = TypeAtom::new(&slice[field_tok.span.start..field_tok.span.end])
+            .ok_or(TcError::FieldNotFound { span: op_span })?;
+        let base = *stack
+            .get(*sp - 1)
+            .ok_or(TcError::StackUnderflow { span: op_span })?;
+        let (struct_ty, mutable) = match base {
+            Value::Ptr { ty, mutable } => (ty, mutable),
+            _ => return Err(TcError::FieldNotFound { span: op_span }),
+        };
+        let Some(sinfo) = self.nominals.structs.iter().find(|s| s.name == struct_ty) else {
+            return Err(TcError::FieldNotFound { span: op_span });
+        };
+        let mut offset: u32 = 0;
+        let mut found: Option<TypeAtom> = None;
+        for field in sinfo.fields.iter() {
+            let fsize = type_size_bytes(field.ty, self.nominals)
+                .ok_or(TcError::FieldSizeError { span: op_span })?;
+            let falign = field_align(fsize);
+            offset = align_up(offset, falign);
+            if field.name == field_atom {
+                found = Some(field.ty);
+                break;
+            }
+            offset = offset
+                .checked_add(fsize)
+                .ok_or(TcError::FieldSizeError { span: op_span })?;
+        }
+        let Some(field_ty) = found else {
+            return Err(TcError::FieldNotFound { span: op_span });
+        };
+        let base_tid = if mutable {
+            lir::TY_PTR_MUT
+        } else {
+            lir::TY_PTR
+        };
+        self.emit_op(
+            cur,
+            lir::OpKind::PtrAddConst {
+                ty: base_tid,
+                offset,
+            },
+            op_span,
+        )?;
+        stack[*sp - 1] = Value::Ptr {
+            ty: field_ty,
+            mutable,
+        };
+        Ok(cur)
+    }
+
+
+    pub(super) fn compile_index(
+        &mut self,
+        mut cur: lir::BlockId,
+        stack: &mut [Value; 256],
+        sp: &mut usize,
+        span: Span,
+        slice: &[u8],
+        tok: Token,
+        lex: &mut Lexer,
+        allow_suspend: bool,
+        allow_locals: bool,
+        observer: &mut dyn TypecheckObserver,
+    ) -> Result<lir::BlockId, TcError> {
+        let op_span = Span::new(span.start + tok.span.start, span.start + tok.span.end);
+        let mut const_idx: Option<u32> = None;
+        let mut is_dynamic = false;
+
+        let next = lex.next();
+        match next.kind {
+            TokenKind::Number => {
+                const_idx = parse_u32_any(&slice[next.span.start..next.span.end]);
+                if const_idx.is_none() {
+                    return Err(TcError::IndexError { span: op_span });
+                }
+            }
+            TokenKind::PunctLParen => {
+                let par = capture_balanced(
+                    lex,
+                    slice,
+                    TokenKind::PunctLParen,
+                    TokenKind::PunctRParen,
+                    next.span.start,
+                )
+                .map_err(|_| TcError::IndexError { span: op_span })?;
+                let inner = Span::new(span.start + par.start + 1, span.start + par.end - 1);
+                cur = self.compile_span(
+                    cur,
+                    stack,
+                    sp,
+                    inner,
+                    allow_suspend,
+                    allow_locals,
+                    observer,
+                )?;
+                is_dynamic = true;
+            }
+            _ => {
+                return Err(TcError::IndexError { span: op_span });
+            }
+        }
+
+        if is_dynamic {
+            if *sp == 0 {
+                return Err(TcError::IndexError { span: op_span });
+            }
+            if stack[*sp - 1] != Value::Plain(TypeAtom::I64) {
+                return Err(TcError::IndexError { span: op_span });
+            }
+        }
+
+        let base_pos = if is_dynamic { *sp - 2 } else { *sp - 1 };
+        if base_pos >= *sp {
+            return Err(TcError::IndexError { span: op_span });
+        }
+
+        let base = stack[base_pos];
+        let (elem_ty, scale, out_kind, base_tid) = match base {
+            Value::Plain(t) => {
+                let Some(elem) = array_elem_type(t) else {
+                    return Err(TcError::IndexError { span: op_span });
+                };
+                let len = array_len(t).ok_or(TcError::IndexError { span: op_span })?;
+                if let Some(idx) = const_idx {
+                    if idx >= len {
+                        return Err(TcError::ArrayIndexOob { span: op_span });
+                    }
+                }
+                let size = type_size_bytes(elem, self.nominals)
+                    .ok_or(TcError::IndexError { span: op_span })?;
+                (elem, size, IndexOut::Value, lir::TY_PTR)
+            }
+            Value::Ptr { ty, mutable } => {
+                let Some(elem) = array_elem_type(ty) else {
+                    return Err(TcError::IndexError { span: op_span });
+                };
+                let len = array_len(ty).ok_or(TcError::IndexError { span: op_span })?;
+                if let Some(idx) = const_idx {
+                    if idx >= len {
+                        return Err(TcError::ArrayIndexOob { span: op_span });
+                    }
+                }
+                let size = type_size_bytes(elem, self.nominals)
+                    .ok_or(TcError::IndexError { span: op_span })?;
+                let tid = if mutable {
+                    lir::TY_PTR_MUT
+                } else {
+                    lir::TY_PTR
+                };
+                (elem, size, IndexOut::Ptr(mutable), tid)
+            }
+            Value::MmioPlace(MmioResolved::Reg(reg)) => {
+                let Some(width) = mmio_type_width_bytes(reg.reg_ty.as_bytes()) else {
+                    return Err(TcError::IndexError { span: op_span });
+                };
+                if let Some(idx) = const_idx {
+                    if let Some(len) = reg.array_len {
+                        if idx >= len {
+                            return Err(TcError::MmioArrayIndexOob { span: op_span });
+                        }
+                    }
+                }
+                (reg.reg_ty, width, IndexOut::Mmio, lir::TY_MMIO)
+            }
+            Value::MmioPlace(MmioResolved::Field(_)) => {
+                return Err(TcError::IndexError { span: op_span });
+            }
+            _ => return Err(TcError::IndexError { span: op_span }),
+        };
+
+        match out_kind {
+            IndexOut::Value => {
+                stack[base_pos] = Value::Ptr {
+                    ty: elem_ty,
+                    mutable: false,
+                };
+            }
+            IndexOut::Ptr(mutable) => {
+                stack[base_pos] = Value::Ptr {
+                    ty: elem_ty,
+                    mutable,
+                };
+            }
+            IndexOut::Mmio => {}
+        }
+
+        if is_dynamic {
+            self.emit_op(
+                cur,
+                lir::OpKind::PtrAddIndex {
+                    ty: base_tid,
+                    scale,
+                },
+                op_span,
+            )?;
+            *sp = (*sp).saturating_sub(1);
+        } else {
+            let offset = const_idx
+                .expect("!is_dynamic => const_idx is Some")
+                .saturating_mul(scale);
+            self.emit_op(
+                cur,
+                lir::OpKind::PtrAddConst {
+                    ty: base_tid,
+                    offset,
+                },
+                op_span,
+            )?;
+        }
+
+        if matches!(out_kind, IndexOut::Value) {
+            let tid = self.ty_id_of_type(elem_ty, op_span)?;
+            self.emit_op(cur, lir::OpKind::Load { ty: tid }, op_span)?;
+            stack[base_pos] = Value::Plain(elem_ty);
+        }
+        Ok(cur)
+    }
+
+
+    pub(super) fn compile_addr_of(
+        &mut self,
+        cur: lir::BlockId,
+        stack: &mut [Value; 256],
+        sp: &mut usize,
+        span: Span,
+        slice: &[u8],
+        tok: Token,
+        lex: &mut Lexer,
+    ) -> Result<lir::BlockId, TcError> {
+        let mut_tok = tok.kind == TokenKind::PunctAmpBang;
+        let place = parse_place(lex, slice).ok_or(TcError::PlaceParseFailed {
+            span: Span::new(span.start + tok.span.start, span.start + tok.span.end),
+        })?;
+        let place_bytes = &slice[place.full.start..place.full.end];
+        let place_abs = Span::new(span.start + place.full.start, span.start + place.full.end);
+        let root_atom =
+            TypeAtom::new(&slice[place.root.start..place.root.end]).unwrap_or(TypeAtom::EMPTY);
+        let mut const_addr: Option<u64> = None;
+
+        if let Some(res) = resolve_mmio_place(self.mmio, self.src, place_bytes, place_abs)? {
+            match res {
+                MmioResolved::Reg(reg) => {
+                    if mut_tok && !access_can_write(reg.access) {
+                        return Err(TcError::MmioAccessViolation { span: place_abs });
+                    }
+                    const_addr = Some(reg.addr);
+                    push(
+                        stack,
+                        sp,
+                        Value::MmioPtr {
+                            reg,
+                            mutable: mut_tok,
+                        },
+                    )?;
+                }
+                MmioResolved::Field(_) => {
+                    return Err(TcError::MmioFieldNotAddressable { span: place_abs })
+                }
+            }
+        } else {
+            if resource_ty(self.resources, root_atom).is_some() {
+                if self.locked_resource != Some(root_atom) {
+                    if resource_sharing_class(self.resources, root_atom) >= 1 {
+                        return Err(TcError::ResourceSharedUnlocked { span: place_abs });
+                    }
+                    return Err(TcError::CapMissing { span: place_abs });
+                }
+            } else if mut_tok {
+                let root = TypeAtom::new(&slice[place.root.start..place.root.end]).unwrap();
+                if find_local(&self.locals, self.local_len, root).is_some() {
+                    return Err(TcError::MutRefToLocal {
+                        span: place.root_abs(span.start),
+                    });
+                }
+            }
+            if let Some(pointee) = self.resolve_place_pointee_ty(place_bytes, place_abs)? {
+                push(
+                    stack,
+                    sp,
+                    Value::Ptr {
+                        ty: pointee,
+                        mutable: mut_tok,
+                    },
+                )?;
+            } else {
+                let ty = if mut_tok {
+                    TypeAtom::PTR_MUT
+                } else {
+                    TypeAtom::PTR
+                };
+                push(stack, sp, Value::Plain(ty))?;
+            }
+        }
+
+        self.emit_op(
+            cur,
+            lir::OpKind::AddrOf {
+                place: lir_atom(place_bytes)?,
+                mutable: mut_tok,
+                const_addr,
+            },
+            place_abs,
+        )?;
+        Ok(cur)
+    }
+
+
+    pub(super) fn compile_load_store(
+        &mut self,
+        cur: lir::BlockId,
+        stack: &mut [Value; 256],
+        sp: &mut usize,
+        name_abs: Span,
+        name: &[u8],
+        _tok: Token,
+    ) -> Result<lir::BlockId, TcError> {
+        let is_load = name[0] == b'@';
+        let typed = name.len() > 1;
+        let ty_atom = if typed {
+            Some(
+                TypeAtom::new(&name[1..])
+                    .ok_or(TcError::MmioTypedAtomInvalid { span: name_abs })?,
+            )
+        } else {
+            None
+        };
+
+        if is_load {
+            let addr = pop(stack, sp).ok_or(TcError::MmioTypedPopAddr { span: name_abs })?;
+            match addr {
+                Value::MmioPtr { reg, .. } => {
+                    if !access_can_read(reg.access) {
+                        return Err(TcError::MmioReadNotAllowed { span: name_abs });
+                    }
+                    if let Some(want) = ty_atom {
+                        if want != reg.reg_ty {
+                            return Err(TcError::MmioTypedTypeMismatch { span: name_abs });
+                        }
+                    }
+                    push(stack, sp, Value::Plain(reg.reg_ty))?;
+                    let tid = self.ty_id_of_type(reg.reg_ty, name_abs)?;
+                    self.emit_op(
+                        cur,
+                        lir::OpKind::MmioVolLoad {
+                            ty: tid,
+                            place: lir_atom(slice_span(self.src, reg.place_span))?,
+                        },
+                        name_abs,
+                    )?;
+                    Ok(cur)
+                }
+                Value::MmioPlace(MmioResolved::Reg(reg)) => {
+                    if !access_can_read(reg.access) {
+                        return Err(TcError::MmioReadNotAllowed { span: name_abs });
+                    }
+                    if let Some(want) = ty_atom {
+                        if want != reg.reg_ty {
+                            return Err(TcError::MmioTypedTypeMismatch { span: name_abs });
+                        }
+                    }
+                    push(stack, sp, Value::Plain(reg.reg_ty))?;
+                    let tid = self.ty_id_of_type(reg.reg_ty, name_abs)?;
+                    self.emit_op(
+                        cur,
+                        lir::OpKind::MmioVolLoad {
+                            ty: tid,
+                            place: lir_atom(slice_span(self.src, reg.place_span))?,
+                        },
+                        name_abs,
+                    )?;
+                    Ok(cur)
+                }
+                Value::MmioPlace(MmioResolved::Field(field)) => {
+                    if !access_can_read(field.reg_access) || !access_can_read(field.field.access) {
+                        return Err(TcError::MmioReadNotAllowed { span: name_abs });
+                    }
+                    if typed {
+                        return Err(TcError::MmioTypedMismatch { span: name_abs });
+                    }
+                    let (mask, shift) = field_mask_shift(&field.field);
+                    push(stack, sp, Value::Plain(field.field.ty))?;
+                    let reg_tid = self.ty_id_of_type(field.reg_ty, name_abs)?;
+                    let tid = self.ty_id_of_type(field.field.ty, name_abs)?;
+                    self.emit_op(
+                        cur,
+                        lir::OpKind::MmioVolLoadField {
+                            reg_ty: reg_tid,
+                            field_ty: tid,
+                            place: lir_atom(slice_span(self.src, field.place_span))?,
+                            mask,
+                            shift,
+                        },
+                        name_abs,
+                    )?;
+                    Ok(cur)
+                }
+                Value::Ptr { ty, .. } => {
+                    if !typed {
+                        return Err(TcError::MmioTypedNotAllowed { span: name_abs });
+                    }
+                    let want = ty_atom.expect("typed => ty_atom is Some");
+                    if want != ty {
+                        return Err(TcError::TypedLoadStoreTypeMismatch { span: name_abs });
+                    }
+                    push(stack, sp, Value::Plain(ty))?;
+                    let tid = self.ty_id_of_type(ty, name_abs)?;
+                    self.emit_op(cur, lir::OpKind::Load { ty: tid }, name_abs)?;
+                    Ok(cur)
+                }
+                Value::Plain(t) => {
+                    if !typed {
+                        return Err(TcError::MmioTypedNotAllowed { span: name_abs });
+                    }
+                    if t != TypeAtom::PTR && t != TypeAtom::PTR_MUT {
+                        return Err(TcError::MmioTypedNotAllowed { span: name_abs });
+                    }
+                    let ty_atom = ty_atom.expect("typed => ty_atom is Some");
+                    push(stack, sp, Value::Plain(ty_atom))?;
+                    let tid = self.ty_id_of_type(ty_atom, name_abs)?;
+                    self.emit_op(cur, lir::OpKind::Load { ty: tid }, name_abs)?;
+                    Ok(cur)
+                }
+                _ => Err(TcError::MmioTypedNotAllowed { span: name_abs }),
+            }
+        } else {
+            let v = pop(stack, sp).ok_or(TcError::ReturnStackDepth { span: name_abs })?;
+            let addr = pop(stack, sp).ok_or(TcError::ReturnStackDepth { span: name_abs })?;
+            let vty = match v {
+                Value::Plain(t) => t,
+                Value::Scoped { ty, .. } => ty,
+                Value::Resource(_) => TypeAtom::RESOURCE,
+                Value::Quot(_) => TypeAtom::QUOT,
+                Value::MmioPlace(_) => TypeAtom::MMIO,
+                Value::Ptr { mutable: false, .. } => TypeAtom::PTR,
+                Value::Ptr { mutable: true, .. } => TypeAtom::PTR_MUT,
+                Value::MmioPtr { mutable: false, .. } => TypeAtom::PTR,
+                Value::MmioPtr { mutable: true, .. } => TypeAtom::PTR_MUT,
+            };
+            match (addr, v) {
+                (
+                    Value::MmioPtr {
+                        reg,
+                        mutable: false,
+                    },
+                    _,
+                ) => {
+                    let _ = reg;
+                    Err(TcError::MmioTypedNotAllowed { span: name_abs })
+                }
+                (Value::MmioPtr { reg, mutable: true }, Value::Plain(_)) => {
+                    if !access_can_write(reg.access) {
+                        return Err(TcError::MmioAccessViolation { span: name_abs });
+                    }
+                    if let Some(want) = ty_atom {
+                        if want != reg.reg_ty {
+                            return Err(TcError::MmioTypedTypeMismatch { span: name_abs });
+                        }
+                    }
+                    if vty != reg.reg_ty {
+                        return Err(TcError::ReturnTypeMismatch { span: name_abs });
+                    }
+                    let tid = self.ty_id_of_type(reg.reg_ty, name_abs)?;
+                    let access = match reg.access {
+                        crate::typecheck::mmio::AccessMode::W1c => lir::MmioAccess::W1c,
+                        crate::typecheck::mmio::AccessMode::W1s => lir::MmioAccess::W1s,
+                        _ => lir::MmioAccess::Rw,
+                    };
+                    self.emit_op(
+                        cur,
+                        lir::OpKind::MmioVolStore {
+                            ty: tid,
+                            place: lir_atom(slice_span(self.src, reg.place_span))?,
+                            access,
+                        },
+                        name_abs,
+                    )?;
+                    Ok(cur)
+                }
+                (Value::MmioPlace(MmioResolved::Reg(reg)), Value::Plain(_)) => {
+                    if !access_can_write(reg.access) {
+                        return Err(TcError::MmioAccessViolation { span: name_abs });
+                    }
+                    if let Some(want) = ty_atom {
+                        if want != reg.reg_ty {
+                            return Err(TcError::MmioTypedTypeMismatch { span: name_abs });
+                        }
+                    }
+                    if vty != reg.reg_ty {
+                        return Err(TcError::ReturnTypeMismatch { span: name_abs });
+                    }
+                    let tid = self.ty_id_of_type(reg.reg_ty, name_abs)?;
+                    let access = match reg.access {
+                        crate::typecheck::mmio::AccessMode::W1c => lir::MmioAccess::W1c,
+                        crate::typecheck::mmio::AccessMode::W1s => lir::MmioAccess::W1s,
+                        _ => lir::MmioAccess::Rw,
+                    };
+                    self.emit_op(
+                        cur,
+                        lir::OpKind::MmioVolStore {
+                            ty: tid,
+                            place: lir_atom(slice_span(self.src, reg.place_span))?,
+                            access,
+                        },
+                        name_abs,
+                    )?;
+                    Ok(cur)
+                }
+                (Value::MmioPlace(MmioResolved::Field(field)), Value::Plain(_)) => {
+                    if !access_can_write(field.reg_access) || !access_can_write(field.field.access)
+                    {
+                        return Err(TcError::MmioAccessViolation { span: name_abs });
+                    }
+                    if typed {
+                        return Err(TcError::MmioTypedMismatch { span: name_abs });
+                    }
+                    if vty != field.field.ty {
+                        return Err(TcError::ReturnTypeMismatch { span: name_abs });
+                    }
+                    let (mask, shift) = field_mask_shift(&field.field);
+                    let reg_tid = self.ty_id_of_type(field.reg_ty, name_abs)?;
+                    let tid = self.ty_id_of_type(field.field.ty, name_abs)?;
+                    self.emit_op(
+                        cur,
+                        lir::OpKind::MmioVolStoreField {
+                            reg_ty: reg_tid,
+                            field_ty: tid,
+                            place: lir_atom(slice_span(self.src, field.place_span))?,
+                            mask,
+                            shift,
+                        },
+                        name_abs,
+                    )?;
+                    Ok(cur)
+                }
+                (Value::Ptr { ty, mutable }, Value::Plain(_)) => {
+                    if !typed {
+                        return Err(TcError::MmioTypedNotAllowed { span: name_abs });
+                    }
+                    if !mutable {
+                        return Err(TcError::MmioTypedNotAllowed { span: name_abs });
+                    }
+                    let want = ty_atom.expect("typed => ty_atom is Some");
+                    if want != ty {
+                        return Err(TcError::TypedLoadStoreTypeMismatch { span: name_abs });
+                    }
+                    if vty != ty {
+                        return Err(TcError::ReturnTypeMismatch { span: name_abs });
+                    }
+                    let tid = self.ty_id_of_type(ty, name_abs)?;
+                    self.emit_op(cur, lir::OpKind::Store { ty: tid }, name_abs)?;
+                    Ok(cur)
+                }
+                (Value::Plain(t), Value::Plain(_)) => {
+                    if !typed {
+                        return Err(TcError::MmioTypedNotAllowed { span: name_abs });
+                    }
+                    if t != TypeAtom::PTR_MUT {
+                        return Err(TcError::MmioTypedNotAllowed { span: name_abs });
+                    }
+                    let ty_atom = ty_atom.expect("typed => ty_atom is Some");
+                    if vty != ty_atom {
+                        return Err(TcError::ReturnTypeMismatch { span: name_abs });
+                    }
+                    let tid = self.ty_id_of_type(ty_atom, name_abs)?;
+                    self.emit_op(cur, lir::OpKind::Store { ty: tid }, name_abs)?;
+                    Ok(cur)
+                }
+                _ => Err(TcError::MmioTypedNotAllowed { span: name_abs }),
+            }
+        }
+    }
+
+
+}

@@ -1,54 +1,78 @@
-//! Project manifest (`tyu.toml`) parsing and resolution.
-//!
-//! Provides types for the `[project]`, `[targets.*]`, `[toolchain.*]`, and
-//! `[deploy.*]` sections, plus helpers to locate the manifest and resolve
-//! target aliases.
-
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::toml_parser::{parse_toml, TomlEntry, TomlValue};
-
-/// The complete project manifest.
-#[derive(Clone, Debug, Default)]
-pub struct ProjectManifest {
-    pub project: ProjectSection,
-    pub targets: HashMap<String, TargetAlias>,
-    pub toolchain: HashMap<String, ToolchainConfig>,
-    pub deploy: HashMap<String, DeployConfig>,
-}
+use codegen_core::{Feature, FeatureSet};
 
 /// `[project]` section.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Deserialize)]
 pub struct ProjectSection {
     pub main: Option<String>,
+    #[serde(default)]
     pub modules: Vec<String>,
 }
 
 /// `[targets.<name>]` — a named target alias.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Deserialize)]
 pub struct TargetAlias {
     pub triple: String,
+    #[serde(default)]
     pub runner: Option<String>,
 }
 
 /// `[toolchain.<triple>]` — tool overrides for a target triple.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Deserialize)]
 pub struct ToolchainConfig {
+    #[serde(default, rename = "as")]
     pub asm: Option<String>,
+    #[serde(default)]
     pub ld: Option<String>,
+    #[serde(default)]
     pub qemu: Option<String>,
 }
 
 /// `[deploy.<name>]` — deployment configuration.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Deserialize)]
 pub struct DeployConfig {
+    #[serde(default)]
     pub format: Option<String>,
+    #[serde(default)]
     pub sign: Option<bool>,
+    #[serde(default)]
     pub encrypt: Option<String>,
+    #[serde(default)]
     pub key_sign: Option<String>,
+    #[serde(default)]
     pub key_encrypt: Option<String>,
+}
+
+/// `[profile.<name>]` — image-level build profile.
+///
+/// A profile selects a set of features that control which language constructs
+/// are accepted and which runtime units are linked into the final image.
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+pub struct ProfileConfig {
+    /// Image features enabled in this profile.
+    /// Recognised values: `"concurrency"`, `"module-loading"`.
+    #[serde(default)]
+    pub features: Vec<String>,
+}
+
+/// The complete project manifest.
+#[derive(Clone, Debug, Default, serde::Deserialize)]
+pub struct ProjectManifest {
+    #[serde(default)]
+    pub project: ProjectSection,
+    #[serde(default)]
+    pub targets: HashMap<String, TargetAlias>,
+    #[serde(default)]
+    pub toolchain: HashMap<String, ToolchainConfig>,
+    #[serde(default)]
+    pub deploy: HashMap<String, DeployConfig>,
+    /// Per-profile feature sets.  The active profile is selected by
+    /// `tyu --profile=<name>` (default: `"dev"` if present, else all-features-on).
+    #[serde(default)]
+    pub profile: HashMap<String, ProfileConfig>,
 }
 
 /// Locate `tyu.toml` starting from `dir` and walking up.
@@ -69,95 +93,8 @@ pub fn find_manifest(start_dir: &Path) -> Option<PathBuf> {
 pub fn parse_project_manifest(path: &Path) -> Result<ProjectManifest, String> {
     let text = fs::read_to_string(path)
         .map_err(|e| format!("reading '{}': {}", path.display(), e))?;
-    let entries = parse_toml(&text)?;
-    let mut pm = ProjectManifest::default();
-
-    for entry in &entries {
-        let sec = &entry.section;
-        if sec.is_empty() {
-            continue;
-        }
-        match sec[0].as_str() {
-            "project" => {
-                process_project(&mut pm.project, entry);
-            }
-            "targets" if sec.len() >= 2 => {
-                let name = sec[1].clone();
-                let alias = pm.targets.entry(name).or_insert_with(|| TargetAlias {
-                    triple: String::new(),
-                    runner: None,
-                });
-                match entry.key.as_str() {
-                    "triple" => alias.triple = toml_string(&entry.value)?,
-                    "runner" => alias.runner = Some(toml_string(&entry.value)?),
-                    _ => {}
-                }
-            }
-            "toolchain" if sec.len() >= 2 => {
-                let triple = sec[1].clone();
-                let tc = pm.toolchain.entry(triple).or_default();
-                match entry.key.as_str() {
-                    "as" => tc.asm = Some(toml_string(&entry.value)?),
-                    "ld" => tc.ld = Some(toml_string(&entry.value)?),
-                    "qemu" => tc.qemu = Some(toml_string(&entry.value)?),
-                    _ => {}
-                }
-            }
-            "deploy" if sec.len() >= 2 => {
-                let name = sec[1].clone();
-                let dc = pm.deploy.entry(name).or_default();
-                match entry.key.as_str() {
-                    "format" => dc.format = Some(toml_string(&entry.value)?),
-                    "sign" => dc.sign = Some(toml_bool(&entry.value)?),
-                    "encrypt" => dc.encrypt = Some(toml_string(&entry.value)?),
-                    "key_sign" => dc.key_sign = Some(toml_string(&entry.value)?),
-                    "key_encrypt" => dc.key_encrypt = Some(toml_string(&entry.value)?),
-                    _ => {}
-                }
-            }
-            _ => {}
-        }
-    }
-
-    Ok(pm)
-}
-
-fn process_project(proj: &mut ProjectSection, entry: &TomlEntry) {
-    match entry.key.as_str() {
-        "main" => {
-            if let Ok(s) = toml_string(&entry.value) {
-                proj.main = Some(s);
-            }
-        }
-        "modules" => {
-            if let Ok(v) = toml_string_array(&entry.value) {
-                proj.modules = v;
-            }
-        }
-        _ => {}
-    }
-}
-
-fn toml_string(v: &TomlValue) -> Result<String, String> {
-    match v {
-        TomlValue::Str(s) => Ok(s.clone()),
-        _ => Err("expected string".into()),
-    }
-}
-
-fn toml_bool(v: &TomlValue) -> Result<bool, String> {
-    match v {
-        TomlValue::Bool(b) => Ok(*b),
-        _ => Err("expected boolean".into()),
-    }
-}
-
-fn toml_string_array(v: &TomlValue) -> Result<Vec<String>, String> {
-    match v {
-        TomlValue::StrArray(a) => Ok(a.clone()),
-        TomlValue::Str(s) => Ok(vec![s.clone()]),
-        _ => Err("expected string array".into()),
-    }
+    toml::from_str(&text)
+        .map_err(|e| format!("parsing '{}': {}", path.display(), e))
 }
 
 /// Resolve a target name (alias or triple) to a parsed `Target`.
@@ -183,9 +120,56 @@ pub fn toolchain_for_target<'a>(
     manifest.toolchain.get(triple)
 }
 
+/// Resolve a profile name (or the implicit default) to a [`FeatureSet`].
+///
+/// Resolution rules (per Q3):
+///  1. If `profile_name_opt` is `Some(n)`, look up profile `n` — error if missing.
+///  2. If `None` and manifest has a `"dev"` profile, use it.
+///  3. Otherwise, return `FeatureSet::all()` (implicit all-features-on default).
+///
+/// Returns `(feature_set, resolved_profile_name)`.
+pub fn resolve_feature_set(
+    profile_name_opt: Option<&str>,
+    manifest: &ProjectManifest,
+) -> Result<(FeatureSet, Option<String>), String> {
+    let name = profile_name_opt
+        .map(|n| n.to_string())
+        .or_else(|| {
+            if manifest.profile.contains_key("dev") {
+                Some("dev".to_string())
+            } else {
+                None
+            }
+        });
+
+    let set = match name {
+        Some(ref n) => {
+            let pc = manifest
+                .profile
+                .get(n.as_str())
+                .ok_or_else(|| format!("unknown profile '{}'", n))?;
+            let mut set = FeatureSet::empty();
+            for f_str in &pc.features {
+                let f = Feature::parse(f_str)
+                    .ok_or_else(|| format!("unknown feature '{}' in profile '{}'", f_str, n))?;
+                set = set.with(f);
+            }
+            set
+        }
+        None => FeatureSet::all(),
+    };
+
+    Ok((set, name))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn parse_project_manifest_from_str(text: &str) -> Result<ProjectManifest, String> {
+        toml::from_str(text)
+            .map_err(|e| e.to_string())
+    }
 
     #[test]
     fn parse_project_section() {
@@ -260,50 +244,117 @@ triple = "armv7m-unknown-none"
         assert_eq!(target, codegen_core::Target::X86_64UnknownNone);
     }
 
-    fn parse_project_manifest_from_str(text: &str) -> Result<ProjectManifest, String> {
-        let entries = parse_toml(text)?;
-        let mut pm = ProjectManifest::default();
-        for entry in &entries {
-            let sec = &entry.section;
-            if sec.is_empty() { continue; }
-            match sec[0].as_str() {
-                "project" => process_project(&mut pm.project, entry),
-                "targets" if sec.len() >= 2 => {
-                    let name = sec[1].clone();
-                    let alias = pm.targets.entry(name).or_insert_with(|| TargetAlias {
-                        triple: String::new(), runner: None,
-                    });
-                    match entry.key.as_str() {
-                        "triple" => alias.triple = toml_string(&entry.value).unwrap(),
-                        "runner" => alias.runner = Some(toml_string(&entry.value).unwrap()),
-                        _ => {}
-                    }
-                }
-                "toolchain" if sec.len() >= 2 => {
-                    let triple = sec[1].clone();
-                    let tc = pm.toolchain.entry(triple).or_default();
-                    match entry.key.as_str() {
-                        "as" => tc.asm = Some(toml_string(&entry.value).unwrap()),
-                        "ld" => tc.ld = Some(toml_string(&entry.value).unwrap()),
-                        "qemu" => tc.qemu = Some(toml_string(&entry.value).unwrap()),
-                        _ => {}
-                    }
-                }
-                "deploy" if sec.len() >= 2 => {
-                    let name = sec[1].clone();
-                    let dc = pm.deploy.entry(name).or_default();
-                    match entry.key.as_str() {
-                        "format" => dc.format = Some(toml_string(&entry.value).unwrap()),
-                        "sign" => dc.sign = Some(toml_bool(&entry.value).unwrap()),
-                        "encrypt" => dc.encrypt = Some(toml_string(&entry.value).unwrap()),
-                        "key_sign" => dc.key_sign = Some(toml_string(&entry.value).unwrap()),
-                        "key_encrypt" => dc.key_encrypt = Some(toml_string(&entry.value).unwrap()),
-                        _ => {}
-                    }
-                }
-                _ => {}
-            }
-        }
-        Ok(pm)
+    #[test]
+    fn default_manifest_empty() {
+        let pm = ProjectManifest::default();
+        assert!(pm.project.main.is_none());
+        assert!(pm.project.modules.is_empty());
+        assert!(pm.targets.is_empty());
+        assert!(pm.toolchain.is_empty());
+        assert!(pm.deploy.is_empty());
+    }
+
+    #[test]
+    fn targets_are_optional() {
+        let toml = r#"
+[project]
+main = "main.mod"
+"#;
+        let manifest = parse_project_manifest_from_str(toml).unwrap();
+        assert_eq!(manifest.project.main.unwrap(), "main.mod");
+        assert!(manifest.targets.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // resolve_feature_set
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn resolve_feature_set_implicit_default_all() {
+        let manifest = ProjectManifest::default();
+        let (set, name) = resolve_feature_set(None, &manifest).unwrap();
+        assert!(set.contains(codegen_core::Feature::Concurrency));
+        assert!(set.contains(codegen_core::Feature::ModuleLoading));
+        assert!(name.is_none());
+    }
+
+    #[test]
+    fn resolve_feature_set_dev_profile() {
+        let toml = r#"
+[profile.dev]
+features = ["concurrency", "module-loading"]
+"#;
+        let manifest = parse_project_manifest_from_str(toml).unwrap();
+        let (set, name) = resolve_feature_set(Some("dev"), &manifest).unwrap();
+        assert!(set.contains(codegen_core::Feature::Concurrency));
+        assert!(set.contains(codegen_core::Feature::ModuleLoading));
+        assert_eq!(name.as_deref(), Some("dev"));
+    }
+
+    #[test]
+    fn resolve_feature_set_slim_profile() {
+        let toml = r#"
+[profile.slim]
+features = ["concurrency"]
+"#;
+        let manifest = parse_project_manifest_from_str(toml).unwrap();
+        let (set, _) = resolve_feature_set(Some("slim"), &manifest).unwrap();
+        assert!(set.contains(codegen_core::Feature::Concurrency));
+        assert!(!set.contains(codegen_core::Feature::ModuleLoading));
+    }
+
+    #[test]
+    fn resolve_feature_set_empty_features() {
+        let toml = r#"
+[profile.minimal]
+features = []
+"#;
+        let manifest = parse_project_manifest_from_str(toml).unwrap();
+        let (set, _) = resolve_feature_set(Some("minimal"), &manifest).unwrap();
+        assert!(!set.contains(codegen_core::Feature::Concurrency));
+        assert!(!set.contains(codegen_core::Feature::ModuleLoading));
+    }
+
+    #[test]
+    fn resolve_feature_set_unknown_profile_errs() {
+        let manifest = ProjectManifest::default();
+        let err = resolve_feature_set(Some("nonexistent"), &manifest).unwrap_err();
+        assert!(err.contains("unknown profile"), "error: {err}");
+    }
+
+    #[test]
+    fn resolve_feature_set_unknown_feature_errs() {
+        let toml = r#"
+[profile.x]
+features = ["bogus"]
+"#;
+        let manifest = parse_project_manifest_from_str(toml).unwrap();
+        let err = resolve_feature_set(Some("x"), &manifest).unwrap_err();
+        assert!(err.contains("unknown feature"), "error: {err}");
+    }
+
+    #[test]
+    fn resolve_feature_set_dev_implicit_when_present() {
+        let toml = r#"
+[profile.dev]
+features = ["concurrency"]
+"#;
+        let manifest = parse_project_manifest_from_str(toml).unwrap();
+        let (set, name) = resolve_feature_set(None, &manifest).unwrap();
+        assert!(set.contains(codegen_core::Feature::Concurrency));
+        assert!(!set.contains(codegen_core::Feature::ModuleLoading));
+        assert_eq!(name.as_deref(), Some("dev"));
+    }
+
+    #[test]
+    fn resolve_feature_set_keeps_unrecognized_fields() {
+        // Extra fields in profile should be tolerated (serde default).
+        let toml = r#"
+[profile.foo]
+features = ["concurrency"]
+extra_field = true
+"#;
+        let manifest = parse_project_manifest_from_str(toml).unwrap();
+        assert!(manifest.profile.contains_key("foo"));
     }
 }

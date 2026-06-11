@@ -246,7 +246,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         })
     }
 
-    fn block_mut(&mut self, id: lir::BlockId) -> Result<&mut lir::Block, TcError> {
+    pub(super) fn block_mut(&mut self, id: lir::BlockId) -> Result<&mut lir::Block, TcError> {
         self.word
             .blocks
             .get_mut(id.0 as usize)
@@ -255,7 +255,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             })
     }
 
-    fn new_block(
+    pub(super) fn new_block(
         &mut self,
         stack: &[Value; 256],
         sp: usize,
@@ -281,14 +281,14 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         Ok(id)
     }
 
-    fn emit_op(&mut self, cur: lir::BlockId, kind: lir::OpKind, span: Span) -> Result<(), TcError> {
+    pub(super) fn emit_op(&mut self, cur: lir::BlockId, kind: lir::OpKind, span: Span) -> Result<(), TcError> {
         let op = lir::Op { kind, span };
         let b = self.block_mut(cur)?;
         b.ops.push(op).map_err(|_| TcError::OpTableFull { span })?;
         Ok(())
     }
 
-    fn emit_subtype_range_trap(
+    pub(super) fn emit_subtype_range_trap(
         &mut self,
         cur: lir::BlockId,
         value_slot: u16,
@@ -348,7 +348,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         Ok(())
     }
 
-    fn resolve_place_pointee_ty(
+    pub(super) fn resolve_place_pointee_ty(
         &self,
         place_bytes: &[u8],
         place_abs: Span,
@@ -413,7 +413,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
 }
 
 impl<'a, 'r> IrWordGen<'a, 'r> {
-    fn finish(mut self, span: Span) -> Result<IrWordOutput<'r>, TcError> {
+    pub(super) fn finish(mut self, span: Span) -> Result<IrWordOutput<'r>, TcError> {
         self.word.bound = self.acc;
         let word = unsafe {
             let arena = &mut *self.arena;

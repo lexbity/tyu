@@ -21,6 +21,7 @@ SECTIONS {
     .text       : { *(.text) }       :text
     .rodata     : { *(.rodata) }     :rodata
     .data       : { *(.data) }       :rwdata
+    .modpack    : { *(.modpack) }    :rwdata
     .bss        : {
         *(.bss)
         *(COMMON)

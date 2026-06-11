@@ -114,6 +114,8 @@ extern "C" fn langc_main(argc: isize, argv: *const *const hosted::c::c_char) -> 
             cfg.allow_raw_casts,
             cfg.debug_trap_loc,
             target,
+            cfg.input,
+            cfg.features,
             &mut out,
         ),
         EmitMode::Obj => {
@@ -128,6 +130,8 @@ extern "C" fn langc_main(argc: isize, argv: *const *const hosted::c::c_char) -> 
                 out_dir,
                 target,
                 cfg.is_lib,
+                cfg.input,
+                cfg.features,
             )
         }
     }

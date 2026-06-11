@@ -3,6 +3,10 @@ name = "lmod-pack"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "lmod_pack"
+path = "src/lib.rs"
+
 [[bin]]
 name = "lmod-pack"
 path = "src/main.rs"

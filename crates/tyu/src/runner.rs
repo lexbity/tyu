@@ -4,12 +4,13 @@
 //! target), or on a physical device via OpenOCD/probe-rs.
 
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use codegen_core::target::QemuSpec;
 use codegen_core::Target;
+use crate::error::TyuError;
 
 /// How to run a built image.
 #[allow(dead_code)]
@@ -18,6 +19,11 @@ pub enum Runner {
     Native,
     /// Execute under QEMU system-mode using the given spec.
     Qemu(&'static QemuSpec),
+    /// Execute under QEMU with gdbstub for A-side escalation.
+    QemuDebug {
+        spec: &'static QemuSpec,
+        gdb_port: u16,
+    },
     /// Flash and run on physical hardware via OpenOCD.
     Device(OpenOcdSpec),
 }
@@ -72,9 +78,58 @@ impl Runner {
     pub fn run(&self, image: &Path, timeout: Duration) -> Result<RunOutcome, String> {
         match self {
             Runner::Native => run_native(image, timeout),
-            Runner::Qemu(spec) => run_qemu(spec, image, timeout),
+            Runner::Qemu(spec) => run_qemu(spec, image, timeout, None),
+            Runner::QemuDebug { spec, gdb_port } => {
+                run_qemu(spec, image, timeout, Some(*gdb_port))
+            }
             Runner::Device(spec) => run_device(spec, image, timeout),
         }
+    }
+
+    /// Spawn a QEMU process with gdbstub enabled and CPU frozen (`-S`).
+    ///
+    /// Returns the child process handle and the port it is listening on.
+    /// The caller is responsible for killing the process when done.
+    /// This is a building block for A-side escalation (Phase 14).
+    pub fn spawn_debug(
+        spec: &'static QemuSpec,
+        image: &Path,
+        port: u16,
+    ) -> Result<Child, String> {
+        let bin = std::str::from_utf8(spec.system_bin)
+            .map_err(|_| "non-UTF-8 QEMU binary name")?;
+        let machine = std::str::from_utf8(spec.machine)
+            .map_err(|_| "non-UTF-8 QEMU machine name")?;
+
+        let mut cmd = Command::new(bin);
+        cmd.arg("-machine").arg(machine);
+        cmd.stdout(Stdio::null());
+        cmd.stderr(Stdio::null());
+
+        for arg in spec.extra_args {
+            let s = std::str::from_utf8(arg)
+                .map_err(|_| "non-UTF-8 QEMU extra arg")?;
+            // Exclude isa-debug-exit device; for debug mode, we control
+            // the target via gdbstub instead.
+            if s.starts_with("-device") || s.starts_with("-debugcon") {
+                continue;
+            }
+            cmd.arg(s);
+        }
+
+        match spec.exit_convention {
+            codegen_core::QemuExitConvention::Semihosting => {
+                cmd.arg("-semihosting-config");
+                cmd.arg("enable=on,target=native");
+            }
+            codegen_core::QemuExitConvention::IsaDebugExit { .. } => {}
+        }
+
+        cmd.arg("-gdb").arg(format!("tcp::{}", port));
+        cmd.arg("-S"); // freeze CPU at startup
+        cmd.arg("-kernel").arg(image);
+
+        cmd.spawn().map_err(|e| format!("spawning debug QEMU: {}", e))
     }
 }
 
@@ -128,7 +183,7 @@ fn spawn_and_wait(
             }
             Err(e) => {
                 let _stdout = stdout_handle.join().unwrap_or_default();
-                return Err(format!("waitpid failed: {}", e));
+                return Err(TyuError::Build(format!("waitpid failed: {}", e)).into());
             }
         }
     };
@@ -154,7 +209,12 @@ fn run_native(image: &Path, timeout: Duration) -> Result<RunOutcome, String> {
 // QEMU runner
 // ---------------------------------------------------------------------------
 
-fn run_qemu(spec: &QemuSpec, image: &Path, timeout: Duration) -> Result<RunOutcome, String> {
+fn run_qemu(
+    spec: &QemuSpec,
+    image: &Path,
+    timeout: Duration,
+    gdb_port: Option<u16>,
+) -> Result<RunOutcome, String> {
     let bin = std::str::from_utf8(spec.system_bin)
         .map_err(|_| "non-UTF-8 QEMU binary name")?;
     let machine = std::str::from_utf8(spec.machine)
@@ -175,6 +235,11 @@ fn run_qemu(spec: &QemuSpec, image: &Path, timeout: Duration) -> Result<RunOutco
             cmd.arg("enable=on,target=native");
         }
         codegen_core::QemuExitConvention::IsaDebugExit { .. } => {}
+    }
+
+    if let Some(port) = gdb_port {
+        cmd.arg("-gdb").arg(format!("tcp::{}", port));
+        cmd.arg("-S");
     }
 
     cmd.arg("-kernel").arg(image);
@@ -208,10 +273,10 @@ fn run_device(spec: &OpenOcdSpec, image: &Path, timeout: Duration) -> Result<Run
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
-        .map_err(|e| format!("spawning OpenOCD '{}': {}", spec.bin, e))?;
+        .map_err(|e| TyuError::Build(format!("spawning OpenOCD '{}': {}", spec.bin, e)))?;
 
     if !flash_status.success() {
-        return Err(format!("OpenOCD flash failed for '{}'", image.display()));
+        return Err(TyuError::Build(format!("OpenOCD flash failed for '{}'", image.display())).into());
     }
 
     // Step 2: Open serial port and capture output.

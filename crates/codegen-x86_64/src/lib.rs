@@ -1,6 +1,8 @@
 #![no_std]
 #![deny(unsafe_op_in_unsafe_fn)]
 
+extern crate alloc;
+
 use codegen_core::{AsmMode, CodegenBackend, CodegenError};
 use frontend::{
     parse::{ModuleAst, Output},
@@ -14,7 +16,6 @@ pub mod ophelpers;
 pub mod postlude;
 pub mod prelude;
 pub mod region;
-pub mod strings;
 pub mod task;
 pub(crate) mod util;
 pub mod word;
@@ -38,6 +39,15 @@ pub(crate) struct ModInfoImport {
     pub name: lir::Atom,
 }
 
+/// Metadata for a single word in the `.lang.debug` section.
+#[derive(Clone, Copy)]
+pub(crate) struct DebugWordInfo {
+    pub name: lir::Atom,
+    pub net: i16,
+    pub high: u32,
+    pub effects: u16,
+}
+
 pub struct X86_64HostedBackend<'a> {
     pub module: &'a ModuleAst,
     pub src: &'a [u8],
@@ -52,7 +62,11 @@ pub struct X86_64HostedBackend<'a> {
     pub str_spans: [Span; 128],
     pub str_ids: [u32; 128],
     pub debug_trap_loc: bool,
-    pub cur_word_id: u32,
+    pub cur_word_id: u64,
+    /// Collected word info for `.lang.debug` section emission.
+    /// Populated during `emit_word` when `debug_trap_loc` is set.
+    pub(crate) debug_words: [Option<DebugWordInfo>; 4096],
+    pub(crate) debug_word_count: usize,
     pub scoped_base: u32,
     pub scoped_slots: u32,
     pub scoped_next: u32,
@@ -92,6 +106,8 @@ impl<'a> X86_64HostedBackend<'a> {
             str_ids: [0u32; 128],
             debug_trap_loc,
             cur_word_id: 0,
+            debug_words: [None; 4096],
+            debug_word_count: 0,
             scoped_base: 0,
             scoped_slots: 0,
             scoped_next: 0,
@@ -186,6 +202,52 @@ impl<'a> X86_64HostedBackend<'a> {
         // Emit FASM section.
         self.out.write(b"section '.lang.modinfo'\n");
         self.out.write(b"  db ");
+        if size > 0 {
+            crate::ophelpers::write_u32(self.out, buf[0] as u32);
+            for i in 1..size {
+                self.out.write(b",");
+                crate::ophelpers::write_u32(self.out, buf[i] as u32);
+            }
+        }
+        self.out.write(b"\n");
+        Ok(())
+    }
+
+    /// Emit the `.lang.debug` section (full-coverage word table) when
+    /// `debug_trap_loc` is enabled.
+    pub(crate) fn emit_debugsec_section(&mut self) -> Result<(), CodegenError> {
+        if !self.debug_trap_loc {
+            return Ok(());
+        }
+        let count = self.debug_word_count;
+        if count == 0 || count > lmod::debugsec::MAX_DEBUG_ENTRIES {
+            return Ok(());
+        }
+
+        // Build entries from the collected words.
+        let mut entries: alloc::vec::Vec<lmod::debugsec::DebugEntry<'_>> =
+            alloc::vec::Vec::with_capacity(count);
+        for i in 0..count {
+            if let Some(ref dw) = self.debug_words[i] {
+                let name = dw.name.as_bytes();
+                entries.push(lmod::debugsec::DebugEntry {
+                    sym_hash: crate::util::fnv1a_u64(name),
+                    name,
+                    net: dw.net,
+                    high: dw.high,
+                    effects: dw.effects,
+                });
+            }
+        }
+
+        let mut buf = [0u8; 65536];
+        let size = match lmod::debugsec::encode_into(&mut buf, &entries) {
+            Some(s) => s,
+            None => return Ok(()),
+        };
+
+        // Emit as FASM section with raw bytes.
+        self.out.write(b"section '.lang.debug'\n  db ");
         if size > 0 {
             crate::ophelpers::write_u32(self.out, buf[0] as u32);
             for i in 1..size {

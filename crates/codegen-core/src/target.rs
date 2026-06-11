@@ -120,6 +120,118 @@ impl PlatformCapability {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Feature — image-level build features orthogonal to target triples
+// ---------------------------------------------------------------------------
+
+/// Image-level build features selected per `[profile.<name>]` in `tyu.toml`.
+///
+/// A feature gates both (a) the semantic layer (which language constructs are
+/// accepted) and (b) the link step (which runtime units are included).  Axes:
+///
+/// | Feature          | Language construct              | Runtime unit     |
+/// |------------------|--------------------------------|------------------|
+/// | `Concurrency`    | `task spawn`                   | `concurrency.asm`|
+/// | `ModuleLoading`  | loader/module-load constructs  | `modload.asm`    |
+///
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Feature {
+    Concurrency,
+    ModuleLoading,
+}
+
+impl core::fmt::Display for Feature {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl Feature {
+    /// All known features, in declaration order.
+    pub const ALL: [Feature; 2] = [Feature::Concurrency, Feature::ModuleLoading];
+
+    /// Canonical string name as used in `tyu.toml` and `--features=<csv>`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Feature::Concurrency => "concurrency",
+            Feature::ModuleLoading => "module-loading",
+        }
+    }
+
+    /// Parse a feature name from its string representation.
+    /// Returns `None` for an unrecognized string.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "concurrency" => Some(Feature::Concurrency),
+            "module-loading" => Some(Feature::ModuleLoading),
+            _ => None,
+        }
+    }
+
+    /// The runtime asm unit stem linked when this feature is enabled.
+    /// `None` means the feature has no separable runtime unit (it is part
+    /// of the mandatory core).
+    pub fn runtime_unit(self) -> Option<&'static str> {
+        match self {
+            Feature::Concurrency => Some("concurrency"),
+            Feature::ModuleLoading => Some("modload"),
+        }
+    }
+}
+
+/// A compact bitset of enabled [`Feature`]s.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct FeatureSet(u8);
+
+impl FeatureSet {
+    /// All features enabled.
+    pub fn all() -> Self {
+        let mut s = Self(0);
+        for f in &Feature::ALL {
+            s = s.with(*f);
+        }
+        s
+    }
+
+    /// No features enabled.
+    pub fn empty() -> Self {
+        Self(0)
+    }
+
+    /// Return a new set with `f` added.
+    pub fn with(self, f: Feature) -> Self {
+        Self(self.0 | (1 << (f as u8)))
+    }
+
+    /// Does this set contain `f`?
+    pub fn contains(self, f: Feature) -> bool {
+        (self.0 & (1 << (f as u8))) != 0
+    }
+
+    /// Iterate over enabled features in declaration order.
+    pub fn iter(self) -> impl Iterator<Item = Feature> {
+        Feature::ALL.iter().copied().filter(move |f| self.contains(*f))
+    }
+
+    /// Write enabled feature names into `out` (up to its length) and return
+    /// the number written.  Typical usage:
+    /// ```ignore
+    /// let mut buf = [""; 2];
+    /// let n = set.write_flags(&mut buf);
+    /// let csv = buf[..n].join(",");
+    /// ```
+    pub fn write_flags(self, out: &mut [&'static str]) -> usize {
+        let mut i = 0;
+        for f in self.iter() {
+            if i < out.len() {
+                out[i] = f.as_str();
+                i += 1;
+            }
+        }
+        i
+    }
+}
+
 /// How QEMU signals test pass/fail back to the host.
 #[derive(Clone, Copy, Debug)]
 pub enum QemuExitConvention {
@@ -411,7 +523,7 @@ mod tests {
         assert_eq!(spec.assembler, AssemblerKind::GasArm);
         assert_eq!(spec.calling_conv, CallingConv::Aapcs32);
         assert_eq!(spec.linker, b"arm-none-eabi-ld");
-        assert_eq!(spec.qemu.map(|q| q.system_bin), Some(b"qemu-system-arm"));
+        assert_eq!(spec.qemu.map(|q| q.system_bin), Some(&b"qemu-system-arm"[..]));
         assert_eq!(
             spec.qemu.and_then(|q| Some(q.exit_convention.host_pass_exit())),
             Some(0),
@@ -435,5 +547,72 @@ mod tests {
         let linux = Target::X86_64UnknownLinuxGnu.spec();
         assert_eq!(linux.linker, b"ld");
         assert_eq!(linux.assembler, AssemblerKind::Fasm);
+    }
+
+    // -----------------------------------------------------------------------
+    // Feature / FeatureSet
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn feature_parse_roundtrip() {
+        for f in &Feature::ALL {
+            let s = f.as_str();
+            let parsed = Feature::parse(s).expect("parse own as_str");
+            assert_eq!(parsed, *f);
+        }
+    }
+
+    #[test]
+    fn feature_parse_unknown_is_none() {
+        assert!(Feature::parse("bogus").is_none());
+        assert!(Feature::parse("concurrency ").is_none()); // trailing space
+    }
+
+    #[test]
+    fn feature_set_all() {
+        let set = FeatureSet::all();
+        assert!(set.contains(Feature::Concurrency));
+        assert!(set.contains(Feature::ModuleLoading));
+    }
+
+    #[test]
+    fn feature_set_empty() {
+        let set = FeatureSet::empty();
+        assert!(!set.contains(Feature::Concurrency));
+        assert!(!set.contains(Feature::ModuleLoading));
+    }
+
+    #[test]
+    fn feature_set_with_and_iter() {
+        let set = FeatureSet::empty().with(Feature::Concurrency);
+        assert!(set.contains(Feature::Concurrency));
+        assert!(!set.contains(Feature::ModuleLoading));
+        let mut count = 0u32;
+        for _f in set.iter() {
+            count += 1;
+        }
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn feature_set_write_flags() {
+        let set = FeatureSet::all();
+        let mut buf = [""; 4];
+        let n = set.write_flags(&mut buf);
+        assert_eq!(n, 2);
+        assert!(buf[..n].contains(&"concurrency"));
+        assert!(buf[..n].contains(&"module-loading"));
+    }
+
+    #[test]
+    fn feature_runtime_unit() {
+        assert_eq!(
+            Feature::Concurrency.runtime_unit(),
+            Some("concurrency")
+        );
+        assert_eq!(
+            Feature::ModuleLoading.runtime_unit(),
+            Some("modload")
+        );
     }
 }

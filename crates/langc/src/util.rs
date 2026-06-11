@@ -1,6 +1,8 @@
+use codegen_core::{Feature, FeatureSet};
 use frontend::parse::Output;
 use frontend::span::Span;
 use hosted::{diag, errno::Errno, fs, io};
+use ir as lir;
 
 pub struct Stdout;
 
@@ -147,4 +149,117 @@ pub fn line_col(src: &[u8], offset: usize) -> (u32, u32) {
         i += 1;
     }
     (line, col)
+}
+
+// ---------------------------------------------------------------------------
+// Feature gate diagnostics (E61xx)
+// ---------------------------------------------------------------------------
+
+/// What feature a particular `OpKind` requires, if any.
+///
+/// Returns `None` for ops that are always available (ungated).
+pub fn op_requires_feature(kind: lir::OpKind) -> Option<Feature> {
+    match kind {
+        lir::OpKind::TaskSpawn { .. } => Some(Feature::Concurrency),
+        // Module-loading ops will gate on Feature::ModuleLoading when they
+        // are added to the IR (e.g. OpKind::ModuleLoad { .. }).
+        // The op_requires_feature match arm is reserved here so the gate
+        // infrastructure is ready; no such ops exist yet.
+        _ => None,
+    }
+}
+
+/// Emit `error[E6101]: feature `xxx` is disabled` with a source span.
+///
+/// Renders:
+/// ```text
+/// error[E6101]: feature `concurrency` is disabled
+///   --> path.mod:12:3
+///    |
+/// 12 |   task spawn worker;
+///    |   ^^^^^^^^^^^^^^^^^^ requires feature `concurrency`
+/// ```
+pub fn emit_gate_error(
+    path: &[u8],
+    src: &[u8],
+    feature: Feature,
+    span: Span,
+) {
+    let (line, col) = line_col(src, span.start);
+    let feat_name = feature.as_str();
+
+    // error[E6101]
+    let _ = io::stderr(b"error[E6101]: feature `");
+    let _ = io::stderr(feat_name.as_bytes());
+    let _ = io::stderr(b"` is disabled\n");
+
+    //   --> path:line:col
+    let _ = io::stderr(b"  --> ");
+    let _ = io::stderr(path);
+    let _ = io::stderr(b":");
+    write_u32_stderr(line);
+    let _ = io::stderr(b":");
+    write_u32_stderr(col);
+
+    // Source line with caret
+    let _ = io::stderr(b"\n   |\n");
+    // Find the source line containing the span
+    let mut line_start = span.start;
+    while line_start > 0 && src[line_start - 1] != b'\n' {
+        line_start -= 1;
+    }
+    let mut line_end = span.end;
+    while line_end < src.len() && src[line_end] != b'\n' {
+        line_end += 1;
+    }
+    // Print the source line
+    let _ = io::stderr(b" ");
+    write_u32_stderr(line);
+    let _ = io::stderr(b" | ");
+    let _ = io::stderr(&src[line_start..line_end]);
+    let _ = io::stderr(b"\n");
+
+    // Caret line: spaces then ^^^ under the span
+    let caret_col = span.start - line_start;
+    let caret_width = core::cmp::max(1, span.end - span.start);
+    let _ = io::stderr(b"   | ");
+    for _ in 0..caret_col {
+        let _ = io::stderr(b" ");
+    }
+    for _ in 0..caret_width {
+        let _ = io::stderr(b"^");
+    }
+    let _ = io::stderr(b" requires feature `");
+    let _ = io::stderr(feat_name.as_bytes());
+    let _ = io::stderr(b"`\n");
+}
+
+/// Check every `Op` in `word` against the feature gate.
+/// Returns `true` if any gated op was found (and its diagnostics emitted).
+pub fn check_word_for_gate(
+    word: &lir::Word,
+    feature_set: FeatureSet,
+    path: &[u8],
+    src: &[u8],
+) -> bool {
+    let mut hit = false;
+    for bi in 0..word.blocks.len() {
+        let block = match word.blocks.get(bi) {
+            Some(b) => b,
+            None => break,
+        };
+        for oi in 0..block.ops.len() {
+            let op = match block.ops.get(oi) {
+                Some(o) => o,
+                None => break,
+            };
+            if let Some(required) = op_requires_feature(op.kind) {
+                if !feature_set.contains(required) {
+                    emit_gate_error(path, src, required, op.span);
+                    hit = true;
+                }
+            }
+        }
+    }
+    hit
 }

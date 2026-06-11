@@ -1,4 +1,5 @@
 use codegen_core::{AsmMode, CodegenError};
+use codegen_core::strings::STR_TABLE_CAP;
 use frontend::span::Span;
 use ir as lir;
 
@@ -18,7 +19,22 @@ use crate::X86_64HostedBackend;
 
 impl<'a> X86_64HostedBackend<'a> {
     pub fn emit_word(&mut self, w: &lir::Word) -> Result<(), CodegenError> {
-        self.cur_word_id = fnv1a_u64(w.name.as_bytes()) as u32;
+        self.cur_word_id = fnv1a_u64(w.name.as_bytes());
+        // Collect debug metadata for every word when debug_trap_loc is set.
+        if self.debug_trap_loc {
+            let idx = self.debug_word_count;
+            if idx < self.debug_words.len() {
+                if let Some(name) = lir::Atom::new(w.name.as_bytes()) {
+                    self.debug_words[idx] = Some(crate::DebugWordInfo {
+                        name,
+                        net: w.bound.net,
+                        high: w.bound.wire_u32(),
+                        effects: w.performs.bits(),
+                    });
+                    self.debug_word_count = idx + 1;
+                }
+            }
+        }
         self.out.write(b"\n");
         if self.mode == AsmMode::Object && is_exported(self.module, self.src, w.name.as_bytes()) {
             self.out.write(b"public ");
@@ -510,7 +526,7 @@ impl<'a> X86_64HostedBackend<'a> {
                 self.out.write(b"\n");
                 Ok(())
             }
-        }
+        } // exhaustive: adding an OpKind MUST be handled here
     }
 
     fn emit_cast(&mut self, w: &lir::Word, from: lir::TypeId, to: lir::TypeId) {
@@ -591,16 +607,24 @@ impl<'a> X86_64HostedBackend<'a> {
 
     pub(crate) fn emit_trap_with_loc(&mut self, code: u32, span: Span) {
         if self.debug_trap_loc {
+            // Register contract for __lang_trap_loc (x86_64 SysV ABI):
+            //   rdi = trap_code (u32, zero-extended to 64 bits)
+            //   rsi = valid flag  (1 = language trap, 0 = hardware fault)
+            //   rdx = source line (u32, zero-extended)
+            //   rcx = word_hash   (full fnv1a_u64, 64-bit)
+            //
+            // The host diagnostic decoder matches word_hash against the
+            // modinfo sym_hash (abi-contract §6) to name the trapping word.
             let (line, _col) = line_col(self.src, span.start);
             self.out.write(b"  mov rdi, ");
             write_u32(self.out, code);
             self.out.write(b"\n");
-            self.out.write(b"  mov rsi, 1");
+            self.out.write(b"  mov rsi, 1\n");
             self.out.write(b"  mov rdx, ");
             write_u32(self.out, line);
             self.out.write(b"\n");
             self.out.write(b"  mov rcx, ");
-            write_u32(self.out, self.cur_word_id);
+            write_u64_hex(self.out, self.cur_word_id);
             self.out.write(b"\n");
             self.out.write(b"  jmp __lang_trap_loc\n");
         } else {
@@ -619,7 +643,7 @@ impl<'a> X86_64HostedBackend<'a> {
                 return Ok(self.str_ids[i]);
             }
         }
-        if self.str_len >= self.str_spans.len() {
+        if self.str_len >= STR_TABLE_CAP {
             return Err(CodegenError::StringLiteralCapacityExceeded);
         }
         let id = self.fresh_label();

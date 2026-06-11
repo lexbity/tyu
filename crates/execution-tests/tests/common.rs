@@ -59,13 +59,19 @@ pub fn temp_dir(label: &str) -> PathBuf {
 // Tool availability
 // ---------------------------------------------------------------------------
 
-/// Returns true if the named binary exists somewhere in PATH.
+/// Returns true if a named binary exists — either on `PATH` or in
+/// `target/debug/` (for workspace-built binaries like `langc`, `tyu`).
 pub fn tool_available(name: &str) -> bool {
-    Command::new("which")
+    if Command::new("which")
         .arg(name)
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
+    {
+        return true;
+    }
+    let target = workspace_root().join("target").join("debug").join(name);
+    target.exists()
 }
 
 /// Environment-aware tool gating.
@@ -111,6 +117,7 @@ pub fn langc_compile(target: Target, src: &Path, out_dir: &Path, is_lib: bool) -
         format!("--target={triple}"),
         format!("--sysroot={}", sysroot_dir().display()),
         format!("--out-dir={}", out_dir.display()),
+        format!("-I={}", out_dir.display()),
     ];
     if is_lib {
         args.push("--lib".into());
@@ -132,37 +139,49 @@ pub fn langc_compile(target: Target, src: &Path, out_dir: &Path, is_lib: bool) -
         .expect("langc produced no .o file")
 }
 
-/// Assemble `runtime.asm` for the given target.
-pub fn assemble_runtime(target: Target, out_dir: &Path) -> PathBuf {
+/// Assemble `runtime.asm` and any feature-specific optional runtime units
+/// for the given target.  Returns a `Vec` of object paths.
+///
+/// Optional units (e.g. `modload.asm`) are assembled only when the
+/// corresponding `.asm` file exists in the runtime directory.
+pub fn assemble_runtime(target: Target, out_dir: &Path) -> Vec<PathBuf> {
     let spec = target.spec();
     let rt_dir = runtime_dir(target);
-    let asm = rt_dir.join("runtime.asm");
-    let out = out_dir.join("runtime.o");
 
-    match spec.assembler {
-        AssemblerKind::Fasm => {
-            let status = Command::new("fasm")
-                .args([asm.to_str().unwrap(), out.to_str().unwrap()])
-                .status()
-                .expect("fasm invocation failed");
-            assert!(status.success(), "fasm failed to assemble runtime");
+    let mut objs = Vec::new();
+    let stems = &["runtime", "concurrency", "modload"];
+    for stem in stems {
+        let asm = rt_dir.join(format!("{}.asm", stem));
+        if !asm.exists() {
+            continue;
         }
-        AssemblerKind::GasArm => {
-            let status = Command::new("arm-none-eabi-as")
-                .args(["-mcpu=cortex-m3", "-mthumb", asm.to_str().unwrap(), "-o", out.to_str().unwrap()])
-                .status()
-                .expect("arm-none-eabi-as invocation failed");
-            assert!(status.success(), "arm-none-eabi-as failed to assemble runtime");
+        let out = out_dir.join(format!("{}.o", stem));
+        match spec.assembler {
+            AssemblerKind::Fasm => {
+                let status = Command::new("fasm")
+                    .args([asm.to_str().unwrap(), out.to_str().unwrap()])
+                    .status()
+                    .expect("fasm invocation failed");
+                assert!(status.success(), "fasm failed to assemble {stem}");
+            }
+            AssemblerKind::GasArm => {
+                let status = Command::new("arm-none-eabi-as")
+                    .args(["-mcpu=cortex-m3", "-mthumb", asm.to_str().unwrap(), "-o", out.to_str().unwrap()])
+                    .status()
+                    .expect("arm-none-eabi-as invocation failed");
+                assert!(status.success(), "arm-none-eabi-as failed to assemble {stem}");
+            }
+            AssemblerKind::GasRiscV => {
+                let status = Command::new("riscv64-unknown-elf-as")
+                    .args(["-march=rv32i", "-mabi=ilp32", asm.to_str().unwrap(), "-o", out.to_str().unwrap()])
+                    .status()
+                    .expect("riscv64-unknown-elf-as invocation failed");
+                assert!(status.success(), "riscv64-unknown-elf-as failed to assemble {stem}");
+            }
         }
-        AssemblerKind::GasRiscV => {
-            let status = Command::new("riscv64-unknown-elf-as")
-                .args(["-march=rv32i", "-mabi=ilp32", asm.to_str().unwrap(), "-o", out.to_str().unwrap()])
-                .status()
-                .expect("riscv64-unknown-elf-as invocation failed");
-            assert!(status.success(), "riscv64-unknown-elf-as failed to assemble runtime");
-        }
+        objs.push(out);
     }
-    out
+    objs
 }
 
 /// Link object files + runtime into an ELF.
@@ -180,6 +199,55 @@ pub fn link_image(target: Target, objs: &[PathBuf], out_dir: &Path) -> PathBuf {
     let status = cmd.status().unwrap_or_else(|_| panic!("{linker} invocation failed"));
     assert!(status.success(), "{linker} failed to link test image");
     out
+}
+
+/// Return the set of symbol names that MUST be present in a linked image
+/// for a given feature set.  Core symbols are always required; optional
+/// unit symbols are included iff the corresponding feature is enabled.
+pub fn expected_symbols(feature_set: codegen_core::FeatureSet) -> Vec<&'static str> {
+    let mut syms: Vec<&'static str> = vec![
+        // Core runtime symbols (abi-contract §4.4.1).
+        "__lang_start",
+        "__lang_trap",
+        "__lang_trap_loc",
+        "__stack_overflow",
+        "__lang_ds_base",
+        "__lang_ds_limit",
+        "__lang_ds_high",
+    ];
+
+    if feature_set.contains(codegen_core::Feature::Concurrency) {
+        syms.extend_from_slice(&[
+            "__task_spawn",
+            "__task_yield",
+            "__task_join",
+            "__task_current",
+            "__task_state",
+            "__task_rsp",
+            "__task_r15",
+            "__task_r14",
+            "__task_entry",
+            "__task_ds_mem",
+            "__task_cs_mem",
+            "__task_g_head",
+            "__task_g_tail",
+            "__task_g_buf",
+            "__chan_next",
+            "__chan_inuse",
+            "__chan_head",
+            "__chan_tail",
+            "__chan_buf",
+        ]);
+    }
+
+    if feature_set.contains(codegen_core::Feature::ModuleLoading) {
+        syms.extend_from_slice(&[
+            "__lang_modpack_start",
+            "__lang_modpack_end",
+        ]);
+    }
+
+    syms
 }
 
 

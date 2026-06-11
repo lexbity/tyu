@@ -90,12 +90,29 @@ pub fn rederive_stack_high(code: &[u8], arch: Arch, slot_bytes: u32) -> u32 {
 ///
 /// Push (`add r15, N`) increments the DS pointer → positive offset → raises peak.
 /// Pop  (`sub r15, N`) decrements the DS pointer → offset moves toward / below base.
+///
+/// Returns `TOP_SENTINEL` for patterns the scanner cannot safely bound:
+/// - `add r15, imm32` (`49 81 c7 XX XX XX XX`) — recognized DS growth, not counted.
+/// - Any `REX`-prefixed instruction modifying register `r15` that is not a
+///   recognized push/pop — treat as unverifiable.
+/// - Backward jump (loop) — static analysis cannot bound loop iterations.
 fn rederive_x86_64(code: &[u8], slot_bytes: u32) -> u32 {
     let mut off: i64 = 0; // bytes above base (push) or below (pop)
     let mut peak: u32 = 0;
     let mut i = 0;
     while i < code.len() {
         let b = code[i];
+
+        // Backward jump → loop → cannot statically bound push count.
+        if b == 0xEB && i + 2 <= code.len() {
+            let rel = code[i + 1] as i8 as i64;
+            if rel < 0 { return TOP_SENTINEL; }
+        }
+        if (0x70..=0x7F).contains(&b) && i + 2 <= code.len() {
+            let rel = code[i + 1] as i8 as i64;
+            if rel < 0 { return TOP_SENTINEL; }
+        }
+
         // add r15, imm8 — PUSH (DS grows upward: 49 83 c7 XX)
         if i + 3 < code.len()
             && b == 0x49
@@ -119,6 +136,33 @@ fn rederive_x86_64(code: &[u8], slot_bytes: u32) -> u32 {
             if off < 0 { off = 0; }
             i += 4;
             continue;
+        }
+        // add r15, imm32 (49 81 c7 XX XX XX XX) — recognized but not counted.
+        if i + 6 < code.len()
+            && b == 0x49
+            && code[i + 1] == 0x81
+            && code[i + 2] == 0xc7
+        {
+            return TOP_SENTINEL;
+        }
+        // Any other REX-prefixed instruction targeting register 7 (r15)
+        // that is not the recognized `49 83 c7` or `49 83 ef` sequence.
+        // The ModRM byte is at position i+1 (after REX) for instructions
+        // that have one; for instructions like `add r/m64, r64` (opcode 01)
+        // the ModRM is at i+1 and the opcode selects the form.
+        if (b & 0xEF) == 0x49 && i + 2 < code.len() {
+            let opc = code[i + 1];
+            let modrm = code[i + 2];
+            let rm = modrm & 0x7;
+            // Opcodes that target r15: 01 (add), 03 (sub), 09 (or), 11 (adc),
+            // 13 (sbb), 19 (sbb), 21 (and), 23 (and), 29 (sub), 31 (xor),
+            // 39 (cmp), 89 (mov), 8B (mov), 87 (xchg), 85 (test), etc.
+            if rm == 7 && (opc == 0x01 || opc == 0x03 || opc == 0x29
+                || opc == 0x89 || opc == 0x8B || opc == 0x85
+                || opc == 0x09 || opc == 0x21 || opc == 0x31 || opc == 0x39)
+            {
+                return TOP_SENTINEL;
+            }
         }
         i += 1;
     }
@@ -520,5 +564,42 @@ mod tests {
         let mut code = Vec::new();
         for _ in 0..5 { code.extend_from_slice(&encode_riscv_addi_s2(-8)); }
         assert_eq!(rederive_stack_high(&code, Arch::RiscV, 4), 0);
+    }
+
+    // -------------------------------------------------------------------
+    // TOP_SENTINEL tests — patterns the scanner cannot safely bound.
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn loop_yields_top() {
+        // Backward jmp over a push → static scan cannot bound iterations.
+        let mut code = Vec::new();
+        code.push(0x49); code.push(0x83); code.push(0xc7); code.push(8); // add r15, 8
+        code.push(0xEB); code.push(-6i8 as u8);                         // jmp -6 (back to add)
+        assert_eq!(rederive_stack_high(&code, Arch::X86_64, 8), TOP_SENTINEL);
+    }
+
+    #[test]
+    fn backward_jcc_yields_top() {
+        // je rel8 pointing backwards
+        let mut code = Vec::new();
+        code.push(0x49); code.push(0x83); code.push(0xc7); code.push(8);
+        code.push(0x74); code.push(-6i8 as u8);  // je -6
+        assert_eq!(rederive_stack_high(&code, Arch::X86_64, 8), TOP_SENTINEL);
+    }
+
+    #[test]
+    fn add_r15_imm32_yields_top() {
+        // 49 81 c7 XX XX XX XX — add r15, imm32 (the imm8-only scanner misses this)
+        let code = vec![0x49, 0x81, 0xc7, 0x00, 0x10, 0x00, 0x00];
+        assert_eq!(rederive_stack_high(&code, Arch::X86_64, 8), TOP_SENTINEL);
+    }
+
+    #[test]
+    fn unknown_ds_write_yields_top() {
+        // 49 01 c7 — add r15, rdi (REX.W add r/m64, r64 targeting r15)
+        // The scanner doesn't recognize this but it modifies r15 → unverifiable.
+        let code = vec![0x49, 0x01, 0xc7];
+        assert_eq!(rederive_stack_high(&code, Arch::X86_64, 8), TOP_SENTINEL);
     }
 }

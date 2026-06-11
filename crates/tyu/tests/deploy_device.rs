@@ -86,7 +86,7 @@ fn deploy_device_produces_n_slots() {
     ensure_tools();
 
     let dir = temp_dir("d3");
-    let main_mod = dir.join("main.mod");
+    let main_mod = dir.join("Main.mod");
     std::fs::write(&main_mod, PASS_MOD).unwrap();
     let keys_dir = create_device_keys(&dir, &[
         ("device-a", &[0xaa; 32]),
@@ -129,7 +129,7 @@ fn deploy_device_isolation_via_loader() {
     ensure_tools();
 
     let dir = temp_dir("d4");
-    let main_mod = dir.join("main.mod");
+    let main_mod = dir.join("Main.mod");
     std::fs::write(&main_mod, PASS_MOD).unwrap();
     let keys_dir = create_device_keys(&dir, &[
         ("device-a", &[0xaa; 32]),
@@ -174,7 +174,7 @@ fn deploy_device_missing_keysdir_errors() {
     ensure_tools();
 
     let dir = temp_dir("d6");
-    let main_mod = dir.join("main.mod");
+    let main_mod = dir.join("Main.mod");
     std::fs::write(&main_mod, PASS_MOD).unwrap();
     let sysroot = workspace_root().join("sysroot");
     let out_dir = dir.join("out");
@@ -204,7 +204,7 @@ fn deploy_device_empty_keysdir_errors() {
     ensure_tools();
 
     let dir = temp_dir("d7");
-    let main_mod = dir.join("main.mod");
+    let main_mod = dir.join("Main.mod");
     std::fs::write(&main_mod, PASS_MOD).unwrap();
     let empty_keys = dir.join("empty-keys");
     std::fs::create_dir_all(&empty_keys).unwrap();

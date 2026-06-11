@@ -1,7 +1,6 @@
 //! Tests for the project manifest (tyu.toml) parser.
 
 use tyu::project::{parse_project_manifest, resolve_target, ProjectManifest};
-use tyu::toml_parser::parse_toml;
 use std::path::Path;
 
 #[test]
@@ -11,19 +10,7 @@ fn project_section() {
 main = "src/main.mod"
 modules = ["src/", "sysroot/"]
 "#;
-    let entries = parse_toml(toml).unwrap();
-    let mut pm = ProjectManifest::default();
-    for entry in &entries {
-        if entry.section == vec!["project"] {
-            match entry.key.as_str() {
-                "main" => pm.project.main = Some(
-                    match &entry.value { tyu::toml_parser::TomlValue::Str(s) => s.clone(), _ => unreachable!() }
-                ),
-                "modules" => pm.project.modules = vec!["src/".into(), "sysroot/".into()],
-                _ => {}
-            }
-        }
-    }
+    let pm: ProjectManifest = toml::from_str(toml).unwrap();
     assert_eq!(pm.project.main.unwrap(), "src/main.mod");
     assert_eq!(pm.project.modules, vec!["src/", "sysroot/"]);
 }

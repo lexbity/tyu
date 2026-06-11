@@ -2,6 +2,7 @@
 
 extern crate alloc;
 
+pub mod error;
 pub mod load;
 pub mod modpack;
 pub mod platform;

@@ -38,7 +38,7 @@ pub struct ArmThumbBackend<'a> {
     pub str_spans: [Span; 128],
     pub str_ids: [u32; 128],
     pub debug_trap_loc: bool,
-    pub cur_word_id: u32,
+    pub cur_word_id: u64,
 
     // --- S2 Phase 1: modinfo collection ---
     pub(crate) mi_exports: [ModInfoExport; 64],
@@ -48,6 +48,14 @@ pub struct ArmThumbBackend<'a> {
 
     // --- S2 Phase 2: abi_hash ---
     pub expected_abi_hash: u64,
+
+    // --- Slice 8: concurrency flag ---
+    pub uses_tasks: bool,
+
+    // --- Slice 5: scoped region allocation ---
+    pub scoped_base: u32,
+    pub scoped_slots: u32,
+    pub scoped_next: u32,
 }
 
 impl<'a> ArmThumbBackend<'a> {
@@ -79,6 +87,10 @@ impl<'a> ArmThumbBackend<'a> {
             mi_imports: [ModInfoImport { name: lir::AT_EMPTY }; 64],
             mi_import_count: 0,
             expected_abi_hash: 0,
+            uses_tasks: false,
+            scoped_base: 0,
+            scoped_slots: 0,
+            scoped_next: 0,
         }
     }
 

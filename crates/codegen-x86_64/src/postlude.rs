@@ -1,43 +1,53 @@
 use codegen_core::{AsmMode, CodegenError};
 
 use crate::ophelpers::write_u32;
-use crate::strings::decode_string_bytes;
 use crate::task;
+use codegen_core::strings::decode_string_bytes;
 use crate::X86_64HostedBackend;
 
 impl<'a> X86_64HostedBackend<'a> {
+    /// Emit the interned string table into the current section.
+    /// Called from both Executable and Object mode postludes.
+    fn emit_string_table(&mut self) -> Result<(), CodegenError> {
+        for i in 0..self.str_len {
+            let id = self.str_ids[i];
+            let span = self.str_spans[i];
+            let bytes = decode_string_bytes(self.src, span)
+                .ok_or(CodegenError::MalformedStringLiteral)?;
+
+            self.out.write(b"\n__lang_str_");
+            write_u32(self.out, id);
+            self.out.write(b":\n");
+            self.out.write(b"  dq __lang_str_");
+            write_u32(self.out, id);
+            self.out.write(b"_bytes\n");
+            self.out.write(b"  dq ");
+            write_u32(self.out, bytes.len() as u32);
+            self.out.write(b"\n");
+
+            self.out.write(b"__lang_str_");
+            write_u32(self.out, id);
+            self.out.write(b"_bytes db ");
+            for (j, b) in bytes.iter().enumerate() {
+                if j != 0 {
+                    self.out.write(b",");
+                }
+                write_u32(self.out, *b as u32);
+            }
+            if bytes.is_empty() {
+                self.out.write(b"0");
+            }
+            self.out.write(b"\n");
+        }
+        Ok(())
+    }
+
     pub fn emit_postlude(&mut self) -> Result<(), CodegenError> {
         match self.mode {
             AsmMode::Executable => {
-                for i in 0..self.str_len {
-                    let id = self.str_ids[i];
-                    let span = self.str_spans[i];
-                    let bytes = decode_string_bytes(self.src, span)
-                        .ok_or(CodegenError::MalformedStringLiteral)?;
-
-                    self.out.write(b"\n__lang_str_");
-                    write_u32(self.out, id);
-                    self.out.write(b":\n");
-                    self.out.write(b"  dq __lang_str_");
-                    write_u32(self.out, id);
-                    self.out.write(b"_bytes\n");
-                    self.out.write(b"  dq ");
-                    write_u32(self.out, bytes.len() as u32);
-                    self.out.write(b"\n");
-
-                    self.out.write(b"__lang_str_");
-                    write_u32(self.out, id);
-                    self.out.write(b"_bytes db ");
-                    for (j, b) in bytes.iter().enumerate() {
-                        if j != 0 {
-                            self.out.write(b",");
-                        }
-                        write_u32(self.out, *b as u32);
-                    }
-                    if bytes.is_empty() {
-                        self.out.write(b"0");
-                    }
-                    self.out.write(b"\n");
+                if self.str_len > 0 {
+                    self.out.write(b"\nsegment readable\n");
+                    self.emit_string_table()?;
                 }
 
                 if self.uses_tasks {
@@ -98,43 +108,12 @@ impl<'a> X86_64HostedBackend<'a> {
                 Ok(())
             }
             AsmMode::Object => {
-                // Emit .lang.modinfo first (S2 Phase 1).
+                if self.str_len > 0 {
+                    self.out.write(b"\nsegment readable\n");
+                    self.emit_string_table()?;
+                }
                 X86_64HostedBackend::emit_modinfo_section(self)?;
-
-                if self.str_len == 0 {
-                    return Ok(());
-                }
-                self.out.write(b"section '.rodata'\n");
-                for i in 0..self.str_len {
-                    let id = self.str_ids[i];
-                    let span = self.str_spans[i];
-                    let bytes = decode_string_bytes(self.src, span)
-                        .ok_or(CodegenError::MalformedStringLiteral)?;
-
-                    self.out.write(b"\n__lang_str_");
-                    write_u32(self.out, id);
-                    self.out.write(b":\n");
-                    self.out.write(b"  dq __lang_str_");
-                    write_u32(self.out, id);
-                    self.out.write(b"_bytes\n");
-                    self.out.write(b"  dq ");
-                    write_u32(self.out, bytes.len() as u32);
-                    self.out.write(b"\n");
-
-                    self.out.write(b"__lang_str_");
-                    write_u32(self.out, id);
-                    self.out.write(b"_bytes db ");
-                    for (j, b) in bytes.iter().enumerate() {
-                        if j != 0 {
-                            self.out.write(b",");
-                        }
-                        write_u32(self.out, *b as u32);
-                    }
-                    if bytes.is_empty() {
-                        self.out.write(b"0");
-                    }
-                    self.out.write(b"\n");
-                }
+                X86_64HostedBackend::emit_debugsec_section(self)?;
                 Ok(())
             }
         }

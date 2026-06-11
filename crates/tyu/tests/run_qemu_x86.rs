@@ -1,4 +1,7 @@
 //! Tests for `tyu run` on x86_64-unknown-none (QEMU).
+//!
+//! R-1: pass, fail-marker, no-completion (with completed assertion).
+//! R-2: deterministic hang detection (no TCO dependency).
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -42,8 +45,9 @@ module Main;\nimport platform/testio { testio.write-byte };\n\
 const NO_COMPLETION_MOD: &str = "\
 module Main;\n: main ( -- i64 ) 0 ;\nexport { main };\nend;\n";
 
-const HANG_MOD: &str = "\
-module Main;\n: main ( -- i64 ) main ;\nexport { main };\nend;\n";
+// ---------------------------------------------------------------------------
+// R-1: pass, fail-marker, no-completion
+// ---------------------------------------------------------------------------
 
 #[test]
 fn run_qemu_pass() {
@@ -68,6 +72,7 @@ fn run_qemu_fail_marker() {
     let outcome = Runner::Qemu(runner).run(&image, Duration::from_secs(10)).unwrap();
     let s = harness_core::parse_output(&outcome.stdout);
     assert!(s.failures > 0);
+    assert!(s.completed, "R-1: fail-marker test must still report completion (S\\n)");
 }
 
 #[test]
@@ -81,6 +86,19 @@ fn run_qemu_no_completion() {
     assert!(!s.completed);
 }
 
+// ---------------------------------------------------------------------------
+// R-2: Deterministic hang detection
+// ---------------------------------------------------------------------------
+//
+// Uses a counted loop that never reaches its terminating condition.
+// No recursion (no TCO dependency).  The QEMU process genuinely does
+// not terminate, so the 500 ms timeout expires and timed_out == true.
+
+const HANG_MOD: &str = "\
+module Main;\n\
+: main ( -- i64 ) 0 begin 1 + dup 0 < until drop 0 ;\n\
+export { main };\nend;\n";
+
 #[test]
 fn run_qemu_hang_detected() {
     if !require_tools(&["langc", "fasm", "ld", "qemu-system-x86_64"]) { return; }
@@ -88,5 +106,7 @@ fn run_qemu_hang_detected() {
     let image = build_x86_image(HANG_MOD, &dir, "hang");
     let runner = Target::X86_64UnknownNone.spec().qemu.unwrap();
     let outcome = Runner::Qemu(runner).run(&image, Duration::from_millis(500)).unwrap();
-    assert!(outcome.timed_out);
+    assert!(outcome.timed_out, "R-2: program must time out, got exit_code={}", outcome.exit_code);
+    let s = harness_core::parse_output(&outcome.stdout);
+    assert!(!s.completed, "R-2: timed-out program must not report completion");
 }

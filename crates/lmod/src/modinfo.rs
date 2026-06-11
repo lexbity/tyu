@@ -100,6 +100,12 @@ pub fn encode_into<'a>(
 ) -> Option<usize> {
     let export_count = exports.len() as u32;
     let import_count = imports.len() as u32;
+
+    // Bounds check: the encoder uses fixed-size arrays of 64 elements.
+    if export_count > 64 || import_count > 64 {
+        return None;
+    }
+
     let res_count = res_metas.len() as u32;
 
     // --- Compute total size ---
@@ -499,5 +505,34 @@ mod tests {
         let n = encode_into(&mut buf, b"X", &[], &[], expected, 0, &[]).unwrap();
         let decoded = decode(&buf[..n]).unwrap();
         assert_eq!(decoded.abi_hash, expected);
+    }
+
+    #[test]
+    fn encode_more_than_64_exports_rejected() {
+        // The encoder uses fixed-size arrays [u32; 64] for name offsets.
+        // Exporting 65 words must return None rather than panicking.
+        let e = ExportEntry {
+            sym_hash: fnv1a_u64(b"dummy"),
+            name: b"dummy",
+            effects: 0,
+            requires_caps: 0,
+            stack_bound: 0,
+        };
+        let exports = [e; 65];
+        let mut buf = [0u8; 4096];
+        let result = encode_into(&mut buf, b"M", &exports, &[], 42, 0, &[]);
+        assert!(result.is_none(), ">64 exports must return None, not panic");
+    }
+
+    #[test]
+    fn encode_more_than_64_imports_rejected() {
+        let imp = ImportEntry {
+            sym_hash: fnv1a_u64(b"dummy"),
+            name: b"dummy",
+        };
+        let imports = [imp; 65];
+        let mut buf = [0u8; 4096];
+        let result = encode_into(&mut buf, b"M", &[], &imports, 42, 0, &[]);
+        assert!(result.is_none(), ">64 imports must return None, not panic");
     }
 }

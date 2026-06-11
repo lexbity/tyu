@@ -11,11 +11,12 @@
 //!   - `R_X86_64_PLT32` (kind 3) — PLT-relative 32-bit:    S + A - P
 //!
 //! Any other kind is rejected with `E_RELOC_UNSUPPORTED (5204)`.
+use crate::error::LoadError;
 
 use lmod::reloc::RelocKind;
 
 /// Error returned for unsupported relocation kinds.
-pub const E_RELOC_UNSUPPORTED: u32 = 5204;
+pub use crate::error::E_RELOC_UNSUPPORTED;
 
 /// Apply one import relocation.
 ///
@@ -44,12 +45,12 @@ pub fn apply_import_reloc(
     kind: u8,
     sym_addr: u64,
     addend: i64,
-) -> Result<(), u32> {
+) -> Result<(), LoadError> {
     match kind {
         k if k == RelocKind::X86_64_64 as u8 => {
             // R_X86_64_64: S + A  (write 8 bytes, little-endian)
             if site_off + 8 > buf.len() {
-                return Err(E_RELOC_UNSUPPORTED);
+                return Err(LoadError::RelocUnsupported);
             }
             let val = sym_addr.wrapping_add(addend as u64);
             buf[site_off..site_off + 8].copy_from_slice(&val.to_le_bytes());
@@ -58,7 +59,7 @@ pub fn apply_import_reloc(
         k if k == RelocKind::X86_64_PC32 as u8 || k == RelocKind::X86_64_PLT32 as u8 => {
             // R_X86_64_PC32 / R_X86_64_PLT32: S + A - P  (write 4 bytes, LE)
             if site_off + 4 > buf.len() {
-                return Err(E_RELOC_UNSUPPORTED);
+                return Err(LoadError::RelocUnsupported);
             }
             let p = (buf.as_ptr() as u64).wrapping_add(site_off as u64);
             let val = (sym_addr as i64)
@@ -67,7 +68,7 @@ pub fn apply_import_reloc(
             buf[site_off..site_off + 4].copy_from_slice(&(val as u32).to_le_bytes());
             Ok(())
         }
-        _ => Err(E_RELOC_UNSUPPORTED),
+        _ => Err(LoadError::RelocUnsupported),
     }
 }
 

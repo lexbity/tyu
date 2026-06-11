@@ -164,4 +164,22 @@ mod tests {
         let h = compute_abi_hash(8, 64, 2);
         assert_ne!(h, 0, "abi_hash must not be zero");
     }
+
+    #[test]
+    fn abi_hash_golden_x86_64_none() {
+        // Golden value for x86_64-unknown-none (slot_bytes=8, word_bits=64,
+        // MODINFO_VER=3).  If this changes, all previously-compiled modules
+        // will be rejected by the loader — bump CODEGEN_REV and update any
+        // dependent goldens.
+        let h = compute_abi_hash(8, 64, 3);
+        assert_eq!(h, 0x9100_D9DA_37DD_A42Au64,
+            "abi_hash for slot_bytes=8, word_bits=64, modinfo_ver=3 must be stable");
+    }
+
+    #[test]
+    fn abi_hash_golden_armv7m_none() {
+        let h = compute_abi_hash(4, 32, 3);
+        assert_eq!(h, 0x154D_A033_503B_0946u64,
+            "abi_hash for slot_bytes=4, word_bits=32, modinfo_ver=3 must be stable");
+    }
 }

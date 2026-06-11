@@ -576,4 +576,55 @@ mod tests {
         assert_eq!(c.reloc_count(), 0);
         assert_eq!(c.code().len(), 32);
     }
+
+    // -------------------------------------------------------------------
+    // Edge case: sig_off / sig_len bounds
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn sig_off_before_header_rejected() {
+        let mut buf = build_valid_container();
+        // sig_off is at bytes 64-68 of the 72-byte header.
+        // Set it to 8 (before the 72-byte header boundary → overlaps header).
+        buf[64..68].copy_from_slice(&8u32.to_le_bytes());
+        buf[68..72].copy_from_slice(&33u32.to_le_bytes()); // sig_len
+        assert!(Container::parse(&buf).is_err(),
+            "sig_off before header must be rejected");
+    }
+
+    #[test]
+    fn sig_out_of_bounds_rejected() {
+        let mut buf = build_valid_container();
+        let total = buf.len() as u32;
+        // sig_off past end of container.
+        buf[64..68].copy_from_slice(&(total + 100).to_le_bytes());
+        buf[68..72].copy_from_slice(&33u32.to_le_bytes());
+        assert!(Container::parse(&buf).is_err(),
+            "sig_off past end must be rejected");
+    }
+
+    // -------------------------------------------------------------------
+    // Edge case: reloc table bounds
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn reloc_off_before_header_rejected() {
+        let mut buf = build_valid_container();
+        // reloc_off is at offset 44 in the 72-byte header.
+        // Set it to 10 (inside the header area).
+        buf[44..48].copy_from_slice(&10u32.to_le_bytes());
+        assert!(Container::parse(&buf).is_err(),
+            "reloc_off inside header must be rejected");
+    }
+
+    #[test]
+    fn reloc_count_overflow_rejected() {
+        let mut buf = build_valid_container();
+        // reloc_count is at offset 40 in the 72-byte header.
+        buf[40..44].copy_from_slice(&u32::MAX.to_le_bytes());
+        // This should be rejected by the validate step.
+        assert!(Container::parse(&buf).is_err(),
+            "reloc_count overflow must be rejected");
+    }
+
 }

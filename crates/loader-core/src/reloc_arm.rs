@@ -12,11 +12,12 @@
 //! Thumb-bit handling: function symbols must have LSB=1 when
 //! written as code pointers.  The caller should set the Thumb
 //! bit before passing `sym_addr`.
+use crate::error::LoadError;
 
 use lmod::reloc::RelocKind;
 
 /// Error returned for unsupported relocation kinds.
-pub const E_RELOC_UNSUPPORTED: u32 = 5204;
+pub use crate::error::E_RELOC_UNSUPPORTED;
 
 /// Apply one ARM Thumb import relocation.
 ///
@@ -34,13 +35,13 @@ pub fn apply_import_reloc(
     kind: u8,
     sym_addr: u64,
     addend: i64,
-) -> Result<(), u32> {
+) -> Result<(), LoadError> {
     let site_addr = (buf.as_ptr() as u64).wrapping_add(site_off as u64);
     match kind {
         k if k == RelocKind::ArmAbs32 as u8 => {
             // R_ARM_ABS32: S + A  (write 4 bytes LE)
             if site_off + 4 > buf.len() {
-                return Err(E_RELOC_UNSUPPORTED);
+                return Err(LoadError::RelocUnsupported);
             }
             let val = sym_addr.wrapping_add(addend as u64) as u32;
             buf[site_off..site_off + 4].copy_from_slice(&val.to_le_bytes());
@@ -49,7 +50,7 @@ pub fn apply_import_reloc(
         k if k == RelocKind::ArmRel32 as u8 => {
             // R_ARM_REL32: S + A - P  (write 4 bytes LE)
             if site_off + 4 > buf.len() {
-                return Err(E_RELOC_UNSUPPORTED);
+                return Err(LoadError::RelocUnsupported);
             }
             let val = (sym_addr as i64)
                 .wrapping_add(addend)
@@ -62,7 +63,7 @@ pub fn apply_import_reloc(
             // Offset = S + A - P, 4-byte Thumb-2 BL/BLX.
             // The offset is encoded as a signed 25-bit value in halfwords.
             if site_off + 4 > buf.len() {
-                return Err(E_RELOC_UNSUPPORTED);
+                return Err(LoadError::RelocUnsupported);
             }
             let offset = (sym_addr as i64)
                 .wrapping_add(addend)
@@ -70,13 +71,13 @@ pub fn apply_import_reloc(
             // For Thumb BL, PC is ahead by 4 bytes (instruction is 4 bytes).
             let adj_offset = offset - 4;
             encode_thumb_bl(&mut buf[site_off..site_off + 4], adj_offset)
-                .map_err(|_| E_RELOC_UNSUPPORTED)?;
+                .map_err(|_| LoadError::RelocUnsupported)?;
             Ok(())
         }
         k if k == RelocKind::ArmThmJump24 as u8 => {
             // R_ARM_THM_JUMP24: B/BL.W instruction.
             if site_off + 4 > buf.len() {
-                return Err(E_RELOC_UNSUPPORTED);
+                return Err(LoadError::RelocUnsupported);
             }
             let offset = (sym_addr as i64)
                 .wrapping_add(addend)
@@ -84,10 +85,10 @@ pub fn apply_import_reloc(
             // For Thumb B/BL, PC is ahead by 4 bytes.
             let adj_offset = offset - 4;
             encode_thumb_bl(&mut buf[site_off..site_off + 4], adj_offset)
-                .map_err(|_| E_RELOC_UNSUPPORTED)?;
+                .map_err(|_| LoadError::RelocUnsupported)?;
             Ok(())
         }
-        _ => Err(E_RELOC_UNSUPPORTED),
+        _ => Err(LoadError::RelocUnsupported),
     }
 }
 
@@ -146,6 +147,43 @@ fn encode_thumb_bl(insn: &mut [u8], offset: i64) -> Result<(), ()> {
     insn[0..2].copy_from_slice(&hw0.to_le_bytes());
     insn[2..4].copy_from_slice(&hw1.to_le_bytes());
     Ok(())
+}
+
+/// Decode a Thumb BL (branch-and-link) instruction back to a byte offset.
+/// The reverse of `encode_thumb_bl`.
+fn decode_thumb_bl(insn: &[u8]) -> Result<i64, ()> {
+    if insn.len() < 4 { return Err(()); }
+    let hw0 = u16::from_le_bytes([insn[0], insn[1]]);
+    let hw1 = u16::from_le_bytes([insn[2], insn[3]]);
+
+    // Check fixed bits: hw0[15:11] = 11110, hw0[7:6] = 11?, hw0[5] = 1
+    if (hw0 & 0xF800) != 0xF000 { return Err(()); }
+    if (hw0 & 0x00C0) != 0x00C0 { return Err(()); }
+    if (hw0 & 0x0020) != 0x0020 { return Err(()); }
+    // hw1[15:11] = 11111, hw1[14] = 1, hw1[12] = 1
+    if (hw1 & 0xF800) != 0xF800 { return Err(()); }
+    if (hw1 & 0x5000) != 0x5000 { return Err(()); }
+
+    let s: u32 = ((hw0 >> 10) & 1) as u32;
+    let j1: u32 = ((hw0 >> 6) & 1) as u32;
+    let j2: u32 = ((hw0 >> 7) & 1) as u32;
+    let imm10: u32 = (hw0 & 0x3FF) as u32;
+    let imm11: u32 = (hw1 & 0x7FF) as u32;
+
+    // I1 = J1 ^ (S ^ 1), I2 = J2 ^ (S ^ 1)
+    let i1 = j1 ^ (s ^ 1);
+    let i2 = j2 ^ (s ^ 1);
+
+    // Reconstruct 24-bit signed offset: S : I1 : I2 : imm10 : imm11 : 0
+    let half: u32 = (s << 23) | (i1 << 22) | (i2 << 21) | (imm10 << 11) | imm11;
+    // Sign-extend from 24 bits.
+    let half_signed = if half & 0x800000 != 0 {
+        half | 0xFF00_0000u32
+    } else {
+        half
+    };
+
+    Ok((half_signed as i64) * 2) // convert halfwords back to bytes
 }
 
 /// Apply the Thumb-bit (LSB=1) to a function address.
@@ -313,5 +351,53 @@ mod tests {
         // offset = 1 (odd) → should fail encoding
         let err = apply_import_reloc(&mut buf, 0, 5, p + 1, 0).unwrap_err();
         assert_eq!(err, E_RELOC_UNSUPPORTED);
+    }
+
+    #[test]
+    fn thumb_bl_encodes_known_patterns() {
+        // Verify encode_thumb_bl produces the correct bit patterns.
+        // offset = 0 → both halfwords zero except fixed bits
+        let mut insn = [0u8; 4];
+        encode_thumb_bl(&mut insn, 0).unwrap();
+        let hw0 = u16::from_le_bytes([insn[0], insn[1]]);
+        let hw1 = u16::from_le_bytes([insn[2], insn[3]]);
+        // hw0 bits 15:12 = 1111, bit 11 = 1, bits 9:8 = 11, bit 5 = 1
+        assert_ne!(hw0 & 0xF800, 0, "hw0 fixed bits");
+        assert_ne!(hw1 & 0xF800, 0, "hw1 fixed bits");
+        // offset = 4: hw = 2, imm11 = 2, rest zero
+        let mut insn = [0u8; 4];
+        encode_thumb_bl(&mut insn, 4).unwrap();
+        let hw1 = u16::from_le_bytes([insn[2], insn[3]]);
+        assert_eq!(hw1 & 0x7FF, 2, "imm11 for offset 4 must be 2");
+    }
+
+    #[test]
+    fn thumb_bl_encode_decode_roundtrip() {
+        // Direct encode→decode round-trip via encode_thumb_bl / decode_thumb_bl.
+        let cases: [i64; 8] = [4, -4, 0, 0x200, -0x200, 0x00FF_FFFE, -0x0100_0000, 0x1000];
+        for &off in &cases {
+            let mut insn = [0u8; 4];
+            assert!(encode_thumb_bl(&mut insn, off).is_ok(),
+                "encode_thumb_bl({off:#x}) must succeed");
+            let decoded = decode_thumb_bl(&insn).unwrap_or(i64::MIN);
+            assert_eq!(decoded, off,
+                "encode→decode round-trip failed for offset {off:#x}, got {decoded:#x}");
+        }
+    }
+
+    #[test]
+    fn thumb_bl_out_of_range_rejected() {
+        let mut insn = [0u8; 4];
+        assert!(encode_thumb_bl(&mut insn, 0x0100_0000).is_err(),
+            "BL offset +16MB+1 must be rejected");
+        assert!(encode_thumb_bl(&mut insn, -0x0100_0000 - 2).is_err(),
+            "BL offset -16MB-2 must be rejected");
+    }
+
+    #[test]
+    fn thumb_bl_misaligned_rejected() {
+        let mut insn = [0u8; 4];
+        assert!(encode_thumb_bl(&mut insn, 1).is_err(),
+            "BL misaligned offset must be rejected");
     }
 }

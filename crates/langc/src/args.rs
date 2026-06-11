@@ -1,8 +1,8 @@
-use codegen_core::{EmitMode, Target};
+use codegen_core::{EmitMode, FeatureSet, Target};
 use hosted::{args::RawArgs, cstr, io};
 use semantics::typecheck::ChecksMode;
 
-pub const HELP: &[u8] = b"langc (tyu_lang) v0.1.0\n\nUSAGE:\n  langc [options] <file.mod|file.def>\n\nOPTIONS:\n  --help, -h              Print help\n  --emit=ast              Parse and dump AST (inspection)\n  --emit=ir               Typecheck and dump IR (inspection)\n  --emit=tc               Stack-trace typecheck dump (inspection)\n  --emit=asm              Emit assembly text (inspection only, not assemblable standalone)\n  --emit=obj              Emit relocatable object file (production output)\n  --lib                   Compile as a library (no main required, --emit=obj only)\n  -g                      Enable trap-with-location stubs\n  -I <path>               Add include path\n  --checks=off|contracts|all  Checks insertion mode\n  --allow-raw-casts       Enable raw pointer casts\n  --sysroot=<path>        Sysroot root directory\n  --out-dir=<path>        Output directory (--emit=obj)\n  --target=<triple>       Target triple, required for --emit=obj\n                          Supported: x86_64-unknown-linux-gnu\n                                     x86_64-unknown-none\n                                     armv7m-unknown-none\n\n";
+pub const HELP: &[u8] = b"langc (tyu_lang) v0.1.0\n\nUSAGE:\n  langc [options] <file.mod|file.def>\n\nOPTIONS:\n  --help, -h                  Print help\n  --emit=ast                  Parse and dump AST (inspection)\n  --emit=ir                   Typecheck and dump IR (inspection)\n  --emit=tc                   Stack-trace typecheck dump (inspection)\n  --emit=asm                  Emit assembly text (inspection only, not assemblable standalone)\n  --emit=obj                  Emit relocatable object file (production output)\n  --lib                       Compile as a library (no main required, --emit=obj only)\n  -g                          Enable trap-with-location stubs\n  -I <path>                   Add include path\n  --checks=off|contracts|all  Checks insertion mode\n  --allow-raw-casts           Enable raw pointer casts\n  --features=<csv>            Image features to enable (default: all) [concurrency, module-loading]\n  --no-default-features       Start from empty feature set\n  --sysroot=<path>            Sysroot root directory\n  --out-dir=<path>            Output directory (--emit=obj)\n  --target=<triple>           Target triple, required for --emit=obj\n                              Supported: x86_64-unknown-linux-gnu\n                                         x86_64-unknown-none\n                                         armv7m-unknown-none\n                                         riscv32-unknown-none\n\n";
 
 /// Validated compiler configuration.
 pub struct Config<'a> {
@@ -17,6 +17,7 @@ pub struct Config<'a> {
     pub include_len: usize,
     pub sysroot: Option<&'a [u8]>,
     pub out_dir: Option<&'a [u8]>,
+    pub features: FeatureSet,
 }
 
 pub enum ParseResult<'a> {
@@ -62,6 +63,8 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]]) -> (ParseResult<'a>, bool) {
     let mut sysroot: Option<&[u8]> = None;
     let mut out_dir: Option<&[u8]> = None;
     let mut target: Option<Target> = None;
+    let mut features = FeatureSet::all();
+    let mut no_default_features = false;
 
     let mut i = 1usize;
     while i < args.len() {
@@ -121,6 +124,38 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]]) -> (ParseResult<'a>, bool) {
         }
         if a == b"-g" {
             debug_trap_loc = true;
+            i += 1;
+            continue;
+        }
+        if a == b"--no-default-features" {
+            no_default_features = true;
+            features = FeatureSet::empty();
+            i += 1;
+            continue;
+        }
+        if a.starts_with(b"--features=") {
+            let csv = &a[b"--features=".len()..];
+            let base = if no_default_features {
+                FeatureSet::empty()
+            } else {
+                FeatureSet::all()
+            };
+            if csv.is_empty() {
+                features = base;
+            } else {
+                let mut set = base;
+                for chunk in csv.split(|&b| b == b',') {
+                    let s = core::str::from_utf8(chunk).unwrap_or("");
+                    match codegen_core::Feature::parse(s) {
+                        Some(f) => set = set.with(f),
+                        None => {
+                            emit_error(1007, b"unknown --features value");
+                            return (ParseResult::Error(2), true);
+                        }
+                    }
+                }
+                features = set;
+            }
             i += 1;
             continue;
         }
@@ -235,6 +270,7 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]]) -> (ParseResult<'a>, bool) {
             include_len,
             sysroot,
             out_dir,
+            features,
         }),
         false,
     )
@@ -423,5 +459,72 @@ mod tests {
     #[test]
     fn unknown_flag_ignored() {
         ok(&[b"langc", b"--bogus-flag", b"--emit=ast", b"x.mod"]);
+    }
+
+    #[test]
+    fn features_default_all() {
+        let cfg = ok(&[b"langc", b"--emit=ast", b"x.mod"]);
+        assert!(cfg.features.contains(codegen_core::Feature::Concurrency));
+        assert!(cfg.features.contains(codegen_core::Feature::ModuleLoading));
+    }
+
+    #[test]
+    fn features_parse_csv() {
+        let cfg = ok(&[
+            b"langc",
+            b"--features=concurrency",
+            b"--emit=ast",
+            b"x.mod",
+        ]);
+        assert!(cfg.features.contains(codegen_core::Feature::Concurrency));
+        assert!(!cfg.features.contains(codegen_core::Feature::ModuleLoading));
+    }
+
+    #[test]
+    fn features_multiple_csv() {
+        let cfg = ok(&[
+            b"langc",
+            b"--features=concurrency,module-loading",
+            b"--emit=ast",
+            b"x.mod",
+        ]);
+        assert!(cfg.features.contains(codegen_core::Feature::Concurrency));
+        assert!(cfg.features.contains(codegen_core::Feature::ModuleLoading));
+    }
+
+    #[test]
+    fn features_no_default() {
+        let cfg = ok(&[
+            b"langc",
+            b"--no-default-features",
+            b"--features=concurrency",
+            b"--emit=ast",
+            b"x.mod",
+        ]);
+        assert!(cfg.features.contains(codegen_core::Feature::Concurrency));
+        assert!(!cfg.features.contains(codegen_core::Feature::ModuleLoading));
+    }
+
+    #[test]
+    fn features_no_default_empty() {
+        let cfg = ok(&[
+            b"langc",
+            b"--no-default-features",
+            b"--emit=ast",
+            b"x.mod",
+        ]);
+        assert!(!cfg.features.contains(codegen_core::Feature::Concurrency));
+        assert!(!cfg.features.contains(codegen_core::Feature::ModuleLoading));
+    }
+
+    #[test]
+    fn features_unknown_value_errs() {
+        let code = err(&[
+            b"langc",
+            b"--features=bogus",
+            b"--emit=ast",
+            b"x.mod",
+        ]);
+        assert_eq!(code, 2);
     }
 }

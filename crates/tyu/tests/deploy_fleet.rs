@@ -31,12 +31,17 @@ fn deploy_fleet_produces_encrypted_signed_artifact() {
     if !require_tools(&["langc", "fasm", "ld", "lmod-pack", "lmod-encrypt", "lmod-sign"]) { return; }
     ensure_tools();
 
+    struct EnvGuard(&'static str, &'static str);
+    impl Drop for EnvGuard { fn drop(&mut self) { std::env::remove_var(self.0); } }
+    let _g = EnvGuard("TYU_D1_KEK", "TYU_D1_SIGN");
+    std::env::set_var("TYU_D1_KEK", hex::encode([0xab; 32]));
+    std::env::set_var("TYU_D1_SIGN", hex::encode([0xab; 32]));
+
     let dir = temp_dir("d1");
-    let main_mod = dir.join("main.mod");
+    let main_mod = dir.join("Main.mod");
     std::fs::write(&main_mod, PASS_MOD).unwrap();
     let sysroot = workspace_root().join("sysroot");
     let out_dir = dir.join("out");
-    let kek = hex::encode([0xabu8; 32]);
 
     let output = Command::new(tyu_exe())
         .args([
@@ -45,8 +50,9 @@ fn deploy_fleet_produces_encrypted_signed_artifact() {
             &format!("--sysroot={}", sysroot.display()),
             &format!("--out-dir={}", out_dir.display()),
             "--encrypt=fleet",
-            &format!("--key-encrypt={}", kek),
+            "--key-encrypt=env:TYU_D1_KEK",
             "--sign",
+            "--key-sign=env:TYU_D1_SIGN",
             &main_mod.to_string_lossy(),
         ])
         .output().expect("tyu deploy");
@@ -69,12 +75,17 @@ fn deploy_fleet_runs_under_qemu() {
     if !require_tools(&["langc", "fasm", "ld", "qemu-system-x86_64", "lmod-pack", "lmod-encrypt", "lmod-sign"]) { return; }
     ensure_tools();
 
+    struct EnvGuard(&'static str, &'static str);
+    impl Drop for EnvGuard { fn drop(&mut self) { std::env::remove_var(self.0); } }
+    let _g = EnvGuard("TYU_D2_KEK", "TYU_D2_SIGN");
+    std::env::set_var("TYU_D2_KEK", hex::encode([0xab; 32]));
+    std::env::set_var("TYU_D2_SIGN", hex::encode([0xab; 32]));
+
     let dir = temp_dir("d2");
-    let main_mod = dir.join("main.mod");
+    let main_mod = dir.join("Main.mod");
     std::fs::write(&main_mod, PASS_MOD).unwrap();
     let sysroot = workspace_root().join("sysroot");
     let out_dir = dir.join("out");
-    let kek = hex::encode([0xabu8; 32]);
 
     let output = Command::new(tyu_exe())
         .args([
@@ -83,8 +94,9 @@ fn deploy_fleet_runs_under_qemu() {
             &format!("--sysroot={}", sysroot.display()),
             &format!("--out-dir={}", out_dir.display()),
             "--encrypt=fleet",
-            &format!("--key-encrypt={}", kek),
+            "--key-encrypt=env:TYU_D2_KEK",
             "--sign",
+            "--key-sign=env:TYU_D2_SIGN",
             &main_mod.to_string_lossy(),
         ])
         .output().expect("tyu deploy");
@@ -113,7 +125,7 @@ fn deploy_fleet_missing_key_errors() {
     ensure_tools();
 
     let dir = temp_dir("d5");
-    let main_mod = dir.join("main.mod");
+    let main_mod = dir.join("Main.mod");
     std::fs::write(&main_mod, PASS_MOD).unwrap();
     let sysroot = workspace_root().join("sysroot");
     let out_dir = dir.join("out");
@@ -146,7 +158,7 @@ fn deploy_none_is_plaintext() {
     ensure_tools();
 
     let dir = temp_dir("d8");
-    let main_mod = dir.join("main.mod");
+    let main_mod = dir.join("Main.mod");
     std::fs::write(&main_mod, PASS_MOD).unwrap();
     let sysroot = workspace_root().join("sysroot");
     let out_dir = dir.join("out");
@@ -184,7 +196,7 @@ fn deploy_fleet_key_from_env() {
     std::env::set_var("TYU_KEK", hex::encode([0xab; 32]));
 
     let dir = temp_dir("d9");
-    let main_mod = dir.join("main.mod");
+    let main_mod = dir.join("Main.mod");
     std::fs::write(&main_mod, PASS_MOD).unwrap();
     let sysroot = workspace_root().join("sysroot");
     let out_dir = dir.join("out");

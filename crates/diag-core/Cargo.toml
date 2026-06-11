@@ -1,0 +1,13 @@
+[package]
+name = "diag-core"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = []
+std = ["lmod"]
+
+[lib]
+
+[dependencies]
+lmod = { path = "../lmod", optional = true }

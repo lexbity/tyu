@@ -17,6 +17,7 @@ fn main() {
     match args::parse() {
         args::Command::Build(mut build_args) => {
             apply_project_to_build(&mut build_args, &project_manifest, &cwd);
+            resolve_profile(&mut build_args.feature_set, build_args.profile.as_deref(), &project_manifest);
             match build::build(&build_args) {
                 Ok(image) => println!("{}", image.display()),
                 Err(e) => { eprintln!("tyu: build error: {}", e); std::process::exit(1); }
@@ -24,6 +25,7 @@ fn main() {
         }
         args::Command::Run(mut run_args) => {
             apply_project_to_run(&mut run_args, &project_manifest, &cwd);
+            resolve_profile(&mut run_args.feature_set, run_args.profile.as_deref(), &project_manifest);
             if let Err(e) = run_cmd::run(&run_args) {
                 eprintln!("tyu: run error: {}", e);
                 std::process::exit(1);
@@ -31,6 +33,15 @@ fn main() {
         }
         args::Command::Test(mut test_args) => {
             apply_project_to_test(&mut test_args, &project_manifest, &cwd);
+            resolve_profile(&mut test_args.feature_set, test_args.profile.as_deref(), &project_manifest);
+            eprintln!(
+                "tyu: test features: [{}]",
+                {
+                    let mut buf = [""; 8];
+                    let n = test_args.feature_set.write_flags(&mut buf);
+                    buf[..n].join(", ")
+                }
+            );
             if let Err(e) = test_cmd::run(&test_args) {
                 eprintln!("tyu: test error: {}", e);
                 std::process::exit(1);
@@ -64,6 +75,33 @@ fn main() {
             }
         }
         args::Command::Help => {}
+    }
+}
+
+/// Resolve a profile name to a `FeatureSet`, printing the result.
+/// Falls back to `FeatureSet::all()` (implicit default) on error.
+fn resolve_profile(
+    feature_set: &mut codegen_core::FeatureSet,
+    profile_name: Option<&str>,
+    manifest: &tyu::project::ProjectManifest,
+) {
+    match tyu::project::resolve_feature_set(profile_name, manifest) {
+        Ok((set, name)) => {
+            *feature_set = set;
+            let mut flag_buf = [""; 8];
+            let n = set.write_flags(&mut flag_buf);
+            let profile_label = name.as_deref().unwrap_or("(implicit all-features-on)");
+            eprintln!(
+                "tyu: resolved profile '{}' → features: [{}]",
+                profile_label,
+                flag_buf[..n].join(", "),
+            );
+        }
+        Err(e) => {
+            eprintln!("tyu: profile resolution error: {}", e);
+            eprintln!("tyu: falling back to all-features-on default");
+            *feature_set = codegen_core::FeatureSet::all();
+        }
     }
 }
 

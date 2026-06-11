@@ -178,9 +178,34 @@ fn resolve_one(
     })
 }
 
-/// Find a binary in PATH.
+/// Resolve a tool binary by name.
+///
+/// Checks, in order:
+///   1. The workspace `target/debug/<name>` (development convenience).
+///   2. `PATH` lookup.
+///
+/// Returns a clean `Err` if not found.
+pub fn resolve_tool(name: &str) -> Result<PathBuf, String> {
+    // Development fallback: check workspace target/debug (avoids requiring
+    // every contributor to add CARGO_TARGET_DIR/debug to their PATH).
+    let workspace_debug = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent().unwrap()
+        .parent().unwrap()
+        .join("target")
+        .join("debug")
+        .join(name);
+    if workspace_debug.is_file() {
+        return Ok(workspace_debug);
+    }
+
+    find_in_path(name).ok_or_else(|| format!("tool '{name}' not found in PATH"))
+}
+
+/// Find a binary — first in PATH, then in `target/debug/` (for workspace-built
+/// tools like `langc` that are not on PATH but are built by `cargo build`).
 pub fn find_in_path(name: &str) -> Option<PathBuf> {
-    std::env::var_os("PATH").and_then(|path| {
+    // Check PATH.
+    if let Some(p) = std::env::var_os("PATH").and_then(|path| {
         for dir in std::env::split_paths(&path) {
             let candidate = dir.join(name);
             if candidate.is_file() {
@@ -188,7 +213,17 @@ pub fn find_in_path(name: &str) -> Option<PathBuf> {
             }
         }
         None
-    })
+    }) {
+        return Some(p);
+    }
+    // Fall back to target/debug/ for workspace-built binaries.
+    let ws = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()?
+        .parent()?
+        .join("target")
+        .join("debug")
+        .join(name);
+    if ws.is_file() { Some(ws) } else { None }
 }
 
 /// Probe a tool's version by running `<path> --version`.
