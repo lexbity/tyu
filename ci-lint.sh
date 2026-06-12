@@ -167,9 +167,30 @@ if [ $# -eq 0 ]; then
 fi
 
 # --- Function stubs for pre-existing missing checkers ---
-check_aad_reimplementation() { return 0; }
-check_test_count() { return 0; }
-check_source_patterns() { return 0; }
+# --- 11. 50xx error code corpus coverage ---
+# Every TcError code in the 50xx band must have at least one test fixture
+# (either as error[E NNNN] in expected-stderr or via assert!(contains("NNNN"))).
+check_50xx_corpus() {
+    local rc=0
+    # 5024 (BorrowLedgerFull) excluded — ledger cap 64 is a safety net; tighter
+    # limits (resource cap 64, sig input cap 8, struct field cap 32, local cap 64)
+    # prevent reaching 65 distinct borrows in practice.
+    local codes="5001 5002 5003 5004 5010 5011 5012 5020 5021 5022 5023 5030 5031 5040 5050 5051 3523"
+    for code in $codes; do
+        local error_match=$(grep -rn "error\[E${code}\]" crates/tooling-tests/tests/ --include="*.rs" 2>/dev/null | wc -l)
+        local contains_match=$(grep -rn "contains.*\"${code}\"" crates/tooling-tests/tests/ --include="*.rs" 2>/dev/null | wc -l)
+        # Also check for numeric references like `assert_eq!(..., ${code})` or `${code},`
+        local numeric_match=$(grep -rn "[^0-9]${code}[,)]" crates/tooling-tests/tests/ --include="*.rs" 2>/dev/null | grep -v "//\|TODO\|FIXME" | wc -l)
+        if [ "$error_match" -eq 0 ] && [ "$contains_match" -eq 0 ] && [ "$numeric_match" -eq 0 ]; then
+            msg $RED "  E${code}: missing test fixture"
+            rc=1
+        fi
+    done
+    if [ "$rc" -eq 0 ]; then
+        msg $GREEN "  50xx corpus: all codes have test coverage"
+    fi
+    return $rc
+}
 
 # --- 9. M4 borrow exclusivity survey ---
 check_m4_survey() {
@@ -197,6 +218,7 @@ check_syntax_survey() {
 
 check_m4_survey || overall_rc=1
 check_syntax_survey || overall_rc=1
+check_50xx_corpus || overall_rc=1
 
 if [ "$overall_rc" -eq 0 ]; then
     msg $GREEN "All lint checks passed."
