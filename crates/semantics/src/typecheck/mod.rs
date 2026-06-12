@@ -1,3 +1,4 @@
+pub mod builtins;
 pub mod db;
 pub mod error;
 pub mod irgen;
@@ -8,6 +9,7 @@ pub mod util;
 pub mod value;
 
 // Re-export public API types and functions
+pub use crate::typecheck::builtins::builtin_words;
 pub use crate::typecheck::db::SubtypeInfo;
 pub use crate::typecheck::error::{ChecksMode, Output, TcError};
 pub use crate::typecheck::parse::parse_word_sig;

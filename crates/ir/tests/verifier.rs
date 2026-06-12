@@ -190,6 +190,7 @@ fn verifier_type_pool_baseline_indices_match_constants() {
         types.get(TY_PTR_MUT.0 as usize).unwrap().as_bytes(),
         b"ptr_mut"
     );
+    assert_eq!(types.get(TY_MMIO.0 as usize).unwrap().as_bytes(), b"mmio");
 }
 
 // ---------------------------------------------------------------------------
@@ -995,6 +996,148 @@ fn verify_handles_stack_overflow() {
     assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9099);
 }
 
+#[test]
+fn verify_accepts_stack_64_exact() {
+    // Exactly 64 pushes should succeed (pop them all before Ret).
+    let mut ops: FixedVec<Op, 96> = FixedVec::new();
+    for _ in 0..30 {
+        ops.push(Op { kind: OpKind::ConstI64(0), span: Span::UNKNOWN }).unwrap();
+    }
+    for _ in 0..30 {
+        ops.push(Op { kind: OpKind::Drop { ty: TY_I64 }, span: Span::UNKNOWN }).unwrap();
+    }
+    ops.push(Op { kind: OpKind::Ret, span: Span::UNKNOWN }).unwrap();
+    let mut blocks: FixedVec<Block, 16> = FixedVec::new();
+    blocks.push(Block { id: BlockId(0), entry_stack: FixedVec::new(), ops }).unwrap();
+    let w = Word {
+        name: atom(b"w"),
+        sig: Sig::empty(),
+        performs: EffectSet::empty(),
+        requires: CapSet::empty(),
+        bound: StackBound::ID,
+        entry: BlockId(0),
+        types: baseline_types(),
+        type_sizes: baseline_type_sizes(),
+        blocks,
+    };
+    ir::verify_word(&w).unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Asymmetric BrIf: different then/else targets
+// ---------------------------------------------------------------------------
+
+fn word_with_two_blocks(b0_ops: &[OpKind], b1_ops: &[OpKind]) -> Word {
+    let mut ops0: FixedVec<Op, 96> = FixedVec::new();
+    for &kind in b0_ops {
+        ops0.push(Op { kind, span: Span::UNKNOWN }).unwrap();
+    }
+    let mut ops1: FixedVec<Op, 96> = FixedVec::new();
+    for &kind in b1_ops {
+        ops1.push(Op { kind, span: Span::UNKNOWN }).unwrap();
+    }
+    let mut blocks: FixedVec<Block, 16> = FixedVec::new();
+    blocks.push(Block { id: BlockId(0), entry_stack: FixedVec::new(), ops: ops0 }).unwrap();
+    blocks.push(Block { id: BlockId(1), entry_stack: FixedVec::new(), ops: ops1 }).unwrap();
+    Word {
+        name: atom(b"w"),
+        sig: Sig::empty(),
+        performs: EffectSet::empty(),
+        requires: CapSet::empty(),
+        bound: StackBound::ID,
+        entry: BlockId(0),
+        types: baseline_types(),
+        type_sizes: baseline_type_sizes(),
+        blocks,
+    }
+}
+
+#[test]
+fn verify_accepts_brif_asymmetric() {
+    // BrIf with different then/else targets where both branches lead to
+    // blocks with consistent stack state.
+    let w = word_with_two_blocks(
+        &[OpKind::ConstBool(true), OpKind::BrIf { then_tgt: BlockId(1), else_tgt: BlockId(1) }],
+        &[OpKind::Ret],
+    );
+    ir::verify_word(&w).unwrap();
+}
+
+#[test]
+fn verify_rejects_brif_asymmetric_mismatch() {
+    // BrIf where the two targets have incompatible stack depths.
+    // b0 pushes bool, then i64, brIf — stack is [bool, i64] at brIf.
+    // BrIf pops bool as condition, leaving [i64].
+    // then_tgt=1 expects empty stack → mismatch.
+    // else_tgt=2 expects 1 i64 → match on that side.
+    let mut ops0: FixedVec<Op, 96> = FixedVec::new();
+    ops0.push(Op { kind: OpKind::ConstI64(0), span: Span::UNKNOWN }).unwrap();
+    ops0.push(Op { kind: OpKind::ConstBool(true), span: Span::UNKNOWN }).unwrap();
+    ops0.push(Op { kind: OpKind::BrIf { then_tgt: BlockId(1), else_tgt: BlockId(2) }, span: Span::UNKNOWN }).unwrap();
+    let mut ops1: FixedVec<Op, 96> = FixedVec::new();
+    ops1.push(Op { kind: OpKind::Ret, span: Span::UNKNOWN }).unwrap();
+    let mut ops2: FixedVec<Op, 96> = FixedVec::new();
+    ops2.push(Op { kind: OpKind::Drop { ty: TY_I64 }, span: Span::UNKNOWN }).unwrap();
+    ops2.push(Op { kind: OpKind::Ret, span: Span::UNKNOWN }).unwrap();
+    let mut entry_stack = FixedVec::new();
+    entry_stack.push(TY_I64).unwrap();
+    let mut blocks: FixedVec<Block, 16> = FixedVec::new();
+    blocks.push(Block { id: BlockId(0), entry_stack: FixedVec::new(), ops: ops0 }).unwrap();
+    blocks.push(Block { id: BlockId(1), entry_stack: FixedVec::new(), ops: ops1 }).unwrap();
+    blocks.push(Block { id: BlockId(2), entry_stack, ops: ops2 }).unwrap();
+    let w = Word {
+        name: atom(b"w"),
+        sig: Sig::empty(),
+        performs: EffectSet::empty(),
+        requires: CapSet::empty(),
+        bound: StackBound::ID,
+        entry: BlockId(0),
+        types: baseline_types(),
+        type_sizes: baseline_type_sizes(),
+        blocks,
+    };
+    // BrIf then_tgt=1 expects empty stack, else_tgt=2 expects 1 i64 → mismatch
+    // The verifier reports 9031 (BrIf target stack depth mismatch) when
+    // the two branches disagree on how many values they expect.
+    let err = ir::verify_word(&w).unwrap_err();
+    assert_eq!(err.code(), 9031);
+}
+
+// ---------------------------------------------------------------------------
+// Back-edge test: block branching to an earlier block
+// ---------------------------------------------------------------------------
+
+#[test]
+fn verify_accepts_back_edge() {
+    // Block 0 branches to block 1; block 1 branches back to block 0.
+    let mut b0_ops: FixedVec<Op, 96> = FixedVec::new();
+    b0_ops.push(Op { kind: OpKind::ConstI64(0), span: Span::UNKNOWN }).unwrap();
+    b0_ops.push(Op { kind: OpKind::Br { target: BlockId(1) }, span: Span::UNKNOWN }).unwrap();
+    let mut b1_ops: FixedVec<Op, 96> = FixedVec::new();
+    b1_ops.push(Op { kind: OpKind::Drop { ty: TY_I64 }, span: Span::UNKNOWN }).unwrap();
+    b1_ops.push(Op { kind: OpKind::Br { target: BlockId(0) }, span: Span::UNKNOWN }).unwrap();
+    // b0 entry empty; ConstI64 pushes i64 then Br goes to b1 with [i64].
+    // b1 entry matches [i64]; Drop removes it, Br returns to b0 with [].
+    let mut blocks: FixedVec<Block, 16> = FixedVec::new();
+    let mut b1_entry = FixedVec::new();
+    b1_entry.push(TY_I64).unwrap();
+    blocks.push(Block { id: BlockId(0), entry_stack: FixedVec::new(), ops: b0_ops }).unwrap();
+    blocks.push(Block { id: BlockId(1), entry_stack: b1_entry, ops: b1_ops }).unwrap();
+    let w = Word {
+        name: atom(b"w"),
+        sig: Sig::empty(),
+        performs: EffectSet::empty(),
+        requires: CapSet::empty(),
+        bound: StackBound::ID,
+        entry: BlockId(0),
+        types: baseline_types(),
+        type_sizes: baseline_type_sizes(),
+        blocks,
+    };
+    // The verifier must not loop forever on the back-edge.
+    ir::verify_word(&w).unwrap();
+}
+
 // ---------------------------------------------------------------------------
 // Accept valid ops
 // ---------------------------------------------------------------------------
@@ -1188,18 +1331,10 @@ fn verify_accepts_check_subtype() {
 
 #[cfg(test)]
 mod proptests {
-    use ir::{CapSet, EffectSet, OpKind, StackBound, TY_I64};
+    use ir::{CapSet, EffectSet, OpKind, StackBound, TY_I64, TY_BOOL};
     use proptest::prelude::*;
 
     fn make_word(ops: &[OpKind]) -> ir::Word {
-        let mut types: frontend::fixed::FixedVec<ir::Atom, 64> = frontend::fixed::FixedVec::new();
-        types.push(ir::Atom::new(b"").unwrap()).unwrap();
-        types.push(ir::Atom::new(b"i64").unwrap()).unwrap();
-        types.push(ir::Atom::new(b"bool").unwrap()).unwrap();
-        let mut sizes: frontend::fixed::FixedVec<u32, 64> = frontend::fixed::FixedVec::new();
-        sizes.push(0).unwrap();
-        sizes.push(8).unwrap();
-        sizes.push(1).unwrap();
         let mut opv: frontend::fixed::FixedVec<ir::Op, 96> = frontend::fixed::FixedVec::new();
         for kind in ops {
             if opv.len() >= 95 {
@@ -1226,13 +1361,25 @@ mod proptests {
             requires: CapSet::empty(),
             bound: StackBound::ID,
             entry: ir::BlockId(0),
-            types,
-            type_sizes: sizes,
+            types: super::baseline_types(),
+            type_sizes: super::baseline_type_sizes(),
             blocks,
         }
     }
 
-    fn arb_simple_op() -> impl Strategy<Value = OpKind> {
+    fn arb_type_id() -> impl Strategy<Value = ir::TypeId> {
+        prop_oneof![
+            Just(TY_I64),
+            Just(TY_BOOL),
+            Just(ir::TY_EMPTY),
+            Just(ir::TY_STR),
+            Just(ir::TY_PTR),
+            Just(ir::TY_PTR_MUT),
+            Just(ir::TY_MMIO),
+        ]
+    }
+
+    fn arb_wide_op() -> impl Strategy<Value = OpKind> {
         prop_oneof![
             Just(OpKind::AddI64),
             Just(OpKind::SubI64),
@@ -1243,30 +1390,48 @@ mod proptests {
             Just(OpKind::Ret),
             any::<i64>().prop_map(OpKind::ConstI64),
             any::<bool>().prop_map(OpKind::ConstBool),
+            // Br with arbitrary u16 target — may produce invalid targets but
+            // the verifier must not panic, only return Err.
+            any::<u16>().prop_map(|id| OpKind::Br { target: ir::BlockId(id) }),
+            // Drop/Dup/Cast with arbitrary TypeId
+            arb_type_id().prop_map(|ty| OpKind::Drop { ty }),
+            arb_type_id().prop_map(|ty| OpKind::Dup { ty }),
         ]
     }
 
     proptest! {
-        /// Never panics on any sequence of simple ops.
+        /// Never panics on any sequence of widened ops (ir:M3).
+        /// Accepts any verdict (Ok or Err) — the invariant is no panic.
         #[test]
-        fn verifier_never_panics(ops in prop::collection::vec(arb_simple_op(), 0..32)) {
+        fn verifier_never_panics(ops in prop::collection::vec(arb_wide_op(), 0..32)) {
             let _ = ir::verify_word(&make_word(&ops));
         }
 
-        /// A block of ConstI64+Drop pairs is safe (Ret or not).
+        /// A block of ConstI64+Drop pairs: without Ret → Err(9035);
+        /// with Ret → Ok.
         #[test]
         fn verifier_push_drop_cycle(n in 0..30usize) {
             let mut ops: Vec<OpKind> = (0..n).flat_map(|_| vec![OpKind::ConstI64(0), OpKind::Drop { ty: TY_I64 }]).collect();
-            let _ = ir::verify_word(&make_word(&ops));
+            let without_ret = ir::verify_word(&make_word(&ops));
+            assert_eq!(without_ret.unwrap_err().code(), 9035,
+                "unterminated block without Ret must be Err(9035)");
             ops.push(OpKind::Ret);
-            let _ = ir::verify_word(&make_word(&ops));
+            let with_ret = ir::verify_word(&make_word(&ops));
+            assert!(with_ret.is_ok(),
+                "terminated ConstI64+Drop cycle with Ret must be Ok");
         }
 
-        /// Ret-only words never panic.
+        /// Ret-only: single Ret is Ok; two or more Ret → Err(9010).
         #[test]
         fn verifier_ret_only(n in 1..10usize) {
             let ops: Vec<OpKind> = (0..n).map(|_| OpKind::Ret).collect();
-            let _ = ir::verify_word(&make_word(&ops));
+            let result = ir::verify_word(&make_word(&ops));
+            if n == 1 {
+                assert!(result.is_ok(), "single Ret must be Ok");
+            } else {
+                assert_eq!(result.unwrap_err().code(), 9010,
+                    "multiple Ret must be Err(9010)");
+            }
         }
     }
 }

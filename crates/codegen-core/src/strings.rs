@@ -15,6 +15,11 @@ pub const STR_TABLE_CAP: usize = 128;
 /// Decode a double-quoted source string span into its literal byte content,
 /// resolving standard escape sequences (`\n`, `\r`, `\t`, `\0`, `\\`, `\"`).
 ///
+/// Unknown escape sequences (e.g. `\x`) pass the second character through
+/// as-is (`\x` → `x`).  This is a deliberate design choice: it keeps the
+/// decoder simple and avoids hard-failing on source that uses future escape
+/// codes.  **If a strict mode is ever needed, add a `strict` parameter.**
+///
 /// Returns `None` on malformed input (missing quotes, truncated escape, or
 /// decoded length exceeding the 256-byte inline limit).
 ///
@@ -146,8 +151,54 @@ mod tests {
         assert!(decode_string_bytes(b"\"\\", span_all(b"\"\\")).is_none());
     }
 
+    // -----------------------------------------------------------------------
+    // Boundary tests: 256-byte capacity, nonzero span offset, trailing \ case
+    // -----------------------------------------------------------------------
+
+    /// Helper: build a quoted string of `n` ASCII 'a' bytes.
+    fn string_of_len(n: usize) -> [u8; 260] {
+        let mut s = [0u8; 260];
+        s[0] = b'"';
+        for i in 0..n.min(258) {
+            s[i + 1] = b'a';
+        }
+        s[n + 1] = b'"';
+        s
+    }
+
     #[test]
-    fn str_table_cap_value() {
-        assert_eq!(STR_TABLE_CAP, 128);
+    fn decode_256_bytes_exact_fit() {
+        // FixedVec<u8, 256> has capacity 256.  256 payload 'a' + 2 quotes = 258 span.
+        let buf = string_of_len(256);
+        let sp = Span::new(0, 258);
+        let r = decode_string_bytes(&buf, sp);
+        assert!(r.is_some(), "256 payload bytes must fit exactly in FixedVec<u8, 256>");
+        assert_eq!(r.unwrap().len(), 256);
+    }
+
+    #[test]
+    fn decode_257_bytes_exceeds_capacity() {
+        // 257 payload 'a' + 2 quotes = 259; payload overflows FixedVec<u8, 256>.
+        let buf = string_of_len(257);
+        let sp = Span::new(0, 259);
+        let r = decode_string_bytes(&buf, sp);
+        assert!(r.is_none(), "257 payload bytes must exceed FixedVec<u8, 256> capacity");
+    }
+
+    #[test]
+    fn decode_nonzero_span_offset() {
+        // String embedded at an offset within a larger buffer.
+        let src = b"prefix \"hello\" suffix";
+        let sp = Span::new(7, 14); // spans `"hello"`
+        let r = decode_string_bytes(src, sp).unwrap();
+        assert_eq!(r.len(), 5);
+        assert!(fv_eq(&r, b"hello"));
+    }
+
+    #[test]
+    fn decode_trailing_bare_backslash() {
+        // `"a\` is 3 bytes (quote + a + backslash).
+        let r = decode_string_bytes(b"\"a\\", Span::new(0, 3));
+        assert!(r.is_none(), "trailing bare backslash must be rejected");
     }
 }

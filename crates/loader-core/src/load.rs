@@ -182,10 +182,10 @@ pub fn load_module<'a>(
     // Step 4b: Decryption (NEW, feature-gated).
     // Must happen after signature verification (P3: no unauthenticated decryption)
     // and before section placement (so placed bytes are plaintext).
-    let decrypted_cek: Option<[u8; 32]> = None;
-    let decrypted_nonce: [u8; 12] = [0u8; 12];
-    let decrypted_tag: [u8; 16] = [0u8; 16];
-    let aad_buf: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
+    let mut decrypted_cek: Option<[u8; 32]> = None;
+    let mut decrypted_nonce: [u8; 12] = [0u8; 12];
+    let mut decrypted_tag: [u8; 16] = [0u8; 16];
+    let mut aad_buf: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
 
     if hdr.flags & lmod::header::LMOD_FLAG_ENCRYPTED != 0 {
         #[cfg(not(feature = "encryption"))]
@@ -878,23 +878,22 @@ mod tests {
     /// Returns the encrypted bytes and the random CEK used.
     #[cfg(feature = "encryption")]
     fn encrypt_lmod(data: &[u8], kek: &[u8; 32]) -> (Vec<u8>, [u8; 32]) {
-        use chacha20poly1305::aead::{Aead, KeyInit, OsRng, Payload};
+        use chacha20poly1305::aead::{Aead, AeadInPlace, KeyInit, Payload};
         use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
         use lmod::enc::{
             enc_header_len, encode_enc_header, EncHeader, EncMode, WrappedCekSlot,
             AEAD_CHACHA20POLY1305, CEK_LEN, NONCE_LEN, TAG_LEN, WRAP_LEN,
             WRAP_SCHEME_SYMMETRIC_CHACHA20POLY1305,
         };
-        use rand_core::RngCore;
 
         let container = lmod::validate::Container::parse(data).unwrap();
         let hdr = container.header();
 
         // Generate random CEK + nonce.
         let mut cek = [0u8; CEK_LEN];
-        OsRng.fill_bytes(&mut cek);
+        getrandom::getrandom(&mut cek).expect("rng");
         let mut nonce = [0u8; NONCE_LEN];
-        OsRng.fill_bytes(&mut nonce);
+        getrandom::getrandom(&mut nonce).expect("rng");
 
         // Wrap CEK under KEK using deterministic zero-nonce ChaCha20-Poly1305.
         let wrap_cipher = ChaCha20Poly1305::new(Key::from_slice(kek));
@@ -969,7 +968,7 @@ mod tests {
         }
 
         // Build AAD and encrypt
-        let mut aad = alloc::Vec::new();
+        let mut aad = alloc::vec::Vec::new();
         aad.extend_from_slice(&out[..lmod::header::HEADER_SIZE as usize]);
         let tag_off_in_eh = 4 + NONCE_LEN;
         eh_bytes[tag_off_in_eh..tag_off_in_eh + TAG_LEN].fill(0);

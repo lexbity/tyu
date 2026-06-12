@@ -20,7 +20,7 @@ const KEK_HEX: &str = "ababababababababababababababababababababababababababababa
 const SIGN_KEY_HEX: &str = "abababababababababababababababababababababababababababababababab";
 
 fn tool(name: &str) -> PathBuf {
-    workspace_root().join("target").join("debug").join(name)
+    tyu::test_helpers::bin(name)
 }
 
 #[test]

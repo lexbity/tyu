@@ -2,6 +2,8 @@
 //!
 //! Consolidates duplicated helper functions across phase test files.
 
+pub mod bin;
+
 use hosted::loader::HostedLoaderPlatform;
 use hosted::mem;
 use lmod::validate::Container;

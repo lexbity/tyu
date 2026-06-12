@@ -42,7 +42,7 @@ fn golden_pack_matches_committed() {
 
     std::fs::write(tmp.join("golden.mod"), std::fs::read(gold.join("golden.mod")).unwrap()).unwrap();
 
-    let output = Command::new(workspace_root().join("target").join("debug").join("langc"))
+    let output = Command::new(tyu::test_helpers::bin("langc"))
         .args([
             "--emit=obj",
             "--target=x86_64-unknown-none",
@@ -63,7 +63,7 @@ fn golden_pack_matches_committed() {
 
     // Pack into a fresh .lmod in temp dir.
     let fresh_lmod = tmp.join("packed.lmod");
-    let status = Command::new(workspace_root().join("target").join("debug").join("lmod-pack"))
+    let status = Command::new(tyu::test_helpers::bin("lmod-pack"))
         .args([o_path.to_string_lossy().as_ref(), fresh_lmod.to_string_lossy().as_ref()])
         .status().expect("lmod-pack");
     assert!(status.success(), "lmod-pack failed");

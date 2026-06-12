@@ -188,6 +188,8 @@ impl LoaderPlatform for HostedLoaderPlatform {
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use super::*;
 
     type FnReturningI64 = unsafe extern "C" fn() -> i64;
@@ -253,43 +255,86 @@ mod tests {
     }
 
     #[test]
-    fn wx_discipline_write_after_make_exec_fails() {
-        // Allocate exec region, write code, flip to RX, then attempt to write.
-        // The write should trigger SIGSEGV.  We can't catch that portably,
-        // but we CAN verify that mprotect with PROT_WRITE alone fails after
-        // make_exec set PROT_READ|PROT_EXEC.  This proves the hardware
-        // enforces W^X at the page level.
+    #[cfg(target_os = "linux")]
+    fn make_exec_page_is_rx_not_w() {
+        // Verifies that after make_exec, the page is r-x (PROT_READ|PROT_EXEC)
+        // and does NOT have write permission (no 'w' in /proc/self/maps).
+        use std::vec::Vec;
+        use std::string::String;
+
+        fn prot_of(addr: *const u8) -> String {
+            let pid = std::process::id();
+            // Build "/proc/<pid>/maps" without std::format!
+            let prefix = b"/proc/";
+            let suffix = b"/maps\0";
+            let mut path_buf = Vec::with_capacity(32);
+            path_buf.extend_from_slice(prefix);
+            let mut tmp = pid;
+            let mut digits = [0u8; 10];
+            let mut nd = 10;
+            loop {
+                nd -= 1;
+                digits[nd] = b'0' + (tmp % 10) as u8;
+                tmp /= 10;
+                if tmp == 0 { break; }
+            }
+            path_buf.extend_from_slice(&digits[nd..10]);
+            path_buf.extend_from_slice(suffix);
+            // Remove trailing NUL
+            let path_str = core::str::from_utf8(&path_buf[..path_buf.len() - 1]).unwrap();
+
+            let mut maps = String::new();
+            use std::io::Read;
+            let mut file = std::fs::File::open(path_str).unwrap();
+            file.read_to_string(&mut maps).unwrap();
+            let addr_val = addr as usize;
+            for line in maps.lines() {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() < 2 { continue; }
+                let range: Vec<&str> = parts[0].split('-').collect();
+                if range.len() != 2 { continue; }
+                let start = usize::from_str_radix(range[0], 16).ok();
+                let end = usize::from_str_radix(range[1], 16).ok();
+                if let (Some(s), Some(e)) = (start, end) {
+                    if addr_val >= s && addr_val < e {
+                        return String::from(parts[1]);
+                    }
+                }
+            }
+            String::from("unknown")
+        }
+
         let mut plat = HostedLoaderPlatform::new(0);
         let mut region = plat.alloc_exec(4096).unwrap();
 
-        // Write while RW is allowed.
-        unsafe {
-            region.as_mut_slice()[0..4].copy_from_slice(&[0x01, 0x02, 0x03, 0x04]);
-        }
+        // Write known data while page is RW.
+        unsafe { region.as_mut_slice()[0] = 0x01; }
+
+        // Before make_exec: page should be rw- (writable).
+        let before = prot_of(region.as_ptr());
+        assert!(before.contains('w'), "before make_exec, page must be writable, got {before}");
 
         // Flip to RX.
         plat.make_exec(&mut region).unwrap();
 
-        // Verify the code is still readable (we can read back what we wrote).
+        // After make_exec: page must be r-x (no 'w').
+        let after = prot_of(region.as_ptr());
+        assert!(!after.contains('w'), "after make_exec, page must NOT be writable, got {after}");
+        assert!(
+            after.contains('r') && after.contains('x'),
+            "after make_exec, page must be readable+executable, got {after}"
+        );
+
+        // Verify code is still readable.
         let val = region.as_slice()[0];
         assert_eq!(val, 0x01, "code should be readable after make_exec");
+    }
 
-        // Attempt to change the page to PROT_WRITE only (removing PROT_EXEC).
-        // This is NOT the same as being able to write — W^X means the page
-        // is never both W and X at the same time.  Changing to PROT_WRITE
-        // (without PROT_EXEC) is allowed and doesn't violate W^X.
-        //
-        // The true W^X assertion is that we CANNOT have PROT_WRITE|PROT_EXEC
-        // simultaneously.  Since mprotect replaces, not ORs, protection,
-        // calling make_exec sets PROT_READ|PROT_EXEC.  To write, we'd need
-        // PROT_WRITE, which would remove PROT_EXEC — that's allowed by W^X.
-        //
-        // So the W^X discipline is enforced at the loader level (the runtime
-        // never calls `mprotect(PROT_WRITE)` on code pages after make_exec).
-        // The hardware enforces that pages are never W+X simultaneously.
-        //
-        // We verify by checking that make_exec succeeded and code is readable.
-        let _ = val;
+    #[test]
+    #[cfg(not(target_os = "linux"))]
+    fn make_exec_page_is_rx_not_w() {
+        // Non-Linux: skip this test (the hosted platform targets Linux).
+        eprintln!("SKIP: W^X verification requires Linux /proc/self/maps");
     }
 
     #[test]

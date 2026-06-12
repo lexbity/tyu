@@ -37,19 +37,26 @@ pub fn decrypt_payload(
 
 /// Unwrap a content-encryption key from a wrapped slot.
 ///
-/// The CEK was wrapped using ChaCha20-Poly1305 with a deterministic
-/// zero nonce under the given KEK.  `wrapped` is 60 bytes
-/// (nonce(12) + ciphertext(32) + tag(16)).
+/// The CEK was wrapped using ChaCha20-Poly1305 under the given KEK.
+/// `wrapped` is 60 bytes (nonce(12) + ciphertext(32) + tag(16)).
+///
+/// The nonce is read from `wrapped[..NONCE_LEN]` (the first 12 bytes of
+/// the wrapped slot).  Legacy slots that were created with a deterministic
+/// zero nonce will have `[0u8; 12]` in that position and will still unwrap
+/// correctly — the consumer change is strictly backward-compatible.
 pub fn unwrap_cek(kek: &[u8; CEK_LEN], wrapped: &[u8; WRAP_LEN]) -> Result<[u8; CEK_LEN], AeadError> {
     use chacha20poly1305::aead::{AeadInPlace, KeyInit};
     use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 
     let key = Key::from_slice(kek);
     let cipher = ChaCha20Poly1305::new(key);
-    let zero_nonce = Nonce::from_slice(&[0u8; NONCE_LEN]);
 
     // wrapped layout: nonce(12) + ciphertext(32) + tag(16)
-    // We skip the first 12 bytes (nonce, which is zero for deterministic wrap).
+    // Read the nonce from the slot (D-14): first 12 bytes.
+    let mut nonce_buf = [0u8; NONCE_LEN];
+    nonce_buf.copy_from_slice(&wrapped[..NONCE_LEN]);
+    let wrap_nonce = Nonce::from_slice(&nonce_buf);
+
     let mut cek_buf = [0u8; CEK_LEN];
     cek_buf.copy_from_slice(&wrapped[NONCE_LEN..NONCE_LEN + CEK_LEN]);
     let tag_start = NONCE_LEN + CEK_LEN;
@@ -57,7 +64,7 @@ pub fn unwrap_cek(kek: &[u8; CEK_LEN], wrapped: &[u8; WRAP_LEN]) -> Result<[u8; 
 
     let aead_tag = chacha20poly1305::Tag::from_slice(tag);
     cipher
-        .decrypt_in_place_detached(zero_nonce, b"", &mut cek_buf, aead_tag)
+        .decrypt_in_place_detached(wrap_nonce, b"", &mut cek_buf, aead_tag)
         .map_err(|_| AeadError)?;
 
     Ok(cek_buf)
@@ -120,20 +127,39 @@ mod tests {
         assert!(result.is_err(), "wrong key must fail decryption");
     }
 
-    /// LAYOUT-ARITHMETIC GUARD ONLY — not a producer↔consumer contract test.
-    ///
-    /// This round-trips through the *same* `chacha20poly1305` crate on both
-    /// the wrap and unwrap sides, so it proves only that our wire layout
-    /// constants (NONCE_LEN, CEK_LEN, TAG_LEN) produce a correctly-sized
-    /// wrapped buffer.  It does NOT prove that `lmod-encrypt`'s wrapping and
-    /// the loader's `unwrap_cek` agree — that cross-check lives at the
-    /// contract layer (§3.4, C-CT-1).
     #[test]
-    fn unwrap_cek_roundtrip() {
+    fn unwrap_cek_roundtrip_with_nonce() {
+        let kek = [0x11; CEK_LEN];
+        let cek = [0x22; CEK_LEN];
+        let wrap_nonce = [0x33; NONCE_LEN];
+
+        // Wrap the CEK using a non-zero nonce.
+        use chacha20poly1305::aead::AeadInPlace;
+        use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
+        let cipher = ChaCha20Poly1305::new(Key::from_slice(&kek));
+        let nonce = Nonce::from_slice(&wrap_nonce);
+        let mut cek_buf = cek;
+        let wrap_tag = cipher
+            .encrypt_in_place_detached(nonce, b"", &mut cek_buf)
+            .unwrap();
+
+        // Build the wrapped slot: nonce(12) + ciphertext(32) + tag(16)
+        let mut wrapped = [0u8; WRAP_LEN];
+        wrapped[..NONCE_LEN].copy_from_slice(&wrap_nonce);
+        wrapped[NONCE_LEN..NONCE_LEN + CEK_LEN].copy_from_slice(&cek_buf);
+        wrapped[NONCE_LEN + CEK_LEN..].copy_from_slice(wrap_tag.as_slice());
+
+        // Unwrap using the new slot-nonce method.
+        let unwrapped = unwrap_cek(&kek, &wrapped).unwrap();
+        assert_eq!(unwrapped, cek, "unwrapped CEK must match original");
+    }
+
+    #[test]
+    fn legacy_zero_nonce_slot_still_unwraps() {
         let kek = [0x11; CEK_LEN];
         let cek = [0x22; CEK_LEN];
 
-        // Wrap the CEK using the deterministic zero-nonce method.
+        // Wrap with zero nonce (legacy method).
         use chacha20poly1305::aead::AeadInPlace;
         use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
         let cipher = ChaCha20Poly1305::new(Key::from_slice(&kek));
@@ -143,15 +169,13 @@ mod tests {
             .encrypt_in_place_detached(zero_nonce, b"", &mut cek_buf)
             .unwrap();
 
-        // Build the wrapped slot: nonce(12) + ciphertext(32) + tag(16)
         let mut wrapped = [0u8; WRAP_LEN];
-        wrapped[..NONCE_LEN].copy_from_slice(&[0u8; NONCE_LEN]); // zero nonce
+        wrapped[..NONCE_LEN].copy_from_slice(&[0u8; NONCE_LEN]); // legacy zero nonce
         wrapped[NONCE_LEN..NONCE_LEN + CEK_LEN].copy_from_slice(&cek_buf);
         wrapped[NONCE_LEN + CEK_LEN..].copy_from_slice(wrap_tag.as_slice());
 
-        // Unwrap.
         let unwrapped = unwrap_cek(&kek, &wrapped).unwrap();
-        assert_eq!(unwrapped, cek, "unwrapped CEK must match original");
+        assert_eq!(unwrapped, cek, "legacy zero-nonce slot must still unwrap");
     }
 
     #[test]

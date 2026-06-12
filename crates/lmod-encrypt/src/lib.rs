@@ -58,17 +58,27 @@ pub struct DeviceConfig {
 // Core encryption functions
 // ---------------------------------------------------------------------------
 
-/// Wrap a CEK under a KEK using deterministic zero-nonce ChaCha20-Poly1305.
+/// Wrap a CEK under a KEK using a per-call random nonce (D-14).
+///
+/// Each invocation generates a fresh 12-byte wrap nonce via `getrandom`
+/// and stores it in `wrapped[..NONCE_LEN]`.  The consumer
+/// (`loader-core::unwrap_cek`) reads the nonce from the slot, so old
+/// zero-nonce legacy slots remain loadable.
 fn wrap_cek(kek: &[u8], cek: &[u8; CEK_LEN], key_id: u64) -> WrappedCekSlot {
+    use getrandom::getrandom;
+
+    let mut wrap_nonce = [0u8; NONCE_LEN];
+    getrandom(&mut wrap_nonce).expect("rng");
+
     let wrap_cipher = ChaCha20Poly1305::new(Key::from_slice(kek));
-    let zero_nonce = Nonce::from_slice(&[0u8; NONCE_LEN]);
+    let nonce = Nonce::from_slice(&wrap_nonce);
     let mut cek_buf = *cek;
     let wrap_tag = wrap_cipher
-        .encrypt_in_place_detached(zero_nonce, b"", &mut cek_buf)
-        .expect("zero-nonce ChaCha20 wrap must succeed");
+        .encrypt_in_place_detached(nonce, b"", &mut cek_buf)
+        .expect("ChaCha20 wrap must succeed");
 
     let mut wrapped = [0u8; WRAP_LEN];
-    wrapped[..NONCE_LEN].copy_from_slice(&[0u8; NONCE_LEN]);
+    wrapped[..NONCE_LEN].copy_from_slice(&wrap_nonce);
     wrapped[NONCE_LEN..NONCE_LEN + CEK_LEN].copy_from_slice(&cek_buf);
     wrapped[NONCE_LEN + CEK_LEN..].copy_from_slice(wrap_tag.as_slice());
 
@@ -298,14 +308,18 @@ mod tests {
     }
 
     /// Inverse of `wrap_cek`: unwrap the CEK using the KEK.
+    /// Reads the nonce from the slot (D-14), so this works for both
+    /// random-nonce and legacy zero-nonce slots.
     fn unwrap_cek_with_kek(kek: &[u8; 32], slot: &WrappedCekSlot) -> Result<[u8; CEK_LEN], ()> {
         let cipher = ChaCha20Poly1305::new(Key::from_slice(kek));
-        let zero_nonce = Nonce::from_slice(&[0u8; NONCE_LEN]);
+        let mut wrap_nonce = [0u8; NONCE_LEN];
+        wrap_nonce.copy_from_slice(&slot.wrapped[..NONCE_LEN]);
+        let nonce = Nonce::from_slice(&wrap_nonce);
         let mut cek = [0u8; CEK_LEN];
         cek.copy_from_slice(&slot.wrapped[NONCE_LEN..NONCE_LEN + CEK_LEN]);
         let tag = &slot.wrapped[NONCE_LEN + CEK_LEN..];
         cipher
-            .decrypt_in_place_detached(zero_nonce, b"", &mut cek, tag.into())
+            .decrypt_in_place_detached(nonce, b"", &mut cek, tag.into())
             .map_err(|_| ())?;
         Ok(cek)
     }
@@ -452,5 +466,23 @@ mod tests {
         let a = encrypt_fleet(&input, &kek).unwrap();
         let b = encrypt_fleet(&input, &kek).unwrap();
         assert_ne!(a, b, "two encryptions of same input must differ");
+    }
+
+    /// Verifies D-14: wrap nonces are unique per artifact.
+    /// Two calls with the same KEK and CEK produce different nonces.
+    /// The round-trip (unwrap via real loader) is tested at the contract
+    /// layer in `tooling-tests/contract_encryption` (C-CT-5).
+    #[test]
+    fn cek_wrap_nonces_are_unique_per_artifact() {
+        let kek = [0xabu8; 32];
+        let cek = [0xcdu8; CEK_LEN];
+
+        let slot_a = wrap_cek(&kek, &cek, 0);
+        let slot_b = wrap_cek(&kek, &cek, 0);
+
+        let nonce_a = &slot_a.wrapped[..NONCE_LEN];
+        let nonce_b = &slot_b.wrapped[..NONCE_LEN];
+
+        assert_ne!(nonce_a, nonce_b, "wrap nonces must differ per artifact");
     }
 }

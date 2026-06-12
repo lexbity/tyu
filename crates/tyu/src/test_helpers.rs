@@ -25,18 +25,42 @@ pub fn golden_dir() -> PathBuf {
     workspace_root().join("test-goldens")
 }
 
+/// Resolve a workspace binary for e2e use.
+///
+/// Priority:
+///   1. `$TYU_BIN_DIR/<name>` — authoritative override for CI.
+///   2. `target/debug/<name>` — local debug build.
+///   3. `target/release/<name>` — local release build.
+pub fn bin(name: &str) -> PathBuf {
+    if let Ok(dir) = std::env::var("TYU_BIN_DIR") {
+        let p = PathBuf::from(&dir).join(name);
+        assert!(
+            p.is_file(),
+            "TYU_BIN_DIR={dir} set but {name} not found at {p:?}"
+        );
+        return p;
+    }
+    let root = workspace_root();
+    let p = root.join("target").join("debug").join(name);
+    if p.exists() {
+        return p;
+    }
+    root.join("target").join("release").join(name)
+}
+
 /// The `tyu` driver binary.
 pub fn tyu_exe() -> PathBuf {
-    workspace_root().join("target").join("debug").join("tyu")
+    bin("tyu")
 }
 
 /// The `langc` cross-compiler binary.
 pub fn langc_exe() -> PathBuf {
-    workspace_root().join("target").join("debug").join("langc")
+    bin("langc")
 }
 
-/// Returns true if a named binary exists — either on `PATH` or in
-/// `target/debug/` (for workspace-built binaries like `langc`, `tyu`).
+/// Returns true if a named binary exists — either on `PATH`, in
+/// `target/debug/`, or in `target/release/` (for workspace-built
+/// binaries like `langc`, `tyu`).
 pub fn tool_available(name: &str) -> bool {
     // Check PATH via which.
     if Command::new("which").arg(name).output()
@@ -44,9 +68,13 @@ pub fn tool_available(name: &str) -> bool {
     {
         return true;
     }
-    // Check target/debug/ for workspace-built binaries.
-    let target = workspace_root().join("target").join("debug").join(name);
-    target.exists()
+    // Check target/debug/ then target/release/ for workspace-built binaries.
+    let root = workspace_root();
+    let p = root.join("target").join("debug").join(name);
+    if p.exists() {
+        return true;
+    }
+    root.join("target").join("release").join(name).exists()
 }
 
 /// Environment-aware tool gating: requires all named tools, panics under CI

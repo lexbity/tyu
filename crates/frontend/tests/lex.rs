@@ -22,11 +22,6 @@ fn kind(s: &str) -> Vec<TokenKind> {
     lex(s).into_iter().map(|t| t.kind).collect()
 }
 
-#[allow(dead_code)]
-fn spans(s: &str) -> Vec<Span> {
-    lex(s).into_iter().map(|t| t.span).collect()
-}
-
 // ---------------------------------------------------------------------------
 // Keywords
 // ---------------------------------------------------------------------------
@@ -754,21 +749,28 @@ mod proptests {
             assert_eq!(first_pass, second_pass, "re-scan produced different token sequence");
         }
 
-        /// Eof appears exactly once when scanning to completion.
+        /// Eof is a terminal: after the first Eof, all subsequent calls
+        /// return Eof with the identical span (end-of-input point).
         #[test]
-        fn lexer_eof_once(bytes: Vec<u8>) {
+        fn lexer_eof_is_terminal(bytes: Vec<u8>) {
             let mut lex = Lexer::new(&bytes);
-            let mut eof_count = 0;
-            for _ in 0..(bytes.len() + 2) {
+            // Consume all tokens until Eof.
+            let mut first_eof = None;
+            loop {
                 let tok = lex.next();
                 if tok.kind == TokenKind::Eof {
-                    eof_count += 1;
-                    if eof_count > 1 {
-                        break;
-                    }
+                    first_eof = Some(tok);
+                    break;
                 }
             }
-            assert!(eof_count >= 1, "Eof should appear at least once");
+            let first = first_eof.unwrap();
+            // Subsequent calls must return Eof with the same span.
+            for _ in 0..3 {
+                let tok = lex.next();
+                assert_eq!(tok.kind, TokenKind::Eof);
+                assert_eq!(tok.span, first.span,
+                    "post-Eof calls must return identical span");
+            }
         }
     }
 }

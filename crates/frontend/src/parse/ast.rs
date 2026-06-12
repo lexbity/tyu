@@ -125,6 +125,15 @@ pub enum ParseError {
     TooManyItems {
         span: Span,
     },
+    /// An unknown effect name was used in a `performs` declaration.
+    UnknownEffect {
+        span: Span,
+        name: crate::span::Span,
+    },
+    /// Skipped unrecognized input at the top level (recovery marker).
+    Skipped {
+        span: Span,
+    },
 }
 
 impl ParseError {
@@ -169,6 +178,8 @@ impl ParseError {
             Self::ExpectedRegisterName { .. } => 2186,
             Self::ExpectedSemiSkip { .. } => 2199,
             Self::TooManyItems { .. } => 2198,
+            Self::UnknownEffect { name, .. } => 2143,
+            Self::Skipped { span } => 2144,
         }
     }
 
@@ -212,7 +223,9 @@ impl ParseError {
             | Self::ExpectedConstName { span }
             | Self::ExpectedRegisterName { span }
             | Self::ExpectedSemiSkip { span }
-            | Self::TooManyItems { span } => *span,
+            | Self::TooManyItems { span }
+            | Self::Skipped { span } => *span,
+            Self::UnknownEffect { name, .. } => *name,
         }
     }
 }

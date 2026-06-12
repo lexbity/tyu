@@ -124,6 +124,21 @@ check_doc_links() {
     return $rc
 }
 
+# --- 12. Forbidden pattern: `let _ = ir::verify_word` (must assert verdict)
+# verifier_never_panics in the proptests module is exempt — panics is
+# the invariant it tests, so discarding the Err verdict is intentional.
+check_ir_verify_usage() {
+    local rc=0
+    local total=$(grep -rn 'let _ = ir::verify_word' crates/ir/tests/ --include='*.rs' 2>/dev/null | wc -l)
+    local exempt=$(grep -rn 'fn verifier_never_panics' crates/ir/tests/ --include='*.rs' 2>/dev/null | wc -l)
+    local violations=$((total - exempt))
+    if [ "$violations" -gt 0 ]; then
+        msg $RED "  IR VERIFY: $violations occurrence(s) of `let _ = ir::verify_word` outside verifier_never_panics — must assert the verdict"
+        rc=1
+    fi
+    return $rc
+}
+
 # Function stubs for pre-existing missing checkers (defined before first use)
 check_aad_reimplementation() { return 0; }
 check_test_count() { return 0; }
@@ -219,6 +234,7 @@ check_syntax_survey() {
 check_m4_survey || overall_rc=1
 check_syntax_survey || overall_rc=1
 check_50xx_corpus || overall_rc=1
+check_ir_verify_usage || overall_rc=1
 
 if [ "$overall_rc" -eq 0 ]; then
     msg $GREEN "All lint checks passed."

@@ -16,6 +16,14 @@ pub enum Target {
 }
 
 impl Target {
+    /// All known target triples. Used for exhaustive iteration in tests.
+    pub const ALL: [Target; 4] = [
+        Target::X86_64UnknownLinuxGnu,
+        Target::X86_64UnknownNone,
+        Target::ArmV7MUnknownNone,
+        Target::RiscV32UnknownNone,
+    ];
+
     /// Parse a target triple from a raw byte string.
     ///
     /// Returns `None` for any unrecognised triple so the caller can emit a

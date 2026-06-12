@@ -45,7 +45,7 @@ fn golden_sign_plain_matches_committed() {
     let packed_path = gold.join("packed.lmod");
     let signed_path = tmp.join("signed_plain.lmod");
 
-    let status = Command::new(workspace_root().join("target").join("debug").join("lmod-sign"))
+    let status = Command::new(tyu::test_helpers::bin("lmod-sign"))
         .args([
             packed_path.to_string_lossy().as_ref(),
             signed_path.to_string_lossy().as_ref(),

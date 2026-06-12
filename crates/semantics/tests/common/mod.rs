@@ -6,13 +6,14 @@
 pub use frontend::fixed::FixedVec;
 pub use semantics::typecheck::db::{IsoDb, NominalDb, ResourceDb, SubtypeInfo};
 pub use semantics::typecheck::irgen::{arena, build_ir_word, NullObserver};
-pub use semantics::typecheck::mmio::MmioDb;
+pub use semantics::typecheck::mmio::{MmioDb, AccessMode};
 pub use semantics::typecheck::ChecksMode;
 pub use semantics::types::{TypeAtom, WordEntry, WordSig};
 
 use frontend::parse::{DeclAst, DeclKind};
 use frontend::span::Span;
-use ir::{CapSet, EffectSet, StackBound};
+use ir::{CapSet, EffectSet, StackBound, Word};
+use semantics::typecheck::mmio::MmioFieldInfo;
 
 pub fn ta(bytes: &[u8]) -> TypeAtom {
     TypeAtom::new(bytes).unwrap()
@@ -78,52 +79,119 @@ pub fn make_decl(body: &str) -> (DeclAst, Vec<u8>) {
 pub fn builtin_env() -> ([WordEntry; 256], usize) {
     let mut env = empty_env();
     let mut len = 0usize;
-    macro_rules! add {
-        ($name:expr, $inp:expr, $out:expr) => {{
-            env[len] = entry($name, $inp, $out);
-            len += 1;
-        }};
+    for w in semantics::typecheck::builtin_words() {
+        if len >= env.len() {
+            break;
+        }
+        env[len] = *w;
+        len += 1;
     }
-    add!(b"dup", &[b"i64"], &[b"i64", b"i64"]);
-    add!(b"drop", &[b"i64"], &[]);
-    add!(b"swap", &[b"i64", b"i64"], &[b"i64", b"i64"]);
-    add!(b"+", &[b"i64", b"i64"], &[b"i64"]);
-    add!(b"-", &[b"i64", b"i64"], &[b"i64"]);
-    add!(b"*", &[b"i64", b"i64"], &[b"i64"]);
-    add!(b">", &[b"i64", b"i64"], &[b"bool"]);
-    add!(b"<", &[b"i64", b"i64"], &[b"bool"]);
-    add!(b"==", &[b"i64", b"i64"], &[b"bool"]);
-    add!(b"and", &[b"bool", b"bool"], &[b"bool"]);
-    add!(b"or", &[b"bool", b"bool"], &[b"bool"]);
-    add!(b"not", &[b"bool"], &[b"bool"]);
     (env, len)
 }
 
 // ---------------------------------------------------------------------------
-// Stack-heavy checkers, each runs on its own 8MB thread
+// Dbs — semantic database builder
 // ---------------------------------------------------------------------------
 
-struct CheckOkInput {
-    body: String,
-    inputs: Vec<Vec<u8>>,
-    outputs: Vec<Vec<u8>>,
-    env: Vec<WordEntry>,
+pub struct Dbs {
+    pub subtypes: Vec<SubtypeInfo>,
+}
+
+impl Dbs {
+    pub fn new() -> Self {
+        Dbs { subtypes: Vec::new() }
+    }
+
+    pub fn with_subtype(mut self, name: &[u8], base: &[u8], min: i64, max: i64) -> Self {
+        self.subtypes.push(SubtypeInfo {
+            name: TypeAtom::new(name).unwrap(),
+            base: TypeAtom::new(base).unwrap(),
+            min,
+            max,
+        });
+        self
+    }
+}
+
+// ---------------------------------------------------------------------------
+// check() — run the typechecker, assertions run inside the 8MB-stack thread.
+// ---------------------------------------------------------------------------
+
+/// Run the typechecker with given body/inputs/outputs/env/dbs/checks.
+/// The `on_word` callback runs inside the big-stack thread with access to
+/// the built IR `Word` (on success).  On error the error code is returned.
+pub fn check(
+    body: &str,
+    inputs: &[&[u8]],
+    outputs: &[&[u8]],
+    env: &[WordEntry],
+    dbs: &Dbs,
+    checks: ChecksMode,
+    on_result: impl FnOnce(Result<(), u32>) + Send + 'static,
+) {
+    let body_owned = body.to_string();
+    let inputs_owned: Vec<Vec<u8>> = inputs.iter().map(|b| b.to_vec()).collect();
+    let outputs_owned: Vec<Vec<u8>> = outputs.iter().map(|b| b.to_vec()).collect();
+    let env_owned: Vec<WordEntry> = env.to_vec();
+    let subtypes_owned: Vec<SubtypeInfo> = dbs.subtypes.clone();
+
+    std::thread::Builder::new()
+        .stack_size(8 << 20)
+        .spawn(move || {
+            let (decl, src) = make_decl(&body_owned);
+            let s = sig(
+                &inputs_owned.iter().map(|v| v.as_slice()).collect::<Vec<_>>(),
+                &outputs_owned.iter().map(|v| v.as_slice()).collect::<Vec<_>>(),
+            );
+            let mut arena = arena::ArenaAllocator::new();
+            let mmio = MmioDb { maps: FixedVec::new(), instances: FixedVec::new() };
+            let resources = ResourceDb { items: FixedVec::new() };
+            let nominals = NominalDb { structs: FixedVec::new(), enums: FixedVec::new() };
+            let iso = IsoDb { types: FixedVec::new() };
+            let mut obs = NullObserver;
+            match build_ir_word(
+                &decl, &src, &env_owned, &subtypes_owned, &mmio, &resources,
+                &nominals, &iso, checks, false, &s,
+                &mut arena, &mut obs,
+            ) {
+                Ok(_out_words) => on_result(Ok(())),
+                Err(e) => on_result(Err(e.code())),
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap()
 }
 
 pub fn check_ok(body: &str, inputs: &[&[u8]], outputs: &[&[u8]], env: &[WordEntry]) {
-    let inp = CheckOkInput {
-        body: body.to_string(),
-        inputs: inputs.iter().map(|b| b.to_vec()).collect(),
-        outputs: outputs.iter().map(|b| b.to_vec()).collect(),
-        env: env.to_vec(),
-    };
-    let handle = std::thread::Builder::new()
+    let dbs = Dbs::new();
+    check(body, inputs, outputs, env, &dbs, ChecksMode::All, |result| {
+        match result {
+            Ok(()) => {},
+            Err(code) => panic!("expected OK, got error code {code}"),
+        }
+    });
+}
+
+/// Like `check_ok` but also invokes `on_word` with the built IR word
+/// so callers can assert IR shape (op kinds, block count, etc.).
+/// The callback runs inside the 8MB-stack thread.
+pub fn check_ok_with<F>(body: &str, inputs: &[&[u8]], outputs: &[&[u8]], env: &[WordEntry], on_word: F)
+where
+    F: FnOnce(&Word) + Send + 'static,
+{
+    let body_owned = body.to_string();
+    let inputs_owned: Vec<Vec<u8>> = inputs.iter().map(|b| b.to_vec()).collect();
+    let outputs_owned: Vec<Vec<u8>> = outputs.iter().map(|b| b.to_vec()).collect();
+    let env_owned: Vec<WordEntry> = env.to_vec();
+
+    std::thread::Builder::new()
         .stack_size(8 << 20)
         .spawn(move || {
-            let (decl, src) = make_decl(&inp.body);
+            let (decl, src) = make_decl(&body_owned);
             let s = sig(
-                &inp.inputs.iter().map(|v| v.as_slice()).collect::<Vec<_>>(),
-                &inp.outputs.iter().map(|v| v.as_slice()).collect::<Vec<_>>(),
+                &inputs_owned.iter().map(|v| v.as_slice()).collect::<Vec<_>>(),
+                &outputs_owned.iter().map(|v| v.as_slice()).collect::<Vec<_>>(),
             );
             let mut arena = arena::ArenaAllocator::new();
             let mmio = MmioDb { maps: FixedVec::new(), instances: FixedVec::new() };
@@ -132,29 +200,18 @@ pub fn check_ok(body: &str, inputs: &[&[u8]], outputs: &[&[u8]], env: &[WordEntr
             let iso = IsoDb { types: FixedVec::new() };
             let subtypes: &[SubtypeInfo] = &[];
             let mut obs = NullObserver;
-            let result = build_ir_word(
-                &decl, &src, &inp.env, subtypes, &mmio, &resources,
+            match build_ir_word(
+                &decl, &src, &env_owned, subtypes, &mmio, &resources,
                 &nominals, &iso, ChecksMode::All, false, &s,
                 &mut arena, &mut obs,
-            );
-            if let Err(e) = result {
-                panic!(
-                    "expected OK, got error code {} span={:?}",
-                    e.code(),
-                    e.span()
-                );
+            ) {
+                Ok(out_words) => on_word(out_words.word),
+                Err(e) => panic!("expected OK, got error code {} span={:?}", e.code(), e.span()),
             }
         })
-        .unwrap();
-    handle.join().unwrap();
-}
-
-struct CheckErrInput {
-    body: String,
-    inputs: Vec<Vec<u8>>,
-    outputs: Vec<Vec<u8>>,
-    env: Vec<WordEntry>,
-    expected_code: u32,
+        .unwrap()
+        .join()
+        .unwrap()
 }
 
 pub fn check_err(
@@ -164,43 +221,11 @@ pub fn check_err(
     env: &[WordEntry],
     expected_code: u32,
 ) {
-    let inp = CheckErrInput {
-        body: body.to_string(),
-        inputs: inputs.iter().map(|b| b.to_vec()).collect(),
-        outputs: outputs.iter().map(|b| b.to_vec()).collect(),
-        env: env.to_vec(),
-        expected_code,
-    };
-    let handle = std::thread::Builder::new()
-        .stack_size(8 << 20)
-        .spawn(move || {
-            let (decl, src) = make_decl(&inp.body);
-            let s = sig(
-                &inp.inputs.iter().map(|v| v.as_slice()).collect::<Vec<_>>(),
-                &inp.outputs.iter().map(|v| v.as_slice()).collect::<Vec<_>>(),
-            );
-            let mut arena = arena::ArenaAllocator::new();
-            let mmio = MmioDb { maps: FixedVec::new(), instances: FixedVec::new() };
-            let resources = ResourceDb { items: FixedVec::new() };
-            let nominals = NominalDb { structs: FixedVec::new(), enums: FixedVec::new() };
-            let iso = IsoDb { types: FixedVec::new() };
-            let subtypes: &[SubtypeInfo] = &[];
-            let mut obs = NullObserver;
-            let err = match build_ir_word(
-                &decl, &src, &inp.env, subtypes, &mmio, &resources,
-                &nominals, &iso, ChecksMode::All, false, &s,
-                &mut arena, &mut obs,
-            ) {
-                Ok(_) => panic!("expected error for body: {:?}", inp.body),
-                Err(e) => e,
-            };
-            assert_eq!(
-                err.code(),
-                inp.expected_code,
-                "error code mismatch for body: {:?}",
-                inp.body,
-            );
-        })
-        .unwrap();
-    handle.join().unwrap();
+    let dbs = Dbs::new();
+    check(body, inputs, outputs, env, &dbs, ChecksMode::All, move |result| {
+        match result {
+            Ok(_) => panic!("expected error {expected_code}, got Ok"),
+            Err(code) => assert_eq!(code, expected_code),
+        }
+    });
 }

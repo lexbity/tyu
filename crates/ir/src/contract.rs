@@ -932,4 +932,48 @@ mod tests {
         );
         assert_ne!(base, different);
     }
+
+    #[test]
+    fn abi_hash_changes_on_requires() {
+        let base = abi_hash(b"", b"", EffectSet::empty(), CapSet::empty(), StackBound::ID, 8);
+        let with_req = abi_hash(
+            b"", b"",
+            EffectSet::empty(),
+            CapSet::from_bits(CapSet::WRITE),
+            StackBound::ID,
+            8,
+        );
+        assert_ne!(base, with_req);
+    }
+
+    #[test]
+    fn abi_hash_changes_on_sig_in() {
+        let base = abi_hash(b"", b"", EffectSet::empty(), CapSet::empty(), StackBound::ID, 8);
+        let with_sig = abi_hash(
+            b"i64", b"",
+            EffectSet::empty(), CapSet::empty(), StackBound::ID, 8,
+        );
+        assert_ne!(base, with_sig);
+    }
+
+    #[test]
+    fn abi_hash_changes_on_sig_out() {
+        let base = abi_hash(b"", b"", EffectSet::empty(), CapSet::empty(), StackBound::ID, 8);
+        let with_sig = abi_hash(
+            b"", b"bool",
+            EffectSet::empty(), CapSet::empty(), StackBound::ID, 8,
+        );
+        assert_ne!(base, with_sig);
+    }
+
+    /// Golden value for a fixed input — changing this constant is an ABI break.
+    /// If you need to change the hash algorithm, bump ABI_CONTRACT_VERSION.
+    #[test]
+    fn abi_hash_golden_v1() {
+        let h = abi_hash(b"i64", b"i64", EffectSet::empty(), CapSet::empty(), StackBound::ID, 8);
+        assert_eq!(
+            h, 14985849781704156055,
+            "ABI_HASH_GOLDEN_V1 changed — this is an ABI break. Bump ABI_CONTRACT_VERSION."
+        );
+    }
 }

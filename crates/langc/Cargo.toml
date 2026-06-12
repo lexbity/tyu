@@ -3,12 +3,14 @@ name = "langc"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "langc"
+path = "src/lib.rs"
+
 [[bin]]
 name = "langc"
 path = "src/main.rs"
-harness = false
 test = false
-doctest = false
 
 [dependencies]
 hosted = { path = "../hosted" }

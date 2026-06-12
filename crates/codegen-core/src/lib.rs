@@ -6,6 +6,7 @@ pub mod emit_mode;
 pub mod error;
 pub mod strings;
 pub mod target;
+pub mod tier;
 
 pub use backend::CodegenBackend;
 pub use emit_mode::{AsmMode, EmitMode};

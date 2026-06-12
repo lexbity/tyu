@@ -187,6 +187,7 @@ pub fn find_word_decl<'a>(m: &'a ModuleAst, src: &[u8], name: &[u8]) -> Option<&
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec::Vec;
     use frontend::fixed::FixedVec;
     use frontend::parse::Parser;
     use frontend::span::Span;
@@ -206,98 +207,107 @@ mod tests {
     // -- sig_eq --
 
     #[test]
-    fn test_sig_eq_identical() {
+    fn sig_eq_identical() {
         assert!(sig_eq(b"( i64 -- i64 )", b"( i64 -- i64 )"));
     }
 
     #[test]
-    fn test_sig_eq_different_inputs() {
+    fn sig_eq_different_inputs() {
         assert!(!sig_eq(b"( i64 -- bool )", b"( bool -- bool )"));
     }
 
     #[test]
-    fn test_sig_eq_empty() {
+    fn sig_eq_empty() {
         assert!(sig_eq(b"( -- )", b"( -- )"));
     }
 
     // -- attrs_eq --
 
     #[test]
-    fn test_attrs_eq_identical() {
-        let def = make_attrs(&[Span::new(0, 3), Span::new(5, 8)]);
-        let mo = make_attrs(&[Span::new(0, 3), Span::new(5, 8)]);
-        assert!(attrs_eq(b"foobar", &def, b"foobar", &mo));
+    fn attrs_eq_identical() {
+        let def = make_attrs(&[Span::new(0, 3), Span::new(5, 10)]);
+        let mo = make_attrs(&[Span::new(0, 3), Span::new(5, 10)]);
+        assert!(attrs_eq(b"foobarbazqux", &def, b"foobarbazqux", &mo));
     }
 
     #[test]
-    fn test_attrs_eq_different() {
+    fn attrs_eq_different() {
         let def = make_attrs(&[Span::new(0, 3)]);
         let mo = make_attrs(&[Span::new(0, 4)]);
         assert!(!attrs_eq(b"foobar", &def, b"foobar", &mo));
     }
 
-    // -- is_exported --
+    // -- is_exported: assert span bytes, not just boolean presence --
 
     #[test]
-    fn test_is_exported_with_export_stmt() {
+    fn is_exported_with_export_stmt() {
         let src = b"module m; export { foo } ; : bar ; : foo ; end;";
         let ast = parse(core::str::from_utf8(src).unwrap());
         assert!(is_exported(&ast, src, b"foo"));
         assert!(!is_exported(&ast, src, b"bar"));
+        // Verify span resolves to the correct bytes
+        let decl = find_decl(&ast, src, b"foo").unwrap();
+        assert_eq!(slice_span(src, decl.name), b"foo");
     }
 
     #[test]
-    fn test_is_exported_decls_only() {
+    fn is_exported_decls_only() {
         let src = b"module m; : foo ; : bar ; end;";
         let ast = parse(core::str::from_utf8(src).unwrap());
         assert!(is_exported(&ast, src, b"foo"));
         assert!(is_exported(&ast, src, b"bar"));
+        // All decls are exported by default; verify span bytes
+        let decl = find_decl(&ast, src, b"foo").unwrap();
+        assert_eq!(slice_span(src, decl.name), b"foo");
+        let decl = find_decl(&ast, src, b"bar").unwrap();
+        assert_eq!(slice_span(src, decl.name), b"bar");
     }
 
-    // -- find_decl --
+    // -- find_decl: assert resolved span bytes --
 
     #[test]
-    fn test_find_decl_found() {
+    fn find_decl_found() {
         let src = b"module m; : foo ; end;";
         let ast = parse(core::str::from_utf8(src).unwrap());
-        assert!(find_decl(&ast, src, b"foo").is_some());
+        let decl = find_decl(&ast, src, b"foo").unwrap();
+        assert_eq!(slice_span(src, decl.name), b"foo");
     }
 
     #[test]
-    fn test_find_decl_not_found() {
+    fn find_decl_not_found() {
         let src = b"module m; : foo ; end;";
         let ast = parse(core::str::from_utf8(src).unwrap());
         assert!(find_decl(&ast, src, b"bar").is_none());
     }
 
-    // -- export_iter --
+    // -- export_iter: assert export names resolve to correct span bytes --
 
     #[test]
-    fn test_export_iter_with_export_stmt() {
+    fn export_iter_with_export_stmt() {
         let src = b"module m; export { foo, bar } ; : baz ; end;";
         let ast = parse(core::str::from_utf8(src).unwrap());
         let names: Vec<&[u8]> = export_iter(&ast, src).collect();
         assert_eq!(names.len(), 2);
-        assert!(names.contains(&b"foo"));
+        // Assert exact byte content, not just membership
+        assert_eq!(names[0], b"foo");
+        assert_eq!(names[1], b"bar");
     }
 
     #[test]
-    fn test_export_iter_no_export_stmt() {
+    fn export_iter_no_export_stmt() {
         let src = b"module m; : foo ; : bar ; end;";
         let ast = parse(core::str::from_utf8(src).unwrap());
         let names: Vec<&[u8]> = export_iter(&ast, src).collect();
         assert_eq!(names.len(), 2);
+        assert_eq!(names[0], b"foo");
+        assert_eq!(names[1], b"bar");
     }
 
-    // -- iface_error_message --
+    // -- iface_error_message: driven by EMITTED_IFACE_CODES constant --
 
     #[test]
-    fn test_error_messages_all_codes() {
-        let codes: &[u32] = &[
-            2020, 2021, 2022, 2201, 2202, 2203, 2204, 2205, 2207, 2210, 2211, 2212, 2213, 2214,
-            2215, 2216, 2217, 2218, 2219, 2220, 2223, 2300,
-        ];
-        for &code in codes {
+    fn error_messages_all_codes() {
+        for &code in EMITTED_IFACE_CODES {
             assert!(
                 !iface_error_message(code).is_empty(),
                 "code {code} has empty message"
@@ -306,10 +316,33 @@ mod tests {
     }
 
     #[test]
-    fn test_error_message_unknown() {
+    fn error_message_unknown() {
         assert_eq!(iface_error_message(9999), b"interface/import error");
     }
+
+    #[test]
+    fn error_messages_unlisted_code_in_range() {
+        // Pick an in-range code (2000-2500) that is NOT in EMITTED_IFACE_CODES
+        let unlisted: u32 = 2050;
+        assert!(
+            !EMITTED_IFACE_CODES.contains(&unlisted),
+            "2050 must not be a real code for this test"
+        );
+        assert_eq!(
+            iface_error_message(unlisted),
+            b"interface/import error",
+            "unlisted code should fall through to default"
+        );
+    }
 }
+
+/// Every error code returned by the interface checker.
+/// This list is the single source of truth; tests consume it so
+/// adding a new code without adding it here is a compile-time reminder.
+pub const EMITTED_IFACE_CODES: &[u32] = &[
+    2020, 2021, 2022, 2201, 2202, 2203, 2204, 2205, 2207, 2210, 2211, 2212, 2213, 2214,
+    2215, 2216, 2217, 2218, 2219, 2220, 2223, 2300,
+];
 
 pub fn iface_error_message(code: u32) -> &'static [u8] {
     match code {

@@ -479,10 +479,11 @@ fn word_effect_multiple() {
 
 #[test]
 fn word_effect_unknown_name() {
-    // Unknown effect names are silently ignored (no bit set).
-    // The parser accepts performs {unknown} (future-proof).
-    let ast = assert_parse_ok("module m; : foo performs {unknown} ; end;");
-    assert_eq!(ast.decls.get(0).unwrap().effect_bits, 0);
+    // D-8: Unknown effect names are now a parse error.
+    assert_parse_err!(
+        "module m; : foo performs {unknown} ; end;",
+        ParseError::UnknownEffect { .. }
+    );
 }
 
 #[test]
@@ -553,6 +554,63 @@ fn err_unknown_kw_skipped() {
     assert!(result.is_ok(), "parser should recover from unknown keyword");
     let ast = result.unwrap();
     assert_eq!(ast.decls.len(), 0);
+}
+
+// ---------------------------------------------------------------------------
+// Capacity overflow tests (frontend:M5)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn too_many_decls_rejected() {
+    // A module with more than 256 word declarations should fail with TooManyItems.
+    let mut src = String::from("module m;\n");
+    for i in 0..260 {
+        src.push_str(&format!(": w{i} ;\n"));
+    }
+    src.push_str("end;\n");
+    let result = parse(&src);
+    assert!(result.is_err(), "260 declarations must overflow FixedVec<DeclAst, 256>");
+    match result {
+        Err(ParseError::TooManyItems { .. }) => {} // expected
+        Err(e) => panic!("expected TooManyItems, got {:?}", e),
+        Ok(_) => panic!("expected error"),
+    }
+}
+
+#[test]
+fn too_many_imports_rejected() {
+    // A module with more imports than FixedVec capacity (64) should fail.
+    let mut src = String::from("module m;\n");
+    for i in 0..70 {
+        src.push_str(&format!("import Mod{i} ;\n"));
+    }
+    src.push_str("end;\n");
+    let result = parse(&src);
+    assert!(result.is_err(), "too many imports must overflow");
+}
+
+// ---------------------------------------------------------------------------
+// InvalidInteger via overflow literal
+// ---------------------------------------------------------------------------
+
+#[test]
+fn err_invalid_range_min() {
+    // parse_i64 wraps on very large values; the subtype range check
+    // catches out-of-range minima via InvalidRangeMin.
+    assert_parse_err!(
+        "module m; subtype Age = i64 range 999999999999999999999..150 ; end;",
+        ParseError::InvalidRangeMin { .. }
+    );
+}
+
+#[test]
+fn err_invalid_range_max() {
+    // parse_i64 wraps on very large values; the subtype range check
+    // catches out-of-range maxima via InvalidRangeMax.
+    assert_parse_err!(
+        "module m; subtype Age = i64 range 0..0xFFFFFFFFFFFFFFFFFFFFFFFF ; end;",
+        ParseError::InvalidRangeMax { .. }
+    );
 }
 
 // ---------------------------------------------------------------------------

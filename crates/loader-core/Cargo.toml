@@ -4,13 +4,20 @@ version = "0.1.0"
 edition = "2021"
 
 # no_std — used by on-device loader and host-side testing.
+# CI runs both: `cargo test --workspace` (no encryption feature) and
+# `cargo test --features encryption -p loader-core` (or the workspace
+# variant in ci.yml).  Both states are meaningful.
 [dependencies]
 lmod = { path = "../lmod" }
 chacha20poly1305 = { version = "0.10", default-features = false, optional = true }
+aead = { version = "0.5", default-features = false, features = ["alloc", "getrandom"], optional = true }
+getrandom = { version = "0.2", default-features = false, optional = true }
+# On Linux, getrandom uses the getrandom syscall by default with
+# /dev/urandom fallback. No extra features needed.
 
 [dev-dependencies]
 hmac = "0.12"
 sha2 = "0.10"
 
 [features]
-encryption = ["chacha20poly1305"]
+encryption = ["chacha20poly1305", "aead", "getrandom"]

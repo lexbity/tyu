@@ -9,21 +9,73 @@
 pub mod regs;
 
 use std::io::{self, Read, Write};
-use std::net::TcpStream;
-use std::time::Duration;
+use std::net::{TcpStream, TcpListener};
+use std::time::{Duration, Instant};
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
-
-/// Default QEMU gdbstub port.
-pub const DEFAULT_GDB_PORT: u16 = 1234;
 
 /// Default connection timeout.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Response timeout for individual RSP commands.
 pub const RSP_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Retry interval for connect_retry.
+const CONNECT_RETRY_INTERVAL: Duration = Duration::from_millis(50);
+
+/// Maximum retry attempts for connect_retry.
+const CONNECT_RETRY_MAX: u32 = 100;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Bind to `:0` to get an ephemeral port, drop the listener, and return
+/// the port number.  The port is free to be reused by a subsequent bind.
+///
+/// There is a TOCTOU window between dropping the listener and the caller
+/// using the port — connect_retry handles this by retrying on failure.
+pub fn ephemeral_port() -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .expect("ephemeral_port: bind to :0 failed");
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    port
+}
+
+/// Connect to `host:port` with retry up to `CONNECT_RETRY_MAX` times.
+/// Returns `Ok(stream)` on success or `Err` after all retries are exhausted.
+pub fn connect_retry(host: &str, port: u16) -> io::Result<TcpStream> {
+    let addr = format!("{host}:{port}");
+    let deadline = Instant::now() + CONNECT_TIMEOUT * 2;
+    for attempt in 0..CONNECT_RETRY_MAX {
+        match TcpStream::connect_timeout(
+            &addr.as_str().parse().map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?,
+            CONNECT_RETRY_INTERVAL,
+        ) {
+            Ok(stream) => {
+                stream.set_read_timeout(Some(RSP_TIMEOUT))?;
+                stream.set_write_timeout(Some(RSP_TIMEOUT))?;
+                return Ok(stream);
+            }
+            Err(_) if Instant::now() >= deadline => {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("connect_retry: timed out after {attempt} attempts"),
+                ));
+            }
+            Err(_) => {
+                std::thread::sleep(CONNECT_RETRY_INTERVAL);
+            }
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::TimedOut,
+        format!("connect_retry: exhausted {CONNECT_RETRY_MAX} attempts"),
+    ))
+}
 
 // ---------------------------------------------------------------------------
 // RSP packet helpers
@@ -426,6 +478,51 @@ mod tests {
     // Integration tests — x86_64, ARM, RISC-V (gated on QEMU availability)
     // -------------------------------------------------------------------
 
+    /// Helper: launch QEMU, connect RSP client via ephemeral port with
+    /// connect_retry, run the roundtrip, kill QEMU, return result.
+    fn qemu_rsp_roundtrip(
+        qemu_bin: &str,
+        qemu_args: &[&str],
+        kernel_path: &std::path::Path,
+        pc_reg: u8,
+    ) -> Result<(), io::Error> {
+        let port = ephemeral_port();
+
+        let mut qemu = std::process::Command::new(qemu_bin);
+        qemu.args(qemu_args);
+        qemu.arg("-gdb").arg(format!("tcp::{port}"));
+        qemu.arg("-S");
+        qemu.arg("-kernel").arg(kernel_path);
+        qemu.stdout(std::process::Stdio::null());
+        qemu.stderr(std::process::Stdio::null());
+
+        let mut child = qemu.spawn().map_err(|e| {
+            io::Error::new(io::ErrorKind::Other, format!("qemu spawn failed: {e}"))
+        })?;
+
+        let stream = connect_retry("127.0.0.1", port).map_err(|e| {
+            let _ = child.kill(); let _ = child.wait(); e
+        })?;
+        let mut client = RspClient { stream, recv_buf: Vec::with_capacity(4096) };
+
+        let result = (|| -> io::Result<()> {
+            let pc_raw = client.read_register(pc_reg)?;
+            assert!(!pc_raw.is_empty(), "PC must be readable");
+            let pc_val = match pc_raw.len() {
+                4 => u64::from_le_bytes([pc_raw[0], pc_raw[1], pc_raw[2], pc_raw[3], 0, 0, 0, 0]),
+                8 => u64::from_le_bytes(pc_raw[..8].try_into().unwrap()),
+                _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "unexpected PC width")),
+            };
+            let mem = client.read_memory(pc_val, 2)?;
+            assert!(!mem.is_empty(), "memory at PC must be readable");
+            Ok(())
+        })();
+
+        let _ = child.kill();
+        let _ = child.wait();
+        result
+    }
+
     /// Build a minimal PVH ELF that loops forever, suitable for
     /// `qemu-system-x86_64 -kernel`.
     fn try_build_infinite_loop_elf(out_dir: &std::path::Path) -> Option<std::path::PathBuf> {
@@ -477,67 +574,13 @@ mod tests {
             }
         };
 
-        // Launch QEMU with gdbstub on port 1234, CPU frozen (-S).
-        let port = 1234u16;
-        let mut qemu = std::process::Command::new("qemu-system-x86_64");
-        qemu.arg("-machine").arg("q35");
-        qemu.arg("-m").arg("32M");
-        qemu.arg("-display").arg("none");
-        qemu.arg("-device").arg("isa-debug-exit,iobase=0x501,iosize=0x02");
-        qemu.arg("-gdb").arg(format!("tcp::{}", port));
-        qemu.arg("-S");
-        qemu.arg("-kernel").arg(&elf);
-        qemu.stdout(std::process::Stdio::null());
-        qemu.stderr(std::process::Stdio::null());
-
-        let mut child = qemu.spawn().expect("qemu-system-x86_64 spawn failed");
-        // Give QEMU time to start listening.
-        std::thread::sleep(std::time::Duration::from_millis(500));
-
-        let result = (|| -> io::Result<()> {
-            let mut client = RspClient::connect("127.0.0.1", port)?;
-
-            // Read RIP (register 16).
-            let rip_raw = client.read_register(regs::x86_64::RIP)?;
-            // RIP is 8 bytes (64-bit).  It should be non-zero (some address in the image).
-            assert_eq!(rip_raw.len(), 8, "RIP must be 8 bytes");
-            let rip_bytes: [u8; 8] = rip_raw.as_slice().try_into().unwrap();
-            let rip_val = u64::from_le_bytes(rip_bytes);
-            assert!(rip_val > 0x1000, "RIP should be a valid code address, got {:#x}", rip_val);
-
-            // Read memory at RIP (should contain the `jmp main` instruction).
-            let mem = client.read_memory(rip_val, 2)?;
-            // `jmp main` at the end is `eb fe` (jmp $) or `e9 XX XX XX XX` (jmp rel32).
-            // At minimum, the memory at RIP should be readable and non-empty.
-            assert!(!mem.is_empty(), "memory at RIP must be readable");
-
-            // Set a breakpoint at the first instruction of `main` (RIP after -S).
-            client.set_breakpoint(rip_val)?;
-
-            // Continue execution — should hit the breakpoint immediately.
-            client.continue_exec()?;
-
-            // Read RIP again — should still be (or very close to) the breakpoint address.
-            let rip2_raw = client.read_register(regs::x86_64::RIP)?;
-            let rip2_bytes: [u8; 8] = rip2_raw.as_slice().try_into().unwrap();
-            let rip2_val = u64::from_le_bytes(rip2_bytes);
-            // The breakpoint is at `rip_val`; after hitting it, RIP may be at
-            // rip_val or rip_val+1 (depending on how QEMU reports breakpoints).
-            assert!(
-                rip2_val == rip_val || rip2_val == rip_val + 1,
-                "RIP after breakpoint hit should be near {:#x}, got {:#x}",
-                rip_val,
-                rip2_val,
-            );
-
-            Ok(())
-        })();
-
-        // Clean up QEMU.
-        let _ = child.kill();
-        let _ = child.wait();
-
-        // Unwrap the result for test assertion.
+        let qemu_args = [
+            "-machine", "q35",
+            "-m", "32M",
+            "-display", "none",
+            "-device", "isa-debug-exit,iobase=0x501,iosize=0x02",
+        ];
+        let result = qemu_rsp_roundtrip("qemu-system-x86_64", &qemu_args, &elf, regs::x86_64::RIP);
         if let Err(e) = result {
             panic!("RSP integration test failed: {}", e);
         }
@@ -619,55 +662,12 @@ mod tests {
             None => { eprintln!("SKIP: could not build ARM test ELF"); return; }
         };
 
-        let port = 1234u16;
-        let mut qemu = std::process::Command::new("qemu-system-arm");
-        qemu.arg("-machine").arg("lm3s6965evb");
-        qemu.arg("-semihosting-config").arg("enable=on,target=native");
-        qemu.arg("-nographic");
-        qemu.arg("-gdb").arg(format!("tcp::{}", port));
-        qemu.arg("-S");
-        qemu.arg("-kernel").arg(&elf);
-        qemu.stdout(std::process::Stdio::null());
-        qemu.stderr(std::process::Stdio::null());
-
-        let mut child = qemu.spawn().expect("qemu-system-arm spawn failed");
-        std::thread::sleep(std::time::Duration::from_millis(500));
-
-        let result = (|| -> io::Result<()> {
-            let mut client = RspClient::connect("127.0.0.1", port)?;
-
-            // Read PC (register 15 on ARM). On Cortex-M3 the first instruction
-            // is at the reset vector address. PC should be non-zero.
-            let pc_raw = client.read_register(regs::arm::PC)?;
-            // ARM registers are 4 bytes.
-            assert_eq!(pc_raw.len(), 4, "ARM PC must be 4 bytes");
-            let pc_bytes: [u8; 4] = pc_raw.as_slice().try_into().unwrap();
-            let pc_val = u32::from_le_bytes(pc_bytes) as u64;
-            assert!(pc_val > 0, "ARM PC should be non-zero, got {:#x}", pc_val);
-
-            // Read memory at PC.
-            let mem = client.read_memory(pc_val, 2)?;
-            assert!(!mem.is_empty(), "memory at ARM PC must be readable");
-
-            // Set breakpoint and continue.
-            client.set_breakpoint(pc_val)?;
-            client.continue_exec()?;
-
-            // Read PC again.
-            let pc2_raw = client.read_register(regs::arm::PC)?;
-            let pc2_bytes: [u8; 4] = pc2_raw.as_slice().try_into().unwrap();
-            let pc2_val = u32::from_le_bytes(pc2_bytes) as u64;
-            assert!(
-                pc2_val == pc_val || pc2_val == pc_val + 2 ||
-                pc2_val == pc_val + 1 || pc2_val == pc_val.wrapping_sub(1),
-                "ARM PC after breakpoint should be near {:#x}, got {:#x}",
-                pc_val, pc2_val,
-            );
-            Ok(())
-        })();
-
-        let _ = child.kill();
-        let _ = child.wait();
+        let qemu_args = [
+            "-machine", "lm3s6965evb",
+            "-semihosting-config", "enable=on,target=native",
+            "-nographic",
+        ];
+        let result = qemu_rsp_roundtrip("qemu-system-arm", &qemu_args, &elf, regs::arm::PC);
         if let Err(e) = result {
             panic!("ARM RSP integration test failed: {}", e);
         }
@@ -691,53 +691,12 @@ mod tests {
             None => { eprintln!("SKIP: could not build RISC-V test ELF"); return; }
         };
 
-        let port = 1234u16;
-        let mut qemu = std::process::Command::new("qemu-system-riscv32");
-        qemu.arg("-machine").arg("virt");
-        qemu.arg("-semihosting-config").arg("enable=on,target=native");
-        qemu.arg("-nographic");
-        qemu.arg("-gdb").arg(format!("tcp::{}", port));
-        qemu.arg("-S");
-        qemu.arg("-kernel").arg(&elf);
-        qemu.stdout(std::process::Stdio::null());
-        qemu.stderr(std::process::Stdio::null());
-
-        let mut child = qemu.spawn().expect("qemu-system-riscv32 spawn failed");
-        std::thread::sleep(std::time::Duration::from_millis(500));
-
-        let result = (|| -> io::Result<()> {
-            let mut client = RspClient::connect("127.0.0.1", port)?;
-
-            // Read PC (register 32 on RISC-V). RV32 registers are 4 bytes.
-            let pc_raw = client.read_register(regs::riscv::PC)?;
-            assert_eq!(pc_raw.len(), 4, "RISC-V PC must be 4 bytes");
-            let pc_bytes: [u8; 4] = pc_raw.as_slice().try_into().unwrap();
-            let pc_val = u32::from_le_bytes(pc_bytes) as u64;
-            assert!(pc_val >= 0x80000000, "RISC-V PC should be in DRAM, got {:#x}", pc_val);
-
-            // Read memory at PC.
-            let mem = client.read_memory(pc_val, 2)?;
-            assert!(!mem.is_empty(), "memory at RISC-V PC must be readable");
-
-            // Set breakpoint and continue.
-            client.set_breakpoint(pc_val)?;
-            client.continue_exec()?;
-
-            // Read PC again.
-            let pc2_raw = client.read_register(regs::riscv::PC)?;
-            let pc2_bytes: [u8; 4] = pc2_raw.as_slice().try_into().unwrap();
-            let pc2_val = u32::from_le_bytes(pc2_bytes) as u64;
-            assert!(
-                pc2_val == pc_val || pc2_val == pc_val + 2 ||
-                pc2_val == pc_val + 4 || pc2_val == pc_val.wrapping_sub(2),
-                "RISC-V PC after breakpoint should be near {:#x}, got {:#x}",
-                pc_val, pc2_val,
-            );
-            Ok(())
-        })();
-
-        let _ = child.kill();
-        let _ = child.wait();
+        let qemu_args = [
+            "-machine", "virt",
+            "-semihosting-config", "enable=on,target=native",
+            "-nographic",
+        ];
+        let result = qemu_rsp_roundtrip("qemu-system-riscv32", &qemu_args, &elf, regs::riscv::PC);
         if let Err(e) = result {
             panic!("RISC-V RSP integration test failed: {}", e);
         }

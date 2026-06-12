@@ -68,6 +68,22 @@ impl<'a> Parser<'a> {
                 effect_bits = bits;
                 effect_net = net;
                 effect_high = high;
+                // D-8: reject unknown effect names.
+                // Scan the inner content (comma-separated) for any name that
+                // is not in the known set.  Skip net=/high= parameters.
+                for segment in core::str::from_utf8(inner).unwrap_or("").split(',') {
+                    let s = segment.trim();
+                    if s.is_empty() || s.starts_with("net=") || s.starts_with("high=") {
+                        continue;
+                    }
+                    let known = matches!(s, "suspend" | "interrupt" | "diverge" | "mmio" | "alloc");
+                    if !known {
+                        return Err(ParseError::UnknownEffect {
+                            span: brace_span,
+                            name: Span::UNKNOWN,
+                        });
+                    }
+                }
             } else {
                 return Err(ParseError::ExpectedRBrace { span: self.look.span });
             }

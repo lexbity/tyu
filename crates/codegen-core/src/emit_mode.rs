@@ -46,6 +46,15 @@ pub enum EmitMode {
 }
 
 impl EmitMode {
+    /// All emit modes. Used for exhaustive iteration in tests.
+    pub const ALL: [EmitMode; 5] = [
+        EmitMode::Ast,
+        EmitMode::Ir,
+        EmitMode::StackCheck,
+        EmitMode::Asm,
+        EmitMode::Obj,
+    ];
+
     /// True if this mode produces a linkable/production artifact.
     pub fn is_production(self) -> bool {
         matches!(self, Self::Obj)

@@ -15,7 +15,7 @@ use std::process::Command;
 use lmod::enc::EncMode;
 use lmod::header::{HEADER_SIZE, LMOD_FLAG_ENCRYPTED, LMOD_FLAG_SIGNED, FORMAT_VER};
 use lmod::validate::Container;
-use tyu::test_helpers::{golden_dir, workspace_root};
+use tyu::test_helpers::{bin, golden_dir, workspace_root};
 
 const KEK_HEX: &str = "abababababababababababababababababababababababababababababababab";
 const SIGN_KEY_HEX: &str = "abababababababababababababababababababababababababababababababab";
@@ -47,7 +47,7 @@ fn golden_encrypt_structural() {
     let encrypted_path = tmp.join("encrypted.lmod");
 
     // Encrypt the committed packed.lmod.
-    let status = Command::new(workspace_root().join("target").join("debug").join("lmod-encrypt"))
+    let status = Command::new(tyu::test_helpers::bin("lmod-encrypt"))
         .args([
             input_lmod.to_string_lossy().as_ref(),
             encrypted_path.to_string_lossy().as_ref(),
@@ -90,7 +90,7 @@ fn golden_encrypt_then_sign_structural() {
     let signed_path = tmp.join("signed.lmod");
 
     // Encrypt.
-    let status = Command::new(workspace_root().join("target").join("debug").join("lmod-encrypt"))
+    let status = Command::new(tyu::test_helpers::bin("lmod-encrypt"))
         .args([
             input_lmod.to_string_lossy().as_ref(),
             encrypted_path.to_string_lossy().as_ref(),
@@ -101,7 +101,7 @@ fn golden_encrypt_then_sign_structural() {
     assert!(status.success(), "lmod-encrypt failed");
 
     // Sign.
-    let status = Command::new(workspace_root().join("target").join("debug").join("lmod-sign"))
+    let status = Command::new(tyu::test_helpers::bin("lmod-sign"))
         .args([
             encrypted_path.to_string_lossy().as_ref(),
             signed_path.to_string_lossy().as_ref(),

@@ -59,8 +59,9 @@ pub fn temp_dir(label: &str) -> PathBuf {
 // Tool availability
 // ---------------------------------------------------------------------------
 
-/// Returns true if a named binary exists — either on `PATH` or in
-/// `target/debug/` (for workspace-built binaries like `langc`, `tyu`).
+/// Returns true if a named binary exists — either on `PATH`, in
+/// `target/debug/`, or in `target/release/` (for workspace-built
+/// binaries like `langc`, `tyu`).
 pub fn tool_available(name: &str) -> bool {
     if Command::new("which")
         .arg(name)
@@ -70,8 +71,12 @@ pub fn tool_available(name: &str) -> bool {
     {
         return true;
     }
-    let target = workspace_root().join("target").join("debug").join(name);
-    target.exists()
+    let root = workspace_root();
+    let p = root.join("target").join("debug").join(name);
+    if p.exists() {
+        return true;
+    }
+    root.join("target").join("release").join(name).exists()
 }
 
 /// Environment-aware tool gating.

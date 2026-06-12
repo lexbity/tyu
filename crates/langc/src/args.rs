@@ -197,6 +197,10 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]]) -> (ParseResult<'a>, bool) {
                 return (ParseResult::Error(2), true);
             }
         }
+        if a.starts_with(b"--") {
+            emit_error(1008, b"unknown flag");
+            return (ParseResult::Error(2), true);
+        }
         if a.starts_with(b"-") {
             i += 1;
             continue;
@@ -303,7 +307,7 @@ pub unsafe fn parse_args<'a>(
 mod tests {
     use super::*;
 
-    fn ok(args: &[&[u8]]) -> Config {
+    fn ok<'a>(args: &[&'a [u8]]) -> Config<'a> {
         match parse_args_from_iter(args).0 {
             ParseResult::Ok(c) => c,
             ParseResult::Help => panic!("expected Ok, got Help"),
@@ -311,7 +315,7 @@ mod tests {
         }
     }
 
-    fn err(args: &[&[u8]]) -> i32 {
+    fn err_code<'a>(args: &[&'a [u8]]) -> i32 {
         match parse_args_from_iter(args).0 {
             ParseResult::Ok(_) => panic!("expected error"),
             ParseResult::Help => panic!("expected error, got Help"),
@@ -325,7 +329,7 @@ mod tests {
 
     #[test]
     fn minimal_input() {
-        let cfg = ok(&[b"langc", b"input.mod"]);
+        let cfg = ok(&[b"langc", b"--emit=asm", b"input.mod"]);
         assert_eq!(cfg.emit, EmitMode::Asm);
         assert_eq!(cfg.input, b"input.mod");
     }
@@ -355,11 +359,6 @@ mod tests {
     }
 
     #[test]
-    fn emit_asm() {
-        assert_eq!(ok(&[b"langc", b"--emit=asm", b"x.mod"]).emit, EmitMode::Asm);
-    }
-
-    #[test]
     fn emit_obj() {
         let cfg = ok(&[
             b"langc",
@@ -373,17 +372,22 @@ mod tests {
 
     #[test]
     fn emit_obj_requires_target() {
-        err(&[b"langc", b"--emit=obj", b"x.mod"]);
+        assert_eq!(err_code(&[b"langc", b"--emit=obj", b"x.mod"]), 2);
+    }
+
+    #[test]
+    fn emit_obj_requires_target_with_lib() {
+        assert_eq!(err_code(&[b"langc", b"--emit=obj", b"--lib", b"x.mod"]), 2);
     }
 
     #[test]
     fn multiple_emit_is_error() {
-        err(&[b"langc", b"--emit=ast", b"--emit=ir", b"x.mod"]);
+        assert_eq!(err_code(&[b"langc", b"--emit=ast", b"--emit=ir", b"x.mod"]), 2);
     }
 
     #[test]
     fn no_emit_is_error() {
-        err(&[b"langc", b"x.mod"]);
+        assert_eq!(err_code(&[b"langc", b"x.mod"]), 2);
     }
 
     #[test]
@@ -395,7 +399,7 @@ mod tests {
 
     #[test]
     fn missing_I_arg() {
-        err(&[b"langc", b"-I", b"--emit=ast", b"x.mod"]);
+        assert_eq!(err_code(&[b"langc", b"-I", b"--emit=ast", b"x.mod"]), 2);
     }
 
     #[test]
@@ -410,7 +414,7 @@ mod tests {
 
     #[test]
     fn invalid_checks_value() {
-        err(&[b"langc", b"--checks=bogus", b"--emit=ast", b"x.mod"]);
+        assert_eq!(err_code(&[b"langc", b"--checks=bogus", b"--emit=ast", b"x.mod"]), 2);
     }
 
     #[test]
@@ -426,7 +430,7 @@ mod tests {
     #[test]
     fn sysroot() {
         let cfg = ok(&[b"langc", b"--sysroot=/x", b"--emit=ast", b"x.mod"]);
-        assert_eq!(cfg.sysroot, Some(b"/x"));
+        assert_eq!(cfg.sysroot, Some(&b"/x"[..]));
     }
 
     #[test]
@@ -438,17 +442,17 @@ mod tests {
             b"--target=x86_64-unknown-linux-gnu",
             b"x.mod",
         ]);
-        assert_eq!(cfg.out_dir, Some(b"/tmp"));
+        assert_eq!(cfg.out_dir, Some(&b"/tmp"[..]));
     }
 
     #[test]
     fn unknown_target() {
-        err(&[b"langc", b"--emit=obj", b"--target=unknown-cpu", b"x.mod"]);
+        assert_eq!(err_code(&[b"langc", b"--emit=obj", b"--target=unknown-cpu", b"x.mod"]), 2);
     }
 
     #[test]
     fn no_input_file() {
-        err(&[b"langc", b"--emit=ast"]);
+        assert_eq!(err_code(&[b"langc", b"--emit=ast"]), 2);
     }
 
     #[test]
@@ -457,8 +461,8 @@ mod tests {
     }
 
     #[test]
-    fn unknown_flag_ignored() {
-        ok(&[b"langc", b"--bogus-flag", b"--emit=ast", b"x.mod"]);
+    fn unknown_long_flag_is_rejected() {
+        assert_eq!(err_code(&[b"langc", b"--bogus-flag", b"--emit=ast", b"x.mod"]), 2);
     }
 
     #[test]
@@ -472,6 +476,7 @@ mod tests {
     fn features_parse_csv() {
         let cfg = ok(&[
             b"langc",
+            b"--no-default-features",
             b"--features=concurrency",
             b"--emit=ast",
             b"x.mod",
@@ -519,7 +524,7 @@ mod tests {
 
     #[test]
     fn features_unknown_value_errs() {
-        let code = err(&[
+        let code = err_code(&[
             b"langc",
             b"--features=bogus",
             b"--emit=ast",
