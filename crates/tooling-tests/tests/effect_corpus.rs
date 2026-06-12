@@ -287,7 +287,7 @@ fn e5020_borrow_escape() {
     std::fs::write(
         &path,
         b"module Main;\n\
-          : ok ( i64'4 -- i64'4 )\n\
+          : ok ( i64.4 -- i64.4 )\n\
             &[ drop ]\n\
           ;\n\
           end;\n",

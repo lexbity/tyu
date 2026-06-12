@@ -479,7 +479,7 @@ fn milestone13_array_type_and_scoped_slice_typechecks() {
     std::fs::write(
         dir.join("Main.mod"),
         b"module Main;\n\
-: f ( i64'4 -- i64'4 )\n\
+: f ( i64.4 -- i64.4 )\n\
   &[\n\
     drop\n\
   ]\n\
@@ -499,7 +499,7 @@ end;\n",
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("i64'4"));
+    assert!(stdout.contains("i64.4"));
     assert!(stdout.contains("Slice(i64)"));
     assert!(stdout.contains("scoped_enter"));
 }
@@ -550,7 +550,7 @@ fn milestone13_borrowed_slice_cannot_escape_via_return() {
     std::fs::write(
         dir.join("Main.mod"),
         b"module Main;\n\
-: f ( i64'4 -- Slice(i64) )\n\
+: f ( i64.4 -- Slice(i64) )\n\
   &[\n\
     swap drop\n\
     return\n\
@@ -578,7 +578,7 @@ fn milestone13_borrowed_slice_live_in_local_blocks_yield() {
     std::fs::write(
         dir.join("Main.mod"),
         b"module Main;\n\
-: f ( i64'4 -- i64'4 ) performs {suspend}\n\
+: f ( i64.4 -- i64.4 ) performs {suspend}\n\
   &[\n\
     => s\n\
     platform.task.yield\n\
@@ -782,7 +782,7 @@ struct Point\n\
 end;\n\
 : getx ( Point -- i32 )\n\
   => p\n\
-  &p ->x @i32\n\
+  &p .x @i32\n\
 ;\n\
 end;\n",
     )

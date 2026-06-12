@@ -84,21 +84,22 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 TokenKind::PunctLBracket => {
                     self.compile_quotation(cur, stack, sp, span, slice, tok, &mut lex)?
                 }
+                // S-14: `->` is deleted; `.` auto-projects through pointers.
                 TokenKind::PunctArrow => {
-                    self.compile_field_access(cur, stack, sp, span, slice, tok, &mut lex)?
+                    // Migration hint: use `.` instead of `->`.
+                    return Err(TcError::Internal { span: Span::new(span.start + tok.span.start, span.start + tok.span.end) });
                 }
-                TokenKind::PunctApostrophe => self.compile_index(
-                    cur,
-                    stack,
-                    sp,
-                    span,
-                    slice,
-                    tok,
-                    &mut lex,
-                    allow_suspend,
-                    allow_locals,
-                    observer,
-                )?,
+                TokenKind::PunctDot => {
+                    // `.` handles field access, static index, and dynamic index
+                    // with auto-projection (value-extract vs pointer-address).
+                    // Delegate to a unified handler.
+                    cur = self.compile_dot_op(cur, stack, sp, span, slice, tok, &mut lex)?;
+                    cur
+                }
+                TokenKind::PunctApostrophe => {
+                    // S-14: `'` is type-only.  In term position it's a migration hint.
+                    return Err(TcError::Internal { span: Span::new(span.start + tok.span.start, span.start + tok.span.end) });
+                }
                 TokenKind::PunctAmp | TokenKind::PunctAmpBang => {
                     self.compile_addr_of(cur, stack, sp, span, slice, tok, &mut lex)?
                 }

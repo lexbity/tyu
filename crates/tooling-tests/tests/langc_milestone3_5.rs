@@ -439,7 +439,7 @@ fn fnv1a_u64(bytes: &[u8]) -> u64 {
 fn write_u64_hex_compact(v: u64, buf: &mut [u8; 18]) -> &[u8] {
     // Produces the same format as codegen_x86_64::util::write_u64_hex:
     // "0x" + lowercase hex with no leading zeros (except "0x0" for zero).
-    buf[0] = b'0';
+    buf[0] = b.0';
     buf[1] = b'x';
     let mut n = 2usize;
     let mut started = false;
@@ -448,7 +448,7 @@ fn write_u64_hex_compact(v: u64, buf: &mut [u8; 18]) -> &[u8] {
         if started || nib != 0 || i == 0 {
             started = true;
             buf[n] = match nib {
-                0..=9 => b'0' + nib,
+                0..=9 => b.0' + nib,
                 _ => b'a' + (nib - 10),
             };
             n += 1;

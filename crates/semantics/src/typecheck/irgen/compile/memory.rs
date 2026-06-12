@@ -5,6 +5,7 @@ use crate::typecheck::value::PLACE_NONE;
 
 impl<'a, 'r> IrWordGen<'a, 'r> {
 
+    #[allow(dead_code)]
     pub(super) fn compile_field_access(
         &mut self,
         cur: lir::BlockId,
@@ -76,6 +77,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
     }
 
 
+    #[allow(dead_code)]
     pub(super) fn compile_index(
         &mut self,
         mut cur: lir::BlockId,
@@ -349,6 +351,161 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         Ok(cur)
     }
 
+
+    /// S-14: unified `.` operator — handles field access, static index, and
+    /// dynamic index with auto-projection (value-extract vs pointer-address).
+    pub(super) fn compile_dot_op(
+        &mut self,
+        cur: lir::BlockId,
+        stack: &mut [Value; 256],
+        sp: &mut usize,
+        span: Span,
+        slice: &[u8],
+        tok: Token,
+        lex: &mut Lexer,
+    ) -> Result<lir::BlockId, TcError> {
+        let op_span = Span::new(span.start + tok.span.start, span.start + tok.span.end);
+        let next = lex.next();
+        match next.kind {
+            TokenKind::Ident => {
+                // .field_name — field access (old `->field` or `.field`)
+                let field_atom = TypeAtom::new(&slice[next.span.start..next.span.end])
+                    .ok_or(TcError::FieldNotFound { span: op_span })?;
+                let base = *stack
+                    .get(*sp - 1)
+                    .ok_or(TcError::StackUnderflow { span: op_span })?;
+                match base {
+                    Value::Ptr { ty, mutable, place } => {
+                        // Auto-projection: `.x` on a Ptr → field address (old -> behavior).
+                        let Some(sinfo) = self.nominals.structs.iter().find(|s| s.name == ty) else {
+                            return Err(TcError::FieldNotFound { span: op_span });
+                        };
+                        let mut offset: u32 = 0;
+                        let mut found: Option<TypeAtom> = None;
+                        for field in sinfo.fields.iter() {
+                            let fsize = type_size_bytes(field.ty, self.nominals)
+                                .ok_or(TcError::FieldSizeError { span: op_span })?;
+                            let falign = field_align(fsize);
+                            offset = align_up(offset, falign);
+                            if field.name == field_atom {
+                                found = Some(field.ty);
+                                break;
+                            }
+                            offset = offset.checked_add(fsize)
+                                .ok_or(TcError::FieldSizeError { span: op_span })?;
+                        }
+                        let Some(field_ty) = found else {
+                            return Err(TcError::FieldNotFound { span: op_span });
+                        };
+                        let base_tid = if mutable { lir::TY_PTR_MUT } else { lir::TY_PTR };
+                        self.emit_op(cur, lir::OpKind::PtrAddConst { ty: base_tid, offset }, op_span)?;
+                        stack[*sp - 1] = Value::Ptr { ty: field_ty, mutable, place };
+                        Ok(cur)
+                    }
+                    Value::Plain(struct_ty) => {
+                        // Auto-projection: `.x` on a value → field extraction.
+                        let Some(sinfo) = self.nominals.structs.iter().find(|s| s.name == struct_ty) else {
+                            return Err(TcError::FieldNotFound { span: op_span });
+                        };
+                        let mut offset: u32 = 0;
+                        let mut found: Option<TypeAtom> = None;
+                        for field in sinfo.fields.iter() {
+                            let fsize = type_size_bytes(field.ty, self.nominals)
+                                .ok_or(TcError::FieldSizeError { span: op_span })?;
+                            let falign = field_align(fsize);
+                            offset = align_up(offset, falign);
+                            if field.name == field_atom {
+                                found = Some(field.ty);
+                                break;
+                            }
+                            offset = offset.checked_add(fsize)
+                                .ok_or(TcError::FieldSizeError { span: op_span })?;
+                        }
+                        let Some(field_ty) = found else {
+                            return Err(TcError::FieldNotFound { span: op_span });
+                        };
+                        let struct_tid = self.ty_id_of_type(struct_ty, op_span)?;
+                        self.emit_op(cur, lir::OpKind::PtrAddConst { ty: struct_tid, offset }, op_span)?;
+                        let field_tid = self.ty_id_of_type(field_ty, op_span)?;
+                        self.emit_op(cur, lir::OpKind::Load { ty: field_tid }, op_span)?;
+                        let _ = pop(stack, sp);
+                        push(stack, sp, Value::Plain(field_ty))?;
+                        Ok(cur)
+                    }
+                    _ => Err(TcError::FieldNotFound { span: op_span }),
+                }
+            }
+            TokenKind::Number => {
+                // .N — static index (old 'N behavior)
+                let const_idx = crate::typecheck::util::parse_u32_any(
+                    &slice[next.span.start..next.span.end],
+                ).ok_or(TcError::IndexError { span: op_span })?;
+                let base_pos = *sp - 1;
+                let base = stack[base_pos];
+                let (elem_ty, scale, out_kind, base_tid) = match base {
+                    Value::Plain(t) => {
+                        let Some(elem) = array_elem_type(t) else {
+                            return Err(TcError::IndexError { span: op_span });
+                        };
+                        let len = array_len(t).ok_or(TcError::IndexError { span: op_span })?;
+                        if const_idx >= len {
+                            return Err(TcError::ArrayIndexOob { span: op_span });
+                        }
+                        let size = type_size_bytes(elem, self.nominals)
+                            .ok_or(TcError::IndexError { span: op_span })?;
+                        (elem, size, IndexOut::Value, lir::TY_PTR)
+                    }
+                    Value::Ptr { ty, mutable, .. } => {
+                        let Some(elem) = array_elem_type(ty) else {
+                            return Err(TcError::IndexError { span: op_span });
+                        };
+                        let len = array_len(ty).ok_or(TcError::IndexError { span: op_span })?;
+                        if const_idx >= len {
+                            return Err(TcError::ArrayIndexOob { span: op_span });
+                        }
+                        let size = type_size_bytes(elem, self.nominals)
+                            .ok_or(TcError::IndexError { span: op_span })?;
+                        let tid = if mutable { lir::TY_PTR_MUT } else { lir::TY_PTR };
+                        (elem, size, IndexOut::Ptr(mutable), tid)
+                    }
+                    Value::MmioPlace(MmioResolved::Reg(reg)) => {
+                        let Some(width) = mmio_type_width_bytes(reg.reg_ty.as_bytes()) else {
+                            return Err(TcError::IndexError { span: op_span });
+                        };
+                        if let Some(len) = reg.array_len {
+                            if const_idx >= len {
+                                return Err(TcError::MmioArrayIndexOob { span: op_span });
+                            }
+                        }
+                        (reg.reg_ty, width, IndexOut::Mmio, lir::TY_MMIO)
+                    }
+                    _ => return Err(TcError::IndexError { span: op_span }),
+                };
+                match out_kind {
+                    IndexOut::Value => {
+                        stack[base_pos] = Value::Ptr { ty: elem_ty, mutable: false, place: PLACE_NONE };
+                    }
+                    IndexOut::Ptr(mutable) => {
+                        let base_place = match stack[base_pos] {
+                            Value::Ptr { place, .. } => place,
+                            _ => PLACE_NONE,
+                        };
+                        stack[base_pos] = Value::Ptr { ty: elem_ty, mutable, place: base_place };
+                    }
+                    IndexOut::Mmio => {}
+                }
+                let offset = const_idx.saturating_mul(scale);
+                self.emit_op(cur, lir::OpKind::PtrAddConst { ty: base_tid, offset }, op_span)?;
+                if matches!(out_kind, IndexOut::Value) {
+                    let tid = self.ty_id_of_type(elem_ty, op_span)?;
+                    self.emit_op(cur, lir::OpKind::Load { ty: tid }, op_span)?;
+                    stack[base_pos] = Value::Plain(elem_ty);
+                }
+                Ok(cur)
+            }
+            _ => Err(TcError::IndexError { span: op_span }),
+        }
+    }
 
     pub(super) fn compile_load_store(
         &mut self,

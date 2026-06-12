@@ -560,8 +560,8 @@ register-map GPIO\n\
 end;\n\
 const gpio = GPIO @ 0x0;\n\
 : main ( -- i64 )\n\
-  &!gpio.DATA'0 &!gpio.DATA'1 &!gpio.DATA'2 &!gpio.DATA'3\n\
-  &!gpio.DATA'4 &!gpio.DATA'5 &!gpio.DATA'6 &!gpio.DATA'7\n\
+  &!gpio.DATA.0 &!gpio.DATA.1 &!gpio.DATA.2 &!gpio.DATA.3\n\
+  &!gpio.DATA.4 &!gpio.DATA.5 &!gpio.DATA.6 &!gpio.DATA.7\n\
   drop drop drop drop drop drop drop drop\n\
   0\n\
 ;\n\

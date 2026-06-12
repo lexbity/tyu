@@ -440,7 +440,7 @@ register-map GPIO\n\
 end;\n\
 const gpio = GPIO @ 0x1000;\n\
 : bad ( -- u32 )\n\
-  &gpio.PINCFG'2 @u32\n\
+  &gpio.PINCFG.2 @u32\n\
 ;\n\
 end;\n",
     )

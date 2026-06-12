@@ -7,7 +7,7 @@
 //!
 //! And accepts:
 //!   - Hex digit `e` in `0x`-prefixed numbers (`0x1e5`)
-//!   - Place-projection `.N` on identifiers (`m.3.5`-shape, staged as `m'3'5`
+//!   - Place-projection `.N` on identifiers (`m.3.5`-shape, staged as `m.3.5`
 //!     for now — migrated by S-14's sweep)
 
 use std::process::Command;
@@ -119,7 +119,7 @@ register-map GPIO\n\
 end;\n\
 const gpio = GPIO @ 0x0;\n\
 : main ( -- i64 )\n\
-  gpio.DATA'2 @u32 drop\n\
+  gpio.DATA.2 @u32 drop\n\
   0\n\
 ;\n\
 end;\n";

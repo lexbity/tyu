@@ -35,7 +35,10 @@ impl PlacePath {
 
 /// Parse a place path from the lexer's current position.
 ///
-/// Grammar (v1): `IDENT ( '.' IDENT | '\'' NUMBER | '\'' '(' expr ')' )*`
+/// Grammar (S-14): `IDENT ( '.' IDENT | '.' NUMBER | '.' '(' expr ')' )*`
+///
+/// `'` in term position is a migration error (use `.` instead).
+/// `->` is deleted; `.` auto-projects through pointers.
 ///
 /// Returns `PlaceParseFailed` if the token stream does not match.
 pub fn parse_place_path(
@@ -61,42 +64,36 @@ pub fn parse_place_path(
         match next.kind {
             TokenKind::PunctDot => {
                 let seg = step_probe.next();
-                if seg.kind != TokenKind::Ident {
-                    return Err(TcError::PlaceParseFailed {
-                        span: Span::new(seg.span.start, seg.span.end),
-                    });
-                }
-                let field = TypeAtom::new(&slice[seg.span.start..seg.span.end])
-                    .ok_or(TcError::PlaceParseFailed {
-                        span: Span::new(seg.span.start, seg.span.end),
-                    })?;
-                steps.push(Step::Field(field))
-                    .map_err(|_| TcError::PlaceTooDeep {
-                        span: Span::new(root.start, seg.span.end),
-                    })?;
-                end = seg.span.end;
-                probe = step_probe;
-            }
-            TokenKind::PunctApostrophe => {
-                let idx = step_probe.next();
-                match idx.kind {
+                match seg.kind {
+                    TokenKind::Ident => {
+                        let field = TypeAtom::new(&slice[seg.span.start..seg.span.end])
+                            .ok_or(TcError::PlaceParseFailed {
+                                span: Span::new(seg.span.start, seg.span.end),
+                            })?;
+                        steps.push(Step::Field(field))
+                            .map_err(|_| TcError::PlaceTooDeep {
+                                span: Span::new(root.start, seg.span.end),
+                            })?;
+                        end = seg.span.end;
+                        probe = step_probe;
+                    }
                     TokenKind::Number => {
                         let n = crate::typecheck::util::parse_u32_any(
-                            &slice[idx.span.start..idx.span.end],
+                            &slice[seg.span.start..seg.span.end],
                         ).ok_or(TcError::PlaceParseFailed {
-                            span: Span::new(idx.span.start, idx.span.end),
+                            span: Span::new(seg.span.start, seg.span.end),
                         })?;
                         steps.push(Step::Index(n))
                             .map_err(|_| TcError::PlaceTooDeep {
-                                span: Span::new(root.start, idx.span.end),
+                                span: Span::new(root.start, seg.span.end),
                             })?;
-                        end = idx.span.end;
+                        end = seg.span.end;
                         probe = step_probe;
                     }
                     TokenKind::PunctLParen => {
-                        // Dynamic index: '( expr )
+                        // Dynamic index: .( expr )
                         let mut depth = 1u32;
-                        let expr_start = idx.span.start + 1;
+                        let expr_start = seg.span.start + 1;
                         let mut last_end;
                         loop {
                             let t = step_probe.next();
@@ -108,8 +105,7 @@ pub fn parse_place_path(
                                 }
                             }
                         }
-                        // After loop, last_end has advanced past the ')'
-                        let expr_end = last_end - 1; // back to before ')'
+                        let expr_end = last_end - 1;
                         steps.push(Step::DynamicIndex(Span::new(expr_start, expr_end)))
                             .map_err(|_| TcError::PlaceTooDeep {
                                 span: Span::new(root.start, expr_end),
@@ -119,10 +115,18 @@ pub fn parse_place_path(
                     }
                     _ => {
                         return Err(TcError::PlaceParseFailed {
-                            span: Span::new(idx.span.start, idx.span.end),
+                            span: Span::new(seg.span.start, seg.span.end),
                         });
                     }
                 }
+            }
+            TokenKind::PunctApostrophe => {
+                // S-14: `'` in term/place position is a migration hint.
+                // Consume the apostrophe and following tokens to keep lexer in sync.
+                let _ = step_probe.next();
+                return Err(TcError::PlaceParseFailed {
+                    span: Span::new(next.span.start, next.span.start + 1),
+                });
             }
             _ => break,
         }

@@ -222,20 +222,20 @@ end;\n\
 const gpio = GPIO @ 0x0;\n\
 : main ( -- i64 ) performs {suspend}\n\
   platform.channel.make drop\n\
-  0 as u32 &!gpio.DATA'0 swap !u32\n\
-  0 as u32 &!gpio.DATA'1 swap !u32\n\
+  0 as u32 &!gpio.DATA.0 swap !u32\n\
+  0 as u32 &!gpio.DATA.1 swap !u32\n\
   0\n\
   [ dup 64 < ]\n\
   [ dup 0 bitcast |i64| swap |> 1 + ] while\n\
   drop\n\
   [ ( -- )\n\
-    &!gpio.DATA'0 @u32 as i64 1 == [ 1 as u32 &!gpio.DATA'1 swap !u32 ] [ ] if\n\
+    &!gpio.DATA.0 @u32 as i64 1 == [ 1 as u32 &!gpio.DATA.1 swap !u32 ] [ ] if\n\
     0 bitcast |i64| <| drop\n\
   ] platform.task.spawn\n\
   0 bitcast |i64| 99 |>\n\
-  1 as u32 &!gpio.DATA'0 swap !u32\n\
+  1 as u32 &!gpio.DATA.0 swap !u32\n\
   platform.task.join\n\
-  &gpio.DATA'1 @u32 as i64\n\
+  &gpio.DATA.1 @u32 as i64\n\
 ;\n\
 end;\n",
     )
@@ -278,7 +278,7 @@ register-map GPIO\n\
 end;\n\
 const gpio = GPIO @ 0x0;\n\
 : main ( -- i64 )\n\
-  gpio.DATA'2 @u32 drop\n\
+  gpio.DATA.2 @u32 drop\n\
   0\n\
 ;\n\
 end;\n",
@@ -351,16 +351,16 @@ end;\n\
 const gpio = GPIO @ 0x0;\n\
 : main ( -- i64 ) performs {suspend}\n\
   platform.channel.make drop\n\
-  0 as u32 &!gpio.DATA'0 swap !u32\n\
-  0 as u32 &!gpio.DATA'1 swap !u32\n\
+  0 as u32 &!gpio.DATA.0 swap !u32\n\
+  0 as u32 &!gpio.DATA.1 swap !u32\n\
   [ ( -- )\n\
-    &!gpio.DATA'0 @u32 as i64 1 == [ 1 as u32 &!gpio.DATA'1 swap !u32 ] [ ] if\n\
+    &!gpio.DATA.0 @u32 as i64 1 == [ 1 as u32 &!gpio.DATA.1 swap !u32 ] [ ] if\n\
     0 bitcast |i64| 123 |>\n\
   ] platform.task.spawn\n\
   0 bitcast |i64| <| drop\n\
-  1 as u32 &!gpio.DATA'0 swap !u32\n\
+  1 as u32 &!gpio.DATA.0 swap !u32\n\
   platform.task.join\n\
-  &gpio.DATA'1 @u32 as i64\n\
+  &gpio.DATA.1 @u32 as i64\n\
 ;\n\
 end;\n",
     )
@@ -760,14 +760,14 @@ register-map GPIO\n\
 end;\n\
 const gpio = GPIO @ 0x0;\n\
 : main ( -- i64 ) performs {suspend}\n\
-  [ ( -- ) performs {suspend} platform.task.yield 1 as u32 &!gpio.DATA'0 swap !u32 ] platform.task.spawn\n\
-  [ ( -- ) performs {suspend} platform.task.yield 2 as u32 &!gpio.DATA'1 swap !u32 ] platform.task.spawn\n\
-  [ ( -- ) performs {suspend} platform.task.yield 3 as u32 &!gpio.DATA'2 swap !u32 ] platform.task.spawn\n\
-  [ ( -- ) performs {suspend} platform.task.yield 4 as u32 &!gpio.DATA'3 swap !u32 ] platform.task.spawn\n\
-  [ ( -- ) performs {suspend} platform.task.yield 5 as u32 &!gpio.DATA'4 swap !u32 ] platform.task.spawn\n\
-  [ ( -- ) performs {suspend} platform.task.yield 6 as u32 &!gpio.DATA'5 swap !u32 ] platform.task.spawn\n\
-  [ ( -- ) performs {suspend} platform.task.yield 7 as u32 &!gpio.DATA'6 swap !u32 ] platform.task.spawn\n\
-  [ ( -- ) performs {suspend} platform.task.yield 8 as u32 &!gpio.DATA'7 swap !u32 ] platform.task.spawn\n\
+  [ ( -- ) performs {suspend} platform.task.yield 1 as u32 &!gpio.DATA.0 swap !u32 ] platform.task.spawn\n\
+  [ ( -- ) performs {suspend} platform.task.yield 2 as u32 &!gpio.DATA.1 swap !u32 ] platform.task.spawn\n\
+  [ ( -- ) performs {suspend} platform.task.yield 3 as u32 &!gpio.DATA.2 swap !u32 ] platform.task.spawn\n\
+  [ ( -- ) performs {suspend} platform.task.yield 4 as u32 &!gpio.DATA.3 swap !u32 ] platform.task.spawn\n\
+  [ ( -- ) performs {suspend} platform.task.yield 5 as u32 &!gpio.DATA.4 swap !u32 ] platform.task.spawn\n\
+  [ ( -- ) performs {suspend} platform.task.yield 6 as u32 &!gpio.DATA.5 swap !u32 ] platform.task.spawn\n\
+  [ ( -- ) performs {suspend} platform.task.yield 7 as u32 &!gpio.DATA.6 swap !u32 ] platform.task.spawn\n\
+  [ ( -- ) performs {suspend} platform.task.yield 8 as u32 &!gpio.DATA.7 swap !u32 ] platform.task.spawn\n\
   platform.task.join\n\
   platform.task.join\n\
   platform.task.join\n\
@@ -776,14 +776,14 @@ const gpio = GPIO @ 0x0;\n\
   platform.task.join\n\
   platform.task.join\n\
   platform.task.join\n\
-  &gpio.DATA'0 @u32 as i64\n\
-  &gpio.DATA'1 @u32 as i64 +\n\
-  &gpio.DATA'2 @u32 as i64 +\n\
-  &gpio.DATA'3 @u32 as i64 +\n\
-  &gpio.DATA'4 @u32 as i64 +\n\
-  &gpio.DATA'5 @u32 as i64 +\n\
-  &gpio.DATA'6 @u32 as i64 +\n\
-  &gpio.DATA'7 @u32 as i64 +\n\
+  &gpio.DATA.0 @u32 as i64\n\
+  &gpio.DATA.1 @u32 as i64 +\n\
+  &gpio.DATA.2 @u32 as i64 +\n\
+  &gpio.DATA.3 @u32 as i64 +\n\
+  &gpio.DATA.4 @u32 as i64 +\n\
+  &gpio.DATA.5 @u32 as i64 +\n\
+  &gpio.DATA.6 @u32 as i64 +\n\
+  &gpio.DATA.7 @u32 as i64 +\n\
 ;\n\
 end;\n",
     )
@@ -1071,7 +1071,7 @@ fn milestone5_scoped_borrow_must_be_consumed() {
 
     std::fs::write(
         dir.join("Main.mod"),
-        b"module Main;\n: f ( i64'1 -- i64'1 )\n  &[\n  ]\n;\nend;\n",
+        b"module Main;\n: f ( i64.1 -- i64.1 )\n  &[\n  ]\n;\nend;\n",
     )
     .unwrap();
 
@@ -1092,7 +1092,7 @@ fn milestone5_rejects_suspend_with_scoped_live() {
 
     std::fs::write(
         dir.join("Main.mod"),
-        b"module Main;\n: f ( i64'1 -- i64'1 ) performs {suspend}\n  &[\n    platform.task.yield drop\n  ]\n;\nend;\n",
+        b"module Main;\n: f ( i64.1 -- i64.1 ) performs {suspend}\n  &[\n    platform.task.yield drop\n  ]\n;\nend;\n",
     )
     .unwrap();
 
@@ -1113,7 +1113,7 @@ fn milestone5_rejects_suspend_inside_mut_scoped_block() {
 
     std::fs::write(
         dir.join("Main.mod"),
-        b"module Main;\n: f ( i64'1 -- i64'1 )\n  &![\n    drop platform.task.yield\n  ]\n;\nend;\n",
+        b"module Main;\n: f ( i64.1 -- i64.1 )\n  &![\n    drop platform.task.yield\n  ]\n;\nend;\n",
     )
     .unwrap();
 
@@ -1155,7 +1155,7 @@ fn milestone5_allows_drop_before_yield() {
 
     std::fs::write(
         dir.join("Main.mod"),
-        b"module Main;\n: f ( i64'1 -- i64'1 ) performs {suspend}\n  &[\n    drop\n  ]\n  platform.task.yield\n;\nend;\n",
+        b"module Main;\n: f ( i64.1 -- i64.1 ) performs {suspend}\n  &[\n    drop\n  ]\n  platform.task.yield\n;\nend;\n",
     )
     .unwrap();
 
