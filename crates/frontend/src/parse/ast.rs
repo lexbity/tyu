@@ -115,6 +115,9 @@ pub enum ParseError {
     ExpectedConstName {
         span: Span,
     },
+    ExpectedInterruptVector {
+        span: Span,
+    },
     ExpectedRegisterName {
         span: Span,
     },
@@ -175,11 +178,12 @@ impl ParseError {
             Self::InvalidRangeMax { .. } => 2178,
             Self::ExpectedSemiSubtype { .. } => 2179,
             Self::ExpectedConstName { .. } => 2180,
+            Self::ExpectedInterruptVector { .. } => 2185,
             Self::ExpectedRegisterName { .. } => 2186,
             Self::ExpectedSemiSkip { .. } => 2199,
             Self::TooManyItems { .. } => 2198,
-            Self::UnknownEffect { name, .. } => 2143,
-            Self::Skipped { span } => 2144,
+            Self::UnknownEffect { .. } => 2143,
+            Self::Skipped { .. } => 2144,
         }
     }
 
@@ -221,6 +225,7 @@ impl ParseError {
             | Self::InvalidRangeMax { span }
             | Self::ExpectedSemiSubtype { span }
             | Self::ExpectedConstName { span }
+            | Self::ExpectedInterruptVector { span }
             | Self::ExpectedRegisterName { span }
             | Self::ExpectedSemiSkip { span }
             | Self::TooManyItems { span }
@@ -287,11 +292,18 @@ pub struct EnumDeclAst {
     pub variants: FixedVec<EnumVariantAst, 64>,
 }
 
+/// A parsed attribute attached to a declaration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AttrAst {
+    Interrupt { vector: Span },
+    Other(Span),
+}
+
 pub struct DeclAst {
     pub kind: DeclKind,
     pub name: Span,
     pub sig: Option<Span>,
-    pub attrs: FixedVec<Span, 16>,
+    pub attrs: FixedVec<AttrAst, 16>,
     pub body: Option<Span>,
     pub requires: Option<Span>,
     pub ensures: Option<Span>,
@@ -299,6 +311,7 @@ pub struct DeclAst {
     pub effect_bits: u16,
     pub effect_net: i16,
     pub effect_high: u32,
+    pub has_explicit_performs: bool,
 }
 
 pub struct ModuleAst {

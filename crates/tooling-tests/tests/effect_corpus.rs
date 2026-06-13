@@ -7,6 +7,8 @@
 //! band (semantics) and 8xxx band (verifier/IR).  The 50xx/51xx band is
 //! reserved for these tests.
 
+mod common;
+
 use std::sync::Once;
 use std::{path::PathBuf, process::Command};
 
@@ -22,7 +24,7 @@ fn workspace_root() -> PathBuf {
 }
 
 fn langc_exe() -> PathBuf {
-    workspace_root().join("target").join("debug").join("langc")
+    common::bin::resolve("langc")
 }
 
 fn fresh_dir(label: &str) -> PathBuf {
@@ -37,7 +39,6 @@ fn fresh_dir(label: &str) -> PathBuf {
 }
 
 fn rand() -> u64 {
-    // Simple counter-based unique id per call.
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     COUNTER.fetch_add(1, Ordering::Relaxed)
@@ -45,86 +46,275 @@ fn rand() -> u64 {
 
 fn build_langc() {
     BUILD_ONCE.call_once(|| {
-        let status = Command::new(env!("CARGO"))
-            .current_dir(workspace_root())
-            .args(["build", "-p", "langc"])
-            .status()
-            .expect("cargo build failed");
+        let mut cmd = Command::new(env!("CARGO"));
+        cmd.current_dir(workspace_root());
+        cmd.args(["build", "-p", "langc"]);
+        // Match the test binary's profile so common::bin::resolve can find langc
+        // in the primary location.  No shared build helper exists in common/ (the
+        // shared module only resolves existing binaries, it never builds).
+        if !cfg!(debug_assertions) {
+            cmd.arg("--release");
+        }
+        let status = cmd.status().expect("cargo build failed");
         assert!(status.success());
     });
 }
 
-/// Assert that compiling `src` fails with exactly `expected_code`.
-/// Assert that compiling `src` with `--emit=tc` fails with exactly `expected_code`.
-/// The stack-checker is the `--emit=tc` path which uses the Context fold (Phase 5+).
-fn assert_tc_fails_with(src: &str, expected_code: u32) {
-    build_langc();
-    let dir = fresh_dir("tc");
-    let path = dir.join("test.mod");
-    std::fs::write(&path, src).unwrap();
+// ---------------------------------------------------------------------------
+// Xfail ledger helpers
+// ---------------------------------------------------------------------------
+
+struct XfailEntry {
+    fixture: String,
+    current: String,
+    target: String,
+    _slice: String,
+}
+
+fn parse_expect_header(src: &str) -> Result<(), u32> {
+    let first_line = src.lines().next().unwrap_or("");
+    if first_line == "# expect: ok" {
+        return Ok(());
+    }
+    if let Some(code_str) = first_line.strip_prefix("# expect: E") {
+        if let Ok(code) = code_str.parse::<u32>() {
+            return Err(code);
+        }
+    }
+    panic!("invalid # expect header in corpus fixture: {first_line}");
+}
+
+fn load_xfail_ledger() -> Vec<XfailEntry> {
+    let path = workspace_root()
+        .join("crates")
+        .join("tooling-tests")
+        .join("tests")
+        .join("corpus")
+        .join("xfail.toml");
+    let content = std::fs::read_to_string(&path).unwrap_or_default();
+    content
+        .lines()
+        .filter(|l| !l.trim().is_empty() && !l.trim().starts_with('#'))
+        .map(|l| {
+            let parts: Vec<&str> = l.split('|').map(|s| s.trim()).collect();
+            assert!(parts.len() >= 4, "malformed xfail entry: {l}");
+            XfailEntry {
+                fixture: parts[0].to_string(),
+                current: parts[1].to_string(),
+                target: parts[2].to_string(),
+                _slice: parts[3].to_string(),
+            }
+        })
+        .collect()
+}
+
+/// Run a fixture and return the observed outcome.
+fn run_fixture(path: &PathBuf) -> String {
+    let dir = fresh_dir("fixture_run");
+    let mod_path = dir.join("test.mod");
+    std::fs::write(&mod_path, std::fs::read_to_string(path).unwrap()).unwrap();
     let out = Command::new(langc_exe())
-        .args(["--emit=tc", path.to_str().unwrap()])
+        .args(["--emit=ir", mod_path.to_str().unwrap()])
         .output()
         .unwrap();
-    let code = out.status.code().unwrap_or(-1);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let expected_str = format!("E{expected_code}");
-    assert!(
-        code != 0,
-        "expected E{expected_code} (exit non-zero), but compilation succeeded.\nstderr: {stderr}"
+    if out.status.success() {
+        "compiles".to_string()
+    } else {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        // Extract "E5001" from "error[E5001]: typecheck error"
+        let code = stderr
+            .split("E")
+            .nth(1)
+            .and_then(|s| {
+                s.chars()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect::<String>()
+                    .into()
+            })
+            .unwrap_or_else(|| "unknown".to_string());
+        format!("E{code}")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Data-driven corpus runner
+// ---------------------------------------------------------------------------
+
+#[test]
+fn corpus() {
+    build_langc();
+    let ledger = load_xfail_ledger();
+    let corpus_dir = workspace_root()
+        .join("crates")
+        .join("tooling-tests")
+        .join("tests")
+        .join("corpus");
+
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(&corpus_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().map(|x| x == "mod").unwrap_or(false))
+        .collect();
+    entries.sort();
+
+    let total = entries.len();
+    let mut xfail_count = 0u32;
+    let mut pass_count = 0u32;
+
+    for path in &entries {
+        let fixture_name = path.file_name().unwrap().to_str().unwrap().to_string();
+        let src = std::fs::read_to_string(path).unwrap();
+        let expected = parse_expect_header(&src);
+        let observed = run_fixture(path);
+
+        // Check xfail ledger
+        if let Some(xf) = ledger.iter().find(|x| x.fixture == fixture_name) {
+            if observed == xf.current {
+                xfail_count += 1;
+                eprintln!("XFAIL {xfail_count}/{total}: {fixture_name} (observed={observed}, target={target}, slice={slice})",
+                    target=xf.target, slice=xf._slice);
+            } else if observed == xf.target {
+                panic!(
+                    "fixture {fixture_name} went green: observed={observed}, \
+                     target={target}. Update ledger entries for slice {slice}.",
+                    target=xf.target,
+                    slice=xf._slice
+                );
+            } else {
+                panic!(
+                    "regression: {fixture_name} expected current={xf_current}, \
+                     target={xf_target}, but got unexpected outcome={observed}",
+                    xf_current=xf.current,
+                    xf_target=xf.target
+                );
+            }
+        } else {
+            // Normal (non-xfail) test
+            match (expected, observed.as_str()) {
+                (Ok(()), "compiles") => {
+                    pass_count += 1;
+                }
+                (Err(code), s) if s == format!("E{code}") => {
+                    pass_count += 1;
+                }
+                (Ok(()), s) => {
+                    panic!(
+                        "{fixture_name}: expected to compile, got {s}. \
+                         If this is a known issue, add it to xfail.toml."
+                    );
+                }
+                (Err(code), s) => {
+                    panic!(
+                        "{fixture_name}: expected E{code}, got {s}. \
+                         If this is a known issue, add it to xfail.toml."
+                    );
+                }
+            }
+        }
+    }
+
+    eprintln!(
+        "Corpus: {total} fixtures, {pass_count} pass, {xfail_count} xfail"
     );
     assert!(
-        stderr.contains(&expected_str),
-        "expected E{expected_code} in stderr, got:\n{stderr}"
+        total > 0,
+        "corpus directory is empty — no fixtures to run"
     );
 }
 
-/// Assert that compiling `src` with `--emit=ir` fails with exactly `expected_code`.
-/// The IR generator path is used for most corpus tests since it exercises the typechecker
-/// without requiring a full program (main symbol, runtime, etc.).
-fn assert_ir_fails_with(src: &str, expected_code: u32) {
+// ---------------------------------------------------------------------------
+// .def effect boundary: interface declares performs {} but implementation
+// performs {suspend} → iface error 2219
+// ---------------------------------------------------------------------------
+
+#[test]
+fn e_iface_effect_mismatch() {
     build_langc();
-    let dir = fresh_dir("ir");
-    let path = dir.join("test.mod");
-    std::fs::write(&path, src).unwrap();
+    let dir = fresh_dir("iface_effect");
+
+    std::fs::write(
+        dir.join("Core.def"),
+        b"module Core;\nexport { foo };\n: foo ( -- ) performs {} ;\nend;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("Core.mod"),
+        b"module Core;\nexport { foo };\n: foo ( -- ) performs {suspend} platform.task.yield ;\nend;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("Main.mod"),
+        b"module Main;\nimport Core { foo };\n: main ( -- i64 ) foo 0 ;\nend;\n",
+    )
+    .unwrap();
+
     let out = Command::new(langc_exe())
-        .args(["--emit=ir", path.to_str().unwrap()])
+        .current_dir(&dir)
+        .args(["--emit=ir", "Main.mod"])
         .output()
         .unwrap();
-    let code = out.status.code().unwrap_or(-1);
+    assert!(!out.status.success(), "expected iface error for effect mismatch");
     let stderr = String::from_utf8_lossy(&out.stderr);
-    let expected_str = format!("E{expected_code}");
-    assert!(
-        code != 0,
-        "expected E{expected_code} (exit non-zero), but compilation succeeded.\nstderr: {stderr}"
-    );
-    assert!(
-        stderr.contains(&expected_str),
-        "expected E{expected_code} in stderr, got:\n{stderr}"
-    );
+    assert!(stderr.contains("error[E2219]"), "expected E2219 (word effect mismatch), got: {stderr}");
 }
 
-/// Assert that compiling `src` with `--emit=asm` fails with exactly `expected_code`.
-fn assert_fails_with(src: &str, expected_code: u32) {
+// ---------------------------------------------------------------------------
+// Determinism: compile every negative fixture 20×, assert byte-identical
+// rendered diagnostics (NFR-3).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn determinism() {
     build_langc();
-    let dir = fresh_dir("neg");
-    let path = dir.join("test.mod");
-    std::fs::write(&path, src).unwrap();
-    let out = Command::new(langc_exe())
-        .args(["--emit=asm", path.to_str().unwrap()])
-        .output()
-        .unwrap();
-    let code = out.status.code().unwrap_or(-1);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let expected_str = format!("E{expected_code}");
-    assert!(
-        code != 0,
-        "expected E{expected_code} (exit non-zero), but compilation succeeded.\nstderr: {stderr}"
-    );
-    assert!(
-        stderr.contains(&expected_str),
-        "expected E{expected_code} in stderr, got:\n{stderr}"
-    );
+    let corpus_dir = workspace_root()
+        .join("crates")
+        .join("tooling-tests")
+        .join("tests")
+        .join("corpus");
+
+    let entries: Vec<PathBuf> = std::fs::read_dir(&corpus_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            let name = p.file_name().unwrap().to_str().unwrap_or("");
+            name.starts_with("e") && p.extension().map(|x| x == "mod").unwrap_or(false)
+        })
+        .collect();
+
+    for path in &entries {
+        let src = std::fs::read_to_string(path).unwrap();
+        let fixture_name = path.file_name().unwrap().to_str().unwrap().to_string();
+        let mut prev_stderr: Option<Vec<u8>> = None;
+
+        for run in 0..20 {
+            let dir = fresh_dir(&format!("det_{}", fixture_name));
+            let mod_path = dir.join("test.mod");
+            std::fs::write(&mod_path, &src).unwrap();
+            let out = Command::new(langc_exe())
+                .args(["--emit=ir", mod_path.to_str().unwrap()])
+                .output()
+                .unwrap();
+
+            // Collect stderr (the rendered diagnostic)
+            let stderr = if out.status.success() {
+                out.stdout
+            } else {
+                out.stderr
+            };
+
+            match &prev_stderr {
+                None => prev_stderr = Some(stderr),
+                Some(prev) => {
+                    assert_eq!(
+                        &stderr, prev,
+                        "determinism failure: {fixture_name} run {run} differs from run 0"
+                    );
+                }
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -133,11 +323,8 @@ fn assert_fails_with(src: &str, expected_code: u32) {
 
 #[test]
 fn tcerror_codes_are_distinct() {
-    // Collect every TcError code from the 50xx/51xx band.
-    // (Existing 3xxx codes are already stable; we only check the new ones
-    // to ensure no internal collision.)
     let codes = [
-        5001u32, 5002, 5003, 5004, 5010, 5011, 5012, 5020, 5030, 5031, 5040, 5100, 5101, 5103,
+        5001u32, 5002, 5003, 5004, 5005, 5010, 5011, 5012, 5020, 5030, 5031, 5040, 5100, 5101, 5103,
     ];
     let mut sorted = codes.to_vec();
     sorted.sort();
@@ -150,14 +337,11 @@ fn tcerror_codes_are_distinct() {
 }
 
 // ---------------------------------------------------------------------------
-// 50xx — Effect / Capability / Context
+// 50xx — Effect / Capability / Context  (individual fixture tests)
 // ---------------------------------------------------------------------------
 
 #[test]
 fn e5001_suspend_forbidden() {
-    // A word NOT declared with performs {suspend} that calls a suspend word.
-    // The stack checker (--emit=tc) gives the body a context where
-    // SUSPEND is forbidden, triggering SuspendForbidden (5001).
     assert_tc_fails_with(
         "module m;\n\
          : foo ( -- ) platform.task.yield ;\n\
@@ -168,12 +352,11 @@ fn e5001_suspend_forbidden() {
 
 #[test]
 fn e5002_lock_nest() {
-    // Nested lock on the same resource.
     assert_ir_fails_with(
         "module Main;\n\
          resource R;\n\
          : nested ( -- )\n\
-           lock [ lock [ ] ]\n\
+           R lock [ lock [ ] ]\n\
          ;\n\
          end;\n",
         5002,
@@ -182,12 +365,11 @@ fn e5002_lock_nest() {
 
 #[test]
 fn e5003_lock_stack() {
-    // Lock body with non-empty net stack effect.
     assert_ir_fails_with(
         "module Main;\n\
          resource R;\n\
          : bad ( -- )\n\
-           lock [ 1 ]\n\
+           R lock [ 1 ]\n\
          ;\n\
          end;\n",
         5003,
@@ -196,7 +378,6 @@ fn e5003_lock_stack() {
 
 #[test]
 fn e5004_cap_missing() {
-    // Accessing a resource without a lock.
     assert_ir_fails_with(
         "module Main;\n\
          resource R;\n\
@@ -275,13 +456,8 @@ fn e5012_iso_use_after_move() {
     );
 }
 
-#[ignore = "borrow escape detection shadowed by ScopedMarkerLeak (3506) — fix in Slice 8/9"]
 #[test]
 fn e5020_borrow_escape() {
-    // A scoped borrow that is consumed correctly (positive test).
-    // The actual escape detection (5020) is currently shadowed by ScopedMarkerLeak (3506)
-    // which fires at block exit before BorrowEscape can trigger at function end.
-    // This test verifies that a properly consumed borrow compiles successfully.
     build_langc();
     let dir = fresh_dir("e5020");
     let path = dir.join("test.mod");
@@ -348,7 +524,6 @@ fn owned_use_after_move() {
 
 #[test]
 fn owned_round_trip() {
-    // owned values can be moved once via local binding.
     build_langc();
     let dir = fresh_dir("owned_rt");
     let path = dir.join("test.mod");
@@ -377,8 +552,6 @@ fn owned_round_trip() {
 
 #[test]
 fn e5030_isr_suspend_forbidden() {
-    // ISR body that exceeds the N_isr stack ceiling (32) — IsrStack (5030).
-    // `0` + 33 dups + 34 drops: high=33, exceeds N_isr=32.
     assert_ir_fails_with(
         "module Main;\n\
          @interrupt(TIMER0) : isr ( -- )\n\
@@ -399,7 +572,6 @@ fn e5030_isr_suspend_forbidden() {
 
 #[test]
 fn e5031_resource_shared_unlocked() {
-    // A resource reachable from an ISR context, accessed without a lock.
     assert_ir_fails_with(
         "module Main;\n\
          resource R;\n\
@@ -416,10 +588,6 @@ fn e5031_resource_shared_unlocked() {
 
 #[test]
 fn e5040_diverge_in_bounded() {
-    // A word annotated with performs {diverge} compiles successfully (no bounded context yet).
-    // The DivergeInBounded (5040) error requires a bounded-stack context which
-    // is not yet implemented for regular words. This positive test verifies that
-    // performs {diverge} is parsed and tracked.
     build_langc();
     let dir = fresh_dir("e5040");
     let path = dir.join("test.mod");
@@ -450,9 +618,6 @@ fn e5040_diverge_in_bounded() {
 
 #[test]
 fn e5100_stack_unbounded() {
-    // A word with a finite high (positive test — unbounded detection requires a
-    // bounded-stack profile which is post-v1). Verifies that the word's bound
-    // is computed and the word compiles successfully.
     build_langc();
     let dir = fresh_dir("e5100");
     let path = dir.join("test.mod");
@@ -479,10 +644,6 @@ fn e5100_stack_unbounded() {
 
 #[test]
 fn e5101_stack_exceeds_budget() {
-    // An ISR word that exceeds N_isr (32) — IsrStack (5030) is the current check.
-    // StackExceedsBudget (5101) is the general form that fires for non-ISR words
-    // when bounded-stack profiles are implemented. This test exercises the ISR
-    // stack limit which uses the same machinery.
     assert_ir_fails_with(
         "module Main;\n\
          @interrupt(TIMER0) : isr ( -- )\n\
@@ -503,10 +664,6 @@ fn e5101_stack_exceeds_budget() {
 
 #[test]
 fn e5103_stack_quot_erased() {
-    // A quotation with a computable bound (positive test).  StackQuotErased (5103)
-    // would fire when a computed quotation with erased high is called in a
-    // Top-forbidding context.  This test verifies that a regular quotation's
-    // bound is computable.
     build_langc();
     let dir = fresh_dir("e5103");
     let path = dir.join("test.mod");
@@ -528,5 +685,79 @@ fn e5103_stack_quot_erased() {
     assert!(
         code == 0,
         "expected quotation with computable bound to pass, got exit={code} stderr={stderr}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Helpers — unchanged from original but now use common::bin::resolve
+// ---------------------------------------------------------------------------
+
+/// Assert that compiling `src` fails with exactly `expected_code`.
+/// The stack-checker is the `--emit=tc` path which uses the Context fold (Phase 5+).
+fn assert_tc_fails_with(src: &str, expected_code: u32) {
+    build_langc();
+    let dir = fresh_dir("tc");
+    let path = dir.join("test.mod");
+    std::fs::write(&path, src).unwrap();
+    let out = Command::new(langc_exe())
+        .args(["--emit=tc", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let code = out.status.code().unwrap_or(-1);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let expected_str = format!("E{expected_code}");
+    assert!(
+        code != 0,
+        "expected E{expected_code} (exit non-zero), but compilation succeeded.\nstderr: {stderr}"
+    );
+    assert!(
+        stderr.contains(&expected_str),
+        "expected E{expected_code} in stderr, got:\n{stderr}"
+    );
+}
+
+/// Assert that compiling `src` with `--emit=ir` fails with exactly `expected_code`.
+fn assert_ir_fails_with(src: &str, expected_code: u32) {
+    build_langc();
+    let dir = fresh_dir("ir");
+    let path = dir.join("test.mod");
+    std::fs::write(&path, src).unwrap();
+    let out = Command::new(langc_exe())
+        .args(["--emit=ir", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let code = out.status.code().unwrap_or(-1);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let expected_str = format!("E{expected_code}");
+    assert!(
+        code != 0,
+        "expected E{expected_code} (exit non-zero), but compilation succeeded.\nstderr: {stderr}"
+    );
+    assert!(
+        stderr.contains(&expected_str),
+        "expected E{expected_code} in stderr, got:\n{stderr}"
+    );
+}
+
+/// Assert that compiling `src` with `--emit=asm` fails with exactly `expected_code`.
+fn assert_fails_with(src: &str, expected_code: u32) {
+    build_langc();
+    let dir = fresh_dir("neg");
+    let path = dir.join("test.mod");
+    std::fs::write(&path, src).unwrap();
+    let out = Command::new(langc_exe())
+        .args(["--emit=asm", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let code = out.status.code().unwrap_or(-1);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let expected_str = format!("E{expected_code}");
+    assert!(
+        code != 0,
+        "expected E{expected_code} (exit non-zero), but compilation succeeded.\nstderr: {stderr}"
+    );
+    assert!(
+        stderr.contains(&expected_str),
+        "expected E{expected_code} in stderr, got:\n{stderr}"
     );
 }

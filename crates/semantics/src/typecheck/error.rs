@@ -3,6 +3,12 @@ use frontend::span::Span;
 pub use frontend::parse::Output;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EscapeKind {
+    AtClose,
+    AtReturn,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TcError {
     // 3000-3099: Internal (catch-all)
     Internal {
@@ -168,22 +174,14 @@ pub enum TcError {
     MutRefToLocal {
         span: Span,
     },
-    ScopedLiveAtSuspend {
-        span: Span,
-    },
-    SuspendingInNonSuspendingContext {
-        span: Span,
-    },
+    // 3502 retired 2026-06 — superseded by SuspendForbidden 5001 (S5)
+    // 3503 retired 2026-06 — never fired; rule lives as SuspendForbidden 5001
     // (ScopedLeak 3504 retired — replaced by BorrowEscape 5020)
     EmptyStackForScoped {
         span: Span,
     },
-    ScopedMarkerLeak {
-        span: Span,
-    },
-    ReturnWithScoped {
-        span: Span,
-    },
+    // 3506 retired 2026-06 — superseded by BorrowEscape 5020 (S6)
+    // 3511 retired 2026-06 — superseded by BorrowEscape 5020 (S6)
     ScopeDepthExceeded {
         span: Span,
     },
@@ -196,9 +194,7 @@ pub enum TcError {
     ScopedTypeMismatch {
         span: Span,
     },
-    LockNested {
-        span: Span,
-    },
+    // 3517 retired 2026-06 — superseded by LockNest 5002 before ever firing
     ArrayIndexOob {
         span: Span,
     },
@@ -492,6 +488,10 @@ pub enum TcError {
     },
     BorrowEscape {
         span: Span,
+        kind: EscapeKind,
+    },
+    EffectNotDeclared {
+        span: Span,
     },
     BorrowAlias {
         span: Span,
@@ -592,17 +592,17 @@ impl TcError {
             TcError::ContractModifiedInputs { .. } => 3312,
             TcError::PlaceParseFailed { .. } => 3500,
             TcError::MutRefToLocal { .. } => 3501,
-            TcError::ScopedLiveAtSuspend { .. } => 3502,
-            TcError::SuspendingInNonSuspendingContext { .. } => 3503,
+            // 3502 retired 2026-06
+            // 3503 retired 2026-06
             // (ScopedLeak 3504 retired — replaced by BorrowEscape 5020)
             TcError::EmptyStackForScoped { .. } => 3505,
-            TcError::ScopedMarkerLeak { .. } => 3506,
-            TcError::ReturnWithScoped { .. } => 3511,
+            // 3506 retired 2026-06
+            // 3511 retired 2026-06
             TcError::ScopeDepthExceeded { .. } => 3512,
             TcError::SliceTypeFailed { .. } => 3513,
             TcError::LocalNotLive { .. } => 3514,
             TcError::ScopedTypeMismatch { .. } => 3515,
-            TcError::LockNested { .. } => 3517,
+            // 3517 retired 2026-06
             TcError::ArrayIndexOob { .. } => 3518,
             TcError::IndexError { .. } => 3519,
             TcError::PlaceTooDeep { .. } => 3520,
@@ -692,6 +692,7 @@ impl TcError {
             TcError::IsoDrop { .. } => 5011,
             TcError::IsoUseAfterMove { .. } => 5012,
             TcError::BorrowEscape { .. } => 5020,
+            TcError::EffectNotDeclared { .. } => 5005,
             TcError::BorrowAlias { .. } => 5021,
             TcError::BorrowDupMut { .. } => 5022,
             TcError::BorrowLocalReuse { .. } => 5023,
@@ -762,17 +763,17 @@ impl TcError {
             | TcError::ContractModifiedInputs { span }
             | TcError::PlaceParseFailed { span }
             | TcError::MutRefToLocal { span }
-            | TcError::ScopedLiveAtSuspend { span }
-            | TcError::SuspendingInNonSuspendingContext { span }
+            // 3502 retired 2026-06
+            // 3503 retired 2026-06
             // (ScopedLeak 3504 retired — replaced by BorrowEscape 5020)
             | TcError::EmptyStackForScoped { span }
-            | TcError::ScopedMarkerLeak { span }
-            | TcError::ReturnWithScoped { span }
+            // 3506 retired 2026-06
+            // 3511 retired 2026-06
             | TcError::ScopeDepthExceeded { span }
             | TcError::SliceTypeFailed { span }
             | TcError::LocalNotLive { span }
             | TcError::ScopedTypeMismatch { span }
-            | TcError::LockNested { span }
+            // 3517 retired 2026-06
             | TcError::ArrayIndexOob { span }
             | TcError::IndexError { span }
             | TcError::PlaceTooDeep { span }
@@ -861,7 +862,8 @@ impl TcError {
             | TcError::IsoDup { span }
             | TcError::IsoDrop { span }
             | TcError::IsoUseAfterMove { span }
-            | TcError::BorrowEscape { span }
+            | TcError::BorrowEscape { span, .. }
+            | TcError::EffectNotDeclared { span }
             | TcError::BorrowAlias { span, .. }
             | TcError::BorrowDupMut { span, .. }
             | TcError::BorrowLocalReuse { span, .. }

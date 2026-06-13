@@ -1,8 +1,9 @@
+use crate::typecheck::context::{ContextKind, ContextStack, FrameParam};
 use crate::typecheck::db::{
-    enum_variant_value, is_iso_type, resource_sharing_class, resource_ty, struct_field_ty, IsoDb,
+    enum_variant_value, is_iso_type, resource_is_isr_reachable, resource_ty, struct_field_ty, IsoDb,
     NominalDb, ResourceDb, SubtypeInfo,
 };
-use crate::typecheck::error::{ChecksMode, TcError};
+use crate::typecheck::error::{ChecksMode, EscapeKind, TcError};
 use crate::typecheck::mmio::mmio_type_width_bytes;
 use crate::typecheck::mmio::{
     access_can_read, access_can_write, field_mask_shift, resolve_mmio_place, MmioDb, MmioResolved,
@@ -23,7 +24,7 @@ use crate::types::{TypeAtom, WordEntry, WordSig};
 use core::mem::MaybeUninit;
 use frontend::fixed::FixedVec;
 use frontend::lex::Lexer;
-use frontend::parse::DeclAst;
+use frontend::parse::{AttrAst, DeclAst};
 use frontend::span::Span;
 use frontend::token::{Token, TokenKind};
 use ir::{self as lir, CapSet, EffectSet, High, StackBound};
@@ -47,6 +48,7 @@ struct QuoteSig {
     requires: CapSet,
     bound: StackBound,
     body: Span,
+    has_explicit_performs: bool,
 }
 
 struct DestructBind {
@@ -85,8 +87,7 @@ struct IrWordGen<'a, 'r> {
     scope_stack: [u16; 16],
     scope_sp: usize,
 
-    locked_resource: Option<TypeAtom>,
-    in_lock: bool,
+    ctx: ContextStack,
 
     /// Borrow ledger: tracks live borrowed places for exclusivity checking (S-3).
     ledger: [PlaceKey; LEDGER_CAP],
@@ -233,8 +234,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             next_scope: 1,
             scope_stack: [0u16; 16],
             scope_sp: 0,
-            locked_resource: None,
-            in_lock: false,
+            ctx: ContextStack::new(),
             ledger: [PlaceKey { root: TypeAtom::EMPTY, full: TypeAtom::EMPTY, origin: Span::new(0, 0) }; LEDGER_CAP],
             ledger_len: 0,
             acc: StackBound::ID,
@@ -398,6 +398,13 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
     }
 }
 
+/// Unified suspend blocker return — why suspension is blocked at this site.
+pub(super) enum SuspendBlocker {
+    Frame(Span),
+    Undeclared,
+    BorrowLive { frame_span: Span },
+}
+
 impl<'a, 'r> IrWordGen<'a, 'r> {
     pub(super) fn finish(mut self, span: Span) -> Result<IrWordOutput<'r>, TcError> {
         self.word.bound = self.acc;
@@ -410,6 +417,44 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             word,
             extra_words: self.extra_words,
         })
+    }
+
+    /// Unified suspend blocker — checks the three rejection dimensions
+    /// (frame forbid, undeclared word, read-borrow liveness).
+    ///
+    /// Returns `Some` with the reason suspension is blocked.  The suspend
+    /// sites compile_env_word and compile_call_quote call this and map every
+    /// `Some` to `E5001 SuspendForbidden` with the blocker span in the
+    /// diagnostic.  compile_task_run inlines the frame-forbid and liveness
+    /// checks only: it deliberately skips the undeclared-capability check
+    /// because its Handler frame discharges SUSPEND from the body.
+    pub(super) fn suspend_blocker(
+        &self,
+        stack: &[Value; 256],
+        sp: usize,
+    ) -> Option<SuspendBlocker> {
+        // 1. Any frame unconditionally forbids SUSPEND (Lock, MutBorrow, Isr)
+        if let Some(s) = self.ctx.forbidding_span(EffectSet::from_bits(EffectSet::SUSPEND)) {
+            return Some(SuspendBlocker::Frame(s));
+        }
+        // 2. No SUSPENDABLE capability granted (word didn't declare performs {suspend})
+        if !self.ctx.ambient_grants.contains(CapSet::SUSPENDABLE) {
+            return Some(SuspendBlocker::Undeclared);
+        }
+        // 3. Conditional-suspend frames: forbid SUSPEND while the borrow's
+        //    scope is still live (driven by MATRIX[kind].conditional_suspend).
+        for i in 0..self.ctx.depth() as usize {
+            let f = &self.ctx.frames()[i];
+            if !crate::typecheck::context::row(f.kind).conditional_suspend {
+                continue;
+            }
+            if let Some(s) = f.scope() {
+                if self.stack_has_scope(stack, sp, s) || self.local_has_scope_live(s) {
+                    return Some(SuspendBlocker::BorrowLive { frame_span: f.span });
+                }
+            }
+        }
+        None
     }
 }
 
@@ -461,7 +506,7 @@ pub fn build_ir_word<'r>(
     let is_isr = decl
         .attrs
         .iter()
-        .any(|a| slice_span(src, *a).starts_with(b"@interrupt("));
+        .any(|a| matches!(a, AttrAst::Interrupt { .. }));
     if is_isr {
         gen.word.performs = EffectSet::from_bits(EffectSet::INTERRUPT);
     }
@@ -546,27 +591,55 @@ pub fn build_ir_word<'r>(
         }
     }
 
-    if let Some(body_span) = decl.body {
-        // ISR body forbids suspend (and runs with ceiling = N_isr).
-        let allow_suspend = if is_isr {
-            false
-        } else {
-            decl.effect_bits & 1 != 0
-        };
-        cur = gen.compile_span(
-            cur,
-            &mut stack,
-            &mut sp,
-            body_span,
-            allow_suspend,
-            true,
-            observer,
+    // S3: seed context stack for this word.
+    gen.ctx.reset();
+    if is_isr {
+        gen.ctx.push(
+            ContextKind::Isr,
+            FrameParam::None,
+            decl.body.unwrap_or(decl.name),
         )?;
+    }
+    // S9: push Bounded frame when the stack ceiling is finite.
+    if ceiling != High::Top {
+        gen.ctx.push(
+            ContextKind::Bounded,
+            FrameParam::None,
+            decl.body.unwrap_or(decl.name),
+        )?;
+    }
+    if (decl.effect_bits & 1) != 0 {
+        gen.ctx.push(
+            ContextKind::WordBody,
+            FrameParam::None,
+            decl.body.unwrap_or(decl.name),
+        )?;
+    }
+
+    if let Some(body_span) = decl.body {
+        cur = gen.compile_span(cur, &mut stack, &mut sp, body_span, true, observer)?;
+    }
+
+    // Pop context frames back to base depth before finish.
+    while gen.ctx.depth() > 0 {
+        gen.ctx.pop();
+    }
+
+    // S8: E5005 — declared performs must cover computed performs.
+    if decl.has_explicit_performs {
+        let declared = EffectSet::from_bits(decl.effect_bits);
+        let missing = gen.word.performs.minus(declared);
+        if !missing.is_empty() {
+            return Err(TcError::EffectNotDeclared {
+                span: decl.body.unwrap_or(decl.name),
+            });
+        }
     }
 
     if !gen.check_no_scoped_live(&stack, sp) {
         return Err(TcError::BorrowEscape {
             span: decl.body.unwrap_or(decl.name),
+            kind: EscapeKind::AtClose,
         });
     }
 
@@ -603,7 +676,13 @@ pub fn build_ir_word<'r>(
             });
         } else if ceiling == High::Top {
             // On a bounded profile, Top at entry is an error (5100).
-            // For now, High::Top ceiling means unbounded — no error.
+            // S9: this branch is reachable only when a bounded profile is
+            // implemented for non-ISR words.  For v1 the ceiling is Top for
+            // all non-ISR words and Top.exceeds(Top) is false, so this line
+            // is unreachable in practice.
+            return Err(TcError::StackUnbounded {
+                span: decl.body.unwrap_or(decl.name),
+            });
         } else {
             return Err(TcError::StackExceedsBudget {
                 span: decl.body.unwrap_or(decl.name),

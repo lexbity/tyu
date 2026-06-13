@@ -1,5 +1,7 @@
 use super::*;
+use crate::typecheck::error::EscapeKind;
 use crate::typecheck::value::PLACE_NONE;
+use super::super::SuspendBlocker;
 
 impl<'a, 'r> IrWordGen<'a, 'r> {
 
@@ -14,7 +16,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         tok: Token,
         name: &[u8],
         name_abs: Span,
-        allow_suspend: bool,
         _allow_locals: bool,
         terminated: &mut bool,
         observer: &mut dyn TypecheckObserver,
@@ -82,15 +83,15 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         }
 
         if name == b"if" {
-            cur = self.compile_if(cur, stack, sp, allow_suspend, name_abs, observer)?;
+            cur = self.compile_if(cur, stack, sp, name_abs, observer)?;
             return Ok(cur);
         }
         if name == b"while" {
-            cur = self.compile_while(cur, stack, sp, allow_suspend, name_abs, observer)?;
+            cur = self.compile_while(cur, stack, sp, name_abs, observer)?;
             return Ok(cur);
         }
         if name == b"loop" {
-            cur = self.compile_loop(cur, stack, sp, allow_suspend, name_abs, observer)?;
+            cur = self.compile_loop(cur, stack, sp, name_abs, observer)?;
             return Ok(cur);
         }
 
@@ -115,7 +116,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         }
 
         if name == b"call" {
-            return self.compile_call_quote(cur, stack, sp, name_abs, allow_suspend, observer);
+            return self.compile_call_quote(cur, stack, sp, name_abs, observer);
         }
 
         if name == b"platform.task.spawn" {
@@ -123,7 +124,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         }
 
         if name == b"platform.task.run" {
-            return self.compile_task_run(cur, stack, sp, name_abs, allow_suspend, span, observer);
+            return self.compile_task_run(cur, stack, sp, name_abs, span, observer);
         }
 
         if let Some(idx) = find_local(
@@ -134,7 +135,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             return self.compile_local_ref(cur, stack, sp, name_abs, idx);
         }
 
-        self.compile_env_word(cur, stack, sp, name, name_abs, allow_suspend)?;
+        self.compile_env_word(cur, stack, sp, name, name_abs)?;
         Ok(cur)
     }
 
@@ -220,18 +221,39 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         sp: &mut usize,
         name: &[u8],
         name_abs: Span,
-        allow_suspend: bool,
     ) -> Result<(), TcError> {
         let entry = lookup(self.env, name).ok_or(TcError::WordNotFound { span: name_abs })?;
-        if entry.performs.contains(EffectSet::SUSPEND) && !allow_suspend {
-            return Err(TcError::SuspendForbidden { span: name_abs });
-        }
-        if entry.performs.contains(EffectSet::SUSPEND) && !self.check_no_scoped_live_all(stack, *sp)
-        {
-            return Err(TcError::ScopedLiveAtSuspend { span: name_abs });
+        if entry.performs.contains(EffectSet::SUSPEND) {
+            if let Some(blocker) = self.suspend_blocker(stack, *sp) {
+                let span = match blocker {
+                    SuspendBlocker::Frame(s) => s,
+                    SuspendBlocker::BorrowLive { frame_span, .. } => frame_span,
+                    SuspendBlocker::Undeclared => name_abs,
+                };
+                return Err(TcError::SuspendForbidden { span });
+            }
         }
         self.acc = self.acc.compose(entry.bound);
         apply_sig(stack, sp, entry, name_abs, self.subtypes)?;
+
+        // S7: accumulate callee effects into the word's computed performs set.
+        self.word.performs = self.word.performs.union(entry.performs);
+
+        // S8: self-recursive call → DIVERGE.
+        if name == self.word.name.as_bytes() {
+            self.word.performs = self.word.performs.union(EffectSet::from_bits(EffectSet::DIVERGE));
+            // S9: 5040 — self-recursion in a bounded context.
+            if self.ctx.ambient_forbids.contains(EffectSet::DIVERGE) {
+                return Err(TcError::DivergeInBounded { span: name_abs });
+            }
+        }
+
+        // S9: 5040 — callee performs DIVERGE in a bounded context.
+        if entry.performs.contains(EffectSet::DIVERGE)
+            && self.ctx.ambient_forbids.contains(EffectSet::DIVERGE)
+        {
+            return Err(TcError::DivergeInBounded { span: name_abs });
+        }
 
         let builtin = match name {
             b"+" => Some(lir::OpKind::AddI64),
@@ -712,7 +734,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 span: Span::new(span.start + tok.span.start, span.start + tok.span.end),
             })?;
             if v == Value::Plain(TypeAtom::SCOPED) {
-                return Err(TcError::BorrowEscape { span });
+                return Err(TcError::BorrowEscape { span, kind: EscapeKind::AtClose });
             }
             let ty = v.to_type_atom();
             let lname = TypeAtom::new(&slice[name.span.start..name.span.end]).ok_or(

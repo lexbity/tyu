@@ -1,0 +1,8 @@
+# xfail ledger — format: fixture | current_outcome | target_outcome | owning_slice
+# current_outcome: "compiles" or E<code>
+# target_outcome: "compiles" or E<code>
+# Note: e5040_* fixtures removed — S9's bounded-context DIVERGE checks now
+# correctly produce E5040 for ISR words.
+# e5100_stack_unbounded remains: 5100 requires a non-ISR bounded profile,
+# which does not exist in v1 (ISR stack violations are caught by 5030/5040 first).
+e5100_stack_unbounded.mod | compiles | E5100 | S9

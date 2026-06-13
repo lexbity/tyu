@@ -31,7 +31,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         cur: lir::BlockId,
         stack: &mut [Value; 256],
         sp: &mut usize,
-        allow_suspend: bool,
         span: Span,
         observer: &mut dyn TypecheckObserver,
     ) -> Result<lir::BlockId, TcError> {
@@ -73,7 +72,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             &mut then_stack,
             &mut then_sp,
             then_span,
-            allow_suspend,
             false,
             observer,
         )?;
@@ -87,7 +85,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             &mut else_stack,
             &mut else_sp,
             else_span,
-            allow_suspend,
             false,
             observer,
         )?;
@@ -118,7 +115,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         cur: lir::BlockId,
         stack: &mut [Value; 256],
         sp: &mut usize,
-        allow_suspend: bool,
         span: Span,
         observer: &mut dyn TypecheckObserver,
     ) -> Result<lir::BlockId, TcError> {
@@ -148,7 +144,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             &mut cond_stack,
             &mut cond_sp,
             cond_span,
-            allow_suspend,
             false,
             observer,
         )?;
@@ -182,7 +177,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             &mut body_stack,
             &mut body_sp,
             body_span,
-            allow_suspend,
             false,
             observer,
         )?;
@@ -213,7 +207,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         cur: lir::BlockId,
         stack: &mut [Value; 256],
         sp: &mut usize,
-        allow_suspend: bool,
         span: Span,
         observer: &mut dyn TypecheckObserver,
     ) -> Result<lir::BlockId, TcError> {
@@ -250,7 +243,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             &mut body_stack,
             &mut body_sp,
             body_span,
-            allow_suspend,
             false,
             observer,
         )?;
@@ -269,6 +261,12 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             high: body_bound.high,
         };
         self.acc = pre_loop_acc.compose(loop_bound);
+        // S8: every loop construct is a potential DIVERGE source.
+        self.word.performs = self.word.performs.union(EffectSet::from_bits(EffectSet::DIVERGE));
+        // S9: 5040 — loop in a bounded context.
+        if self.ctx.ambient_forbids.contains(EffectSet::DIVERGE) {
+            return Err(TcError::DivergeInBounded { span });
+        }
         self.emit_op(body_end, lir::OpKind::Br { target: check_blk }, span)?;
 
         *stack = base_stack;
@@ -284,10 +282,10 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         span: Span,
         observer: &mut dyn TypecheckObserver,
     ) -> Result<lir::BlockId, TcError> {
-        if self.in_lock {
+        // S4: lock rules flow exclusively through context stack frames.
+        if self.ctx.lock_frame().is_some() {
             return Err(TcError::LockNest { span });
         }
-        self.in_lock = true;
         let body_q = pop(stack, sp).ok_or(TcError::LockPopBody { span })?;
         let body_span = match body_q {
             Value::Quot(s) => s,
@@ -304,22 +302,20 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         } else {
             None
         };
-        self.locked_resource = locked;
+        let param = locked.map_or(FrameParam::None, FrameParam::Resource);
+        self.ctx.push(ContextKind::Lock, param, span)?;
         let base_stack = *stack;
         let base_sp = *sp;
-        let end = self.compile_quote_span(cur, stack, sp, body_span, false, true, observer)?;
+        let end = self.compile_quote_span(cur, stack, sp, body_span, true, observer)?;
         if *sp != base_sp {
-            self.in_lock = false;
             return Err(TcError::LockStack { span });
         }
         for i in 0..base_sp {
             if stack[i] != base_stack[i] {
-                self.in_lock = false;
                 return Err(TcError::LockStack { span });
             }
         }
-        self.locked_resource = None;
-        self.in_lock = false;
+        self.ctx.pop();
         Ok(end)
     }
 }

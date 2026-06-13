@@ -87,7 +87,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         slice: &[u8],
         tok: Token,
         lex: &mut Lexer,
-        allow_suspend: bool,
         allow_locals: bool,
         observer: &mut dyn TypecheckObserver,
     ) -> Result<lir::BlockId, TcError> {
@@ -118,7 +117,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                     stack,
                     sp,
                     inner,
-                    allow_suspend,
                     allow_locals,
                     observer,
                 )?;
@@ -299,8 +297,9 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             }
         } else {
             if resource_ty(self.resources, root_atom).is_some() {
-                if self.locked_resource != Some(root_atom) {
-                    if resource_sharing_class(self.resources, root_atom) >= 1 {
+                let locked_res = self.ctx.lock_frame().and_then(|f| f.resource());
+                if locked_res != Some(root_atom) {
+                    if resource_is_isr_reachable(self.resources, root_atom) {
                         return Err(TcError::ResourceSharedUnlocked { span: place_abs });
                     }
                     return Err(TcError::CapMissing { span: place_abs });

@@ -471,7 +471,6 @@ end;\n",
     assert_eq!(run.code(), Some(0));
 }
 
-#[ignore = "pre-existing: scoped slice typecheck — fix in Slice 8/9"]
 #[test]
 fn milestone13_array_type_and_scoped_slice_typechecks() {
     build_tools();
@@ -500,7 +499,7 @@ end;\n",
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("i64.4"));
+    assert!(stdout.contains("i64'4"));
     assert!(stdout.contains("Slice(i64)"));
     assert!(stdout.contains("scoped_enter"));
 }
@@ -543,7 +542,6 @@ end;\n",
     assert!(stdout.contains("ptr_add_const"), "stdout: {stdout}");
 }
 
-#[ignore = "pre-existing: borrowed slice escape — fix in Slice 8/9"]
 #[test]
 fn milestone13_borrowed_slice_cannot_escape_via_return() {
     build_tools();
@@ -569,10 +567,9 @@ end;\n",
         .unwrap();
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("error[E3511]"), "stderr: {stderr}");
+    assert!(stderr.contains("error[E5020]"), "stderr: {stderr}");
 }
 
-#[ignore = "pre-existing: borrowed slice live in yield — fix in Slice 8/9"]
 #[test]
 fn milestone13_borrowed_slice_live_in_local_blocks_yield() {
     build_tools();
@@ -599,7 +596,7 @@ end;\n",
         .unwrap();
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("error[E3502]"), "stderr: {stderr}");
+    assert!(stderr.contains("error[E5001]"), "stderr: {stderr}");
 }
 
 #[test]

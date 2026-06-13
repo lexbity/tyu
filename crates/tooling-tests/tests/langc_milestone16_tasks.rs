@@ -1065,7 +1065,6 @@ fn milestone5_rejects_mutable_borrow_of_local() {
     assert!(stderr.contains("error[E3501]"));
 }
 
-#[ignore = "pre-existing: scoped borrow detection shadowed — fix in Slice 8/9"]
 #[test]
 fn milestone5_scoped_borrow_must_be_consumed() {
     build_tools();
@@ -1084,10 +1083,9 @@ fn milestone5_scoped_borrow_must_be_consumed() {
         .unwrap();
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("error[E3506]"));
+    assert!(stderr.contains("error[E5020]"));
 }
 
-#[ignore = "pre-existing: suspend-with-scoped-live detection — fix in Slice 8/9"]
 #[test]
 fn milestone5_rejects_suspend_with_scoped_live() {
     build_tools();
@@ -1106,10 +1104,9 @@ fn milestone5_rejects_suspend_with_scoped_live() {
         .unwrap();
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("error[E3502]"));
+    assert!(stderr.contains("error[E5001]"));
 }
 
-#[ignore = "pre-existing: suspend-inside-mut-scoped-block detection — fix in Slice 8/9"]
 #[test]
 fn milestone5_rejects_suspend_inside_mut_scoped_block() {
     build_tools();
@@ -1152,7 +1149,6 @@ fn milestone5_rejects_suspend_inside_lock() {
     assert!(stderr.contains("error[E5001]"));
 }
 
-#[ignore = "pre-existing: drop-before-yield typecheck error — fix in Slice 8/9"]
 #[test]
 fn milestone5_allows_drop_before_yield() {
     build_tools();

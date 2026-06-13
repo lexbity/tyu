@@ -32,10 +32,17 @@ fn profile_dir() -> &'static str {
 /// Resolve a workspace binary for e2e use.
 pub fn resolve(name: &str) -> PathBuf {
     if let Ok(dir) = std::env::var("TYU_BIN_DIR") {
-        let p = PathBuf::from(&dir).join(name);
+        let raw = PathBuf::from(&dir);
+        let p = if raw.is_relative() {
+            workspace_root().join(&raw).join(name)
+        } else {
+            raw.join(name)
+        };
         assert!(
             p.is_file(),
-            "TYU_BIN_DIR={dir} set but {name} not found at {p:?}"
+            "TYU_BIN_DIR={dir} set but {name} not found at {p:?} \
+             (resolved from workspace root {})",
+            workspace_root().display()
         );
         return p;
     }

@@ -488,6 +488,41 @@ fn run_qemu_arm(image: &PathBuf, timeout: std::time::Duration) -> QemuOutcome {
 // ---------------------------------------------------------------------------
 // Compilation helpers
 // ---------------------------------------------------------------------------
+// ISR lock atomicity fixture
+// ---------------------------------------------------------------------------
+
+/// Verify the ISR lock atomicity fixture compiles correctly for ARM.
+/// The full QEMU execution test requires SysTick ISR dispatch support
+/// in the runtime (follow-on).
+#[test]
+fn isr_lock_atomicity() {
+    if !common::require_tools(&["langc", "arm-none-eabi-as", "arm-none-eabi-ld"]) {
+        return;
+    }
+    build_langc();
+
+    let dir = temp_dir("isr_lock_atomicity");
+    let src_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures")
+        .join("isr_lock_atomicity.mod");
+
+    // Compile for ARM: should succeed (resource with lock).
+    let o_path = langc_compile(codegen_core::Target::ArmV7MUnknownNone, &src_path, &dir, false);
+    assert!(o_path.exists(), "ARM .o file must exist");
+
+    // Check for interrupt-masking instructions in the generated asm.
+    let asm_path = dir.join("Main.asm");
+    if asm_path.exists() {
+        let asm = std::fs::read_to_string(&asm_path).unwrap();
+        // The lock on an ISR-shared resource should emit CPSID/CPSIE.
+        assert!(
+            asm.contains("cpsid") || asm.contains("cpsie"),
+            "ISR-shared resource lock must emit interrupt mask/unmask;\n{asm}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 
 fn langc_compile(
     target: codegen_core::Target,

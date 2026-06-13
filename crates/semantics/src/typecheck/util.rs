@@ -3,7 +3,6 @@ use crate::typecheck::error::{Output, TcError};
 use crate::typecheck::value::Value;
 use crate::types::{TypeAtom, WordEntry, WordSig};
 use frontend::span::Span;
-use ir::EffectSet;
 
 pub fn push(stack: &mut [Value; 256], sp: &mut usize, v: Value) -> Result<(), TcError> {
     if *sp >= stack.len() {
@@ -356,9 +355,16 @@ pub fn apply_sig(
     span: Span,
     subtypes: &[SubtypeInfo],
 ) -> Result<(), TcError> {
-    if entry.performs.contains(EffectSet::SUSPEND) && !check_no_scoped_live(stack, *sp) {
-        return Err(TcError::ScopedLiveAtSuspend { span });
-    }
+    // Suspend gating is NOT done here. It lives solely in `suspend_blocker`,
+    // which every caller of apply_sig runs first (compile_env_word in names.rs,
+    // compile_call_quote in control.rs). The old `check_no_scoped_live`-based
+    // SuspendForbidden that lived here was redundant: any live `Value::Scoped`
+    // on the data stack implies an enclosing ReadBorrow/MutBorrow frame
+    // (compile_scoped_block always pushes one; E5020 forbids escape), and
+    // suspend_blocker subsumes that case via forbidding_span (Lock/MutBorrow/
+    // Isr) and the conditional_suspend ReadBorrow path. Re-adding a suspend
+    // check here would resurrect the two-sources-of-truth that the
+    // consolidation (S13) removed — gate suspend through the context stack.
 
     let sig = &entry.sig;
     let need = sig.in_len as usize;

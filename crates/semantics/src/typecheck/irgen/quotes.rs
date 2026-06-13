@@ -1,4 +1,6 @@
 use super::*;
+use crate::typecheck::context::{ContextKind, FrameParam};
+use crate::typecheck::error::EscapeKind;
 
 impl<'a, 'r> IrWordGen<'a, 'r> {
     pub(super) fn lir_sig_for_entry(
@@ -55,9 +57,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             .map_err(|_| TcError::TypeParseFailed { span: sig_span })?;
 
         let mut performs = EffectSet::empty();
+        let mut has_explicit_performs = false;
         let mut next = lex.next();
         // S-12: `performs {suspend}` replaces old `!{suspend}`.
         if next.kind == TokenKind::KwPerforms {
+            has_explicit_performs = true;
             let brace_tok = lex.next();
             if brace_tok.kind == TokenKind::PunctLBrace {
                 let mut depth = 1u32;
@@ -99,6 +103,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             requires: CapSet::empty(),
             bound: StackBound::ID,
             body,
+            has_explicit_performs,
         })
     }
 
@@ -174,8 +179,12 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             )?;
 
             if inherit_context {
-                qgen.locked_resource = self.locked_resource;
-                qgen.in_lock = self.in_lock;
+                // S4: propagate the parent's lock context to the quotation.
+                if let Some(lf) = self.ctx.lock_frame() {
+                    let resource = lf.resource();
+                    let param = resource.map_or(FrameParam::None, FrameParam::Resource);
+                    qgen.ctx.push(ContextKind::Lock, param, Span::new(0, 0))?;
+                }
             }
 
             let mut stack: [Value; 256] = [Value::Plain(TypeAtom::EMPTY); 256];
@@ -186,17 +195,36 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             }
             let cur = lir::BlockId(0);
             let cur = qgen.emit_prologue(cur, &mut stack, &mut sp, None, observer)?;
+            // Quotation words are self-contained: their suspend permission
+            // comes from the parsed annotation, not the parent's context.
+            // We compile a fresh IrWordGen (with its own empty context stack),
+            // so the suspend blocker uses the quotation's declared performs.
+            // We push WordBody if the quotation annotation grants SUSPENDABLE.
+            if parsed.performs.contains(EffectSet::SUSPEND) {
+                qgen.ctx.push(ContextKind::WordBody, FrameParam::None, parsed.body)?;
+            }
             let cur = qgen.compile_span(
                 cur,
                 &mut stack,
                 &mut sp,
                 parsed.body,
-                parsed.performs.contains(EffectSet::SUSPEND),
                 false,
                 observer,
             )?;
+            while qgen.ctx.depth() > 0 {
+                qgen.ctx.pop();
+            }
+
+            // S8: E5005 for quotation annotations.
+            if parsed.has_explicit_performs {
+                let missing = qgen.word.performs.minus(parsed.performs);
+                if !missing.is_empty() {
+                    return Err(TcError::EffectNotDeclared { span: quot_span });
+                }
+            }
+
             if !qgen.check_no_scoped_live(&stack, sp) {
-                return Err(TcError::BorrowEscape { span: quot_span });
+                return Err(TcError::BorrowEscape { span: quot_span, kind: EscapeKind::AtClose });
             }
             if !qgen.terminated {
                 if sp != sig.out_len as usize {

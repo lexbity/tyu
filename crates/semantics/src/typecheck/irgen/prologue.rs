@@ -56,7 +56,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                     )?;
                     push(stack, sp, Value::Plain(self.sig.inputs[i]))?;
                 }
-                cur = self.compile_quote_span(cur, stack, sp, req, false, false, observer)?;
+                cur = self.compile_quote_span(cur, stack, sp, req, false, observer)?;
                 if *sp != n + 1 {
                     return Err(TcError::ContractDepth { span: req });
                 }
@@ -112,7 +112,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             if let Some(ens) = ensures {
                 let n = self.sig.out_len as usize;
                 let base_sp = *sp;
-                cur = self.compile_quote_span(cur, stack, sp, ens, false, false, observer)?;
+                cur = self.compile_quote_span(cur, stack, sp, ens, false, observer)?;
                 if *sp != base_sp + 1 {
                     return Err(TcError::ContractDepth { span: ens });
                 }

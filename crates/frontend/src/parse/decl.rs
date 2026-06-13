@@ -3,7 +3,7 @@ use super::*;
 impl<'a> Parser<'a> {
     pub(super) fn parse_word_ast(
         &mut self,
-        pending_attrs: &mut FixedVec<Span, 16>,
+        pending_attrs: &mut FixedVec<AttrAst, 16>,
     ) -> Result<DeclAst, ParseError> {
         self.bump(); // :
         let name_span = self.capture_qualified_name(ParseError::ExpectedWordName {
@@ -27,6 +27,7 @@ impl<'a> Parser<'a> {
         let mut effect_bits = 0u16;
         let mut effect_net: i16 = 0;
         let mut effect_high: u32 = 0;
+        let mut has_explicit_performs = false;
         if self.look.kind == TokenKind::Ident && self.slice(self.look.span) == b"!" {
             let mut lex2 = self.lex;
             let next = lex2.next();
@@ -47,6 +48,7 @@ impl<'a> Parser<'a> {
             }
         }
         if self.look.kind == TokenKind::KwPerforms {
+            has_explicit_performs = true;
             self.bump();
             if self.look.kind == TokenKind::PunctLBrace {
                 let brace_span = self.capture_balanced(
@@ -153,12 +155,13 @@ impl<'a> Parser<'a> {
             effect_bits,
             effect_net,
             effect_high,
+            has_explicit_performs,
         })
     }
 
     pub(super) fn parse_struct_decl_ast(
         &mut self,
-        pending_attrs: &mut FixedVec<Span, 16>,
+        pending_attrs: &mut FixedVec<AttrAst, 16>,
     ) -> Result<(DeclAst, StructDeclAst), ParseError> {
         self.bump(); // struct
         let name = self.expect(
@@ -255,6 +258,7 @@ impl<'a> Parser<'a> {
             effect_bits: 0,
             effect_net: 0,
             effect_high: 0,
+            has_explicit_performs: false,
         };
         let sdecl = StructDeclAst {
             name: name.span,
@@ -265,7 +269,7 @@ impl<'a> Parser<'a> {
 
     pub(super) fn parse_enum_decl_ast(
         &mut self,
-        pending_attrs: &mut FixedVec<Span, 16>,
+        pending_attrs: &mut FixedVec<AttrAst, 16>,
     ) -> Result<(DeclAst, EnumDeclAst), ParseError> {
         self.bump(); // enum
         let name = self.expect(
@@ -367,6 +371,7 @@ impl<'a> Parser<'a> {
             effect_bits: 0,
             effect_net: 0,
             effect_high: 0,
+            has_explicit_performs: false,
         };
         let edecl = EnumDeclAst {
             name: name.span,
@@ -379,7 +384,7 @@ impl<'a> Parser<'a> {
     pub(super) fn parse_semi_decl_ast(
         &mut self,
         kind: DeclKind,
-        pending_attrs: &mut FixedVec<Span, 16>,
+        pending_attrs: &mut FixedVec<AttrAst, 16>,
     ) -> Result<DeclAst, ParseError> {
         self.bump(); // keyword already matched by caller
         let name = self.expect(
@@ -403,12 +408,13 @@ impl<'a> Parser<'a> {
             effect_bits: 0,
             effect_net: 0,
             effect_high: 0,
+            has_explicit_performs: false,
         })
     }
 
     pub(super) fn parse_resource_decl_ast(
         &mut self,
-        pending_attrs: &mut FixedVec<Span, 16>,
+        pending_attrs: &mut FixedVec<AttrAst, 16>,
     ) -> Result<DeclAst, ParseError> {
         self.bump(); // resource
         let name = self.expect(
@@ -466,12 +472,13 @@ impl<'a> Parser<'a> {
             effect_bits: 0,
             effect_net: 0,
             effect_high: 0,
+            has_explicit_performs: false,
         })
     }
 
     pub(super) fn parse_const_decl_ast(
         &mut self,
-        pending_attrs: &mut FixedVec<Span, 16>,
+        pending_attrs: &mut FixedVec<AttrAst, 16>,
     ) -> Result<(DeclAst, Option<RegMapInstanceAst>), ParseError> {
         self.bump(); // const
         let name = self.expect(
@@ -521,13 +528,14 @@ impl<'a> Parser<'a> {
             effect_bits: 0,
             effect_net: 0,
             effect_high: 0,
+            has_explicit_performs: false,
         };
         Ok((decl, inst))
     }
 
     pub(super) fn parse_register_map_decl_ast(
         &mut self,
-        pending_attrs: &mut FixedVec<Span, 16>,
+        pending_attrs: &mut FixedVec<AttrAst, 16>,
     ) -> Result<DeclAst, ParseError> {
         self.bump(); // register-map
         let name = self.expect(
@@ -586,12 +594,13 @@ impl<'a> Parser<'a> {
             effect_bits: 0,
             effect_net: 0,
             effect_high: 0,
+            has_explicit_performs: false,
         })
     }
 
     pub(super) fn parse_subtype_decl_ast(
         &mut self,
-        pending_attrs: &mut FixedVec<Span, 16>,
+        pending_attrs: &mut FixedVec<AttrAst, 16>,
     ) -> Result<(DeclAst, Option<SubtypeAst>), ParseError> {
         self.bump(); // subtype
         let name = self.expect(
@@ -670,6 +679,7 @@ impl<'a> Parser<'a> {
             effect_bits: 0,
             effect_net: 0,
             effect_high: 0,
+            has_explicit_performs: false,
         };
         let st = Some(SubtypeAst {
             name: name.span,

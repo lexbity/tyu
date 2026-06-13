@@ -406,8 +406,14 @@ fn attribute_on_word() {
     let ast = assert_parse_ok(src);
     let d = &ast.decls.get(0).unwrap();
     assert_eq!(d.attrs.len(), 1);
-    // "@export" starts at byte 10, ends at 17
-    assert_span(*d.attrs.get(0).unwrap(), 10, 17);
+    let attr = d.attrs.get(0).unwrap();
+    match attr {
+        frontend::parse::AttrAst::Other(s) => {
+            // "@export" starts at byte 10, ends at 17
+            assert_span(*s, 10, 17);
+        }
+        _ => panic!("expected Other"),
+    }
 }
 
 #[test]
@@ -424,8 +430,14 @@ fn attribute_interrupt() {
     let ast = assert_parse_ok(src);
     let d = &ast.decls.get(0).unwrap();
     assert_eq!(d.attrs.len(), 1);
-    // "@interrupt(TIMER0)" starts at byte 10, ends at 28
-    assert_span(*d.attrs.get(0).unwrap(), 10, 28);
+    let attr = d.attrs.get(0).unwrap();
+    match attr {
+        frontend::parse::AttrAst::Interrupt { vector } => {
+            // "TIMER0" spans bytes 21..27
+            assert_span(*vector, 21, 27);
+        }
+        _ => panic!("expected Interrupt"),
+    }
 }
 
 // ---------------------------------------------------------------------------

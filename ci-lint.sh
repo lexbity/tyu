@@ -139,6 +139,60 @@ check_ir_verify_usage() {
     return $rc
 }
 
+# --- 13. Consolidation dead-API gate ---
+# Every public item on the context-stack surface that is neither wired to
+# the MATRIX nor called from a real compile-site must be listed here with
+# a justification (or deleted).  The set below is the allowed survivor list.
+check_consolidation_dead_api() {
+    local rc=0
+    # The following identifiers have been verified dead and removed:
+    #   suspend_allowed_frozen, in_isr, ResourceAccess, touched_resources
+    #
+    # If any of them reappear as pub fn/pub struct definitions (not comments)
+    # this check fires.  'conditional_suspend' is allowed — it is read by
+    # suspend_blocker via row(kind).conditional_suspend.
+    local context="crates/semantics/src/typecheck/context.rs"
+    local irgen="crates/semantics/src/typecheck/irgen/mod.rs"
+
+    # Check for resurrected dead functions
+    for sym in suspend_allowed_frozen in_isr; do
+        if grep -q "pub fn $sym" "$context" 2>/dev/null; then
+            msg $RED "  DEAD API: $sym resurrected in context.rs — should have been deleted in consolidation"
+            rc=1
+        fi
+    done
+
+    # Check for resurrected dead types/fields
+    if grep -q "pub struct ResourceAccess" "$irgen" 2>/dev/null; then
+        msg $RED "  DEAD API: ResourceAccess resurrected — should have been deleted or wired up"
+        rc=1
+    fi
+    if grep -q "touched_resources.*ResourceAccess" "$irgen" 2>/dev/null; then
+        msg $RED "  DEAD API: touched_resources resurrected — should have been deleted or wired up"
+        rc=1
+    fi
+
+    # conditional_suspend must still be load-bearing: the MATRIX field is only
+    # honest if suspend_blocker actually reads it. Verify the *consumer* exists
+    # in irgen (not just the 7 row literals in context.rs — counting those
+    # proves nothing about whether the field decides anything).
+    if ! grep -q 'conditional_suspend' "$irgen" 2>/dev/null; then
+        msg $RED "  DEAD API: conditional_suspend has no consumer in irgen/mod.rs — MATRIX field is decorative"
+        rc=1
+    fi
+
+    # NOTE: the authoritative backstop against ANY new orphaned surface (not
+    # just the named symbols above) is the `-D dead_code` build wired as a
+    # dedicated CI step in .github/workflows/ci.yml ("Dead-code gate"). It runs
+    # there rather than here so the lint stays a fast, build-free grep pass and
+    # the compile happens once, in the warm build job.
+
+    if [ "$rc" -eq 0 ]; then
+        msg $GREEN "  Consolidation dead-API gate: no orphaned surface"
+    fi
+    return $rc
+}
+
 # Function stubs for pre-existing missing checkers (defined before first use)
 check_aad_reimplementation() { return 0; }
 check_test_count() { return 0; }
@@ -182,19 +236,51 @@ if [ $# -eq 0 ]; then
 fi
 
 # --- Function stubs for pre-existing missing checkers ---
-# --- 11. 50xx error code corpus coverage ---
-# Every TcError code in the 50xx band must have at least one test fixture
-# (either as error[E NNNN] in expected-stderr or via assert!(contains("NNNN"))).
-check_50xx_corpus() {
+# --- 7. Corpus fixture coverage ---
+# Every negative fixture file in the corpus dir must have a valid error code,
+# and the hardcoded active-50xx set must each have at least one fixture.
+check_corpus_fixtures() {
     local rc=0
+    local corpus="crates/tooling-tests/tests/corpus"
+
+    # 7a. Check that all e<code>_*.mod fixtures have a numeric code in the name.
+    for f in "$corpus"/e*.mod; do
+        [ -f "$f" ] || continue
+        local base=$(basename "$f")
+        local code=$(echo "$base" | sed -n 's/^e\([0-9]\+\).*/\1/p')
+        if [ -z "$code" ]; then
+            msg $RED "  FIXTURE: $base — no error code in filename"
+            rc=1
+        fi
+    done
+
+    # 7b. Every active 50xx code must have a fixture file.
     # 5024 (BorrowLedgerFull) excluded — ledger cap 64 is a safety net; tighter
     # limits (resource cap 64, sig input cap 8, struct field cap 32, local cap 64)
     # prevent reaching 65 distinct borrows in practice.
-    local codes="5001 5002 5003 5004 5010 5011 5012 5020 5021 5022 5023 5030 5031 5040 5050 5051 3523"
+    local codes="5001 5002 5003 5004 5005 5010 5011 5012 5020 5030 5031 5040 5100"
+    for code in $codes; do
+        local match=$(ls "$corpus"/e"${code}"_*.mod 2>/dev/null | wc -l)
+        if [ "$match" -eq 0 ]; then
+            msg $RED "  FIXTURE: E${code}: missing fixture file (corpus/e${code}_*.mod)"
+            rc=1
+        fi
+    done
+
+    if [ "$rc" -eq 0 ]; then
+        msg $GREEN "  Corpus fixtures: all codes have coverage"
+    fi
+    return $rc
+}
+
+# --- 11. 50xx error code test coverage (legacy inline tests) ---
+check_50xx_corpus() {
+    local rc=0
+    # 5024 (BorrowLedgerFull) excluded (same reasoning as above).
+    local codes="5001 5002 5003 5004 5005 5010 5011 5012 5020 5021 5022 5023 5030 5031 5040 5050 5051 3523"
     for code in $codes; do
         local error_match=$(grep -rn "error\[E${code}\]" crates/tooling-tests/tests/ --include="*.rs" 2>/dev/null | wc -l)
         local contains_match=$(grep -rn "contains.*\"${code}\"" crates/tooling-tests/tests/ --include="*.rs" 2>/dev/null | wc -l)
-        # Also check for numeric references like `assert_eq!(..., ${code})` or `${code},`
         local numeric_match=$(grep -rn "[^0-9]${code}[,)]" crates/tooling-tests/tests/ --include="*.rs" 2>/dev/null | grep -v "//\|TODO\|FIXME" | wc -l)
         if [ "$error_match" -eq 0 ] && [ "$contains_match" -eq 0 ] && [ "$numeric_match" -eq 0 ]; then
             msg $RED "  E${code}: missing test fixture"
@@ -231,9 +317,65 @@ check_syntax_survey() {
     return $rc
 }
 
+# --- 12. Effect/context structural consolidation (S13) ---
+# The context-model consolidation replaced ad-hoc special cases with single
+# choke points. These invariants keep them from regrowing: exactly one
+# suspend gate, exactly one scope-close path, no resurrected pre-ContextStack
+# state, and the forbid fold confined to context.rs.
+check_context_consolidation() {
+    local rc=0
+    local sem="crates/semantics/src/typecheck"
+
+    local n
+    n=$(grep -rn 'fn suspend_blocker' "$sem" --include='*.rs' | wc -l)
+    if [ "$n" -ne 1 ]; then
+        msg $RED "  CONSOLIDATION: expected exactly 1 'fn suspend_blocker', found $n"
+        rc=1
+    fi
+
+    n=$(grep -rn 'fn close_scope' "$sem" --include='*.rs' | wc -l)
+    if [ "$n" -ne 1 ]; then
+        msg $RED "  CONSOLIDATION: expected exactly 1 'fn close_scope', found $n"
+        rc=1
+    fi
+
+    # Pre-ContextStack state must not return as code (comments referencing
+    # the old names are allowed).
+    n=$(grep -rn 'in_lock\|locked_resource\|allow_suspend' "$sem" --include='*.rs' \
+        | grep -v '^\s*$' | grep -v ':[0-9]*:\s*//' | wc -l)
+    if [ "$n" -ne 0 ]; then
+        msg $RED "  CONSOLIDATION: in_lock/locked_resource/allow_suspend found outside comments ($n hits)"
+        grep -rn 'in_lock\|locked_resource\|allow_suspend' "$sem" --include='*.rs' | grep -v ':[0-9]*:\s*//' | head -5
+        rc=1
+    fi
+
+    # The ambient forbid fold is ContextStack's job; nothing outside
+    # context.rs may mutate it.
+    n=$(grep -rn 'ambient_forbids\s*=' "$sem" --include='*.rs' | grep -v 'context.rs' | wc -l)
+    if [ "$n" -ne 0 ]; then
+        msg $RED "  CONSOLIDATION: ambient_forbids assigned outside context.rs ($n hits)"
+        rc=1
+    fi
+
+    # MATRIX is the sole rule table.
+    n=$(grep -rln 'pub const MATRIX' "$sem" --include='*.rs' | wc -l)
+    if [ "$n" -ne 1 ]; then
+        msg $RED "  CONSOLIDATION: expected MATRIX defined exactly once, found $n"
+        rc=1
+    fi
+
+    if [ "$rc" -eq 0 ]; then
+        msg $GREEN "  Context consolidation: structural invariants hold"
+    fi
+    return $rc
+}
+
 check_m4_survey || overall_rc=1
 check_syntax_survey || overall_rc=1
+check_context_consolidation || overall_rc=1
+check_corpus_fixtures || overall_rc=1
 check_50xx_corpus || overall_rc=1
+check_consolidation_dead_api || overall_rc=1
 check_ir_verify_usage || overall_rc=1
 
 if [ "$overall_rc" -eq 0 ]; then

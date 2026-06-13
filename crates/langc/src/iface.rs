@@ -1,8 +1,7 @@
 use crate::util::{slice_span, try_load_module_file};
 use frontend::{
     lex::Lexer,
-    parse::{DeclAst, DeclKind, ModuleAst, Parser},
-    span::Span,
+    parse::{AttrAst, DeclAst, DeclKind, ModuleAst, Parser},
     token::TokenKind,
 };
 
@@ -111,18 +110,18 @@ pub fn sig_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 pub fn attrs_eq(
-    def_src: &[u8],
-    def_attrs: &frontend::fixed::FixedVec<Span, 16>,
-    mod_src: &[u8],
-    mod_attrs: &frontend::fixed::FixedVec<Span, 16>,
+    _def_src: &[u8],
+    def_attrs: &frontend::fixed::FixedVec<AttrAst, 16>,
+    _mod_src: &[u8],
+    mod_attrs: &frontend::fixed::FixedVec<AttrAst, 16>,
 ) -> bool {
     if def_attrs.len() != mod_attrs.len() {
         return false;
     }
     for i in 0..def_attrs.len() {
-        let da = *def_attrs.get(i).expect("len checked above");
-        let ma = *mod_attrs.get(i).expect("len checked above");
-        if slice_span(def_src, da) != slice_span(mod_src, ma) {
+        let da = def_attrs.get(i).expect("len checked above");
+        let ma = mod_attrs.get(i).expect("len checked above");
+        if da != ma {
             return false;
         }
     }
@@ -196,10 +195,10 @@ mod tests {
         Parser::new(src.as_bytes()).parse_module_ast().unwrap()
     }
 
-    fn make_attrs(spans: &[Span]) -> FixedVec<Span, 16> {
+    fn make_attrs(spans: &[Span]) -> FixedVec<AttrAst, 16> {
         let mut v = FixedVec::new();
         for &s in spans {
-            v.push(s).unwrap();
+            v.push(AttrAst::Other(s)).unwrap();
         }
         v
     }

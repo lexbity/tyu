@@ -17,10 +17,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         false
     }
 
-    pub(super) fn check_no_scoped_live_all(&self, stack: &[Value; 256], sp: usize) -> bool {
-        !self.any_scoped_live(stack, sp)
-    }
-
     pub(super) fn enter_scope(&mut self) -> Option<u16> {
         if self.scope_sp >= self.scope_stack.len() {
             return None;
@@ -40,6 +36,32 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         if top == id {
             self.scope_sp -= 1;
         }
+    }
+
+    /// Close a scope: if any value still carries this scope id (on stack or
+    /// in a live local), reject with E5020 BorrowEscape.  R-3 ordering:
+    /// classify BEFORE invalidation, else the evidence is destroyed.
+    pub(super) fn close_scope(
+        &self,
+        stack: &[Value; 256],
+        sp: usize,
+        scope: u16,
+        span: Span,
+    ) -> Result<(), TcError> {
+        if self.stack_has_scope(stack, sp, scope) || self.local_has_scope_live(scope) {
+            return Err(TcError::BorrowEscape {
+                span,
+                kind: EscapeKind::AtClose,
+            });
+        }
+        Ok(())
+    }
+
+    pub(super) fn local_has_scope_live(&self, scope: u16) -> bool {
+        self.local_scoped[..self.local_len]
+            .iter()
+            .enumerate()
+            .any(|(i, &s)| s == scope && self.local_live[i])
     }
 
     pub(super) fn stack_has_scope(&self, stack: &[Value; 256], sp: usize, scope: u16) -> bool {

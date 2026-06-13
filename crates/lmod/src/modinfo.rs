@@ -535,4 +535,61 @@ mod tests {
         let result = encode_into(&mut buf, b"M", &[], &imports, 42, 0, &[]);
         assert!(result.is_none(), ">64 imports must return None, not panic");
     }
+
+    #[test]
+    fn word_meta_effect_bits_roundtrip() {
+        // Encode a minimal module with one export carrying known effects bits.
+        // The effects field lives in the WORD META section, after both
+        // export entries and import entries.
+        let mut buf = [0u8; 1024];
+        let export = ExportEntry {
+            sym_hash: fnv1a_u64(b"test"),
+            name: b"test",
+            effects: 0b0000_0101u16, // bits 0 and 2 set
+            requires_caps: 0,
+            stack_bound: 0,
+        };
+        let exports = [export];
+        let encoded_len = encode_into(&mut buf, b"M", &exports, &[], 0, 0, &[])
+            .expect("encode minimal module");
+
+        // Word meta starts after header + module name strings +
+        // 1 export entry (16 bytes) + 0 import entries.
+        let hdr = decode(&buf[..encoded_len]).unwrap();
+        let export_off = export_entries_offset(&buf[..encoded_len]).unwrap();
+        let word_meta_off = export_off
+            + hdr.export_count as usize * EXPORT_ENTRY_SIZE as usize
+            + hdr.import_count as usize * IMPORT_ENTRY_SIZE as usize;
+
+        // effects at offset 8 within the 16-byte word_meta entry.
+        let effects = u16::from_le_bytes(
+            buf[word_meta_off + 8..word_meta_off + 10].try_into().unwrap()
+        );
+        assert_eq!(effects, 0b0000_0101u16, "effects must survive round-trip");
+
+        // Verify a different-effects module produces different bytes.
+        let export2 = ExportEntry {
+            sym_hash: fnv1a_u64(b"test"),
+            name: b"test",
+            effects: 0,
+            requires_caps: 0,
+            stack_bound: 0,
+        };
+        let mut buf2 = [0u8; 1024];
+        let len2 = encode_into(&mut buf2, b"M", &[export2], &[], 0, 0, &[])
+            .expect("encode zero-effects module");
+        let hdr2 = decode(&buf2[..len2]).unwrap();
+        let export_off2 = export_entries_offset(&buf2[..len2]).unwrap();
+        let word_meta_off2 = export_off2
+            + hdr2.export_count as usize * EXPORT_ENTRY_SIZE as usize
+            + hdr2.import_count as usize * IMPORT_ENTRY_SIZE as usize;
+        let effects2 = u16::from_le_bytes(
+            buf2[word_meta_off2 + 8..word_meta_off2 + 10].try_into().unwrap()
+        );
+        assert_eq!(effects2, 0, "zero-effects export must decode to 0");
+        assert_ne!(
+            &buf[..encoded_len], &buf2[..len2],
+            "differing effects must produce differing modinfo bytes"
+        );
+    }
 }

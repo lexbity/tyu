@@ -134,7 +134,7 @@ pub fn parse_type_expr(slice: &[u8], mut i: usize) -> Option<(TypeAtom, usize)> 
         let b = slice[i];
         if matches!(
             b,
-            b'(' | b')' | b',' | b'\'' | b'|' | b' ' | b'\n' | b'\r' | b'\t'
+            b'(' | b')' | b',' | b'\'' | b'.' | b'|' | b' ' | b'\n' | b'\r' | b'\t'
         ) {
             break;
         }
@@ -187,7 +187,7 @@ fn parse_array_suffix(slice: &[u8], base: TypeAtom, mut i: usize) -> Option<(Typ
     while i < slice.len() && matches!(slice[i], b' ' | b'\n' | b'\r' | b'\t') {
         i += 1;
     }
-    if i >= slice.len() || slice[i] != b'\'' {
+    if i >= slice.len() || (slice[i] != b'\'' && slice[i] != b'.') {
         return None;
     }
     i += 1;

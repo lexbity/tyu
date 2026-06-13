@@ -1,4 +1,5 @@
 use super::*;
+use crate::typecheck::context::{ContextKind, FrameParam};
 
 impl<'a, 'r> IrWordGen<'a, 'r> {
 
@@ -41,12 +42,17 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         stack: &mut [Value; 256],
         sp: &mut usize,
         name_abs: Span,
-        _allow_suspend: bool,
         _span: Span,
         observer: &mut dyn TypecheckObserver,
     ) -> Result<lir::BlockId, TcError> {
-        if !self.check_no_scoped_live_all(stack, *sp) {
-            return Err(TcError::ScopedLiveAtSuspend { span: name_abs });
+        // S7: suspend gate at the run call site — forbidders (Lock, MutBorrow,
+        // Isr) and ReadBorrow liveness stop the call.  Undeclared is NOT
+        // checked because Handler discharges SUSPEND for the body.
+        if let Some(s) = self.ctx.forbidding_span(EffectSet::from_bits(EffectSet::SUSPEND)) {
+            return Err(TcError::SuspendForbidden { span: s });
+        }
+        if self.any_scoped_live(stack, *sp) {
+            return Err(TcError::SuspendForbidden { span: name_abs });
         }
         let body_q = pop(stack, sp).ok_or(TcError::TaskRunPop { span: name_abs })?;
         let body_span = match body_q {
@@ -55,7 +61,18 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         };
         let base_stack = *stack;
         let base_sp = *sp;
-        cur = self.compile_quote_span(cur, stack, sp, body_span, true, false, observer)?;
+
+        // S7: snapshot performs before compiling the body, so we can compute
+        // the delta and discharge SUSPEND from outward propagation.
+        let before = self.word.performs;
+        self.ctx.push(ContextKind::Handler, FrameParam::None, name_abs)?;
+        cur = self.compile_quote_span(cur, stack, sp, body_span, false, observer)?;
+        self.ctx.pop();
+        let body_delta = self.word.performs.minus(before);
+        // Discharge SUSPEND: the body may have added SUSPEND (via yield),
+        // but the handler strips it from what propagates outward.
+        self.word.performs = before.union(body_delta.without(EffectSet::SUSPEND));
+
         if *sp != base_sp {
             return Err(TcError::TaskRunDepth { span: name_abs });
         }

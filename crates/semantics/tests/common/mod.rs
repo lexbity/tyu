@@ -72,6 +72,7 @@ pub fn make_decl(body: &str) -> (DeclAst, Vec<u8>) {
         effect_bits: 0,
         effect_net: 0,
         effect_high: 0,
+            has_explicit_performs: false,
     };
     (decl, src)
 }

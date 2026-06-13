@@ -11,6 +11,7 @@ pub struct Config<'a> {
     pub debug_trap_loc: bool,
     pub checks: ChecksMode,
     pub allow_raw_casts: bool,
+    pub unsafe_allow_5031: bool,
     pub is_lib: bool,
     pub input: &'a [u8],
     pub include_dirs: [&'a [u8]; 8],
@@ -56,6 +57,7 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]]) -> (ParseResult<'a>, bool) {
     let mut debug_trap_loc = false;
     let mut checks = ChecksMode::All;
     let mut allow_raw_casts = false;
+    let mut unsafe_allow_5031 = false;
     let mut is_lib = false;
     let mut input: Option<&[u8]> = None;
     let mut include_dirs: [&[u8]; 8] = [&[]; 8];
@@ -114,6 +116,11 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]]) -> (ParseResult<'a>, bool) {
         }
         if a == b"--allow-raw-casts" {
             allow_raw_casts = true;
+            i += 1;
+            continue;
+        }
+        if a == b"--unsafe-allow-5031" {
+            unsafe_allow_5031 = true;
             i += 1;
             continue;
         }
@@ -268,6 +275,7 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]]) -> (ParseResult<'a>, bool) {
             debug_trap_loc,
             checks,
             allow_raw_casts,
+            unsafe_allow_5031,
             is_lib,
             input: input_path,
             include_dirs,

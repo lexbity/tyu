@@ -2,8 +2,8 @@ mod ast;
 mod decl;
 
 pub use ast::{
-    DeclAst, DeclKind, EnumDeclAst, EnumVariantAst, ImportAst, ModuleAst, Output, ParseError,
-    RegMapInstanceAst, StructDeclAst, StructFieldAst, SubtypeAst,
+    AttrAst, DeclAst, DeclKind, EnumDeclAst, EnumVariantAst, ImportAst, ModuleAst, Output,
+    ParseError, RegMapInstanceAst, StructDeclAst, StructFieldAst, SubtypeAst,
 };
 
 use crate::{
@@ -126,30 +126,50 @@ impl<'a> Parser<'a> {
             enums: FixedVec::new(),
         };
 
-        let mut pending_attrs: FixedVec<Span, 16> = FixedVec::new();
+        let mut pending_attrs: FixedVec<AttrAst, 16> = FixedVec::new();
 
         while self.look.kind != TokenKind::KwEnd && self.look.kind != TokenKind::Eof {
             if self.look.kind == TokenKind::Ident && self.slice(self.look.span).starts_with(b"@") {
-                let mut attr_span = self.look.span;
+                let attr_name = self.slice(self.look.span);
+                let attr_span = self.look.span;
                 self.bump();
+                let mut paren_span = None;
                 // Attributes may carry parenthesized arguments, e.g. @interrupt(VEC).
                 // Extend the span to include the balanced parens if present.
                 if self.look.kind == TokenKind::PunctLParen {
-                    if let Ok(paren_span) = self.capture_balanced(
+                    if let Ok(ps) = self.capture_balanced(
                         TokenKind::PunctLParen,
                         TokenKind::PunctRParen,
                         ParseError::UnmatchedParen {
                             span: self.look.span,
                         },
                     ) {
-                        attr_span = Span::new(attr_span.start, paren_span.end);
+                        paren_span = Some(ps);
                     }
                 }
+                let attr = if attr_name == b"@interrupt" {
+                    let vector = match paren_span {
+                        Some(ps) => {
+                            let inner = Span::new(ps.start + 1, ps.end - 1);
+                            if inner.end > inner.start {
+                                inner
+                            } else {
+                                return Err(ParseError::ExpectedInterruptVector { span: attr_span });
+                            }
+                        }
+                        None => return Err(ParseError::ExpectedInterruptVector { span: attr_span }),
+                    };
+                    AttrAst::Interrupt { vector }
+                } else {
+                    let full_span = match paren_span {
+                        Some(ps) => Span::new(attr_span.start, ps.end),
+                        None => attr_span,
+                    };
+                    AttrAst::Other(full_span)
+                };
                 pending_attrs
-                    .push(attr_span)
-                    .map_err(|_| ParseError::TooManyItems {
-                        span: self.look.span,
-                    })?;
+                    .push(attr)
+                    .map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
                 continue;
             }
 

@@ -53,6 +53,14 @@ impl EffectSet {
     pub const fn is_empty(self) -> bool {
         self.0 == 0
     }
+
+    pub const fn minus(self, other: Self) -> Self {
+        Self(self.0 & !other.0)
+    }
+
+    pub const fn without(self, bit: u16) -> Self {
+        Self(self.0 & !bit)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -754,7 +762,11 @@ mod tests {
         assert_eq!(r.high, High::Top);
     }
 
+    // The equal-net invariant is a debug_assert!, which compiles out under
+    // --release — the profile CI tests with — so the panic only exists in
+    // debug builds.
     #[test]
+    #[cfg(debug_assertions)]
     #[should_panic(expected = "branch_max requires equal net")]
     fn stack_bound_branch_max_unequal_net_panics() {
         let t = StackBound {

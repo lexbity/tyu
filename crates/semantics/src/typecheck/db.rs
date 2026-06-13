@@ -21,6 +21,9 @@ pub struct ResourceInfo {
     /// Sharing class: 0 = main-only, 1 = main+ISR (single-core), 2 = multi-core.
     /// Updated by the cross-context resource-sharing analysis (effect-context-model §6.2).
     pub sharing_class: u8,
+    /// True when this resource is reachable from an ISR context.
+    /// Set by compute_resource_sharing or propagated through the call graph.
+    pub isr_reachable: bool,
 }
 
 pub struct ResourceDb {
@@ -100,11 +103,13 @@ pub fn build_isr_bindings(module: &ModuleAst, src: &[u8]) -> FixedVec<IsrBinding
             continue;
         }
         for a in d.attrs.iter() {
-            let bytes = slice_span(src, *a);
-            if let Some(vec_name) = bytes.strip_prefix(b"@interrupt(").and_then(|s| {
-                let end = s.iter().position(|&b| b == b')')?;
-                TypeAtom::new(&s[..end])
-            }) {
+            let vec_name = match a {
+                frontend::parse::AttrAst::Interrupt { vector } => {
+                    TypeAtom::new(slice_span(src, *vector))
+                }
+                _ => None,
+            };
+            if let Some(vec_name) = vec_name {
                 let word_name = TypeAtom::new(slice_span(src, d.name)).unwrap_or(TypeAtom::EMPTY);
                 let _ = bindings.push(IsrBinding {
                     word_name,
@@ -134,6 +139,7 @@ pub fn build_resource_db(module: &ModuleAst, src: &[u8]) -> Result<ResourceDb, T
                 name,
                 ty,
                 sharing_class: 0,
+                isr_reachable: false,
             })
             .map_err(|_| TcError::ResourceCapacityExceeded { span: d.name })?;
     }
@@ -230,6 +236,15 @@ pub fn resource_ty(db: &ResourceDb, name: TypeAtom) -> Option<TypeAtom> {
     None
 }
 
+pub fn resource_is_isr_reachable(db: &ResourceDb, name: TypeAtom) -> bool {
+    for r in db.items.iter() {
+        if r.name == name {
+            return r.isr_reachable;
+        }
+    }
+    false
+}
+
 pub fn resource_sharing_class(db: &ResourceDb, name: TypeAtom) -> u8 {
     for r in db.items.iter() {
         if r.name == name {
@@ -254,7 +269,7 @@ pub fn compute_resource_sharing(module: &ModuleAst, src: &[u8], db: &mut Resourc
             let is_isr = d
                 .attrs
                 .iter()
-                .any(|a| slice_span(src, *a).starts_with(b"@interrupt("));
+                .any(|a| matches!(a, frontend::parse::AttrAst::Interrupt { .. }));
             if is_isr {
                 if let Some(body) = d.body {
                     let _ = bodies.push(body);
@@ -282,6 +297,7 @@ pub fn compute_resource_sharing(module: &ModuleAst, src: &[u8], db: &mut Resourc
             {
                 if let Some(r) = db.items.get_mut(i) {
                     r.sharing_class = 1;
+                    r.isr_reachable = true;
                 }
                 break;
             }

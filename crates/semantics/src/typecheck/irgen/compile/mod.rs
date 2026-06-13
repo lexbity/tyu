@@ -16,7 +16,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         stack: &mut [Value; 256],
         sp: &mut usize,
         quot_span: Span,
-        allow_suspend: bool,
         allow_locals: bool,
         observer: &mut dyn TypecheckObserver,
     ) -> Result<lir::BlockId, TcError> {
@@ -24,7 +23,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             return Ok(cur);
         }
         let inner = Span::new(quot_span.start + 1, quot_span.end - 1);
-        self.compile_span(cur, stack, sp, inner, allow_suspend, allow_locals, observer)
+        self.compile_span(cur, stack, sp, inner, allow_locals, observer)
     }
 
     pub(super) fn compile_span(
@@ -33,7 +32,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         stack: &mut [Value; 256],
         sp: &mut usize,
         span: Span,
-        allow_suspend: bool,
         allow_locals: bool,
         observer: &mut dyn TypecheckObserver,
     ) -> Result<lir::BlockId, TcError> {
@@ -116,7 +114,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                         slice,
                         tok,
                         &mut lex,
-                        allow_suspend,
                         allow_locals,
                         observer,
                     )?,
@@ -149,7 +146,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                         tok,
                         name,
                         name_abs,
-                        allow_suspend,
                         allow_locals,
                         &mut terminated,
                         observer,
