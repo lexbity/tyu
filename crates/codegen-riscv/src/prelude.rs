@@ -35,6 +35,7 @@ impl<'a> RiscVBackend<'a> {
                 self.out.write(b"\t.globl __stack_overflow\n");
                 self.out.write(b"\t.extern __lang_trap\n");
                 self.out.write(b"\t.extern __stack_overflow\n");
+                self.out.write(b"\t.extern __lang_stack_limit\n");
                 Ok(())
             }
         }

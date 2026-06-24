@@ -494,6 +494,12 @@ __lang_expected_abi_hash:
 
     @ return to BSS for the native stack
     .section .bss, "aw", %nobits
+    @ Guard zone below the usable stack: when a word prologue detects
+    @ sp < __lang_stack_limit it branches to __stack_overflow, which then runs
+    @ (emits its diagnostic) using this reserved headroom.
+    .space 1024
+    .global __lang_stack_limit
+__lang_stack_limit:
     @ Native stack — 16 KB (grows downward, SP initialized from vector table).
     @ Sized to leave room in the 64 KB SRAM for the 16 KB data stack and the
     @ concurrency task pools; data-stack-heavy fixtures use the DS region, not

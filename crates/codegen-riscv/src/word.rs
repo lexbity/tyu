@@ -92,6 +92,17 @@ impl<'a> RiscVBackend<'a> {
         write_u32(self.out, ra_off);
         self.out.write(b"(sp)\n");
         let base = self.fresh_label();
+        // Native-stack-overflow guard: if reserving this frame drove sp below
+        // the reserved limit (deep recursion), trap.  __stack_overflow runs in
+        // the guard zone below the limit and reports trap_code 10.
+        if self.mode == AsmMode::Object {
+            self.out.write(b"\tla t0, __lang_stack_limit\n");
+            self.out.write(b"\tbgeu sp, t0, .Lsk");
+            write_u32(self.out, base);
+            self.out.write(b"\n\tj __stack_overflow\n.Lsk");
+            write_u32(self.out, base);
+            self.out.write(b":\n");
+        }
         self.out.write(b"\tj .b");
         write_u32(self.out, base);
         self.out.write(b"_");

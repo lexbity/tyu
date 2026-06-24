@@ -427,6 +427,12 @@ __lang_expected_abi_hash:
 
     # return to BSS for the native stack
     .section .bss
+    # Guard zone below the usable stack: when a word prologue detects
+    # sp < __lang_stack_limit it branches to __stack_overflow, which then runs
+    # (emits its diagnostic) using this reserved headroom.
+    .space 1024
+    .globl __lang_stack_limit
+__lang_stack_limit:
     # Native stack — 32 KB (grows downward, sp initialized by crt0)
     .space 32768
 __stack_top:
