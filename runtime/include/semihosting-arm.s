@@ -21,10 +21,11 @@
 .global w_accb676a903a06d9
 .type w_accb676a903a06d9, %function
 w_accb676a903a06d9:
+    push {lr}                @ save lr: bl __lang_writec clobbers our return addr
     subs r4, r4, #8          @ pop i64 (two DS slots)
     ldr r0, [r4]             @ r0 = low 32 bits of i64 (low byte = char)
     bl __lang_writec
-    bx lr
+    pop {pc}                 @ return
 
 @ -----------------------------------------------------------------
 @ testio.write-str ( str -- )
@@ -37,6 +38,7 @@ w_accb676a903a06d9:
 .global w_eb06855547211672
 .type w_eb06855547211672, %function
 w_eb06855547211672:
+    push {lr}                @ save lr across the __lang_writec calls below
     subs r4, r4, #4          @ pop pointer from DS
     ldr r2, [r4]             @ r2 = pointer to string struct
     ldr r3, [r2]             @ r3 = low 32 bits of length
@@ -49,7 +51,7 @@ w_eb06855547211672:
     subs r3, r3, #1          @ decrement count
     bne .Lstr_loop_arm
 .Lstr_done_arm:
-    bx lr
+    pop {pc}                 @ return
 
 @ -----------------------------------------------------------------
 @ testio.exit ( i64 -- )

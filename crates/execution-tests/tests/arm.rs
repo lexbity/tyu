@@ -456,9 +456,18 @@ fn run_qemu_arm(image: &PathBuf, timeout: std::time::Duration) -> QemuOutcome {
     let mut cmd = Command::new("qemu-system-arm");
     cmd.arg("-machine")
         .arg("lm3s6965evb")
+        // Route semihosting output to a stdio chardev so it lands on stdout
+        // (the default console sends it to QEMU's stderr, which we don't capture).
+        .arg("-display")
+        .arg("none")
+        .arg("-serial")
+        .arg("none")
+        .arg("-monitor")
+        .arg("none")
+        .arg("-chardev")
+        .arg("stdio,id=sh0")
         .arg("-semihosting-config")
-        .arg("enable=on,target=native")
-        .arg("-nographic")
+        .arg("enable=on,target=native,chardev=sh0")
         .arg("-kernel")
         .arg(image);
 

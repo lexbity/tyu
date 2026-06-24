@@ -120,12 +120,20 @@ impl<'a> ArmThumbBackend<'a> {
         self.scoped_base = locals_bytes;
         self.scoped_slots = scoped_count;
         self.scoped_next = 0;
-        let frame_bytes = locals_bytes + scoped_bytes;
-        if frame_bytes > 0 {
-            self.out.write(b"\tsub sp, sp, #");
-            write_u32(self.out, frame_bytes);
-            self.out.write(b"\n");
-        }
+        // Reserve space for `lr` above the locals.  A word may call another
+        // word via `bl`, which clobbers `lr`; without saving it the word's own
+        // `bx lr` returns to the wrong address (self-loop).  `lr` is stored at
+        // the top of the frame so local/scoped offsets (measured from `sp`) are
+        // unchanged.  `locals_bytes`/`scoped_bytes` are multiples of 8, so
+        // `local_frame + 8` keeps `sp` 8-byte aligned (AAPCS).
+        let local_frame = locals_bytes + scoped_bytes;
+        let frame_bytes = local_frame + 8;
+        let lr_off = local_frame + 4;
+        self.out.write(b"\tsub sp, sp, #");
+        write_u32(self.out, frame_bytes);
+        self.out.write(b"\n\tstr lr, [sp, #");
+        write_u32(self.out, lr_off);
+        self.out.write(b"]\n");
 
         let base = self.fresh_label();
         self.out.write(b"\tb .b");
@@ -148,12 +156,11 @@ impl<'a> ArmThumbBackend<'a> {
         self.out.write(b".endword_");
         write_u32(self.out, base);
         self.out.write(b":\n");
-        if frame_bytes > 0 {
-            self.out.write(b"\tadd sp, sp, #");
-            write_u32(self.out, frame_bytes);
-            self.out.write(b"\n");
-        }
-        self.out.write(b"\tbx lr\n");
+        self.out.write(b"\tldr lr, [sp, #");
+        write_u32(self.out, lr_off);
+        self.out.write(b"]\n\tadd sp, sp, #");
+        write_u32(self.out, frame_bytes);
+        self.out.write(b"\n\tbx lr\n");
         Ok(())
     }
 
@@ -236,13 +243,16 @@ impl<'a> ArmThumbBackend<'a> {
                 match kind {
                     lir::CmpKind::Eq => {
                         self.out.write(b"\tcmp r0, r2\n");
-                        self.out.write(b"\titt eq\n\tcmpeq r1, r3\n");
+                        // Only `cmpeq` is conditional here, so the IT block has
+                        // a single slot (`it`, not `itt`) — the following `ite`
+                        // starts a fresh block.
+                        self.out.write(b"\tit eq\n\tcmpeq r1, r3\n");
                         self.out
                             .write(b"\tite eq\n\tmoveq r0, #1\n\tmovne r0, #0\n");
                     }
                     lir::CmpKind::Ne => {
                         self.out.write(b"\tcmp r0, r2\n");
-                        self.out.write(b"\titt ne\n\tcmpne r1, r3\n");
+                        self.out.write(b"\tit ne\n\tcmpne r1, r3\n");
                         self.out
                             .write(b"\tite ne\n\tmovne r0, #1\n\tmoveq r0, #0\n");
                     }
@@ -294,8 +304,11 @@ impl<'a> ArmThumbBackend<'a> {
             lir::OpKind::NotBool => {
                 self.emit_pop_two_r0r1();
                 self.out.write(b"\tcmp r0, #0\n");
+                // `ite` (2 slots): movne (T/ne), moveq (E/eq).  The `eors` that
+                // clears the high word is unconditional and must stay OUTSIDE
+                // the IT block — `itte` would wrongly pull it in.
                 self.out
-                    .write(b"\titte ne\n\tmovne r0, #0\n\tmoveq r0, #1\n");
+                    .write(b"\tite ne\n\tmovne r0, #0\n\tmoveq r0, #1\n");
                 self.out.write(b"\teors r1, r1\n");
                 self.emit_push_r0r1();
                 Ok(())
@@ -517,7 +530,7 @@ impl<'a> ArmThumbBackend<'a> {
                 if to_name == b"bool" && from_name != b"bool" {
                     self.out.write(b"\tcmp r0, #0\n");
                     self.out
-                        .write(b"\titte ne\n\tmovne r0, #1\n\tmoveq r0, #0\n");
+                        .write(b"\tite ne\n\tmovne r0, #1\n\tmoveq r0, #0\n");
                     self.out.write(b"\teors r1, r1\n");
                 }
                 // Mask/sign-extend to target width.
@@ -848,7 +861,7 @@ impl<'a> ArmThumbBackend<'a> {
     fn emit_bool_normalize(&mut self) {
         self.out.write(b"\tcmp r0, #0\n");
         self.out
-            .write(b"\titte ne\n\tmovne r0, #1\n\tmoveq r0, #0\n");
+            .write(b"\tite ne\n\tmovne r0, #1\n\tmoveq r0, #0\n");
     }
 
     // ---- Trap ----

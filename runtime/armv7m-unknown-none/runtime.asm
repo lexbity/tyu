@@ -30,24 +30,27 @@ _vectors:
 
 @ __lang_writec ( r0:byte -- )
 @ Emit low byte of r0 via ARM semihosting SYS_WRITEC.
-@ Preserves r4-r11 (AAPCS callee-save).
+@ Preserves r4-r11 (AAPCS callee-save) AND r0, so callers emitting a run of
+@ equal bytes (e.g. `movs r0, #0; bl __lang_writec` repeated) keep their value
+@ across calls instead of seeing the clobbered SYS_WRITEC operation number.
 __lang_writec:
     push {r0}
     mov r0, #0x03                  @ SYS_WRITEC
     mov r1, sp                     @ r1 = pointer to byte
     bkpt 0xAB
-    add sp, sp, #4
+    pop {r0}                       @ restore caller's byte value
     bx lr
 
 @ __lang_sys_exit ( r1:reason -- )
 @ Terminate via ARM semihosting SYS_EXIT with reason code in r1.
+@ For 32-bit ARM semihosting, SYS_EXIT takes the reason code DIRECTLY in r1 —
+@ not a pointer to a block (that is the 64-bit form).  Passing a pointer makes
+@ QEMU see an unrecognized reason and exit with status 1 instead of terminating
+@ cleanly on ADP_Stopped_ApplicationExit.
 @ Never returns.
 __lang_sys_exit:
-    push {r1}
-    mov r1, sp
-    movs r0, #0x18                 @ SYS_EXIT
+    movs r0, #0x18                 @ SYS_EXIT; r1 already holds the reason
     bkpt 0xAB
-    add sp, sp, #4
     bkpt #0                        @ should not reach here
 
 @ __lang_fail_exit ( -- )
@@ -318,18 +321,20 @@ __lang_trap:
 __lang_trap_loc:
     push {r4, r5, r6, r7, r8, r9, r10, r11, lr}
 
-    @ Compute ds_depth from r4.
-    mov r6, r4
-    ldr r1, =__lang_ds_base
-    sub r6, r6, r1
-    lsr r6, r6, #2
-
-    @ Save trap payload from registers.
+    @ Save trap payload FIRST — the ds_depth computation below clobbers r1,
+    @ which carries `valid` from the caller.  (Reading valid after the clobber
+    @ produced the low byte of __lang_ds_base instead of 1.)
     mov r9, r0                      @ trap_code
     mov r10, r1                     @ valid (1)
     mov r11, r2                     @ source_line
     mov r7, r3                      @ word_hash low 32
     mov r8, r12                     @ word_hash high 32
+
+    @ Compute ds_depth from r4 (r1 now free as scratch).
+    mov r6, r4
+    ldr r1, =__lang_ds_base
+    sub r6, r6, r1
+    lsr r6, r6, #2
 
     bl emit_diag
     @ never returns
@@ -446,16 +451,9 @@ w_6a5791a972f2fbd0:
 w_46f6f74f7859ca64:
     b __lang_fail_exit
 
-@ -----------------------------------------------------------------
-@ Module modpack section (S2 Phase 14)
-@ Embedded .lmod images live in their own section, each prefixed
-@ with a u32 length. Scanned by loader [start .. end).
-@ -----------------------------------------------------------------
-.section .modpack, "aw", %nobits
-.global __lang_modpack_start
-__lang_modpack_start:
-.global __lang_modpack_end
-__lang_modpack_end:
+@ Note: `.modpack` / __lang_modpack_start/_end are provided by `modload.asm`
+@ (assembled only when the module-loading feature is enabled), matching the
+@ RISC-V runtime.  Defining them here too caused a duplicate-symbol link error.
 
 @ -----------------------------------------------------------------
 @ BSS — DS region, high-water, native stack
@@ -496,6 +494,9 @@ __lang_expected_abi_hash:
 
     @ return to BSS for the native stack
     .section .bss, "aw", %nobits
-    @ Native stack — 32 KB (grows downward, SP initialized from vector table)
-    .space 32768
+    @ Native stack — 16 KB (grows downward, SP initialized from vector table).
+    @ Sized to leave room in the 64 KB SRAM for the 16 KB data stack and the
+    @ concurrency task pools; data-stack-heavy fixtures use the DS region, not
+    @ deep native recursion.
+    .space 16384
 __stack_top:
