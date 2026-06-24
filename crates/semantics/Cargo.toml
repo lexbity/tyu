@@ -2,6 +2,7 @@
 name = "semantics"
 version = "0.1.0"
 edition = "2021"
+description = "Semantic analysis, typechecking, and effect checking for Tyu."
 
 [lib]
 doctest = false

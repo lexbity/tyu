@@ -278,13 +278,30 @@ fn ident_with_bang() {
 #[test]
 fn ident_with_slash() {
     // S-13: `/` is no longer part of identifiers.
-    assert_eq!(kind("a/b"), [TokenKind::Ident, TokenKind::PunctSlash, TokenKind::Ident, TokenKind::Eof]);
+    assert_eq!(
+        kind("a/b"),
+        [
+            TokenKind::Ident,
+            TokenKind::PunctSlash,
+            TokenKind::Ident,
+            TokenKind::Eof
+        ]
+    );
 }
 
 #[test]
 fn ident_with_brackets() {
     // S-13: `[` and `]` are no longer part of identifiers.
-    assert_eq!(kind("arr[0]"), [TokenKind::Ident, TokenKind::PunctLBracket, TokenKind::Number, TokenKind::PunctRBracket, TokenKind::Eof]);
+    assert_eq!(
+        kind("arr[0]"),
+        [
+            TokenKind::Ident,
+            TokenKind::PunctLBracket,
+            TokenKind::Number,
+            TokenKind::PunctRBracket,
+            TokenKind::Eof
+        ]
+    );
 }
 
 #[test]
@@ -442,26 +459,60 @@ fn empty_input() {
 
 #[test]
 fn performs_empty() {
-    assert_eq!(kind("performs {}"), [TokenKind::KwPerforms, TokenKind::PunctLBrace, TokenKind::PunctRBrace, TokenKind::Eof]);
+    assert_eq!(
+        kind("performs {}"),
+        [
+            TokenKind::KwPerforms,
+            TokenKind::PunctLBrace,
+            TokenKind::PunctRBrace,
+            TokenKind::Eof
+        ]
+    );
 }
 
 #[test]
 fn performs_with_effect() {
-    assert_eq!(kind("performs {suspend}"), [TokenKind::KwPerforms, TokenKind::PunctLBrace, TokenKind::Ident, TokenKind::PunctRBrace, TokenKind::Eof]);
+    assert_eq!(
+        kind("performs {suspend}"),
+        [
+            TokenKind::KwPerforms,
+            TokenKind::PunctLBrace,
+            TokenKind::Ident,
+            TokenKind::PunctRBrace,
+            TokenKind::Eof
+        ]
+    );
 }
 
 #[test]
 fn performs_with_multiple() {
     assert_eq!(
         kind("performs {suspend, mmio}"),
-        [TokenKind::KwPerforms, TokenKind::PunctLBrace, TokenKind::Ident, TokenKind::PunctComma, TokenKind::Ident, TokenKind::PunctRBrace, TokenKind::Eof]
+        [
+            TokenKind::KwPerforms,
+            TokenKind::PunctLBrace,
+            TokenKind::Ident,
+            TokenKind::PunctComma,
+            TokenKind::Ident,
+            TokenKind::PunctRBrace,
+            TokenKind::Eof
+        ]
     );
 }
 
 #[test]
 fn old_bang_brace_is_two_tokens() {
     // Old `!{` syntax is no longer a special token — it's Ident(!) + PunctLBrace.
-    assert_eq!(kind("!{suspend}"), [TokenKind::Ident, TokenKind::PunctLBrace, TokenKind::Ident, TokenKind::PunctRBrace, TokenKind::Eof]);
+    assert_eq!(
+        kind("!{suspend}"),
+        [
+            TokenKind::Ident,
+            TokenKind::PunctLBrace,
+            TokenKind::Ident,
+            TokenKind::PunctRBrace,
+            TokenKind::Eof
+        ]
+    );
 }
 
 // ---------------------------------------------------------------------------

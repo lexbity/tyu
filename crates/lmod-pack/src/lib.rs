@@ -181,7 +181,11 @@ impl<'a> Elf<'a> {
                 size: sec_size,
                 link: le_u32(data, b + 40 - if elf_class == 2 { 0 } else { 8 }),
                 info: le_u32(data, b + 44 - if elf_class == 2 { 0 } else { 8 }),
-                entsize: if elf_class == 2 { le_u64(data, b + 56) } else { le_u32(data, b + 36) as u64 },
+                entsize: if elf_class == 2 {
+                    le_u64(data, b + 56)
+                } else {
+                    le_u32(data, b + 36) as u64
+                },
             });
         }
 
@@ -227,7 +231,12 @@ impl<'a> Elf<'a> {
             }
         };
 
-        Ok(Self { data, elf_class, sections, strtab })
+        Ok(Self {
+            data,
+            elf_class,
+            sections,
+            strtab,
+        })
     }
 
     fn section_by_name(&self, name: &str) -> Option<&Section> {
@@ -250,8 +259,16 @@ impl<'a> Elf<'a> {
             None => return vec![],
         };
         let st_data = self.section_data(st);
-        let sym_entry_size = if self.elf_class == 2 { 24usize } else { 16usize };
-        let entsize = if st.entsize != 0 { st.entsize as usize } else { sym_entry_size };
+        let sym_entry_size = if self.elf_class == 2 {
+            24usize
+        } else {
+            16usize
+        };
+        let entsize = if st.entsize != 0 {
+            st.entsize as usize
+        } else {
+            sym_entry_size
+        };
         let mut syms = Vec::new();
         let mut pos = 0;
         while pos + entsize <= st_data.len() {
@@ -387,10 +404,22 @@ pub fn pack(input: &[u8]) -> Result<Vec<u8>, PackError> {
     let elf = Elf::parse(input)?;
 
     // 1. Extract section data.
-    let modinfo_data = elf.section_by_name(".lang.modinfo").map(|s| elf.section_data(s)).unwrap_or(&[]);
-    let code_data = elf.section_by_name(".text").map(|s| elf.section_data(s)).unwrap_or(&[]);
-    let rodata_data = elf.section_by_name(".rodata").map(|s| elf.section_data(s)).unwrap_or(&[]);
-    let data_data = elf.section_by_name(".data").map(|s| elf.section_data(s)).unwrap_or(&[]);
+    let modinfo_data = elf
+        .section_by_name(".lang.modinfo")
+        .map(|s| elf.section_data(s))
+        .unwrap_or(&[]);
+    let code_data = elf
+        .section_by_name(".text")
+        .map(|s| elf.section_data(s))
+        .unwrap_or(&[]);
+    let rodata_data = elf
+        .section_by_name(".rodata")
+        .map(|s| elf.section_data(s))
+        .unwrap_or(&[]);
+    let data_data = elf
+        .section_by_name(".data")
+        .map(|s| elf.section_data(s))
+        .unwrap_or(&[]);
 
     let modinfo_len = modinfo_data.len() as u32;
     let code_len = code_data.len() as u32;
@@ -424,25 +453,48 @@ pub fn pack(input: &[u8]) -> Result<Vec<u8>, PackError> {
         let entsize = if sec.entsize != 0 {
             sec.entsize as usize
         } else if is_rela {
-            if elf.elf_class == 2 { 24 } else { 12 }
+            if elf.elf_class == 2 {
+                24
+            } else {
+                12
+            }
         } else {
-            if elf.elf_class == 2 { 24 } else { 8 }
+            if elf.elf_class == 2 {
+                24
+            } else {
+                8
+            }
         };
         let mut pos = 0;
 
         while pos + entsize <= rel_data.len() {
             let (r_offset, r_info_wide, r_addend) = if is_rela && elf.elf_class == 2 {
-                (le_u64(rel_data, pos), le_u64(rel_data, pos + 8), le_u64(rel_data, pos + 16) as i64)
+                (
+                    le_u64(rel_data, pos),
+                    le_u64(rel_data, pos + 8),
+                    le_u64(rel_data, pos + 16) as i64,
+                )
             } else if is_rela && elf.elf_class == 1 {
-                (le_u32(rel_data, pos) as u64, le_u32(rel_data, pos + 4) as u64, le_u32(rel_data, pos + 8) as i64)
+                (
+                    le_u32(rel_data, pos) as u64,
+                    le_u32(rel_data, pos + 4) as u64,
+                    le_u32(rel_data, pos + 8) as i64,
+                )
             } else if !is_rela && elf.elf_class == 2 {
                 (le_u64(rel_data, pos), le_u64(rel_data, pos + 8), 0i64)
             } else {
-                (le_u32(rel_data, pos) as u64, le_u32(rel_data, pos + 4) as u64, 0i64)
+                (
+                    le_u32(rel_data, pos) as u64,
+                    le_u32(rel_data, pos + 4) as u64,
+                    0i64,
+                )
             };
 
             let (sym_idx, r_type) = if elf.elf_class == 2 {
-                ((r_info_wide >> 32) as usize, (r_info_wide & 0xFFFFFFFF) as u32)
+                (
+                    (r_info_wide >> 32) as usize,
+                    (r_info_wide & 0xFFFFFFFF) as u32,
+                )
             } else {
                 ((r_info_wide >> 8) as usize, (r_info_wide & 0xFF) as u32)
             };
@@ -468,13 +520,22 @@ pub fn pack(input: &[u8]) -> Result<Vec<u8>, PackError> {
                     if r_type == 2 {
                         if site_in_section + 4 <= section_data.len() {
                             le_u32(section_data, site_in_section) as i32 as i64
-                        } else { 0 }
+                        } else {
+                            0
+                        }
                     } else {
                         0
                     }
                 };
                 let sym_sec_idx = sym.shndx as usize;
-                internal_fixups.push((target_idx, r_type, r_offset, sym_sec_idx, sym.value, actual_addend));
+                internal_fixups.push((
+                    target_idx,
+                    r_type,
+                    r_offset,
+                    sym_sec_idx,
+                    sym.value,
+                    actual_addend,
+                ));
             }
 
             pos += entsize;
@@ -485,7 +546,14 @@ pub fn pack(input: &[u8]) -> Result<Vec<u8>, PackError> {
     let reloc_count = import_relocs.len() as u32;
     let bss_len = 0u32;
     let layout = lmod::header::compute_layout(
-        abi_hash, modinfo_len, code_len, rodata_len, data_len, bss_len, reloc_count, 0,
+        abi_hash,
+        modinfo_len,
+        code_len,
+        rodata_len,
+        data_len,
+        bss_len,
+        reloc_count,
+        0,
     );
 
     // 6. Build the container in a buffer.
@@ -568,17 +636,21 @@ mod tests {
     fn elf64_empty() -> Vec<u8> {
         let mut buf = vec![0u8; 64];
         buf[0..4].copy_from_slice(b"\x7fELF");
-        buf[4] = 2;  // ELFCLASS64
-        buf[5] = 1;  // little-endian
-        buf[16] = 1; buf[17] = 0;  // e_type = ET_REL (1)
-        // e_machine = 0x3E (x86_64) at byte 18-19
-        buf[18] = 0x3E; buf[19] = 0;
+        buf[4] = 2; // ELFCLASS64
+        buf[5] = 1; // little-endian
+        buf[16] = 1;
+        buf[17] = 0; // e_type = ET_REL (1)
+                     // e_machine = 0x3E (x86_64) at byte 18-19
+        buf[18] = 0x3E;
+        buf[19] = 0;
         // e_shoff at offset 40 (8 bytes)
         // e_shentsize at offset 58 (2 bytes) = 64
         // e_shnum at offset 60 (2 bytes) = 0
         // e_shstrndx at offset 62 (2 bytes) = 0
-        buf[58] = 64; buf[59] = 0;   // shentsize = 64
-        buf[60] = 0; buf[61] = 0;    // shnum = 0
+        buf[58] = 64;
+        buf[59] = 0; // shentsize = 64
+        buf[60] = 0;
+        buf[61] = 0; // shnum = 0
         buf
     }
 
@@ -636,19 +708,23 @@ mod tests {
 
     /// Minimal 32-bit ELF ET_REL header.
     fn elf32_empty() -> Vec<u8> {
-        let mut buf = vec![0u8; 52];  // ELF32 header is 52 bytes
+        let mut buf = vec![0u8; 52]; // ELF32 header is 52 bytes
         buf[0..4].copy_from_slice(b"\x7fELF");
-        buf[4] = 1;  // ELFCLASS32
-        buf[5] = 1;  // little-endian
-        buf[16] = 1; buf[17] = 0;  // e_type = ET_REL
-        // e_machine = 0x28 (ARM)
-        buf[18] = 0x28; buf[19] = 0;
+        buf[4] = 1; // ELFCLASS32
+        buf[5] = 1; // little-endian
+        buf[16] = 1;
+        buf[17] = 0; // e_type = ET_REL
+                     // e_machine = 0x28 (ARM)
+        buf[18] = 0x28;
+        buf[19] = 0;
         // e_shoff at offset 0x20 (4 bytes)
         // e_shentsize at offset 0x2E (2 bytes) = 40
         // e_shnum at offset 0x30 (2 bytes) = 0
         // e_shstrndx at offset 0x32 (2 bytes)
-        buf[0x2E] = 40; buf[0x2F] = 0;   // shentsize = 40
-        buf[0x30] = 0; buf[0x31] = 0;     // shnum = 0
+        buf[0x2E] = 40;
+        buf[0x2F] = 0; // shentsize = 40
+        buf[0x30] = 0;
+        buf[0x31] = 0; // shnum = 0
         buf
     }
 
@@ -672,7 +748,7 @@ mod tests {
     fn rejects_unsupported_class() {
         let mut buf = [0u8; 64];
         buf[0..4].copy_from_slice(b"\x7fELF");
-        buf[4] = 3;  // ELF class 3 = unsupported
+        buf[4] = 3; // ELF class 3 = unsupported
         assert_eq!(pack(&buf), Err(PackError::UnsupportedClass(3)));
     }
 
@@ -680,8 +756,8 @@ mod tests {
     fn rejects_big_endian() {
         let mut buf = [0u8; 64];
         buf[0..4].copy_from_slice(b"\x7fELF");
-        buf[4] = 1;  // ELFCLASS32
-        buf[5] = 2;  // big-endian
+        buf[4] = 1; // ELFCLASS32
+        buf[5] = 2; // big-endian
         assert_eq!(pack(&buf), Err(PackError::NotLittleEndian));
     }
 
@@ -691,7 +767,8 @@ mod tests {
         buf[0..4].copy_from_slice(b"\x7fELF");
         buf[4] = 2;
         buf[5] = 1;
-        buf[16] = 2; buf[17] = 0;  // e_type = ET_EXEC (2), not ET_REL
+        buf[16] = 2;
+        buf[17] = 0; // e_type = ET_EXEC (2), not ET_REL
         assert_eq!(pack(&buf), Err(PackError::NotRelocatable));
     }
 
@@ -700,23 +777,30 @@ mod tests {
         let mut buf = elf64_empty();
         // Set up a section header offset and count so parse reaches shentsize check.
         buf[40..48].copy_from_slice(&64u64.to_le_bytes()); // e_shoff
-        buf[60..62].copy_from_slice(&1u16.to_le_bytes());  // e_shnum = 1
-        buf[62..64].copy_from_slice(&1u16.to_le_bytes());  // e_shstrndx = 1
-        // Add one section header after the header (at offset 64) with wrong entsize
+        buf[60..62].copy_from_slice(&1u16.to_le_bytes()); // e_shnum = 1
+        buf[62..64].copy_from_slice(&1u16.to_le_bytes()); // e_shstrndx = 1
+                                                          // Add one section header after the header (at offset 64) with wrong entsize
         let mut sh = vec![0u8; 64];
         // sh_name name_off for ".text" would be in shstrtab, but we set shentsize wrong first
         // Actually, we trick the parser: give it e_shentsize != 64 for ELF64
-        buf[58] = 48; buf[59] = 0;  // shentsize = 48 (should be 64 for ELF64)
-        // Add section header data so it doesn't overflow
+        buf[58] = 48;
+        buf[59] = 0; // shentsize = 48 (should be 64 for ELF64)
+                     // Add section header data so it doesn't overflow
         buf.extend_from_slice(&[0u8; 48]); // 48-byte section header
-        // Add a dummy .shstrtab section
+                                           // Add a dummy .shstrtab section
         let mut shstr = vec![0u8; 48];
         shstr[4..8].copy_from_slice(&3u32.to_le_bytes()); // SHT_STRTAB
         shstr[24..32].copy_from_slice(&(64u64 + 48 + 48).to_le_bytes()); // offset
         shstr[32..36].copy_from_slice(&16u32.to_le_bytes()); // size
         buf.extend_from_slice(&shstr);
         buf.extend_from_slice(&[0u8; 16]); // strtab data
-        assert_eq!(pack(&buf), Err(PackError::ShentsizeMismatch { expected: 48, actual: 64 }));
+        assert_eq!(
+            pack(&buf),
+            Err(PackError::ShentsizeMismatch {
+                expected: 48,
+                actual: 64
+            })
+        );
     }
 
     #[test]
@@ -724,7 +808,7 @@ mod tests {
         // e_shoff + e_shnum * shentsize > data.len()
         let mut buf = elf64_empty();
         buf[40..48].copy_from_slice(&1000u64.to_le_bytes()); // e_shoff past end
-        buf[60..62].copy_from_slice(&10u16.to_le_bytes());   // shnum = 10
+        buf[60..62].copy_from_slice(&10u16.to_le_bytes()); // shnum = 10
         assert_eq!(pack(&buf), Err(PackError::SectionHeadersOverflow));
     }
 
@@ -749,7 +833,10 @@ mod tests {
         let mut out2 = [0u8; 4];
         let result2 = apply_internal_reloc(&mut out2, 2, 8, 0x100, 0, 0);
         assert!(result2.is_err());
-        assert!(matches!(result2, Err(PackError::RelocSiteOutOfRange { .. })));
+        assert!(matches!(
+            result2,
+            Err(PackError::RelocSiteOutOfRange { .. })
+        ));
     }
 
     #[test]
@@ -783,7 +870,10 @@ mod tests {
         let mut out = vec![0u8; 16];
         apply_internal_reloc(&mut out, 2, 0, 0x1000, 8, -0x100).unwrap();
         let written = i32::from_le_bytes(out[8..12].try_into().unwrap());
-        assert_eq!(written, 0xf00, "R_ARM_ABS32 with negative addend must write S+A");
+        assert_eq!(
+            written, 0xf00,
+            "R_ARM_ABS32 with negative addend must write S+A"
+        );
     }
 
     #[test]
@@ -809,7 +899,10 @@ mod tests {
         // r_offset = 4 → write at site_base + 4 = 8
         apply_internal_reloc(&mut out, 1, 4, 0xABCD, 4, 0).unwrap();
         let written = u64::from_le_bytes(out[8..16].try_into().unwrap());
-        assert_eq!(written, 0xABCD, "R_X86_64_64 with non-zero r_offset must write at site");
+        assert_eq!(
+            written, 0xABCD,
+            "R_X86_64_64 with non-zero r_offset must write at site"
+        );
     }
 
     #[test]
@@ -820,8 +913,11 @@ mod tests {
         let mut out = vec![0u8; 16];
         apply_internal_reloc(&mut out, 2, 0, 0x1000, 8, -4).unwrap();
         let got = u32::from_le_bytes(out[8..12].try_into().unwrap());
-        assert_eq!(got, (0x1000u64.wrapping_add((-4i64) as u64)) as u32,
-            "ARM path: S + A = 0x1000 - 4 = 0xFFC");
+        assert_eq!(
+            got,
+            (0x1000u64.wrapping_add((-4i64) as u64)) as u32,
+            "ARM path: S + A = 0x1000 - 4 = 0xFFC"
+        );
     }
 
     #[test]
@@ -844,24 +940,24 @@ mod tests {
     fn valid_min_et_rel() -> Vec<u8> {
         let mut buf = vec![0u8; 64];
         buf[0..4].copy_from_slice(b"\x7fELF");
-        buf[4] = 2;           // ELFCLASS64
-        buf[5] = 1;           // little-endian
-        buf[16..18].copy_from_slice(&1u16.to_le_bytes());  // ET_REL
+        buf[4] = 2; // ELFCLASS64
+        buf[5] = 1; // little-endian
+        buf[16..18].copy_from_slice(&1u16.to_le_bytes()); // ET_REL
         buf[40..48].copy_from_slice(&64u64.to_le_bytes()); // e_shoff = 64
         buf[58..60].copy_from_slice(&64u16.to_le_bytes()); // shentsize
-        buf[60..62].copy_from_slice(&2u16.to_le_bytes());  // shnum = 2
-        buf[62..64].copy_from_slice(&1u16.to_le_bytes());  // shstrndx = 1
+        buf[60..62].copy_from_slice(&2u16.to_le_bytes()); // shnum = 2
+        buf[62..64].copy_from_slice(&1u16.to_le_bytes()); // shstrndx = 1
 
         // Section 0: .text (SHT_PROGBITS), 8 bytes at offset 64+64+64=192
         let mut sh0 = vec![0u8; 64];
-        sh0[4..8].copy_from_slice(&1u32.to_le_bytes());    // SHT_PROGBITS
+        sh0[4..8].copy_from_slice(&1u32.to_le_bytes()); // SHT_PROGBITS
         sh0[24..32].copy_from_slice(&192u64.to_le_bytes()); // sh_offset
-        sh0[32..36].copy_from_slice(&8u32.to_le_bytes());  // sh_size
+        sh0[32..36].copy_from_slice(&8u32.to_le_bytes()); // sh_size
         buf.extend_from_slice(&sh0);
 
         // Section 1: .shstrtab (SHT_STRTAB), 16 bytes at offset 192+8=200
         let mut sh1 = vec![0u8; 64];
-        sh1[4..8].copy_from_slice(&3u32.to_le_bytes());    // SHT_STRTAB
+        sh1[4..8].copy_from_slice(&3u32.to_le_bytes()); // SHT_STRTAB
         sh1[24..32].copy_from_slice(&200u64.to_le_bytes()); // sh_offset
         sh1[32..36].copy_from_slice(&16u32.to_le_bytes()); // sh_size
         buf.extend_from_slice(&sh1);
@@ -906,14 +1002,18 @@ mod tests {
     fn malformed_elf_never_panics() {
         let base = valid_min_et_rel();
         let corruptors: [fn(Vec<u8>) -> Vec<u8>; 4] = [
-            bad_shstrndx, name_off_overflow, truncate_sh_table, huge_shnum,
+            bad_shstrndx,
+            name_off_overflow,
+            truncate_sh_table,
+            huge_shnum,
         ];
         for corrupt in corruptors {
             let bytes = corrupt(base.clone());
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let _ = pack(&bytes);
             }));
-            assert!(result.is_ok(),
+            assert!(
+                result.is_ok(),
                 "pack must not panic on malformed ELF (corruptor: {})",
                 std::any::type_name_of_val(&corrupt),
             );
@@ -931,13 +1031,16 @@ mod tests {
         // shstrndx access happens.
         let mut buf = elf64_empty();
         buf[40..48].copy_from_slice(&64u64.to_le_bytes()); // e_shoff
-        buf[60..62].copy_from_slice(&1u16.to_le_bytes());  // e_shnum = 1
-        buf[62..64].copy_from_slice(&2u16.to_le_bytes());  // e_shstrndx = 2 (>= shnum)
-        // Add one section header
+        buf[60..62].copy_from_slice(&1u16.to_le_bytes()); // e_shnum = 1
+        buf[62..64].copy_from_slice(&2u16.to_le_bytes()); // e_shstrndx = 2 (>= shnum)
+                                                          // Add one section header
         buf.extend_from_slice(&[0u8; 64]);
         // The parser will try access sections[2] → out of bounds → should Err, not panic.
         let result = pack(&buf);
-        assert!(result.is_err(), "shstrndx >= shnum must return Err, not panic");
+        assert!(
+            result.is_err(),
+            "shstrndx >= shnum must return Err, not panic"
+        );
     }
 
     #[test]
@@ -946,22 +1049,22 @@ mod tests {
         // shstrtab[name_off..].  We need a real shstrtab section.
         let mut buf = elf64_empty();
         buf[40..48].copy_from_slice(&64u64.to_le_bytes()); // e_shoff
-        buf[60..62].copy_from_slice(&2u16.to_le_bytes());  // e_shnum = 2
-        buf[62..64].copy_from_slice(&1u16.to_le_bytes());  // e_shstrndx = 1
+        buf[60..62].copy_from_slice(&2u16.to_le_bytes()); // e_shnum = 2
+        buf[62..64].copy_from_slice(&1u16.to_le_bytes()); // e_shstrndx = 1
 
         // Section 0: name_off points past strtab
         let mut sh0 = vec![0u8; 64];
         sh0[0..4].copy_from_slice(&99u32.to_le_bytes()); // sh_name = 99 (past strtab)
-        sh0[4..8].copy_from_slice(&1u32.to_le_bytes());   // SHT_PROGBITS
+        sh0[4..8].copy_from_slice(&1u32.to_le_bytes()); // SHT_PROGBITS
         sh0[24..32].copy_from_slice(&256u64.to_le_bytes()); // offset
-        sh0[32..36].copy_from_slice(&8u32.to_le_bytes());   // size
+        sh0[32..36].copy_from_slice(&8u32.to_le_bytes()); // size
         buf.extend_from_slice(&sh0);
 
         // Section 1: .shstrtab
         let mut sh1 = vec![0u8; 64];
-        sh1[4..8].copy_from_slice(&3u32.to_le_bytes());    // SHT_STRTAB
+        sh1[4..8].copy_from_slice(&3u32.to_le_bytes()); // SHT_STRTAB
         sh1[24..32].copy_from_slice(&256u64.to_le_bytes()); // offset
-        sh1[32..36].copy_from_slice(&16u32.to_le_bytes());  // size (only 16 bytes)
+        sh1[32..36].copy_from_slice(&16u32.to_le_bytes()); // size (only 16 bytes)
         buf.extend_from_slice(&sh1);
 
         // .shstrtab data: 16 bytes
@@ -969,7 +1072,10 @@ mod tests {
 
         // The name_off = 99 is past the 16-byte strtab → parser should Err, not panic.
         let result = pack(&buf);
-        assert!(result.is_err(), "name_off past strtab must return Err, not panic");
+        assert!(
+            result.is_err(),
+            "name_off past strtab must return Err, not panic"
+        );
     }
 
     #[test]
@@ -978,7 +1084,7 @@ mod tests {
         let mut buf = elf64_empty();
         buf[40..48].copy_from_slice(&1000u64.to_le_bytes()); // e_shoff
         buf[60..62].copy_from_slice(&0xFFFFu16.to_le_bytes()); // e_shnum = 65535
-        // This should trigger SectionHeadersOverflow rather than panic.
+                                                               // This should trigger SectionHeadersOverflow rather than panic.
         let result = pack(&buf);
         assert_eq!(result, Err(PackError::SectionHeadersOverflow));
     }
@@ -994,30 +1100,32 @@ mod tests {
         let mut buf = elf32_empty();
         // Set e_shoff so the parser enters the 32-bit branch
         buf[0x20..0x24].copy_from_slice(&52u32.to_le_bytes()); // e_shoff after header
-        buf[0x30..0x32].copy_from_slice(&1u16.to_le_bytes());  // shnum = 1
-        buf[0x32..0x34].copy_from_slice(&1u16.to_le_bytes());  // shstrndx = 1
-        // Add a 40-byte section header (ELF32 shentsize)
+        buf[0x30..0x32].copy_from_slice(&1u16.to_le_bytes()); // shnum = 1
+        buf[0x32..0x34].copy_from_slice(&1u16.to_le_bytes()); // shstrndx = 1
+                                                              // Add a 40-byte section header (ELF32 shentsize)
         let mut sh = vec![0u8; 40];
-        sh[4..8].copy_from_slice(&1u32.to_le_bytes());   // SHT_PROGBITS
+        sh[4..8].copy_from_slice(&1u32.to_le_bytes()); // SHT_PROGBITS
         sh[16..20].copy_from_slice(&52u32.to_le_bytes()); // sh_offset
-        sh[20..24].copy_from_slice(&8u32.to_le_bytes());  // sh_size
+        sh[20..24].copy_from_slice(&8u32.to_le_bytes()); // sh_size
         buf.extend_from_slice(&sh);
         // Add shstrtab section header
         let mut shstr = vec![0u8; 40];
         shstr[4..8].copy_from_slice(&3u32.to_le_bytes()); // SHT_STRTAB
-        // set offset + size after the second section header
+                                                          // set offset + size after the second section header
         shstr[16..20].copy_from_slice(&(52u32 + 40 + 40).to_le_bytes()); // offset
         shstr[20..24].copy_from_slice(&16u32.to_le_bytes()); // size
         buf.extend_from_slice(&shstr);
         // Section data + strtab
-        buf.extend_from_slice(&[0xCCu8; 8]);   // .text data
-        buf.extend_from_slice(&[0u8; 16]);      // strtab (empty names)
+        buf.extend_from_slice(&[0xCCu8; 8]); // .text data
+        buf.extend_from_slice(&[0u8; 16]); // strtab (empty names)
 
         // It must not panic.  It may Err (no modinfo section is OK).
         let result = pack(&buf);
         // Must not panic: either Ok (surprising but OK) or Err (expected).
-        assert!(result.is_ok() || result.is_err(),
-            "32-bit ELF parse must not panic");
+        assert!(
+            result.is_ok() || result.is_err(),
+            "32-bit ELF parse must not panic"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1027,8 +1135,10 @@ mod tests {
     #[test]
     fn golden_pack_parity_with_binary() {
         let gold_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent().unwrap()
-            .parent().unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
             .join("test-goldens");
 
         // Re-compile golden.mod to get a fresh .o.
@@ -1042,9 +1152,13 @@ mod tests {
         std::fs::write(tmp.join("golden.mod"), &mod_src).unwrap();
 
         let langc = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent().unwrap()
-            .parent().unwrap()
-            .join("target").join("debug").join("langc");
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("target")
+            .join("debug")
+            .join("langc");
 
         let out = std::process::Command::new(&langc)
             .args([
@@ -1053,11 +1167,17 @@ mod tests {
                 &format!("--out-dir={}", tmp.to_string_lossy()),
                 tmp.join("golden.mod").to_string_lossy().as_ref(),
             ])
-            .output().expect("langc");
-        assert!(out.status.success(), "langc failed:\n{}", String::from_utf8_lossy(&out.stderr));
+            .output()
+            .expect("langc");
+        assert!(
+            out.status.success(),
+            "langc failed:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
 
         // Find the .o file.
-        let o_file: PathBuf = std::fs::read_dir(&tmp).unwrap()
+        let o_file: PathBuf = std::fs::read_dir(&tmp)
+            .unwrap()
             .filter_map(|e| e.ok())
             .map(|e| e.path())
             .find(|p| p.extension().and_then(|s| s.to_str()) == Some("o"))

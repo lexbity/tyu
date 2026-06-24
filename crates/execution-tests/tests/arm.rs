@@ -119,8 +119,7 @@ end;
 
     for rec in &d_records {
         if let harness_core::Record::Diag(payload) = rec {
-            let diag = diag_core::DiagRecord::parse(payload)
-                .expect("valid DiagRecord on ARM");
+            let diag = diag_core::DiagRecord::parse(payload).expect("valid DiagRecord on ARM");
             assert_eq!(
                 diag.trap_code, 21,
                 "expected SUBTYPE_FAIL (21), got {}",
@@ -186,8 +185,8 @@ end;
 
     for rec in &records {
         if let harness_core::Record::Diag(payload) = rec {
-            let diag = diag_core::DiagRecord::parse(payload)
-                .expect("valid DiagRecord on ARM overflow");
+            let diag =
+                diag_core::DiagRecord::parse(payload).expect("valid DiagRecord on ARM overflow");
             assert_eq!(
                 diag.trap_code, 10,
                 "stack overflow must report trap_code=10, got {}",
@@ -225,7 +224,11 @@ fn runtime_exports_required_symbols() {
             .arg(obj)
             .output()
             .expect("arm-none-eabi-nm invocation failed");
-        assert!(output.status.success(), "arm-none-eabi-nm failed on {:?}", obj);
+        assert!(
+            output.status.success(),
+            "arm-none-eabi-nm failed on {:?}",
+            obj
+        );
         all_symbols.push_str(&String::from_utf8_lossy(&output.stdout));
     }
 
@@ -265,7 +268,12 @@ fn runtime_exports_required_symbols() {
         trap_addr.is_some() && loc_addr.is_some() && ovf_addr.is_some() && hf_addr.is_some(),
         "all four trap symbols must be defined"
     );
-    let addrs = vec![trap_addr.unwrap(), loc_addr.unwrap(), ovf_addr.unwrap(), hf_addr.unwrap()];
+    let addrs = vec![
+        trap_addr.unwrap(),
+        loc_addr.unwrap(),
+        ovf_addr.unwrap(),
+        hf_addr.unwrap(),
+    ];
     let mut sorted = addrs.clone();
     sorted.sort();
     sorted.dedup();
@@ -316,10 +324,16 @@ end;
     let _status = std::process::Command::new(common::langc_exe())
         .current_dir(&dir)
         .arg("--emit=obj")
-        .arg(format!("--target={}", std::str::from_utf8(target.triple()).unwrap()))
+        .arg(format!(
+            "--target={}",
+            std::str::from_utf8(target.triple()).unwrap()
+        ))
         .arg(format!("--sysroot={}", common::sysroot_dir().display()))
         .arg("-I")
-        .arg(format!("{}/armv7m-unknown-none", common::sysroot_dir().display()))
+        .arg(format!(
+            "{}/armv7m-unknown-none",
+            common::sysroot_dir().display()
+        ))
         .arg("--out-dir=.")
         .arg("Main.mod")
         .status()
@@ -391,10 +405,16 @@ end;
     let _status = std::process::Command::new(common::langc_exe())
         .current_dir(&dir)
         .arg("--emit=obj")
-        .arg(format!("--target={}", std::str::from_utf8(target.triple()).unwrap()))
+        .arg(format!(
+            "--target={}",
+            std::str::from_utf8(target.triple()).unwrap()
+        ))
         .arg(format!("--sysroot={}", common::sysroot_dir().display()))
         .arg("-I")
-        .arg(format!("{}/armv7m-unknown-none", common::sysroot_dir().display()))
+        .arg(format!(
+            "{}/armv7m-unknown-none",
+            common::sysroot_dir().display()
+        ))
         .arg("--out-dir=.")
         .arg("Main.mod")
         .status()
@@ -479,7 +499,10 @@ fn run_qemu_arm(image: &PathBuf, timeout: std::time::Duration) -> QemuOutcome {
             }
             Err(_) => {
                 let stdout = stdout_handle.join().unwrap_or_default();
-                return QemuOutcome { stdout, timed_out: false };
+                return QemuOutcome {
+                    stdout,
+                    timed_out: false,
+                };
             }
         }
     }
@@ -507,7 +530,12 @@ fn isr_lock_atomicity() {
         .join("isr_lock_atomicity.mod");
 
     // Compile for ARM: should succeed (resource with lock).
-    let o_path = langc_compile(codegen_core::Target::ArmV7MUnknownNone, &src_path, &dir, false);
+    let o_path = langc_compile(
+        codegen_core::Target::ArmV7MUnknownNone,
+        &src_path,
+        &dir,
+        false,
+    );
     assert!(o_path.exists(), "ARM .o file must exist");
 
     // Check for interrupt-masking instructions in the generated asm.
@@ -564,7 +592,11 @@ fn langc_compile_g(
         .args(&args)
         .status()
         .expect("langc (g) invocation failed");
-    assert!(status.success(), "langc -g --checks=all failed on {}", src.display());
+    assert!(
+        status.success(),
+        "langc -g --checks=all failed on {}",
+        src.display()
+    );
 
     std::fs::read_dir(out_dir)
         .unwrap()
@@ -576,9 +608,11 @@ fn langc_compile_g(
 }
 
 fn temp_dir(label: &str) -> PathBuf {
-    let dir = std::env::temp_dir()
-        .join("tyu_exec_tests")
-        .join(format!("{}_{}", label, std::process::id()));
+    let dir = std::env::temp_dir().join("tyu_exec_tests").join(format!(
+        "{}_{}",
+        label,
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir

@@ -291,7 +291,10 @@ mod tests {
 
     #[test]
     fn flags_roundtrip() {
-        for (name, flag) in &[("SIGNED", LMOD_FLAG_SIGNED), ("ENCRYPTED", LMOD_FLAG_ENCRYPTED)] {
+        for (name, flag) in &[
+            ("SIGNED", LMOD_FLAG_SIGNED),
+            ("ENCRYPTED", LMOD_FLAG_ENCRYPTED),
+        ] {
             let mut h = LmodHeader::new();
             h.flags = *flag;
             let mut buf = vec![0u8; HEADER_SIZE as usize];

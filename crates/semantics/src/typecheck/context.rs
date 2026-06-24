@@ -97,7 +97,10 @@ pub const MATRIX: [MatrixRow; 7] = [
 ];
 
 pub fn row(kind: ContextKind) -> &'static MatrixRow {
-    MATRIX.iter().find(|r| r.kind == kind).expect("unknown ContextKind")
+    MATRIX
+        .iter()
+        .find(|r| r.kind == kind)
+        .expect("unknown ContextKind")
 }
 
 // ---------------------------------------------------------------------------
@@ -210,10 +213,7 @@ impl ContextStack {
     ///
     /// Panics (ICE) if the stack is already empty.
     pub fn pop(&mut self) {
-        assert!(
-            self.depth > 0,
-            "ContextStack::pop() called on empty stack"
-        );
+        assert!(self.depth > 0, "ContextStack::pop() called on empty stack");
         self.depth -= 1;
         let idx = self.depth as usize;
         self.ambient_grants = self.frames[idx].saved_ambient_grants;
@@ -230,10 +230,7 @@ impl ContextStack {
 
     /// Iterate over all frames of a given kind, innermost first.
     pub fn frames_of(&self, kind: ContextKind) -> impl Iterator<Item = &ContextFrame> {
-        self.frames()
-            .iter()
-            .rev()
-            .filter(move |f| f.kind == kind)
+        self.frames().iter().rev().filter(move |f| f.kind == kind)
     }
 
     /// Find the span of the innermost frame that forbids the given effect.
@@ -284,7 +281,8 @@ mod tests {
     #[test]
     fn reset_clears_stack() {
         let mut ctx = ContextStack::new();
-        ctx.push(ContextKind::Lock, FrameParam::None, Span::new(0, 0)).unwrap();
+        ctx.push(ContextKind::Lock, FrameParam::None, Span::new(0, 0))
+            .unwrap();
         assert_eq!(ctx.depth(), 1);
         ctx.reset();
         assert_eq!(ctx.depth(), 0);
@@ -297,7 +295,8 @@ mod tests {
         let mut ctx = ContextStack::new();
         let grants_before = ctx.ambient_grants;
         let forbids_before = ctx.ambient_forbids;
-        ctx.push(ContextKind::Lock, FrameParam::None, Span::new(0, 0)).unwrap();
+        ctx.push(ContextKind::Lock, FrameParam::None, Span::new(0, 0))
+            .unwrap();
         assert_eq!(ctx.depth(), 1);
         assert!(!ctx.ambient_forbids.is_empty());
         ctx.pop();
@@ -312,12 +311,14 @@ mod tests {
         let g0 = ctx.ambient_grants;
         let f0 = ctx.ambient_forbids;
 
-        ctx.push(ContextKind::Lock, FrameParam::None, Span::new(0, 0)).unwrap();
+        ctx.push(ContextKind::Lock, FrameParam::None, Span::new(0, 0))
+            .unwrap();
         let g1 = ctx.ambient_grants;
         let f1 = ctx.ambient_forbids;
         assert!(!f1.is_empty()); // Lock forbids SUSPEND
 
-        ctx.push(ContextKind::Handler, FrameParam::None, Span::new(0, 0)).unwrap();
+        ctx.push(ContextKind::Handler, FrameParam::None, Span::new(0, 0))
+            .unwrap();
         let g2 = ctx.ambient_grants;
         assert!(!g2.is_empty()); // Handler grants SUSPENDABLE
 
@@ -334,9 +335,11 @@ mod tests {
     fn lock_frame_returns_inner_lock() {
         let mut ctx = ContextStack::new();
         assert!(ctx.lock_frame().is_none());
-        ctx.push(ContextKind::Isr, FrameParam::None, Span::new(0, 0)).unwrap();
+        ctx.push(ContextKind::Isr, FrameParam::None, Span::new(0, 0))
+            .unwrap();
         assert!(ctx.lock_frame().is_none());
-        ctx.push(ContextKind::Lock, FrameParam::None, Span::new(1, 2)).unwrap();
+        ctx.push(ContextKind::Lock, FrameParam::None, Span::new(1, 2))
+            .unwrap();
         let lf = ctx.lock_frame().unwrap();
         assert_eq!(lf.kind, ContextKind::Lock);
         assert_eq!(lf.span, Span::new(1, 2));
@@ -345,8 +348,10 @@ mod tests {
     #[test]
     fn forbidding_span_returns_correct_frame() {
         let mut ctx = ContextStack::new();
-        ctx.push(ContextKind::WordBody, FrameParam::None, Span::new(0, 0)).unwrap();
-        ctx.push(ContextKind::Lock, FrameParam::None, Span::new(5, 10)).unwrap();
+        ctx.push(ContextKind::WordBody, FrameParam::None, Span::new(0, 0))
+            .unwrap();
+        ctx.push(ContextKind::Lock, FrameParam::None, Span::new(5, 10))
+            .unwrap();
         let span = ctx.forbidding_span(EffectSet::from_bits(EffectSet::SUSPEND));
         assert_eq!(span, Some(Span::new(5, 10)));
     }
@@ -355,7 +360,8 @@ mod tests {
     fn depth_overflow_returns_error() {
         let mut ctx = ContextStack::new();
         for _ in 0..MAX_CONTEXT_DEPTH {
-            ctx.push(ContextKind::WordBody, FrameParam::None, Span::new(0, 0)).unwrap();
+            ctx.push(ContextKind::WordBody, FrameParam::None, Span::new(0, 0))
+                .unwrap();
         }
         assert_eq!(ctx.depth(), MAX_CONTEXT_DEPTH);
         let result = ctx.push(ContextKind::WordBody, FrameParam::None, Span::new(0, 0));
@@ -372,17 +378,28 @@ mod tests {
     #[test]
     fn read_borrow_does_not_forbid_suspend() {
         let mut ctx = ContextStack::new();
-        ctx.push(ContextKind::WordBody, FrameParam::None, Span::new(0, 0)).unwrap();
-        assert!(ctx.forbidding_span(EffectSet::from_bits(EffectSet::SUSPEND)).is_none());
-        ctx.push(ContextKind::ReadBorrow, FrameParam::Scope(1), Span::new(0, 0)).unwrap();
-        assert!(ctx.forbidding_span(EffectSet::from_bits(EffectSet::SUSPEND)).is_none());
+        ctx.push(ContextKind::WordBody, FrameParam::None, Span::new(0, 0))
+            .unwrap();
+        assert!(ctx
+            .forbidding_span(EffectSet::from_bits(EffectSet::SUSPEND))
+            .is_none());
+        ctx.push(
+            ContextKind::ReadBorrow,
+            FrameParam::Scope(1),
+            Span::new(0, 0),
+        )
+        .unwrap();
+        assert!(ctx
+            .forbidding_span(EffectSet::from_bits(EffectSet::SUSPEND))
+            .is_none());
     }
 
     #[test]
     fn ambient_grants_wordbody_grants_suspendable() {
         let mut ctx = ContextStack::new();
         assert!(!ctx.ambient_grants.contains(CapSet::SUSPENDABLE));
-        ctx.push(ContextKind::WordBody, FrameParam::None, Span::new(0, 0)).unwrap();
+        ctx.push(ContextKind::WordBody, FrameParam::None, Span::new(0, 0))
+            .unwrap();
         assert!(ctx.ambient_grants.contains(CapSet::SUSPENDABLE));
     }
 
@@ -390,23 +407,33 @@ mod tests {
     fn ambient_grants_handler_grants_suspendable() {
         let mut ctx = ContextStack::new();
         assert!(!ctx.ambient_grants.contains(CapSet::SUSPENDABLE));
-        ctx.push(ContextKind::Handler, FrameParam::None, Span::new(0, 0)).unwrap();
+        ctx.push(ContextKind::Handler, FrameParam::None, Span::new(0, 0))
+            .unwrap();
         assert!(ctx.ambient_grants.contains(CapSet::SUSPENDABLE));
     }
 
     #[test]
     fn lock_forbids_suspend() {
         let mut ctx = ContextStack::new();
-        ctx.push(ContextKind::WordBody, FrameParam::None, Span::new(0, 0)).unwrap();
-        assert!(ctx.forbidding_span(EffectSet::from_bits(EffectSet::SUSPEND)).is_none());
-        ctx.push(ContextKind::Lock, FrameParam::None, Span::new(0, 0)).unwrap();
-        assert!(ctx.forbidding_span(EffectSet::from_bits(EffectSet::SUSPEND)).is_some());
+        ctx.push(ContextKind::WordBody, FrameParam::None, Span::new(0, 0))
+            .unwrap();
+        assert!(ctx
+            .forbidding_span(EffectSet::from_bits(EffectSet::SUSPEND))
+            .is_none());
+        ctx.push(ContextKind::Lock, FrameParam::None, Span::new(0, 0))
+            .unwrap();
+        assert!(ctx
+            .forbidding_span(EffectSet::from_bits(EffectSet::SUSPEND))
+            .is_some());
     }
 
     #[test]
     fn isr_forbids_suspend() {
         let mut ctx = ContextStack::new();
-        ctx.push(ContextKind::Isr, FrameParam::None, Span::new(0, 0)).unwrap();
-        assert!(ctx.forbidding_span(EffectSet::from_bits(EffectSet::SUSPEND)).is_some());
+        ctx.push(ContextKind::Isr, FrameParam::None, Span::new(0, 0))
+            .unwrap();
+        assert!(ctx
+            .forbidding_span(EffectSet::from_bits(EffectSet::SUSPEND))
+            .is_some());
     }
 }

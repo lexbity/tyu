@@ -186,19 +186,37 @@ fn resolve_one(
 ///
 /// Returns a clean `Err` if not found.
 pub fn resolve_tool(name: &str) -> Result<PathBuf, String> {
-    // Development fallback: check workspace target/debug (avoids requiring
-    // every contributor to add CARGO_TARGET_DIR/debug to their PATH).
-    let workspace_debug = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap()
-        .parent().unwrap()
-        .join("target")
-        .join("debug")
-        .join(name);
-    if workspace_debug.is_file() {
-        return Ok(workspace_debug);
+    let candidates: &[&str] = match name {
+        "riscv64-unknown-elf-as" => &["riscv64-unknown-elf-as", "riscv64-linux-gnu-as"],
+        "riscv64-unknown-elf-ld" => &["riscv64-unknown-elf-ld", "riscv64-linux-gnu-ld"],
+        _ => &[name],
+    };
+    resolve_tool_candidates(candidates)
+}
+
+/// Resolve a tool binary from a list of acceptable candidate names.
+pub fn resolve_tool_candidates(names: &[&str]) -> Result<PathBuf, String> {
+    for name in names {
+        // Development fallback: check workspace target/debug (avoids requiring
+        // every contributor to add CARGO_TARGET_DIR/debug to their PATH).
+        let workspace_debug = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("target")
+            .join("debug")
+            .join(name);
+        if workspace_debug.is_file() {
+            return Ok(workspace_debug);
+        }
+
+        if let Some(path) = find_in_path(name) {
+            return Ok(path);
+        }
     }
 
-    find_in_path(name).ok_or_else(|| format!("tool '{name}' not found in PATH"))
+    Err(format!("tool '{}' not found in PATH", names.join(" or ")))
 }
 
 /// Find a binary — first in PATH, then in `target/debug/` (for workspace-built
@@ -223,7 +241,11 @@ pub fn find_in_path(name: &str) -> Option<PathBuf> {
         .join("target")
         .join("debug")
         .join(name);
-    if ws.is_file() { Some(ws) } else { None }
+    if ws.is_file() {
+        Some(ws)
+    } else {
+        None
+    }
 }
 
 /// Probe a tool's version by running `<path> --version`.
@@ -245,23 +267,29 @@ pub fn toolchain_check(target: Target, manifest: &ProjectManifest) -> String {
 
     let mut report = format!("Toolchain for {}:\n", triple);
 
-    let mut add = |role: &str, tool: Option<&ResolvedTool>| {
-        match tool {
-            Some(t) => {
-                let src = match t.source {
-                    ToolSource::FlagOverride => "flag",
-                    ToolSource::Manifest => "manifest",
-                    ToolSource::EnvVar => "env",
-                    ToolSource::Path => "PATH",
-                };
-                let ver = t.version.as_ref()
-                    .map(|v| format!(" ({})", v))
-                    .unwrap_or_default();
-                report.push_str(&format!("  {}: found@{} [{}]{}\n", role, t.path.display(), src, ver));
-            }
-            None => {
-                report.push_str(&format!("  {}: MISSING\n", role));
-            }
+    let mut add = |role: &str, tool: Option<&ResolvedTool>| match tool {
+        Some(t) => {
+            let src = match t.source {
+                ToolSource::FlagOverride => "flag",
+                ToolSource::Manifest => "manifest",
+                ToolSource::EnvVar => "env",
+                ToolSource::Path => "PATH",
+            };
+            let ver = t
+                .version
+                .as_ref()
+                .map(|v| format!(" ({})", v))
+                .unwrap_or_default();
+            report.push_str(&format!(
+                "  {}: found@{} [{}]{}\n",
+                role,
+                t.path.display(),
+                src,
+                ver
+            ));
+        }
+        None => {
+            report.push_str(&format!("  {}: MISSING\n", role));
         }
     };
 

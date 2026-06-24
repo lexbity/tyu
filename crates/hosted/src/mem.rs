@@ -1,5 +1,5 @@
-use crate::{c, errno::Errno};
 use crate::c::c_int;
+use crate::{c, errno::Errno};
 use core::ffi::c_void;
 use core::ptr::NonNull;
 

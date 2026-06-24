@@ -4,7 +4,7 @@
 
 use crate::{c, mem};
 use core::ffi::c_void;
-use loader_core::platform::{LoaderPlatform, Region, Tier};
+use loader_core::platform::{LoaderPlatform, Region, TrustLevel};
 
 /// Load error codes.
 const E_MMAP_FAILED: u32 = 1;
@@ -14,7 +14,7 @@ pub struct HostedLoaderPlatform {
     expected_abi_hash: u64,
     key: [u8; 64],
     key_len: usize,
-    tier: Tier,
+    trust_level: TrustLevel,
     kek: [u8; 32],
     /// Optional single-block reservation for adjacent allocations.
     /// When `Some`, all `alloc_*` calls carve from this block instead
@@ -34,19 +34,19 @@ impl HostedLoaderPlatform {
             expected_abi_hash,
             key: [0u8; 64],
             key_len: 0,
-            tier: Tier::Zero,
+            trust_level: TrustLevel::Zero,
             kek: [0u8; 32],
             block: None,
         }
     }
 
-    /// Configure for Tier 1 operation with an HMAC key.
+    /// Configure for TrustLevel One operation with an HMAC key.
     /// `key` must be 1–64 bytes.
-    pub fn with_key(mut self, key: &[u8], tier: Tier) -> Self {
+    pub fn with_key(mut self, key: &[u8], trust_level: TrustLevel) -> Self {
         let n = key.len().min(64);
         self.key[..n].copy_from_slice(&key[..n]);
         self.key_len = n;
-        self.tier = tier;
+        self.trust_level = trust_level;
         self
     }
 
@@ -89,10 +89,7 @@ impl HostedLoaderPlatform {
     fn release_region(&mut self, region: &mut Region) {
         if region.len() > 0 && !region.as_ptr().is_null() {
             unsafe {
-                c::munmap(
-                    region.as_mut_ptr() as *mut core::ffi::c_void,
-                    region.len(),
-                );
+                c::munmap(region.as_mut_ptr() as *mut core::ffi::c_void, region.len());
             }
         }
     }
@@ -155,7 +152,7 @@ impl LoaderPlatform for HostedLoaderPlatform {
 
     fn verify_sig(&self, signed: &[u8], sig: &[u8]) -> bool {
         if self.key_len == 0 {
-            return true; // Tier 0: trust unconditionally
+            return false;
         }
         let expected = crate::hmac_sha256::hmac_sha256(&self.key[..self.key_len], signed);
         expected.as_slice() == sig
@@ -165,10 +162,10 @@ impl LoaderPlatform for HostedLoaderPlatform {
     fn unwrap_cek(&self, _key_id: u64, wrapped: &[u8], out_cek: &mut [u8; 32]) -> Result<(), u32> {
         use loader_core::crypto::chacha20poly1305::unwrap_cek as do_unwrap;
         const WRAP_LEN: usize = 12 + 32 + 16; // nonce + cek_ciphertext + tag
-        let wrapped_arr: &[u8; WRAP_LEN] =
-            wrapped.try_into().map_err(|_| loader_core::load::E_ENC_BAD_HEADER)?;
-        let cek = do_unwrap(&self.kek, wrapped_arr)
-            .map_err(|_| loader_core::load::E_ENC_NO_KEY)?;
+        let wrapped_arr: &[u8; WRAP_LEN] = wrapped
+            .try_into()
+            .map_err(|_| loader_core::load::E_ENC_BAD_HEADER)?;
+        let cek = do_unwrap(&self.kek, wrapped_arr).map_err(|_| loader_core::load::E_ENC_NO_KEY)?;
         *out_cek = cek;
         Ok(())
     }
@@ -177,8 +174,8 @@ impl LoaderPlatform for HostedLoaderPlatform {
         self.expected_abi_hash
     }
 
-    fn trust_tier(&self) -> Tier {
-        self.tier
+    fn trust_level(&self) -> TrustLevel {
+        self.trust_level
     }
 
     fn release(&mut self, region: &mut Region) {
@@ -194,10 +191,7 @@ mod tests {
 
     type FnReturningI64 = unsafe extern "C" fn() -> i64;
 
-    const MOV_RAX_42_RET: &[u8] = &[
-        0x48, 0xc7, 0xc0, 0x2a, 0x00, 0x00, 0x00,
-        0xc3,
-    ];
+    const MOV_RAX_42_RET: &[u8] = &[0x48, 0xc7, 0xc0, 0x2a, 0x00, 0x00, 0x00, 0xc3];
 
     #[test]
     fn alloc_exec_write_code_and_rx_execute() {
@@ -259,8 +253,8 @@ mod tests {
     fn make_exec_page_is_rx_not_w() {
         // Verifies that after make_exec, the page is r-x (PROT_READ|PROT_EXEC)
         // and does NOT have write permission (no 'w' in /proc/self/maps).
-        use std::vec::Vec;
         use std::string::String;
+        use std::vec::Vec;
 
         fn prot_of(addr: *const u8) -> String {
             let pid = std::process::id();
@@ -276,7 +270,9 @@ mod tests {
                 nd -= 1;
                 digits[nd] = b'0' + (tmp % 10) as u8;
                 tmp /= 10;
-                if tmp == 0 { break; }
+                if tmp == 0 {
+                    break;
+                }
             }
             path_buf.extend_from_slice(&digits[nd..10]);
             path_buf.extend_from_slice(suffix);
@@ -290,9 +286,13 @@ mod tests {
             let addr_val = addr as usize;
             for line in maps.lines() {
                 let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() < 2 { continue; }
+                if parts.len() < 2 {
+                    continue;
+                }
                 let range: Vec<&str> = parts[0].split('-').collect();
-                if range.len() != 2 { continue; }
+                if range.len() != 2 {
+                    continue;
+                }
                 let start = usize::from_str_radix(range[0], 16).ok();
                 let end = usize::from_str_radix(range[1], 16).ok();
                 if let (Some(s), Some(e)) = (start, end) {
@@ -308,18 +308,26 @@ mod tests {
         let mut region = plat.alloc_exec(4096).unwrap();
 
         // Write known data while page is RW.
-        unsafe { region.as_mut_slice()[0] = 0x01; }
+        unsafe {
+            region.as_mut_slice()[0] = 0x01;
+        }
 
         // Before make_exec: page should be rw- (writable).
         let before = prot_of(region.as_ptr());
-        assert!(before.contains('w'), "before make_exec, page must be writable, got {before}");
+        assert!(
+            before.contains('w'),
+            "before make_exec, page must be writable, got {before}"
+        );
 
         // Flip to RX.
         plat.make_exec(&mut region).unwrap();
 
         // After make_exec: page must be r-x (no 'w').
         let after = prot_of(region.as_ptr());
-        assert!(!after.contains('w'), "after make_exec, page must NOT be writable, got {after}");
+        assert!(
+            !after.contains('w'),
+            "after make_exec, page must NOT be writable, got {after}"
+        );
         assert!(
             after.contains('r') && after.contains('x'),
             "after make_exec, page must be readable+executable, got {after}"
@@ -339,7 +347,7 @@ mod tests {
 
     #[test]
     fn expected_abi_hash_matches() {
-        let expected = lmod::abi_hash::compute_abi_hash(8, 64, lmod::modinfo::MODINFO_VER);
+        let expected = lmod::abi_hash::compute_abi_hash(1, 8, 64, lmod::modinfo::MODINFO_VER);
         let plat = HostedLoaderPlatform::new(expected);
         assert_eq!(plat.expected_abi_hash(), expected);
     }

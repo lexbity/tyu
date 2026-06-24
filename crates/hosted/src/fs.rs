@@ -40,7 +40,11 @@ impl ByteBuf {
     pub fn push_slice(&mut self, bytes: &[u8]) -> Result<(), Errno> {
         self.reserve_exact(bytes.len())?;
         unsafe {
-            core::ptr::copy_nonoverlapping(bytes.as_ptr(), self.ptr.as_ptr().add(self.len), bytes.len());
+            core::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                self.ptr.as_ptr().add(self.len),
+                bytes.len(),
+            );
         }
         self.len += bytes.len();
         Ok(())
@@ -101,7 +105,14 @@ pub fn write_file(path: &[u8], bytes: &[u8]) -> Result<(), Errno> {
 
     let mut off = 0usize;
     while off < bytes.len() {
-        let n = unsafe { c::fwrite(bytes[off..].as_ptr() as *const c_void, 1, bytes.len() - off, f) };
+        let n = unsafe {
+            c::fwrite(
+                bytes[off..].as_ptr() as *const c_void,
+                1,
+                bytes.len() - off,
+                f,
+            )
+        };
         if n == 0 {
             let err = unsafe { c::ferror(f) };
             let rc = unsafe { c::fclose(f) };

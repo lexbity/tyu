@@ -6,7 +6,7 @@
 pub use frontend::fixed::FixedVec;
 pub use semantics::typecheck::db::{IsoDb, NominalDb, ResourceDb, SubtypeInfo};
 pub use semantics::typecheck::irgen::{arena, build_ir_word, NullObserver};
-pub use semantics::typecheck::mmio::{MmioDb, AccessMode};
+pub use semantics::typecheck::mmio::{AccessMode, MmioDb};
 pub use semantics::typecheck::ChecksMode;
 pub use semantics::types::{TypeAtom, WordEntry, WordSig};
 
@@ -72,7 +72,7 @@ pub fn make_decl(body: &str) -> (DeclAst, Vec<u8>) {
         effect_bits: 0,
         effect_net: 0,
         effect_high: 0,
-            has_explicit_performs: false,
+        has_explicit_performs: false,
     };
     (decl, src)
 }
@@ -100,7 +100,9 @@ pub struct Dbs {
 
 impl Dbs {
     pub fn new() -> Self {
-        Dbs { subtypes: Vec::new() }
+        Dbs {
+            subtypes: Vec::new(),
+        }
     }
 
     pub fn with_subtype(mut self, name: &[u8], base: &[u8], min: i64, max: i64) -> Self {
@@ -141,19 +143,45 @@ pub fn check(
         .spawn(move || {
             let (decl, src) = make_decl(&body_owned);
             let s = sig(
-                &inputs_owned.iter().map(|v| v.as_slice()).collect::<Vec<_>>(),
-                &outputs_owned.iter().map(|v| v.as_slice()).collect::<Vec<_>>(),
+                &inputs_owned
+                    .iter()
+                    .map(|v| v.as_slice())
+                    .collect::<Vec<_>>(),
+                &outputs_owned
+                    .iter()
+                    .map(|v| v.as_slice())
+                    .collect::<Vec<_>>(),
             );
             let mut arena = arena::ArenaAllocator::new();
-            let mmio = MmioDb { maps: FixedVec::new(), instances: FixedVec::new() };
-            let resources = ResourceDb { items: FixedVec::new() };
-            let nominals = NominalDb { structs: FixedVec::new(), enums: FixedVec::new() };
-            let iso = IsoDb { types: FixedVec::new() };
+            let mmio = MmioDb {
+                maps: FixedVec::new(),
+                instances: FixedVec::new(),
+            };
+            let resources = ResourceDb {
+                items: FixedVec::new(),
+            };
+            let nominals = NominalDb {
+                structs: FixedVec::new(),
+                enums: FixedVec::new(),
+            };
+            let iso = IsoDb {
+                types: FixedVec::new(),
+            };
             let mut obs = NullObserver;
             match build_ir_word(
-                &decl, &src, &env_owned, &subtypes_owned, &mmio, &resources,
-                &nominals, &iso, checks, false, &s,
-                &mut arena, &mut obs,
+                &decl,
+                &src,
+                &env_owned,
+                &subtypes_owned,
+                &mmio,
+                &resources,
+                &nominals,
+                &iso,
+                checks,
+                false,
+                &s,
+                &mut arena,
+                &mut obs,
             ) {
                 Ok(_out_words) => on_result(Ok(())),
                 Err(e) => on_result(Err(e.code())),
@@ -166,19 +194,30 @@ pub fn check(
 
 pub fn check_ok(body: &str, inputs: &[&[u8]], outputs: &[&[u8]], env: &[WordEntry]) {
     let dbs = Dbs::new();
-    check(body, inputs, outputs, env, &dbs, ChecksMode::All, |result| {
-        match result {
-            Ok(()) => {},
+    check(
+        body,
+        inputs,
+        outputs,
+        env,
+        &dbs,
+        ChecksMode::All,
+        |result| match result {
+            Ok(()) => {}
             Err(code) => panic!("expected OK, got error code {code}"),
-        }
-    });
+        },
+    );
 }
 
 /// Like `check_ok` but also invokes `on_word` with the built IR word
 /// so callers can assert IR shape (op kinds, block count, etc.).
 /// The callback runs inside the 8MB-stack thread.
-pub fn check_ok_with<F>(body: &str, inputs: &[&[u8]], outputs: &[&[u8]], env: &[WordEntry], on_word: F)
-where
+pub fn check_ok_with<F>(
+    body: &str,
+    inputs: &[&[u8]],
+    outputs: &[&[u8]],
+    env: &[WordEntry],
+    on_word: F,
+) where
     F: FnOnce(&Word) + Send + 'static,
 {
     let body_owned = body.to_string();
@@ -191,23 +230,53 @@ where
         .spawn(move || {
             let (decl, src) = make_decl(&body_owned);
             let s = sig(
-                &inputs_owned.iter().map(|v| v.as_slice()).collect::<Vec<_>>(),
-                &outputs_owned.iter().map(|v| v.as_slice()).collect::<Vec<_>>(),
+                &inputs_owned
+                    .iter()
+                    .map(|v| v.as_slice())
+                    .collect::<Vec<_>>(),
+                &outputs_owned
+                    .iter()
+                    .map(|v| v.as_slice())
+                    .collect::<Vec<_>>(),
             );
             let mut arena = arena::ArenaAllocator::new();
-            let mmio = MmioDb { maps: FixedVec::new(), instances: FixedVec::new() };
-            let resources = ResourceDb { items: FixedVec::new() };
-            let nominals = NominalDb { structs: FixedVec::new(), enums: FixedVec::new() };
-            let iso = IsoDb { types: FixedVec::new() };
+            let mmio = MmioDb {
+                maps: FixedVec::new(),
+                instances: FixedVec::new(),
+            };
+            let resources = ResourceDb {
+                items: FixedVec::new(),
+            };
+            let nominals = NominalDb {
+                structs: FixedVec::new(),
+                enums: FixedVec::new(),
+            };
+            let iso = IsoDb {
+                types: FixedVec::new(),
+            };
             let subtypes: &[SubtypeInfo] = &[];
             let mut obs = NullObserver;
             match build_ir_word(
-                &decl, &src, &env_owned, subtypes, &mmio, &resources,
-                &nominals, &iso, ChecksMode::All, false, &s,
-                &mut arena, &mut obs,
+                &decl,
+                &src,
+                &env_owned,
+                subtypes,
+                &mmio,
+                &resources,
+                &nominals,
+                &iso,
+                ChecksMode::All,
+                false,
+                &s,
+                &mut arena,
+                &mut obs,
             ) {
                 Ok(out_words) => on_word(out_words.word),
-                Err(e) => panic!("expected OK, got error code {} span={:?}", e.code(), e.span()),
+                Err(e) => panic!(
+                    "expected OK, got error code {} span={:?}",
+                    e.code(),
+                    e.span()
+                ),
             }
         })
         .unwrap()
@@ -223,10 +292,16 @@ pub fn check_err(
     expected_code: u32,
 ) {
     let dbs = Dbs::new();
-    check(body, inputs, outputs, env, &dbs, ChecksMode::All, move |result| {
-        match result {
+    check(
+        body,
+        inputs,
+        outputs,
+        env,
+        &dbs,
+        ChecksMode::All,
+        move |result| match result {
             Ok(_) => panic!("expected error {expected_code}, got Ok"),
             Err(code) => assert_eq!(code, expected_code),
-        }
-    });
+        },
+    );
 }

@@ -172,7 +172,10 @@ mod tests {
         let buf = string_of_len(256);
         let sp = Span::new(0, 258);
         let r = decode_string_bytes(&buf, sp);
-        assert!(r.is_some(), "256 payload bytes must fit exactly in FixedVec<u8, 256>");
+        assert!(
+            r.is_some(),
+            "256 payload bytes must fit exactly in FixedVec<u8, 256>"
+        );
         assert_eq!(r.unwrap().len(), 256);
     }
 
@@ -182,7 +185,10 @@ mod tests {
         let buf = string_of_len(257);
         let sp = Span::new(0, 259);
         let r = decode_string_bytes(&buf, sp);
-        assert!(r.is_none(), "257 payload bytes must exceed FixedVec<u8, 256> capacity");
+        assert!(
+            r.is_none(),
+            "257 payload bytes must exceed FixedVec<u8, 256> capacity"
+        );
     }
 
     #[test]

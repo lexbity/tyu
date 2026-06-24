@@ -5,22 +5,22 @@
 
 mod common;
 
+use common::*;
 use hosted::loader::HostedLoaderPlatform;
+use lmod::hash::fnv1a_u64;
 use lmod::header::{compute_layout, encode_header, LmodHeader};
 use lmod::modinfo::{self, ExportEntry, ImportEntry};
 use lmod::validate::Container;
-use lmod::hash::fnv1a_u64;
 use loader_core::load::{load_module, LoadedSet};
 use loader_core::symbols::SymMap;
-use common::*;
 
 /// ARM Thumb code containing `adds r4, r4, #4` — detectable by Arch scanner.
 /// Encoding: 0001 1010 0100 0100 = 0x1A44, LE = [0x44, 0x1A].
 /// The 00011 prefix at bits 15:11 is what the scanner looks for.
 /// `adds` is a push (DS grows upward); `subs` would be a pop (DS shrinks).
 const ARM_CODE_WITH_ADDS_R4: &[u8] = &[
-    0x44, 0x1a,              // adds r4, r4, #4
-    0x70, 0x47,              // bx lr
+    0x44, 0x1a, // adds r4, r4, #4
+    0x70, 0x47, // bx lr
 ];
 
 /// ARM Thumb code with an import reference via absolute address.
@@ -28,11 +28,11 @@ const ARM_CODE_WITH_ADDS_R4: &[u8] = &[
 /// patches with the resolved symbol's address.  (THM_CALL's ±16 MB range
 /// is too tight for cross-region host addresses on x86_64.)
 const ARM_ABS32_IMPORT_CODE: &[u8] = &[
-    0x00, 0x00, 0x00, 0x00,  // .word 0 (placeholder for R_ARM_ABS32)
-    0x70, 0x47,              // bx lr
+    0x00, 0x00, 0x00, 0x00, // .word 0 (placeholder for R_ARM_ABS32)
+    0x70, 0x47, // bx lr
 ];
 
-const ARM_ABI_HASH: u64 = 0x0445187d53048547; // compute_abi_hash(4, 32, 2)
+const ARM_ABI_HASH: u64 = 0xac34c6b7f7c80145; // compute_abi_hash(ARCH_TAG_ARM, 4, 32, 2)
 
 fn make_arm_lmod(code: &[u8], imports: &[(&str, u8)]) -> Vec<u8> {
     let modinfo_bytes = make_arm_modinfo(imports);
@@ -40,9 +40,7 @@ fn make_arm_lmod(code: &[u8], imports: &[(&str, u8)]) -> Vec<u8> {
     let code_len = code.len() as u32;
     let reloc_count = imports.len() as u32;
 
-    let layout = compute_layout(
-        ARM_ABI_HASH, modinfo_len, code_len, 0, 0, 0, reloc_count, 0,
-    );
+    let layout = compute_layout(ARM_ABI_HASH, modinfo_len, code_len, 0, 0, 0, reloc_count, 0);
     let total = layout.total_len as usize;
     let mut out = vec![0u8; total];
 
@@ -70,16 +68,25 @@ fn make_arm_lmod(code: &[u8], imports: &[(&str, u8)]) -> Vec<u8> {
 
 fn make_arm_modinfo(imports: &[(&str, u8)]) -> Vec<u8> {
     let export_entries: [ExportEntry; 0] = [];
-    let import_entries: Vec<ImportEntry> = imports.iter().map(|(name, _)| {
-        ImportEntry { sym_hash: fnv1a_u64(name.as_bytes()), name: name.as_bytes() }
-    }).collect();
+    let import_entries: Vec<ImportEntry> = imports
+        .iter()
+        .map(|(name, _)| ImportEntry {
+            sym_hash: fnv1a_u64(name.as_bytes()),
+            name: name.as_bytes(),
+        })
+        .collect();
 
     let mut buf = [0u8; 1024];
     let size = modinfo::encode_into(
-        &mut buf, b"TestModule",
-        &export_entries, &import_entries,
-        ARM_ABI_HASH, 0, &[],
-    ).unwrap();
+        &mut buf,
+        b"TestModule",
+        &export_entries,
+        &import_entries,
+        ARM_ABI_HASH,
+        0,
+        &[],
+    )
+    .unwrap();
     buf[..size].to_vec()
 }
 
@@ -127,8 +134,11 @@ fn arm_load_with_import() {
     let patched = u32::from_le_bytes(code_slice[..4].try_into().unwrap()) as u64;
 
     let stub = unsafe { std::mem::transmute::<extern "C" fn(), u64>(common::extern_c_fn_stub) };
-    assert_eq!(patched, stub & 0xFFFF_FFFF,
-        "ABS32 relocation should write the lower 32 bits of the symbol address");
+    assert_eq!(
+        patched,
+        stub & 0xFFFF_FFFF,
+        "ABS32 relocation should write the lower 32 bits of the symbol address"
+    );
 }
 
 /// Test that an abi_hash mismatch is correctly rejected.
@@ -154,8 +164,11 @@ fn arm_load_abi_hash_mismatch_rejected() {
 #[test]
 fn arm_arch_detected_from_thumb_code() {
     let arch = loader_core::rederive::Arch::detect_from_code(ARM_CODE_WITH_ADDS_R4);
-    assert_eq!(arch, loader_core::rederive::Arch::ArmThumb,
-        "should detect ARM Thumb from subs r4 pattern");
+    assert_eq!(
+        arch,
+        loader_core::rederive::Arch::ArmThumb,
+        "should detect ARM Thumb from subs r4 pattern"
+    );
 }
 
 /// Test that ARM rederive works for the code with a DS push.

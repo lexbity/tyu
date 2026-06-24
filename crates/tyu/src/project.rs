@@ -91,10 +91,9 @@ pub fn find_manifest(start_dir: &Path) -> Option<PathBuf> {
 
 /// Parse a `tyu.toml` file into a `ProjectManifest`.
 pub fn parse_project_manifest(path: &Path) -> Result<ProjectManifest, String> {
-    let text = fs::read_to_string(path)
-        .map_err(|e| format!("reading '{}': {}", path.display(), e))?;
-    toml::from_str(&text)
-        .map_err(|e| format!("parsing '{}': {}", path.display(), e))
+    let text =
+        fs::read_to_string(path).map_err(|e| format!("reading '{}': {}", path.display(), e))?;
+    toml::from_str(&text).map_err(|e| format!("parsing '{}': {}", path.display(), e))
 }
 
 /// Resolve a target name (alias or triple) to a parsed `Target`.
@@ -132,15 +131,13 @@ pub fn resolve_feature_set(
     profile_name_opt: Option<&str>,
     manifest: &ProjectManifest,
 ) -> Result<(FeatureSet, Option<String>), String> {
-    let name = profile_name_opt
-        .map(|n| n.to_string())
-        .or_else(|| {
-            if manifest.profile.contains_key("dev") {
-                Some("dev".to_string())
-            } else {
-                None
-            }
-        });
+    let name = profile_name_opt.map(|n| n.to_string()).or_else(|| {
+        if manifest.profile.contains_key("dev") {
+            Some("dev".to_string())
+        } else {
+            None
+        }
+    });
 
     let set = match name {
         Some(ref n) => {
@@ -167,8 +164,7 @@ mod tests {
     use super::*;
 
     fn parse_project_manifest_from_str(text: &str) -> Result<ProjectManifest, String> {
-        toml::from_str(text)
-            .map_err(|e| e.to_string())
+        toml::from_str(text).map_err(|e| e.to_string())
     }
 
     #[test]

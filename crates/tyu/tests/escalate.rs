@@ -23,9 +23,7 @@ fn ensure_langc() {
 
 #[test]
 fn escalate_trap_no_d_record() {
-    if !require_tools(&[
-        "langc", "fasm", "ld", "qemu-system-x86_64", "nm",
-    ]) {
+    if !require_tools(&["langc", "fasm", "ld", "qemu-system-x86_64", "nm"]) {
         return;
     }
     ensure_langc();
@@ -109,9 +107,7 @@ fn escalate_not_invoked_on_clean_pass() {
     // When `tyu test` runs a clean fixture, the escalation should NOT be
     // invoked.  We verify this by checking that the test process succeeds
     // (clean pass) without any escalation attempt showing in the output.
-    if !require_tools(&[
-        "langc", "fasm", "ld", "qemu-system-x86_64",
-    ]) {
+    if !require_tools(&["langc", "fasm", "ld", "qemu-system-x86_64"]) {
         return;
     }
     ensure_langc();
@@ -205,9 +201,9 @@ fn common_assemble_runtime(
     target: codegen_core::Target,
     out_dir: &std::path::Path,
 ) -> std::path::PathBuf {
-    let rt_dir = workspace_root().join("runtime").join(
-        std::str::from_utf8(target.triple()).unwrap(),
-    );
+    let rt_dir = workspace_root()
+        .join("runtime")
+        .join(std::str::from_utf8(target.triple()).unwrap());
     let asm = rt_dir.join("runtime.asm");
     let out = out_dir.join("runtime.o");
 
@@ -242,7 +238,9 @@ fn common_link_image(
     for obj in objs {
         cmd.arg(obj);
     }
-    let status = cmd.status().unwrap_or_else(|_| panic!("{} invocation failed", linker));
+    let status = cmd
+        .status()
+        .unwrap_or_else(|_| panic!("{} invocation failed", linker));
     assert!(status.success(), "{} failed to link", linker);
     out
 }

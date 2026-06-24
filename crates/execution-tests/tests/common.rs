@@ -47,9 +47,11 @@ pub fn langc_exe() -> PathBuf {
 }
 
 pub fn temp_dir(label: &str) -> PathBuf {
-    let dir = std::env::temp_dir()
-        .join("tyu_exec_tests")
-        .join(format!("{}_{}", label, std::process::id()));
+    let dir = std::env::temp_dir().join("tyu_exec_tests").join(format!(
+        "{}_{}",
+        label,
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -58,6 +60,15 @@ pub fn temp_dir(label: &str) -> PathBuf {
 // ---------------------------------------------------------------------------
 // Tool availability
 // ---------------------------------------------------------------------------
+
+/// Acceptable RISC-V toolchain binary names, in preference order.  The
+/// `riscv64-unknown-elf-*` (newlib) names are preferred; the
+/// `riscv64-linux-gnu-*` (Debian/Arch) names are the common fallback.  These
+/// MUST stay in sync with `tyu`'s own resolution in
+/// `crates/tyu/src/toolchain.rs`.
+pub const RISCV_AS: &[&str] = &["riscv64-unknown-elf-as", "riscv64-linux-gnu-as"];
+pub const RISCV_LD: &[&str] = &["riscv64-unknown-elf-ld", "riscv64-linux-gnu-ld"];
+pub const RISCV_NM: &[&str] = &["riscv64-unknown-elf-nm", "riscv64-linux-gnu-nm"];
 
 /// Returns true if a named binary exists — either on `PATH`, in
 /// `target/debug/`, or in `target/release/` (for workspace-built
@@ -79,12 +90,34 @@ pub fn tool_available(name: &str) -> bool {
     root.join("target").join("release").join(name).exists()
 }
 
+/// Return the first available binary among a list of candidate names, or
+/// `None` if none resolve.  Used for toolchains exposed under multiple names
+/// (e.g. RISC-V newlib vs. linux-gnu).
+pub fn first_available(candidates: &[&str]) -> Option<String> {
+    candidates
+        .iter()
+        .find(|c| tool_available(c))
+        .map(|c| c.to_string())
+}
+
 /// Environment-aware tool gating.
 pub fn require_tools(tools: &[&str]) -> bool {
-    let missing: Vec<&str> = tools
+    let groups: Vec<&[&str]> = tools.iter().map(std::slice::from_ref).collect();
+    require_tool_groups(&groups)
+}
+
+/// Like [`require_tools`], but each entry is a list of acceptable candidate
+/// names; a group is satisfied if ANY candidate resolves.  This lets a test
+/// accept a toolchain regardless of which naming scheme it is installed under
+/// (e.g. `riscv64-unknown-elf-as` OR `riscv64-linux-gnu-as`).
+///
+/// Under `CI`, a missing group panics (a silent skip in CI is a false green);
+/// otherwise it prints `SKIP` and returns `false`.
+pub fn require_tool_groups(groups: &[&[&str]]) -> bool {
+    let missing: Vec<String> = groups
         .iter()
-        .filter(|t| !tool_available(t))
-        .copied()
+        .filter(|g| first_available(g).is_none())
+        .map(|g| g.join("|"))
         .collect();
     if missing.is_empty() {
         return true;
@@ -133,7 +166,11 @@ pub fn langc_compile(target: Target, src: &Path, out_dir: &Path, is_lib: bool) -
         .args(&args)
         .status()
         .expect("langc invocation failed");
-    assert!(status.success(), "langc failed to compile {}", src.display());
+    assert!(
+        status.success(),
+        "langc failed to compile {}",
+        src.display()
+    );
 
     std::fs::read_dir(out_dir)
         .unwrap()
@@ -161,6 +198,11 @@ pub fn assemble_runtime(target: Target, out_dir: &Path) -> Vec<PathBuf> {
             continue;
         }
         let out = out_dir.join(format!("{}.o", stem));
+        // GNU `as` resolves `.include "../include/..."` relative to its working
+        // directory, not the source file.  Assemble from `rt_dir` (mirroring
+        // `tyu`'s `build.rs`) so the shared `runtime/include/*.s` files resolve;
+        // `out` is absolute so it is unaffected by the directory change.
+        let asm_name = format!("{}.asm", stem);
         match spec.assembler {
             AssemblerKind::Fasm => {
                 let status = Command::new("fasm")
@@ -171,17 +213,36 @@ pub fn assemble_runtime(target: Target, out_dir: &Path) -> Vec<PathBuf> {
             }
             AssemblerKind::GasArm => {
                 let status = Command::new("arm-none-eabi-as")
-                    .args(["-mcpu=cortex-m3", "-mthumb", asm.to_str().unwrap(), "-o", out.to_str().unwrap()])
+                    .current_dir(&rt_dir)
+                    .args([
+                        "-mcpu=cortex-m3",
+                        "-mthumb",
+                        &asm_name,
+                        "-o",
+                        out.to_str().unwrap(),
+                    ])
                     .status()
                     .expect("arm-none-eabi-as invocation failed");
-                assert!(status.success(), "arm-none-eabi-as failed to assemble {stem}");
+                assert!(
+                    status.success(),
+                    "arm-none-eabi-as failed to assemble {stem}"
+                );
             }
             AssemblerKind::GasRiscV => {
-                let status = Command::new("riscv64-unknown-elf-as")
-                    .args(["-march=rv32i", "-mabi=ilp32", asm.to_str().unwrap(), "-o", out.to_str().unwrap()])
+                let as_bin = first_available(RISCV_AS)
+                    .expect("no RISC-V assembler available (checked RISCV_AS)");
+                let status = Command::new(&as_bin)
+                    .current_dir(&rt_dir)
+                    .args([
+                        "-march=rv32im",
+                        "-mabi=ilp32",
+                        &asm_name,
+                        "-o",
+                        out.to_str().unwrap(),
+                    ])
                     .status()
-                    .expect("riscv64-unknown-elf-as invocation failed");
-                assert!(status.success(), "riscv64-unknown-elf-as failed to assemble {stem}");
+                    .unwrap_or_else(|_| panic!("{as_bin} invocation failed"));
+                assert!(status.success(), "{as_bin} failed to assemble {stem}");
             }
         }
         objs.push(out);
@@ -195,13 +256,28 @@ pub fn link_image(target: Target, objs: &[PathBuf], out_dir: &Path) -> PathBuf {
     let rt_dir = runtime_dir(target);
     let linker_script = rt_dir.join("link.ld");
     let out = out_dir.join("test.elf");
-    let linker = core::str::from_utf8(spec.linker).expect("non-UTF-8 linker name");
-    let mut cmd = Command::new(linker);
+    let linker_name = core::str::from_utf8(spec.linker).expect("non-UTF-8 linker name");
+    // Resolve toolchains exposed under multiple names (e.g. RISC-V newlib vs.
+    // linux-gnu), matching `tyu`'s own linker resolution.
+    let linker = match linker_name {
+        "riscv64-unknown-elf-ld" => {
+            first_available(RISCV_LD).expect("no RISC-V linker available (checked RISCV_LD)")
+        }
+        other => other.to_string(),
+    };
+    let mut cmd = Command::new(&linker);
+    // A multilib `riscv64-*-ld` defaults to elf64; force the rv32 emulation so
+    // it accepts the elf32 objects (matching `tyu`'s `build.rs`).
+    if matches!(spec.assembler, AssemblerKind::GasRiscV) {
+        cmd.arg("-m").arg("elf32lriscv");
+    }
     cmd.arg("-T").arg(&linker_script).arg("-o").arg(&out);
     for obj in objs {
         cmd.arg(obj);
     }
-    let status = cmd.status().unwrap_or_else(|_| panic!("{linker} invocation failed"));
+    let status = cmd
+        .status()
+        .unwrap_or_else(|_| panic!("{linker} invocation failed"));
     assert!(status.success(), "{linker} failed to link test image");
     out
 }
@@ -246,13 +322,8 @@ pub fn expected_symbols(feature_set: codegen_core::FeatureSet) -> Vec<&'static s
     }
 
     if feature_set.contains(codegen_core::Feature::ModuleLoading) {
-        syms.extend_from_slice(&[
-            "__lang_modpack_start",
-            "__lang_modpack_end",
-        ]);
+        syms.extend_from_slice(&["__lang_modpack_start", "__lang_modpack_end"]);
     }
 
     syms
 }
-
-

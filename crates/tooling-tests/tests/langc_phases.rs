@@ -79,7 +79,11 @@ fn phase0_et_rel_object_structure() {
     assert!(status.success(), "fasm static assembly failed");
 
     let run = Command::new(dir.join("prog_static")).status().unwrap();
-    assert_eq!(run.code(), Some(49), "static executable gave wrong exit code");
+    assert_eq!(
+        run.code(),
+        Some(49),
+        "static executable gave wrong exit code"
+    );
 
     // --- Dynamic/obj path (--emit=obj) produces valid ET_REL ---
     let status = Command::new(exe("langc"))
@@ -121,10 +125,7 @@ fn phase0_et_rel_object_structure() {
     assert!(s_out.contains(".rodata"), "missing .rodata section");
     assert!(s_out.contains(".symtab"), "missing .symtab section");
     assert!(s_out.contains(".strtab"), "missing .strtab section");
-    assert!(
-        s_out.contains(".rela.text"),
-        "missing .rela.text section"
-    );
+    assert!(s_out.contains(".rela.text"), "missing .rela.text section");
 
     // readelf -s: verify w_<hash> exported symbols.
     // Without an explicit export statement, all words are public.
@@ -150,9 +151,7 @@ fn phase0_et_rel_object_structure() {
         .current_dir(&dir)
         .args([
             "--out=rt.o",
-            runtime_asm_linux_x86_64_hosted()
-                .to_string_lossy()
-                .as_ref(),
+            runtime_asm_linux_x86_64_hosted().to_string_lossy().as_ref(),
         ])
         .status()
         .unwrap();
@@ -237,7 +236,11 @@ fn phase1_modinfo_section_present_and_decodable() {
     assert!(status.success(), "objcopy failed");
 
     let blob = std::fs::read(&blob_path).unwrap();
-    assert!(blob.len() >= 32, "modinfo blob too small: {} bytes", blob.len());
+    assert!(
+        blob.len() >= 32,
+        "modinfo blob too small: {} bytes",
+        blob.len()
+    );
 
     // Manually decode the fixed header (32-byte little-endian with abi_hash).
     let magic = u32::from_le_bytes(blob[0..4].try_into().unwrap());
@@ -270,9 +273,7 @@ fn phase1_modinfo_section_present_and_decodable() {
         .current_dir(&dir)
         .args([
             "--out=rt.o",
-            runtime_asm_linux_x86_64_hosted()
-                .to_string_lossy()
-                .as_ref(),
+            runtime_asm_linux_x86_64_hosted().to_string_lossy().as_ref(),
         ])
         .status()
         .unwrap();
@@ -286,7 +287,11 @@ fn phase1_modinfo_section_present_and_decodable() {
     assert!(status.success());
 
     let run = Command::new(dir.join("prog")).status().unwrap();
-    assert_eq!(run.code(), Some(1), "linked executable gave wrong exit code");
+    assert_eq!(
+        run.code(),
+        Some(1),
+        "linked executable gave wrong exit code"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -382,11 +387,7 @@ fn phase3_lmod_packer_produces_valid_container() {
         ranges.push(("data", data_off, data_off + data_len));
     }
     if reloc_count > 0 {
-        ranges.push((
-            "reloc",
-            reloc_off,
-            reloc_off + reloc_count * 16,
-        ));
+        ranges.push(("reloc", reloc_off, reloc_off + reloc_count * 16));
     }
     for i in 0..ranges.len() {
         for j in (i + 1)..ranges.len() {
@@ -395,7 +396,12 @@ fn phase3_lmod_packer_produces_valid_container() {
             assert!(
                 e1 <= s2 || e2 <= s1,
                 "section overlap: {} [{},{}) vs {} [{},{})",
-                name1, s1, e1, name2, s2, e2
+                name1,
+                s1,
+                e1,
+                name2,
+                s2,
+                e2
             );
         }
     }
@@ -430,7 +436,12 @@ fn phase4_container_reader_validates_packed_module() {
     // Compile to .o → pack to .lmod → read back with Container::parse
     let status = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=obj", "--target=x86_64-unknown-linux-gnu", "--out-dir=.", "Main.mod"])
+        .args([
+            "--emit=obj",
+            "--target=x86_64-unknown-linux-gnu",
+            "--out-dir=.",
+            "Main.mod",
+        ])
         .status()
         .unwrap();
     assert!(status.success());
@@ -471,10 +482,7 @@ fn phase4_container_reader_validates_packed_module() {
         let off = u32::from_le_bytes(lmod[off_off..off_off + 4].try_into().unwrap()) as usize;
         let len = u32::from_le_bytes(lmod[len_off..len_off + 4].try_into().unwrap()) as usize;
         if len > 0 {
-            assert!(
-                off >= 72,
-                "{name} offset {off} < header size 72"
-            );
+            assert!(off >= 72, "{name} offset {off} < header size 72");
             assert!(
                 off + len <= total_len,
                 "{name} [{off},{}) exceeds total_len {total_len}",
@@ -498,9 +506,7 @@ fn phase4_container_reader_validates_packed_module() {
     }
 
     // Validate no overlaps (monotonic ordering check).
-    let mut ranges: Vec<(usize, usize, &str)> = vec![
-        (0, 72, "header"),
-    ];
+    let mut ranges: Vec<(usize, usize, &str)> = vec![(0, 72, "header")];
     for &(name, off_off, len_off) in &sections {
         let off = u32::from_le_bytes(lmod[off_off..off_off + 4].try_into().unwrap()) as usize;
         let len = u32::from_le_bytes(lmod[len_off..len_off + 4].try_into().unwrap()) as usize;
@@ -518,7 +524,8 @@ fn phase4_container_reader_validates_packed_module() {
         assert!(
             e1 <= s2,
             "overlap: {} ends at {e1} but {} starts at {s2}",
-            name1, name2,
+            name1,
+            name2,
         );
     }
 }

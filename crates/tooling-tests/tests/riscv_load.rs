@@ -5,41 +5,62 @@
 
 mod common;
 
+use common::*;
 use hosted::loader::HostedLoaderPlatform;
+use lmod::hash::fnv1a_u64;
 use lmod::header::{compute_layout, encode_header};
 use lmod::modinfo::{self, ExportEntry, ImportEntry};
 use lmod::validate::Container;
-use lmod::hash::fnv1a_u64;
 use loader_core::load::{load_module, LoadedSet};
 use loader_core::symbols::SymMap;
-use common::*;
 
 /// RISC-V RV32 code with `addi s2, s2, 4` — detectable by Arch scanner.
 /// Encoding: addi s2, s2, 4 = 0x00490913, LE = [0x13, 0x09, 0x49, 0x00]
 /// Positive immediate = push (DS grows upward).
 /// ret: jalr x0, ra, 0 = 0x00008067, LE = [0x67, 0x80, 0x00, 0x00]
 const RV32_CODE_WITH_DS_PUSH: &[u8] = &[
-    0x13, 0x09, 0x49, 0x00,  // addi s2, s2, 4
-    0x67, 0x80, 0x00, 0x00,  // ret
+    0x13, 0x09, 0x49, 0x00, // addi s2, s2, 4
+    0x67, 0x80, 0x00, 0x00, // ret
 ];
 
 /// RV32 code with a 4-byte placeholder for R_RISCV_32 (kind 8) import.
 const RV32_ABS32_IMPORT_CODE: &[u8] = &[
-    0x00, 0x00, 0x00, 0x00,  // .word 0 (placeholder for R_RISCV_32)
-    0x67, 0x80, 0x00, 0x00,  // ret
+    0x00, 0x00, 0x00, 0x00, // .word 0 (placeholder for R_RISCV_32)
+    0x67, 0x80, 0x00, 0x00, // ret
 ];
 
-const RV32_ABI_HASH: u64 = 0x0445187d53048547; // compute_abi_hash(4, 32, 2)
+const RV32_ABI_HASH: u64 = 0xa7df1edbd11ba544; // compute_abi_hash(ARCH_TAG_RISCV, 4, 32, 2)
 
 fn make_rv32_lmod(code: &[u8], imports: &[(&str, u8)]) -> Vec<u8> {
-    let import_entries: Vec<ImportEntry> = imports.iter().map(|(name, _)| {
-        ImportEntry { sym_hash: fnv1a_u64(name.as_bytes()), name: name.as_bytes() }
-    }).collect();
+    let import_entries: Vec<ImportEntry> = imports
+        .iter()
+        .map(|(name, _)| ImportEntry {
+            sym_hash: fnv1a_u64(name.as_bytes()),
+            name: name.as_bytes(),
+        })
+        .collect();
     let mut mbuf = [0u8; 1024];
-    let msize = modinfo::encode_into(&mut mbuf, b"TestModule",
-        &[], &import_entries, RV32_ABI_HASH, 0, &[]).unwrap();
+    let msize = modinfo::encode_into(
+        &mut mbuf,
+        b"TestModule",
+        &[],
+        &import_entries,
+        RV32_ABI_HASH,
+        0,
+        &[],
+    )
+    .unwrap();
 
-    let layout = compute_layout(RV32_ABI_HASH, msize as u32, code.len() as u32, 0, 0, 0, imports.len() as u32, 0);
+    let layout = compute_layout(
+        RV32_ABI_HASH,
+        msize as u32,
+        code.len() as u32,
+        0,
+        0,
+        0,
+        imports.len() as u32,
+        0,
+    );
     let mut out = vec![0u8; layout.total_len as usize];
     encode_header(&mut out, &layout);
 
@@ -94,8 +115,11 @@ fn riscv_load_with_import() {
     let code_slice = unsafe { loaded.code.as_slice() };
     let patched = u32::from_le_bytes(code_slice[..4].try_into().unwrap()) as u64;
     let stub = unsafe { std::mem::transmute::<extern "C" fn(), u64>(common::extern_c_fn_stub) };
-    assert_eq!(patched, stub & 0xFFFF_FFFF,
-        "R_RISCV_32 relocation should write lower 32 bits of symbol address");
+    assert_eq!(
+        patched,
+        stub & 0xFFFF_FFFF,
+        "R_RISCV_32 relocation should write lower 32 bits of symbol address"
+    );
 }
 
 #[test]
@@ -118,8 +142,11 @@ fn riscv_load_abi_hash_mismatch_rejected() {
 #[test]
 fn riscv_arch_detected_from_code() {
     let arch = loader_core::rederive::Arch::detect_from_code(RV32_CODE_WITH_DS_PUSH);
-    assert_eq!(arch, loader_core::rederive::Arch::RiscV,
-        "should detect RISC-V from addi s2 pattern");
+    assert_eq!(
+        arch,
+        loader_core::rederive::Arch::RiscV,
+        "should detect RISC-V from addi s2 pattern"
+    );
 }
 
 #[test]

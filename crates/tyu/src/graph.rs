@@ -4,11 +4,11 @@
 //! file paths using the same search order as `langc`, and produces a
 //! topologically-sorted build order.
 
+use crate::error::TyuError;
 use frontend::parse::Parser;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::{Path, PathBuf};
 use std::fs;
-use crate::error::TyuError;
+use std::path::{Path, PathBuf};
 
 /// A resolved module node in the dependency graph.
 #[derive(Clone, Debug)]
@@ -35,11 +35,14 @@ pub fn resolve_graph(
     let main_abs = if main_path.is_absolute() {
         main_path.to_path_buf()
     } else {
-        std::env::current_dir().map_err(|e| TyuError::Build(format!("current_dir: {}", e)))?
+        std::env::current_dir()
+            .map_err(|e| TyuError::Build(format!("current_dir: {}", e)))?
             .join(main_path)
     };
 
-    let base_dir = main_abs.parent().map(|p| p.to_path_buf())
+    let base_dir = main_abs
+        .parent()
+        .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."));
 
     // Build search directories in langc order.
@@ -63,47 +66,43 @@ pub fn resolve_graph(
         let src_bytes = fs::read(&mod_path)
             .map_err(|e| TyuError::Build(format!("reading '{}': {}", mod_path.display(), e)))?;
         // Box the ModuleAst to avoid ~156KB stack frame from FixedVec inline storage.
-        let module = Box::new(
-            Parser::new(&src_bytes)
-                .parse_module_ast()
-                .map_err(|e| TyuError::Build(format!("parsing '{}': error {}", mod_path.display(), e.code())))?
-        );
+        let module = Box::new(Parser::new(&src_bytes).parse_module_ast().map_err(|e| {
+            TyuError::Build(format!(
+                "parsing '{}': error {}",
+                mod_path.display(),
+                e.code()
+            ))
+        })?);
 
-        let mod_name = String::from_utf8_lossy(
-            &src_bytes[module.name.start..module.name.end]
-        ).to_string();
+        let mod_name =
+            String::from_utf8_lossy(&src_bytes[module.name.start..module.name.end]).to_string();
 
         // Skip if already processed.
         if deps.contains_key(&mod_name) {
             continue;
         }
 
-        deps.entry(mod_name.clone())
-            .or_insert_with(Vec::new);
-        mod_paths.entry(mod_name.clone())
+        deps.entry(mod_name.clone()).or_insert_with(Vec::new);
+        mod_paths
+            .entry(mod_name.clone())
             .or_insert_with(|| mod_path.clone());
 
         // Process each import.
         for import in module.imports.iter() {
-            let import_name = String::from_utf8_lossy(
-                &src_bytes[import.module.start..import.module.end]
-            ).to_string();
+            let import_name =
+                String::from_utf8_lossy(&src_bytes[import.module.start..import.module.end])
+                    .to_string();
 
             // Record edge: mod_name -> import_name.
-            deps.get_mut(&mod_name)
-                .unwrap()
-                .push(import_name.clone());
+            deps.get_mut(&mod_name).unwrap().push(import_name.clone());
 
             // Try to find the import's file if not yet discovered.
             if !mod_paths.contains_key(&import_name) {
-                let import_path = resolve_module_file(
-                    &import_name,
-                    &containing_dir,
-                    &search_dirs,
-                );
+                let import_path = resolve_module_file(&import_name, &containing_dir, &search_dirs);
                 match import_path {
                     Some(p) => {
-                        let parent = p.parent()
+                        let parent = p
+                            .parent()
                             .map(|p| p.to_path_buf())
                             .unwrap_or_else(|| containing_dir.clone());
                         pending.push_back((p, parent));
@@ -120,7 +119,8 @@ pub fn resolve_graph(
                         return Err(TyuError::Build(format!(
                             "module '{}' imported by '{}' not found",
                             import_name, mod_name,
-                        )).into());
+                        ))
+                        .into());
                     }
                 }
             }
@@ -148,7 +148,8 @@ pub fn resolve_graph(
     for (name, edges) in &deps {
         for dep in edges {
             if deps.contains_key(dep.as_str()) {
-                dependents.entry(dep.as_str())
+                dependents
+                    .entry(dep.as_str())
                     .or_insert_with(Vec::new)
                     .push(name.as_str());
             }
@@ -156,7 +157,8 @@ pub fn resolve_graph(
     }
 
     // Start with modules that have no dependencies (in_degree == 0).
-    let mut zero_in: VecDeque<&str> = in_degree.iter()
+    let mut zero_in: VecDeque<&str> = in_degree
+        .iter()
         .filter(|(_, &deg)| deg == 0)
         .map(|(name, _)| *name)
         .collect();
@@ -174,9 +176,11 @@ pub fn resolve_graph(
             let is_root = path == &main_abs;
             let is_lib = !is_root;
 
-            let dep_paths: Vec<PathBuf> = deps.get(name)
+            let dep_paths: Vec<PathBuf> = deps
+                .get(name)
                 .map(|dep_names| {
-                    dep_names.iter()
+                    dep_names
+                        .iter()
                         .filter_map(|dn| mod_paths.get(dn.as_str()))
                         .cloned()
                         .collect()
@@ -205,7 +209,9 @@ pub fn resolve_graph(
     }
 
     if sorted_set.len() != deps.len() {
-        return Err(TyuError::Build("circular dependency detected in module graph".to_string()).into());
+        return Err(
+            TyuError::Build("circular dependency detected in module graph".to_string()).into(),
+        );
     }
 
     Ok(order)

@@ -17,11 +17,19 @@ pub fn read_declared_high(elf_path: &Path) -> Option<u32> {
 pub fn read_declared_high_from_bytes(elf_data: &[u8]) -> Option<u32> {
     // Try .lang.debug first (full coverage, all words).
     if let Some(high) = lookup_in_debugsec(elf_data) {
-        return if high != 0xFFFF_FFFF { Some(high) } else { None };
+        return if high != 0xFFFF_FFFF {
+            Some(high)
+        } else {
+            None
+        };
     }
     // Fall back to .lang.modinfo (exports only).
     if let Some(bound) = lookup_in_modinfo(elf_data) {
-        return if bound != 0xFFFF_FFFF { Some(bound) } else { None };
+        return if bound != 0xFFFF_FFFF {
+            Some(bound)
+        } else {
+            None
+        };
     }
     None
 }
@@ -53,9 +61,7 @@ fn lookup_in_modinfo(elf_data: &[u8]) -> Option<u32> {
             // Read the word_meta entry that this export points to.
             let meta_off = exp.value_off as usize;
             if meta_off + lmod::modinfo::WORD_META_SIZE as usize <= sec.len() {
-                let bound = u32::from_le_bytes(
-                    sec[meta_off + 12..meta_off + 16].try_into().ok()?,
-                );
+                let bound = u32::from_le_bytes(sec[meta_off + 12..meta_off + 16].try_into().ok()?);
                 return Some(bound);
             }
         }
@@ -98,16 +104,16 @@ fn read_elf_section<'a>(data: &'a [u8], section_name: &[u8]) -> Option<&'a [u8]>
         return None;
     }
     let (str_off, str_size) = if elf64 {
-        let off = u64::from_le_bytes(data[shstr_off + 0x18..shstr_off + 0x20].try_into().ok()?)
-            as usize;
-        let sz = u64::from_le_bytes(data[shstr_off + 0x20..shstr_off + 0x28].try_into().ok()?)
-            as usize;
+        let off =
+            u64::from_le_bytes(data[shstr_off + 0x18..shstr_off + 0x20].try_into().ok()?) as usize;
+        let sz =
+            u64::from_le_bytes(data[shstr_off + 0x20..shstr_off + 0x28].try_into().ok()?) as usize;
         (off, sz)
     } else {
-        let off = u32::from_le_bytes(data[shstr_off + 0x10..shstr_off + 0x14].try_into().ok()?)
-            as usize;
-        let sz = u32::from_le_bytes(data[shstr_off + 0x14..shstr_off + 0x18].try_into().ok()?)
-            as usize;
+        let off =
+            u32::from_le_bytes(data[shstr_off + 0x10..shstr_off + 0x14].try_into().ok()?) as usize;
+        let sz =
+            u32::from_le_bytes(data[shstr_off + 0x14..shstr_off + 0x18].try_into().ok()?) as usize;
         (off, sz)
     };
     if str_off + str_size > data.len() {
@@ -121,24 +127,18 @@ fn read_elf_section<'a>(data: &'a [u8], section_name: &[u8]) -> Option<&'a [u8]>
             break;
         }
         let (name_off, sec_off, sec_size) = if elf64 {
-            let no =
-                u32::from_le_bytes(data[sh_off..sh_off + 4].try_into().ok()?) as usize;
+            let no = u32::from_le_bytes(data[sh_off..sh_off + 4].try_into().ok()?) as usize;
             let so =
-                u64::from_le_bytes(data[sh_off + 0x18..sh_off + 0x20].try_into().ok()?)
-                    as usize;
+                u64::from_le_bytes(data[sh_off + 0x18..sh_off + 0x20].try_into().ok()?) as usize;
             let sz =
-                u64::from_le_bytes(data[sh_off + 0x20..sh_off + 0x28].try_into().ok()?)
-                    as usize;
+                u64::from_le_bytes(data[sh_off + 0x20..sh_off + 0x28].try_into().ok()?) as usize;
             (no, so, sz)
         } else {
-            let no =
-                u32::from_le_bytes(data[sh_off..sh_off + 4].try_into().ok()?) as usize;
+            let no = u32::from_le_bytes(data[sh_off..sh_off + 4].try_into().ok()?) as usize;
             let so =
-                u32::from_le_bytes(data[sh_off + 0x10..sh_off + 0x14].try_into().ok()?)
-                    as usize;
+                u32::from_le_bytes(data[sh_off + 0x10..sh_off + 0x14].try_into().ok()?) as usize;
             let sz =
-                u32::from_le_bytes(data[sh_off + 0x14..sh_off + 0x18].try_into().ok()?)
-                    as usize;
+                u32::from_le_bytes(data[sh_off + 0x14..sh_off + 0x18].try_into().ok()?) as usize;
             (no, so, sz)
         };
         if name_off >= str_size {
@@ -221,7 +221,10 @@ pub fn check_stack_witness(
         // Slack is informational — not an error.
         // The caller could collect this for optimization analysis.
         #[cfg(debug_assertions)]
-        eprintln!("stack slack: declared={} measured={} slack={}", declared, measured, slack);
+        eprintln!(
+            "stack slack: declared={} measured={} slack={}",
+            declared, measured, slack
+        );
     }
 
     Ok(())

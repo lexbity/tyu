@@ -28,8 +28,20 @@ fn deploy_pipeline_snapshot() {
     // Build required tools.
     let status = Command::new(env!("CARGO"))
         .current_dir(&workspace_root())
-        .args(["build", "-q", "-p", "langc", "-p", "lmod-pack", "-p", "lmod-encrypt", "-p", "lmod-sign"])
-        .status().expect("cargo build");
+        .args([
+            "build",
+            "-q",
+            "-p",
+            "langc",
+            "-p",
+            "lmod-pack",
+            "-p",
+            "lmod-encrypt",
+            "-p",
+            "lmod-sign",
+        ])
+        .status()
+        .expect("cargo build");
     assert!(status.success(), "cargo build failed");
 
     let dir = temp_dir("deploy_snapshot");
@@ -46,9 +58,13 @@ fn deploy_pipeline_snapshot() {
             &format!("--out-dir={}", out_dir.display()),
             &main_mod.to_string_lossy(),
         ])
-        .output().expect("tyu build");
-    assert!(output.status.success(),
-        "tyu build failed:\n{}", String::from_utf8_lossy(&output.stderr));
+        .output()
+        .expect("tyu build");
+    assert!(
+        output.status.success(),
+        "tyu build failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     // Find the Main.o produced (not runtime.o).
     let main_o = out_dir.join("Main.o");
@@ -57,8 +73,12 @@ fn deploy_pipeline_snapshot() {
     // --- Step 2: Pack ---
     let packed = dir.join("packed.lmod");
     let status = Command::new(tool("lmod-pack"))
-        .args([main_o.to_string_lossy().as_ref(), packed.to_string_lossy().as_ref()])
-        .status().expect("lmod-pack");
+        .args([
+            main_o.to_string_lossy().as_ref(),
+            packed.to_string_lossy().as_ref(),
+        ])
+        .status()
+        .expect("lmod-pack");
     assert!(status.success(), "lmod-pack failed");
 
     // --- Step 3: Encrypt (fleet mode with explicit key) ---
@@ -70,7 +90,8 @@ fn deploy_pipeline_snapshot() {
             "--mode=fleet",
             &format!("--kek={}", KEK_HEX),
         ])
-        .status().expect("lmod-encrypt");
+        .status()
+        .expect("lmod-encrypt");
     assert!(status.success(), "lmod-encrypt failed");
 
     // --- Step 4: Sign (with explicit key) ---
@@ -81,7 +102,8 @@ fn deploy_pipeline_snapshot() {
             signed.to_string_lossy().as_ref(),
             &format!("--key={}", SIGN_KEY_HEX),
         ])
-        .status().expect("lmod-sign");
+        .status()
+        .expect("lmod-sign");
     assert!(status.success(), "lmod-sign failed");
 
     // --- Structural assertions on final artifact ---
@@ -89,26 +111,47 @@ fn deploy_pipeline_snapshot() {
     let container = Container::parse(&data).unwrap();
     let hdr = container.header();
 
-    assert_ne!(hdr.flags & lmod::header::LMOD_FLAG_ENCRYPTED, 0,
-        "deploy snapshot: ENCRYPTED flag must be set");
-    assert_ne!(hdr.flags & lmod::header::LMOD_FLAG_SIGNED, 0,
-        "deploy snapshot: SIGNED flag must be set");
-    assert_eq!(hdr.format_ver, lmod::header::FORMAT_VER,
-        "deploy snapshot: format_ver must be {}", lmod::header::FORMAT_VER);
+    assert_ne!(
+        hdr.flags & lmod::header::LMOD_FLAG_ENCRYPTED,
+        0,
+        "deploy snapshot: ENCRYPTED flag must be set"
+    );
+    assert_ne!(
+        hdr.flags & lmod::header::LMOD_FLAG_SIGNED,
+        0,
+        "deploy snapshot: SIGNED flag must be set"
+    );
+    assert_eq!(
+        hdr.format_ver,
+        lmod::header::FORMAT_VER,
+        "deploy snapshot: format_ver must be {}",
+        lmod::header::FORMAT_VER
+    );
 
     // Check enc header.
     let eh_bytes = &data[lmod::header::HEADER_SIZE as usize..];
-    let eh = lmod::enc::decode_enc_header(eh_bytes)
-        .expect("deploy snapshot: valid enc-header");
-    assert_eq!(eh.enc_mode, EncMode::Fleet,
-        "deploy snapshot: enc_mode must be Fleet");
-    assert_eq!(eh.wrapped_slots.len(), 1,
-        "deploy snapshot: fleet mode must have 1 slot");
+    let eh = lmod::enc::decode_enc_header(eh_bytes).expect("deploy snapshot: valid enc-header");
+    assert_eq!(
+        eh.enc_mode,
+        EncMode::Fleet,
+        "deploy snapshot: enc_mode must be Fleet"
+    );
+    assert_eq!(
+        eh.wrapped_slots.len(),
+        1,
+        "deploy snapshot: fleet mode must have 1 slot"
+    );
 
     // Check signature trailer.
     let sig_trailer = lmod::sig::SigTrailer::parse(&data[hdr.sig_off as usize..]);
-    assert!(sig_trailer.is_some(), "deploy snapshot: signed module must have a valid SigTrailer");
+    assert!(
+        sig_trailer.is_some(),
+        "deploy snapshot: signed module must have a valid SigTrailer"
+    );
     let trailer = sig_trailer.unwrap();
-    assert_eq!(trailer.scheme, lmod::sig::SCHEME_HMAC_SHA256,
-        "deploy snapshot: signature scheme must be HMAC-SHA256");
+    assert_eq!(
+        trailer.scheme,
+        lmod::sig::SCHEME_HMAC_SHA256,
+        "deploy snapshot: signature scheme must be HMAC-SHA256"
+    );
 }

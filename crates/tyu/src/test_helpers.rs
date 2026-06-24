@@ -8,15 +8,17 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use lmod::enc::{EncMode, decode_enc_header};
-use lmod::header::{LMOD_FLAG_ENCRYPTED, LMOD_FLAG_SIGNED, HEADER_SIZE};
+use lmod::enc::{decode_enc_header, EncMode};
+use lmod::header::{HEADER_SIZE, LMOD_FLAG_ENCRYPTED, LMOD_FLAG_SIGNED};
 use lmod::validate::Container;
 
 /// Absolute path to the workspace root (two levels up from `CARGO_MANIFEST_DIR`).
 pub fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap()
-        .parent().unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .to_path_buf()
 }
 
@@ -63,8 +65,11 @@ pub fn langc_exe() -> PathBuf {
 /// binaries like `langc`, `tyu`).
 pub fn tool_available(name: &str) -> bool {
     // Check PATH via which.
-    if Command::new("which").arg(name).output()
-        .map(|o| o.status.success()).unwrap_or(false)
+    if Command::new("which")
+        .arg(name)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
     {
         return true;
     }
@@ -81,25 +86,34 @@ pub fn tool_available(name: &str) -> bool {
 /// if missing, otherwise prints a skip message.
 /// Returns `true` when all tools are present.
 pub fn require_tools(tools: &[&str]) -> bool {
-    let missing: Vec<&str> = tools.iter()
+    let missing: Vec<&str> = tools
+        .iter()
         .filter(|t| !tool_available(t))
-        .copied().collect();
+        .copied()
+        .collect();
     if missing.is_empty() {
         return true;
     }
     if std::env::var("CI").is_ok() {
-        panic!("Required tools not available under CI: {}", missing.join(", "));
+        panic!(
+            "Required tools not available under CI: {}",
+            missing.join(", ")
+        );
     }
-    eprintln!("SKIP: required tools not available ({})", missing.join(", "));
+    eprintln!(
+        "SKIP: required tools not available ({})",
+        missing.join(", ")
+    );
     false
 }
 
 /// Create a temporary directory for a test, cleaning up any previous
 /// directory with the same label.
 pub fn temp_dir(label: &str) -> PathBuf {
-    let dir = std::env::temp_dir()
-        .join("tyu_tests")
-        .join(format!("{}_{}", label, std::process::id()));
+    let dir =
+        std::env::temp_dir()
+            .join("tyu_tests")
+            .join(format!("{}_{}", label, std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -138,7 +152,13 @@ pub fn introspect_lmod(path: &Path) -> LmodFacts {
     } else {
         (None, 0)
     };
-    LmodFacts { encrypted, signed, format_ver, enc_mode, slot_count }
+    LmodFacts {
+        encrypted,
+        signed,
+        format_ver,
+        enc_mode,
+        slot_count,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -165,8 +185,11 @@ pub fn write_device_keys(dir: &Path, ids_and_keys: &[(&str, [u8; 32])]) -> PathB
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lmod::enc::{EncHeader, WrappedCekSlot, WRAPPED_SLOT_SIZE, WRAP_SCHEME_SYMMETRIC_CHACHA20POLY1305, WRAP_LEN};
-    use lmod::header::{self, FORMAT_VER, compute_layout, encode_header};
+    use lmod::enc::{
+        EncHeader, WrappedCekSlot, WRAPPED_SLOT_SIZE, WRAP_LEN,
+        WRAP_SCHEME_SYMMETRIC_CHACHA20POLY1305,
+    };
+    use lmod::header::{self, compute_layout, encode_header, FORMAT_VER};
 
     /// Build a minimal valid plaintext .lmod container on disk.
     fn write_plaintext_lmod(path: &Path) {
@@ -224,7 +247,11 @@ mod tests {
         write_encrypted_fleet_lmod(&path);
         let facts = introspect_lmod(&path);
         assert!(facts.encrypted, "encrypted: encrypted must be true");
-        assert_eq!(facts.enc_mode, Some(EncMode::Fleet), "encrypted: enc_mode=Fleet");
+        assert_eq!(
+            facts.enc_mode,
+            Some(EncMode::Fleet),
+            "encrypted: enc_mode=Fleet"
+        );
         assert_eq!(facts.slot_count, 1, "encrypted: slot_count=1");
         assert_eq!(facts.format_ver, FORMAT_VER);
     }

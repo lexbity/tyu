@@ -121,8 +121,8 @@ impl<'a> Lexer<'a> {
                 }
                 _ => TokenKind::PunctAmp,
             },
-        b'!' => {
-            if self.peek() == Some(b'=') {
+            b'!' => {
+                if self.peek() == Some(b'=') {
                     self.i += 1;
                     return Token::new(TokenKind::PunctNe, Span::new(start, self.i));
                 }
@@ -199,8 +199,8 @@ impl<'a> Lexer<'a> {
             b"owned" => TokenKind::KwOwned,
             b"iso" => TokenKind::KwIso,
             b"requires" => TokenKind::KwRequires,
-            b"ensures"  => TokenKind::KwEnsures,
-            b"needs"    => TokenKind::KwNeeds,
+            b"ensures" => TokenKind::KwEnsures,
+            b"needs" => TokenKind::KwNeeds,
             b"performs" => TokenKind::KwPerforms,
             _ => TokenKind::Ident,
         };

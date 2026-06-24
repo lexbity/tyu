@@ -6,15 +6,24 @@
 
 mod common;
 
-use lmod::validate::Container;
 use common::*;
+use lmod::validate::Container;
 
 #[test]
 fn phase18_equiv_constant_return() {
     let dir = fresh_dir("equiv_const");
-    assert_eq!(dynamic_load_value("module Main;\n: main ( -- i64 ) 42 ;\nend;\n", &dir), 42);
-    assert_eq!(dynamic_load_value("module Main;\n: main ( -- i64 ) 0 ;\nend;\n", &dir), 0);
-    assert_eq!(dynamic_load_value("module Main;\n: main ( -- i64 ) 255 ;\nend;\n", &dir), 255);
+    assert_eq!(
+        dynamic_load_value("module Main;\n: main ( -- i64 ) 42 ;\nend;\n", &dir),
+        42
+    );
+    assert_eq!(
+        dynamic_load_value("module Main;\n: main ( -- i64 ) 0 ;\nend;\n", &dir),
+        0
+    );
+    assert_eq!(
+        dynamic_load_value("module Main;\n: main ( -- i64 ) 255 ;\nend;\n", &dir),
+        255
+    );
 }
 
 #[test]
@@ -37,10 +46,22 @@ fn phase18_equiv_arithmetic() {
 fn phase18_equiv_comparison() {
     let dir = fresh_dir("equiv_cmp");
     let cases: [(&str, i32); 4] = [
-        ("module Main;\n: main ( -- i64 ) 5 3 > [ 1 ] [ 0 ] if ;\nend;\n", 1),
-        ("module Main;\n: main ( -- i64 ) 3 5 > [ 1 ] [ 0 ] if ;\nend;\n", 0),
-        ("module Main;\n: main ( -- i64 ) 3 3 == [ 1 ] [ 0 ] if ;\nend;\n", 1),
-        ("module Main;\n: main ( -- i64 ) 3 5 < [ 1 ] [ 0 ] if ;\nend;\n", 1),
+        (
+            "module Main;\n: main ( -- i64 ) 5 3 > [ 1 ] [ 0 ] if ;\nend;\n",
+            1,
+        ),
+        (
+            "module Main;\n: main ( -- i64 ) 3 5 > [ 1 ] [ 0 ] if ;\nend;\n",
+            0,
+        ),
+        (
+            "module Main;\n: main ( -- i64 ) 3 3 == [ 1 ] [ 0 ] if ;\nend;\n",
+            1,
+        ),
+        (
+            "module Main;\n: main ( -- i64 ) 3 5 < [ 1 ] [ 0 ] if ;\nend;\n",
+            1,
+        ),
     ];
     for (source, expected) in &cases {
         let s = static_exit_code(source, &dir);
@@ -54,8 +75,14 @@ fn phase18_equiv_comparison() {
 fn phase18_equiv_control_flow() {
     let dir = fresh_dir("equiv_cf");
     let cases: [(&str, i32); 2] = [
-        ("module Main;\n: main ( -- i64 ) 0 [ dup 5 < ] [ 1 + ] while ;\nend;\n", 5),
-        ("module Main;\n: main ( -- i64 ) 5 [ dup 0 > ] [ 1 - ] while ;\nend;\n", 0),
+        (
+            "module Main;\n: main ( -- i64 ) 0 [ dup 5 < ] [ 1 + ] while ;\nend;\n",
+            5,
+        ),
+        (
+            "module Main;\n: main ( -- i64 ) 5 [ dup 0 > ] [ 1 - ] while ;\nend;\n",
+            0,
+        ),
     ];
     for (source, expected) in &cases {
         let s = static_exit_code(source, &dir);
@@ -93,7 +120,10 @@ fn phase18_fuzz_container_random_mutations_no_panic() {
 fn phase18_fuzz_container_truncation_no_panic() {
     let dir = fresh_dir("fuzz_trunc");
     let base = std::fs::read(&compile_and_pack(
-        "module Main;\n: main ( -- i64 ) 42 ;\nend;\n", &dir)).unwrap();
+        "module Main;\n: main ( -- i64 ) 42 ;\nend;\n",
+        &dir,
+    ))
+    .unwrap();
     for len in 0..=base.len() {
         let _result = Container::parse(&base[..len]); // must not panic
     }

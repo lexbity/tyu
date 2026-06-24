@@ -17,9 +17,13 @@
 .globl w_accb676a903a06d9
 .type w_accb676a903a06d9, @function
 w_accb676a903a06d9:
+    addi sp, sp, -4          # save ra: __lang_writec is reached via jal,
+    sw ra, 0(sp)             # which clobbers our own return address
     addi s2, s2, -8          # pop i64 (two DS slots)
     lw a0, 0(s2)             # a0 = low 32 bits (low byte = char)
     jal __lang_writec
+    lw ra, 0(sp)
+    addi sp, sp, 4
     ret
 
 # -----------------------------------------------------------------
@@ -32,6 +36,8 @@ w_accb676a903a06d9:
 .globl w_eb06855547211672
 .type w_eb06855547211672, @function
 w_eb06855547211672:
+    addi sp, sp, -4          # save ra across the __lang_writec calls below
+    sw ra, 0(sp)
     addi s2, s2, -4          # pop str pointer (one DS slot)
     lw t0, 0(s2)             # t0 = pointer to string struct
     lw t1, 0(t0)             # t1 = low 32 bits of length
@@ -44,6 +50,8 @@ w_eb06855547211672:
     addi t1, t1, -1          # decrement count
     bnez t1, .Lstr_loop_rv
 .Lstr_done_rv:
+    lw ra, 0(sp)
+    addi sp, sp, 4
     ret
 
 # -----------------------------------------------------------------

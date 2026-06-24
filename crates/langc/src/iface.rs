@@ -339,8 +339,8 @@ mod tests {
 /// This list is the single source of truth; tests consume it so
 /// adding a new code without adding it here is a compile-time reminder.
 pub const EMITTED_IFACE_CODES: &[u32] = &[
-    2020, 2021, 2022, 2201, 2202, 2203, 2204, 2205, 2207, 2210, 2211, 2212, 2213, 2214,
-    2215, 2216, 2217, 2218, 2219, 2220, 2223, 2300,
+    2020, 2021, 2022, 2201, 2202, 2203, 2204, 2205, 2207, 2210, 2211, 2212, 2213, 2214, 2215, 2216,
+    2217, 2218, 2219, 2220, 2223, 2300,
 ];
 
 pub fn iface_error_message(code: u32) -> &'static [u8] {

@@ -2,6 +2,7 @@
 name = "codegen-x86_64"
 version = "0.1.0"
 edition = "2021"
+description = "x86_64 code generation backend for Tyu."
 
 [dependencies]
 frontend     = { path = "../frontend" }

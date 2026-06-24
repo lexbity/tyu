@@ -80,6 +80,21 @@ pub enum CallingConv {
     RiscV,
 }
 
+impl CallingConv {
+    /// Target-identity discriminant folded into `abi_hash` (abi-contract §5
+    /// input #2). Two targets that share `slot_bytes`/`word_bits` but differ in
+    /// calling convention (armv7-m vs riscv32) get distinct hashes so a
+    /// cross-arch load is rejected. The values are a permanent part of the wire
+    /// contract and MUST match `lmod::abi_hash::ARCH_TAG_*` — never renumber.
+    pub fn arch_tag(self) -> u8 {
+        match self {
+            CallingConv::SysV64 => 1,  // ARCH_TAG_X86_64
+            CallingConv::Aapcs32 => 2, // ARCH_TAG_ARM
+            CallingConv::RiscV => 3,   // ARCH_TAG_RISCV
+        }
+    }
+}
+
 /// Which assembler is used to translate the text output to an object file.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AssemblerKind {
@@ -218,7 +233,10 @@ impl FeatureSet {
 
     /// Iterate over enabled features in declaration order.
     pub fn iter(self) -> impl Iterator<Item = Feature> {
-        Feature::ALL.iter().copied().filter(move |f| self.contains(*f))
+        Feature::ALL
+            .iter()
+            .copied()
+            .filter(move |f| self.contains(*f))
     }
 
     /// Write enabled feature names into `out` (up to its length) and return
@@ -323,10 +341,6 @@ pub struct TargetSpec {
     /// Used to register arithmetic builtins with the correct type.
     pub native_int_ty: &'static [u8],
 
-    /// Platform-level capabilities available via sysroot modules.
-    /// Used by the test harness to filter fixtures.
-    pub capabilities: &'static [PlatformCapability],
-
     /// QEMU system-mode parameters. `None` for host-native targets.
     pub qemu: Option<&'static QemuSpec>,
 
@@ -341,6 +355,7 @@ impl TargetSpec {
     /// the loader rejects modules whose hash does not match this value.
     pub fn expected_abi_hash(&self) -> u64 {
         lmod::abi_hash::compute_abi_hash(
+            self.calling_conv.arch_tag(),
             self.slot_bytes,
             self.word_bits,
             lmod::modinfo::MODINFO_VER,
@@ -365,11 +380,6 @@ static X86_64_UNKNOWN_LINUX_GNU: TargetSpec = TargetSpec {
     calling_conv: CallingConv::SysV64,
     native_int_ty: b"i64",
     slot_bytes: 8,
-    capabilities: &[
-        PlatformCapability::TaskScheduler,
-        PlatformCapability::DynamicAlloc,
-        PlatformCapability::Channels,
-    ],
     qemu: None,
     linker: b"ld",
 };
@@ -409,7 +419,6 @@ static X86_64_UNKNOWN_NONE: TargetSpec = TargetSpec {
     calling_conv: CallingConv::SysV64,
     native_int_ty: b"i64",
     slot_bytes: 8,
-    capabilities: &[],
     qemu: Some(&X86_64_UNKNOWN_NONE_QEMU),
     linker: b"ld",
 };
@@ -418,7 +427,11 @@ static X86_64_UNKNOWN_NONE: TargetSpec = TargetSpec {
 // RISC-V RV32 (riscv32-unknown-none)
 // ---------------------------------------------------------------------------
 
-static RISCV32_NONE_EXTRA_ARGS: [&[u8]; 1] = [b"-nographic"];
+// `-bios none`: the `virt` machine loads OpenSBI at 0x80000000 by default,
+// which collides with our kernel (also linked at 0x80000000).  Booting bare
+// metal requires suppressing the default firmware so the CPU resets straight
+// into our image at the start of DRAM.
+static RISCV32_NONE_EXTRA_ARGS: [&[u8]; 3] = [b"-bios", b"none", b"-nographic"];
 
 static RISCV32_NONE_QEMU: QemuSpec = QemuSpec {
     system_bin: b"qemu-system-riscv32",
@@ -440,7 +453,6 @@ static RISCV32_UNKNOWN_NONE: TargetSpec = TargetSpec {
     calling_conv: CallingConv::RiscV,
     native_int_ty: b"i64",
     slot_bytes: 4,
-    capabilities: &[],
     qemu: Some(&RISCV32_NONE_QEMU),
     linker: b"riscv64-unknown-elf-ld",
 };
@@ -471,7 +483,6 @@ static ARM_V7M_UNKNOWN_NONE: TargetSpec = TargetSpec {
     calling_conv: CallingConv::Aapcs32,
     native_int_ty: b"i64",
     slot_bytes: 4,
-    capabilities: &[],
     qemu: Some(&ARM_V7M_NONE_QEMU),
     linker: b"arm-none-eabi-ld",
 };
@@ -531,9 +542,13 @@ mod tests {
         assert_eq!(spec.assembler, AssemblerKind::GasArm);
         assert_eq!(spec.calling_conv, CallingConv::Aapcs32);
         assert_eq!(spec.linker, b"arm-none-eabi-ld");
-        assert_eq!(spec.qemu.map(|q| q.system_bin), Some(&b"qemu-system-arm"[..]));
         assert_eq!(
-            spec.qemu.and_then(|q| Some(q.exit_convention.host_pass_exit())),
+            spec.qemu.map(|q| q.system_bin),
+            Some(&b"qemu-system-arm"[..])
+        );
+        assert_eq!(
+            spec.qemu
+                .and_then(|q| Some(q.exit_convention.host_pass_exit())),
             Some(0),
         );
     }
@@ -541,7 +556,10 @@ mod tests {
     #[test]
     fn arm_target_semihosting_convention() {
         let qemu = Target::ArmV7MUnknownNone.spec().qemu.unwrap();
-        assert!(matches!(qemu.exit_convention, QemuExitConvention::Semihosting));
+        assert!(matches!(
+            qemu.exit_convention,
+            QemuExitConvention::Semihosting
+        ));
         assert_eq!(qemu.exit_convention.host_pass_exit(), 0);
     }
 
@@ -614,13 +632,7 @@ mod tests {
 
     #[test]
     fn feature_runtime_unit() {
-        assert_eq!(
-            Feature::Concurrency.runtime_unit(),
-            Some("concurrency")
-        );
-        assert_eq!(
-            Feature::ModuleLoading.runtime_unit(),
-            Some("modload")
-        );
+        assert_eq!(Feature::Concurrency.runtime_unit(), Some("concurrency"));
+        assert_eq!(Feature::ModuleLoading.runtime_unit(), Some("modload"));
     }
 }

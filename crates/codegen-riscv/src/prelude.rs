@@ -1,6 +1,6 @@
-use codegen_core::{AsmMode, CodegenError};
 use crate::ophelpers::write_sym_label;
 use crate::RiscVBackend;
+use codegen_core::{AsmMode, CodegenError};
 
 impl<'a> RiscVBackend<'a> {
     pub fn emit_prelude(&mut self) -> Result<(), CodegenError> {
@@ -10,8 +10,8 @@ impl<'a> RiscVBackend<'a> {
                 self.out.write(b"\t.globl __lang_start\n");
                 self.out.write(b"\t.type __lang_start, @function\n");
                 self.out.write(b"__lang_start:\n");
-                self.out.write(b"\tli s2, 0\n");    // DS base placeholder
-                self.out.write(b"\tli s3, 0\n");    // DS limit placeholder
+                self.out.write(b"\tli s2, 0\n"); // DS base placeholder
+                self.out.write(b"\tli s3, 0\n"); // DS limit placeholder
                 self.out.write(b"\tli ra, 0\n");
                 self.out.write(b"\tjal ");
                 write_sym_label(self.out, b"main");
@@ -32,19 +32,18 @@ impl<'a> RiscVBackend<'a> {
             AsmMode::Object => {
                 self.out.write(b"\t.section .text\n");
                 self.out.write(b"\t.globl __lang_trap\n");
-                self.out.write(b"\t.type __lang_trap, @function\n");
-                self.out.write(b"__lang_trap:\n");
                 self.out.write(b"\t.globl __stack_overflow\n");
-                self.out.write(b"\t.type __stack_overflow, @function\n");
-                self.out.write(b"__stack_overflow:\n");
-                self.out.write(b"\tj __lang_trap\n");
+                self.out.write(b"\t.extern __lang_trap\n");
+                self.out.write(b"\t.extern __stack_overflow\n");
                 Ok(())
             }
         }
     }
 
     pub fn emit_extern_word(&mut self, name: &[u8]) {
-        if self.mode != AsmMode::Object { return; }
+        if self.mode != AsmMode::Object {
+            return;
+        }
         self.out.write(b"\t.globl ");
         write_sym_label(self.out, name);
         self.out.write(b"\n\t.type ");

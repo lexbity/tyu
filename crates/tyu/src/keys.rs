@@ -46,9 +46,9 @@ impl KeyRef {
             return Ok(KeyRef::Env(var.to_string()));
         }
         if let Some(n_str) = s.strip_prefix("fd:") {
-            let n: u32 = n_str.parse().map_err(|_| {
-                format!("invalid file descriptor number '{}' after 'fd:'", n_str)
-            })?;
+            let n: u32 = n_str
+                .parse()
+                .map_err(|_| format!("invalid file descriptor number '{}' after 'fd:'", n_str))?;
             return Ok(KeyRef::Fd(n));
         }
         // If it has no recognized prefix, reject bare hex / raw string.
@@ -89,8 +89,8 @@ impl KeyMaterial {
     /// Create a `KeyMaterial` from an environment variable.
     /// The variable value is hex-decoded after trimming whitespace.
     pub fn from_env(var: &str) -> Result<Self, String> {
-        let hex = std::env::var(var)
-            .map_err(|_| format!("environment variable '{}' not set", var))?;
+        let hex =
+            std::env::var(var).map_err(|_| format!("environment variable '{}' not set", var))?;
         let bytes = hex::decode(hex.trim())
             .map_err(|e| format!("invalid hex in env var '{}': {}", var, e))?;
         Ok(KeyMaterial::new(&bytes))
@@ -112,8 +112,8 @@ impl KeyMaterial {
             .map_err(|e| format!("reading fd {}: {}", fd, e))?;
         // Prevent the closing of the `Drop` from closing stdin.
         std::mem::forget(file);
-        let bytes = hex::decode(hex.trim())
-            .map_err(|e| format!("invalid hex from fd {}: {}", fd, e))?;
+        let bytes =
+            hex::decode(hex.trim()).map_err(|e| format!("invalid hex from fd {}: {}", fd, e))?;
         Ok(KeyMaterial::new(&bytes))
     }
 
@@ -136,9 +136,7 @@ impl KeyMaterial {
     pub fn try_as_32bytes(&self) -> Result<&[u8; 32], String> {
         let slice: &[u8] = &self.0;
         if slice.len() != 32 {
-            return Err(format!(
-                "key must be 32 bytes, got {} bytes", slice.len()
-            ));
+            return Err(format!("key must be 32 bytes, got {} bytes", slice.len()));
         }
         Ok(unsafe { &*(slice.as_ptr() as *const [u8; 32]) })
     }
@@ -154,9 +152,11 @@ mod tests {
     use std::path::PathBuf;
 
     fn tmp_dir(label: &str) -> PathBuf {
-        let dir = std::env::temp_dir()
-            .join("tyu_keys_tests")
-            .join(format!("{}_{}", label, std::process::id()));
+        let dir = std::env::temp_dir().join("tyu_keys_tests").join(format!(
+            "{}_{}",
+            label,
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -195,8 +195,14 @@ mod tests {
     #[test]
     fn bare_hex_rejected() {
         let err = KeyRef::parse("abababababababababababababababab").unwrap_err();
-        assert!(err.contains("refusing to read key"), "bare hex must be rejected");
-        assert!(err.contains("file:"), "error must mention file: alternative");
+        assert!(
+            err.contains("refusing to read key"),
+            "bare hex must be rejected"
+        );
+        assert!(
+            err.contains("file:"),
+            "error must mention file: alternative"
+        );
         assert!(err.contains("env:"), "error must mention env: alternative");
         assert!(err.contains("fd:"), "error must mention fd: alternative");
     }
@@ -210,7 +216,10 @@ mod tests {
     #[test]
     fn invalid_fd_rejected() {
         let err = KeyRef::parse("fd:xyz").unwrap_err();
-        assert!(err.contains("invalid file descriptor"), "non-numeric fd must be rejected");
+        assert!(
+            err.contains("invalid file descriptor"),
+            "non-numeric fd must be rejected"
+        );
     }
 
     #[test]

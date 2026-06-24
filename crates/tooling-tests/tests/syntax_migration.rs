@@ -9,18 +9,28 @@ use std::process::Command;
 
 fn langc_exe() -> std::path::PathBuf {
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap().parent().unwrap();
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
     workspace.join("target").join("debug").join("langc")
 }
 
 fn repo_sysroot() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap().parent().unwrap().join("sysroot")
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("sysroot")
 }
 
 fn fresh_dir(label: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join("tyu_syntax_tests")
-        .join(format!("{}_{}", label, std::process::id()));
+    let dir = std::env::temp_dir().join("tyu_syntax_tests").join(format!(
+        "{}_{}",
+        label,
+        std::process::id()
+    ));
     let _ = std::fs::create_dir_all(&dir);
     dir
 }
@@ -35,7 +45,11 @@ fn compile_ok(src: &[u8], dir: &std::path::Path) {
         .arg(mod_path.to_str().unwrap())
         .output()
         .unwrap();
-    assert!(out.status.success(), "stderr: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 fn compile_expect_err(src: &[u8], dir: &std::path::Path) -> String {
@@ -102,8 +116,10 @@ import platform/linux { };\n\
 end;\n";
     let err = compile_expect_err(src, &dir);
     // Should produce a parse error (ExpectedModule or similar migration hint).
-    assert!(err.contains("use") || err.contains("needs") || !err.is_empty(),
-        "old requires [ should produce an error, got: {err}");
+    assert!(
+        err.contains("use") || err.contains("needs") || !err.is_empty(),
+        "old requires [ should produce an error, got: {err}"
+    );
 }
 
 // ---------------------------------------------------------------------------

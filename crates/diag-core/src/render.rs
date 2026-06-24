@@ -121,7 +121,8 @@ impl Diagnostic {
         if self.source_line > 0 {
             if let Some(path) = source_path {
                 out.push_str(&format!("\n --> {}:{}", path.display(), self.source_line));
-                if let Some(line) = source_path.and_then(|p| source_map.get_line(p, self.source_line))
+                if let Some(line) =
+                    source_path.and_then(|p| source_map.get_line(p, self.source_line))
                 {
                     out.push_str(&format!("\n  |\n{:>4} | {}\n  |", self.source_line, line));
                 }
@@ -139,10 +140,10 @@ impl Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::decode::{Diagnostic, ModinfoIndex};
     use crate::claims;
-    use std::format;
+    use crate::decode::{Diagnostic, ModinfoIndex};
     use crate::DS_DECLARED_UNKNOWN;
+    use std::format;
 
     fn source_map_with(content: &str) -> (SourceMap, PathBuf) {
         let path = PathBuf::from("test.mod");
@@ -204,7 +205,10 @@ trap in 'main': E_ISR_STACK (5030) at line 4: ds=3/256
         assert!(rendered.contains("unknown word"));
         assert!(rendered.contains("STACK_OVERFLOW"));
         assert!(rendered.contains("ds=16"));
-        assert!(!rendered.contains("-->"), "no source path -> no arrow annotation");
+        assert!(
+            !rendered.contains("-->"),
+            "no source path -> no arrow annotation"
+        );
     }
 
     #[test]

@@ -179,12 +179,7 @@ pub fn op_requires_feature(kind: lir::OpKind) -> Option<Feature> {
 /// 12 |   task spawn worker;
 ///    |   ^^^^^^^^^^^^^^^^^^ requires feature `concurrency`
 /// ```
-pub fn emit_gate_error(
-    path: &[u8],
-    src: &[u8],
-    feature: Feature,
-    span: Span,
-) {
+pub fn emit_gate_error(path: &[u8], src: &[u8], feature: Feature, span: Span) {
     let (line, col) = line_col(src, span.start);
     let feat_name = feature.as_str();
 

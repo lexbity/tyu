@@ -6,9 +6,11 @@ use std::path::PathBuf;
 use tyu::cache::{compiler_fingerprint, inputs_fingerprint, BuildCache};
 
 fn temp_dir(label: &str) -> PathBuf {
-    let dir = std::env::temp_dir()
-        .join("tyu_cache_tests")
-        .join(format!("{}_{}", label, std::process::id()));
+    let dir = std::env::temp_dir().join("tyu_cache_tests").join(format!(
+        "{}_{}",
+        label,
+        std::process::id()
+    ));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     dir
@@ -18,7 +20,10 @@ fn temp_dir(label: &str) -> PathBuf {
 fn lookup_miss_on_unknown_key() {
     let dir = temp_dir("lookup_miss");
     let cache = BuildCache::load(&dir.join("build.json"));
-    assert!(cache.lookup(0, 0, 0).is_none(), "cache miss should return None");
+    assert!(
+        cache.lookup(0, 0, 0).is_none(),
+        "cache miss should return None"
+    );
 }
 
 #[test]
@@ -45,8 +50,10 @@ fn lookup_miss_on_different_compiler_fp() {
     fs::write(&obj, b"\x7fELF").unwrap();
 
     cache.insert(1, 2, 42, "t", &obj).unwrap();
-    assert!(cache.lookup(99, 2, 42).is_none(),
-        "different compiler_fp must miss");
+    assert!(
+        cache.lookup(99, 2, 42).is_none(),
+        "different compiler_fp must miss"
+    );
 }
 
 #[test]
@@ -58,8 +65,10 @@ fn lookup_miss_on_different_inputs_fp() {
     fs::write(&obj, b"\x7fELF").unwrap();
 
     cache.insert(1, 2, 42, "t", &obj).unwrap();
-    assert!(cache.lookup(1, 99, 42).is_none(),
-        "different inputs_fp must miss");
+    assert!(
+        cache.lookup(1, 99, 42).is_none(),
+        "different inputs_fp must miss"
+    );
 }
 
 #[test]
@@ -71,7 +80,9 @@ fn cache_persists_to_disk() {
 
     {
         let mut cache = BuildCache::load(&p);
-        cache.insert(10, 20, 99, "armv7m-unknown-none", &obj).unwrap();
+        cache
+            .insert(10, 20, 99, "armv7m-unknown-none", &obj)
+            .unwrap();
     }
 
     let cache2 = BuildCache::load(&p);

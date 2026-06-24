@@ -4,12 +4,12 @@
 
 mod common;
 
+use common::*;
 use hosted::loader::HostedLoaderPlatform;
 use lmod::validate::Container;
 use loader_core::load::{load_module, LoadedSet};
 use loader_core::modpack::ModpackIter;
 use loader_core::symbols::SymMap;
-use common::*;
 
 fn load_lmod_bytes(lmod_bytes: &[u8], plat: &mut HostedLoaderPlatform) -> i64 {
     let container = Container::parse(lmod_bytes).unwrap();
@@ -84,7 +84,7 @@ fn phase14_host_fs_load_and_run() {
     let dir = fresh_dir("host_fs_load_and_run");
     let lmod_path = compile_and_pack("module Main;\n: main ( -- i64 ) 99 ;\nend;\n", &dir);
     let lmod_bytes = std::fs::read(&lmod_path).unwrap();
-    let abi_hash = lmod::abi_hash::compute_abi_hash(8, 64, lmod::modinfo::MODINFO_VER);
+    let abi_hash = lmod::abi_hash::compute_abi_hash(1, 8, 64, lmod::modinfo::MODINFO_VER);
     let mut plat = HostedLoaderPlatform::new(abi_hash);
     assert_eq!(load_lmod_bytes(&lmod_bytes, &mut plat), 99);
 }
@@ -102,7 +102,7 @@ fn phase14_modpack_load_and_run() {
     let mut iter = ModpackIter::new_from_slice(&modpack);
     let blob = iter.next_blob().expect("modpack should have a blob");
 
-    let abi_hash = lmod::abi_hash::compute_abi_hash(8, 64, lmod::modinfo::MODINFO_VER);
+    let abi_hash = lmod::abi_hash::compute_abi_hash(1, 8, 64, lmod::modinfo::MODINFO_VER);
     let mut plat = HostedLoaderPlatform::new(abi_hash);
     assert_eq!(load_lmod_bytes(blob, &mut plat), 77);
 }

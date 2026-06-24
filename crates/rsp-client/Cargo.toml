@@ -2,6 +2,7 @@
 name = "rsp-client"
 version = "0.1.0"
 edition = "2021"
+description = "Hermetic GDB RSP client used by Tyu tests."
 
 [lib]
 

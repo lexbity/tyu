@@ -2,6 +2,7 @@
 name = "lmod-pack"
 version = "0.1.0"
 edition = "2021"
+description = "Pack ELF objects into `.lmod` containers."
 
 [lib]
 name = "lmod_pack"

@@ -9,7 +9,7 @@
 pub mod regs;
 
 use std::io::{self, Read, Write};
-use std::net::{TcpStream, TcpListener};
+use std::net::{TcpListener, TcpStream};
 use std::time::{Duration, Instant};
 
 // ---------------------------------------------------------------------------
@@ -38,8 +38,7 @@ const CONNECT_RETRY_MAX: u32 = 100;
 /// There is a TOCTOU window between dropping the listener and the caller
 /// using the port — connect_retry handles this by retrying on failure.
 pub fn ephemeral_port() -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .expect("ephemeral_port: bind to :0 failed");
+    let listener = TcpListener::bind("127.0.0.1:0").expect("ephemeral_port: bind to :0 failed");
     let port = listener.local_addr().unwrap().port();
     drop(listener);
     port
@@ -52,7 +51,10 @@ pub fn connect_retry(host: &str, port: u16) -> io::Result<TcpStream> {
     let deadline = Instant::now() + CONNECT_TIMEOUT * 2;
     for attempt in 0..CONNECT_RETRY_MAX {
         match TcpStream::connect_timeout(
-            &addr.as_str().parse().map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?,
+            &addr
+                .as_str()
+                .parse()
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?,
             CONNECT_RETRY_INTERVAL,
         ) {
             Ok(stream) => {
@@ -99,7 +101,11 @@ pub fn encode_packet(data: &[u8]) -> Vec<u8> {
 }
 
 fn hex_nibble(v: u8) -> u8 {
-    if v < 10 { b'0' + v } else { b'a' + v - 10 }
+    if v < 10 {
+        b'0' + v
+    } else {
+        b'a' + v - 10
+    }
 }
 
 fn hex_val(b: u8) -> Option<u8> {
@@ -176,7 +182,9 @@ impl RspClient {
     pub fn connect(host: &str, port: u16) -> io::Result<Self> {
         let addr = format!("{}:{}", host, port);
         let stream = TcpStream::connect_timeout(
-            &addr.parse().map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?,
+            &addr
+                .parse()
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?,
             CONNECT_TIMEOUT,
         )?;
         stream.set_read_timeout(Some(RSP_TIMEOUT))?;
@@ -252,7 +260,10 @@ impl RspClient {
             }
             let mut tmp = [0u8; 1];
             if self.stream.read(&mut tmp)? == 0 {
-                return Err(io::Error::new(io::ErrorKind::ConnectionReset, "connection closed"));
+                return Err(io::Error::new(
+                    io::ErrorKind::ConnectionReset,
+                    "connection closed",
+                ));
             }
             self.recv_buf.push(tmp[0]);
         }
@@ -267,7 +278,10 @@ impl RspClient {
     pub fn read_registers(&mut self) -> io::Result<Vec<u8>> {
         let resp = self.send_and_recv(b"g")?;
         if resp == b"E01" || resp == b"E" {
-            return Err(io::Error::new(io::ErrorKind::Other, "g (read registers) failed"));
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "g (read registers) failed",
+            ));
         }
         hex_decode(&resp).ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidData, "g response is not valid hex")
@@ -279,7 +293,10 @@ impl RspClient {
         let cmd = format!("p{:02x}", reg);
         let resp = self.send_and_recv(cmd.as_bytes())?;
         if resp == b"E01" || resp == b"E" {
-            return Err(io::Error::new(io::ErrorKind::Other, format!("p{:02x} failed", reg)));
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!("p{:02x} failed", reg),
+            ));
         }
         hex_decode(&resp).ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidData, "p response is not valid hex")
@@ -291,7 +308,10 @@ impl RspClient {
         let cmd = format!("m{:x},{:x}", addr, len);
         let resp = self.send_and_recv(cmd.as_bytes())?;
         if resp == b"E01" || resp == b"E" {
-            return Err(io::Error::new(io::ErrorKind::Other, format!("m failed at {:#x}", addr)));
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!("m failed at {:#x}", addr),
+            ));
         }
         hex_decode(&resp).ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidData, "m response is not valid hex")
@@ -310,7 +330,10 @@ impl RspClient {
         if resp == b"OK" {
             Ok(())
         } else {
-            Err(io::Error::new(io::ErrorKind::Other, format!("M failed at {:#x}", addr)))
+            Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!("M failed at {:#x}", addr),
+            ))
         }
     }
 
@@ -321,7 +344,10 @@ impl RspClient {
         if resp == b"OK" {
             Ok(())
         } else {
-            Err(io::Error::new(io::ErrorKind::Other, format!("Z0 failed at {:#x}", addr)))
+            Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!("Z0 failed at {:#x}", addr),
+            ))
         }
     }
 
@@ -333,7 +359,10 @@ impl RspClient {
         if resp == b"OK" {
             Ok(())
         } else {
-            Err(io::Error::new(io::ErrorKind::Other, format!("z0 failed at {:#x}", addr)))
+            Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!("z0 failed at {:#x}", addr),
+            ))
         }
     }
 
@@ -407,7 +436,16 @@ mod tests {
         let data = b"g";
         let pkt = encode_packet(data);
         let csum = rsp_checksum(b"g");
-        assert_eq!(pkt, [b'$', b'g', b'#', hex_nibble(csum >> 4), hex_nibble(csum & 0xf)]);
+        assert_eq!(
+            pkt,
+            [
+                b'$',
+                b'g',
+                b'#',
+                hex_nibble(csum >> 4),
+                hex_nibble(csum & 0xf)
+            ]
+        );
     }
 
     #[test]
@@ -496,14 +534,19 @@ mod tests {
         qemu.stdout(std::process::Stdio::null());
         qemu.stderr(std::process::Stdio::null());
 
-        let mut child = qemu.spawn().map_err(|e| {
-            io::Error::new(io::ErrorKind::Other, format!("qemu spawn failed: {e}"))
-        })?;
+        let mut child = qemu
+            .spawn()
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("qemu spawn failed: {e}")))?;
 
         let stream = connect_retry("127.0.0.1", port).map_err(|e| {
-            let _ = child.kill(); let _ = child.wait(); e
+            let _ = child.kill();
+            let _ = child.wait();
+            e
         })?;
-        let mut client = RspClient { stream, recv_buf: Vec::with_capacity(4096) };
+        let mut client = RspClient {
+            stream,
+            recv_buf: Vec::with_capacity(4096),
+        };
 
         let result = (|| -> io::Result<()> {
             let pc_raw = client.read_register(pc_reg)?;
@@ -511,7 +554,12 @@ mod tests {
             let pc_val = match pc_raw.len() {
                 4 => u64::from_le_bytes([pc_raw[0], pc_raw[1], pc_raw[2], pc_raw[3], 0, 0, 0, 0]),
                 8 => u64::from_le_bytes(pc_raw[..8].try_into().unwrap()),
-                _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "unexpected PC width")),
+                _ => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "unexpected PC width",
+                    ))
+                }
             };
             let mem = client.read_memory(pc_val, 2)?;
             assert!(!mem.is_empty(), "memory at PC must be readable");
@@ -556,12 +604,19 @@ mod tests {
     #[test]
     fn qemu_read_register_and_memory() {
         let tools = ["qemu-system-x86_64", "fasm"];
-        let missing: Vec<&str> = tools.iter().filter(|t| !tool_available(t)).copied().collect();
+        let missing: Vec<&str> = tools
+            .iter()
+            .filter(|t| !tool_available(t))
+            .copied()
+            .collect();
         if !missing.is_empty() {
             if std::env::var("CI").is_ok() {
                 panic!("RSP integration test requires: {}", missing.join(", "));
             }
-            eprintln!("SKIP: qemu RSP integration test (missing: {})", missing.join(", "));
+            eprintln!(
+                "SKIP: qemu RSP integration test (missing: {})",
+                missing.join(", ")
+            );
             return;
         }
 
@@ -575,10 +630,14 @@ mod tests {
         };
 
         let qemu_args = [
-            "-machine", "q35",
-            "-m", "32M",
-            "-display", "none",
-            "-device", "isa-debug-exit,iobase=0x501,iosize=0x02",
+            "-machine",
+            "q35",
+            "-m",
+            "32M",
+            "-display",
+            "none",
+            "-device",
+            "isa-debug-exit,iobase=0x501,iosize=0x02",
         ];
         let result = qemu_rsp_roundtrip("qemu-system-x86_64", &qemu_args, &elf, regs::x86_64::RIP);
         if let Err(e) = result {
@@ -601,7 +660,13 @@ mod tests {
         )
         .ok()?;
         let status = std::process::Command::new("arm-none-eabi-as")
-            .args(["-mcpu=cortex-m3", "-mthumb", asm.to_str().unwrap(), "-o", obj.to_str().unwrap()])
+            .args([
+                "-mcpu=cortex-m3",
+                "-mthumb",
+                asm.to_str().unwrap(),
+                "-o",
+                obj.to_str().unwrap(),
+            ])
             .status()
             .ok()?;
         if !status.success() {
@@ -609,7 +674,12 @@ mod tests {
             return None;
         }
         let status = std::process::Command::new("arm-none-eabi-ld")
-            .args(["-Ttext=0x0", obj.to_str().unwrap(), "-o", elf.to_str().unwrap()])
+            .args([
+                "-Ttext=0x0",
+                obj.to_str().unwrap(),
+                "-o",
+                elf.to_str().unwrap(),
+            ])
             .status()
             .ok()?;
         if !status.success() {
@@ -626,7 +696,13 @@ mod tests {
         let elf = out_dir.join("loop.elf");
         std::fs::write(&asm, b".globl _start\n_start:\n  j _start\n").ok()?;
         let status = std::process::Command::new("riscv64-unknown-elf-as")
-            .args(["-march=rv32i", "-mabi=ilp32", asm.to_str().unwrap(), "-o", obj.to_str().unwrap()])
+            .args([
+                "-march=rv32im",
+                "-mabi=ilp32",
+                asm.to_str().unwrap(),
+                "-o",
+                obj.to_str().unwrap(),
+            ])
             .status()
             .ok()?;
         if !status.success() {
@@ -634,7 +710,12 @@ mod tests {
             return None;
         }
         let status = std::process::Command::new("riscv64-unknown-elf-ld")
-            .args(["-Ttext=0x80000000", obj.to_str().unwrap(), "-o", elf.to_str().unwrap()])
+            .args([
+                "-Ttext=0x80000000",
+                obj.to_str().unwrap(),
+                "-o",
+                elf.to_str().unwrap(),
+            ])
             .status()
             .ok()?;
         if !status.success() {
@@ -647,24 +728,36 @@ mod tests {
     #[test]
     fn arm_qemu_read_register_and_memory() {
         let tools = ["qemu-system-arm", "arm-none-eabi-as", "arm-none-eabi-ld"];
-        let missing: Vec<&str> = tools.iter().filter(|t| !tool_available(t)).copied().collect();
+        let missing: Vec<&str> = tools
+            .iter()
+            .filter(|t| !tool_available(t))
+            .copied()
+            .collect();
         if !missing.is_empty() {
             if std::env::var("CI").is_ok() {
                 panic!("ARM RSP integration test requires: {}", missing.join(", "));
             }
-            eprintln!("SKIP: ARM RSP integration test (missing: {})", missing.join(", "));
+            eprintln!(
+                "SKIP: ARM RSP integration test (missing: {})",
+                missing.join(", ")
+            );
             return;
         }
 
         let dir = temp_dir("rsp_arm_test");
         let elf = match try_build_arm_loop_elf(&dir) {
             Some(e) => e,
-            None => { eprintln!("SKIP: could not build ARM test ELF"); return; }
+            None => {
+                eprintln!("SKIP: could not build ARM test ELF");
+                return;
+            }
         };
 
         let qemu_args = [
-            "-machine", "lm3s6965evb",
-            "-semihosting-config", "enable=on,target=native",
+            "-machine",
+            "lm3s6965evb",
+            "-semihosting-config",
+            "enable=on,target=native",
             "-nographic",
         ];
         let result = qemu_rsp_roundtrip("qemu-system-arm", &qemu_args, &elf, regs::arm::PC);
@@ -675,25 +768,44 @@ mod tests {
 
     #[test]
     fn riscv_qemu_read_register_and_memory() {
-        let tools = ["qemu-system-riscv32", "riscv64-unknown-elf-as", "riscv64-unknown-elf-ld"];
-        let missing: Vec<&str> = tools.iter().filter(|t| !tool_available(t)).copied().collect();
+        let tools = [
+            "qemu-system-riscv32",
+            "riscv64-unknown-elf-as",
+            "riscv64-unknown-elf-ld",
+        ];
+        let missing: Vec<&str> = tools
+            .iter()
+            .filter(|t| !tool_available(t))
+            .copied()
+            .collect();
         if !missing.is_empty() {
             if std::env::var("CI").is_ok() {
-                panic!("RISC-V RSP integration test requires: {}", missing.join(", "));
+                panic!(
+                    "RISC-V RSP integration test requires: {}",
+                    missing.join(", ")
+                );
             }
-            eprintln!("SKIP: RISC-V RSP integration test (missing: {})", missing.join(", "));
+            eprintln!(
+                "SKIP: RISC-V RSP integration test (missing: {})",
+                missing.join(", ")
+            );
             return;
         }
 
         let dir = temp_dir("rsp_riscv_test");
         let elf = match try_build_riscv_loop_elf(&dir) {
             Some(e) => e,
-            None => { eprintln!("SKIP: could not build RISC-V test ELF"); return; }
+            None => {
+                eprintln!("SKIP: could not build RISC-V test ELF");
+                return;
+            }
         };
 
         let qemu_args = [
-            "-machine", "virt",
-            "-semihosting-config", "enable=on,target=native",
+            "-machine",
+            "virt",
+            "-semihosting-config",
+            "enable=on,target=native",
             "-nographic",
         ];
         let result = qemu_rsp_roundtrip("qemu-system-riscv32", &qemu_args, &elf, regs::riscv::PC);
@@ -715,9 +827,11 @@ mod tests {
     }
 
     fn temp_dir(label: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir()
-            .join("rsp_client_tests")
-            .join(format!("{}_{}", label, std::process::id()));
+        let dir = std::env::temp_dir().join("rsp_client_tests").join(format!(
+            "{}_{}",
+            label,
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir

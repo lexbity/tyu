@@ -96,9 +96,12 @@ impl<'a> Parser<'a> {
             let mut end = first.span.end;
             while self.look.kind == TokenKind::PunctSlash {
                 self.bump(); // /
-                let seg = self.expect(TokenKind::Ident, ParseError::ExpectedModuleName {
-                    span: self.look.span,
-                })?;
+                let seg = self.expect(
+                    TokenKind::Ident,
+                    ParseError::ExpectedModuleName {
+                        span: self.look.span,
+                    },
+                )?;
                 end = seg.span.end;
                 self.bump();
             }
@@ -154,10 +157,14 @@ impl<'a> Parser<'a> {
                             if inner.end > inner.start {
                                 inner
                             } else {
-                                return Err(ParseError::ExpectedInterruptVector { span: attr_span });
+                                return Err(ParseError::ExpectedInterruptVector {
+                                    span: attr_span,
+                                });
                             }
                         }
-                        None => return Err(ParseError::ExpectedInterruptVector { span: attr_span }),
+                        None => {
+                            return Err(ParseError::ExpectedInterruptVector { span: attr_span })
+                        }
                     };
                     AttrAst::Interrupt { vector }
                 } else {
@@ -169,7 +176,9 @@ impl<'a> Parser<'a> {
                 };
                 pending_attrs
                     .push(attr)
-                    .map_err(|_| ParseError::TooManyItems { span: self.look.span })?;
+                    .map_err(|_| ParseError::TooManyItems {
+                        span: self.look.span,
+                    })?;
                 continue;
             }
 
@@ -316,7 +325,7 @@ impl<'a> Parser<'a> {
 
     fn parse_import_ast(&mut self) -> Result<ImportAst, ParseError> {
         self.bump(); // import
-        // Read module path: `platform/linux` → `Ident(platform) / Ident(linux)`
+                     // Read module path: `platform/linux` → `Ident(platform) / Ident(linux)`
         let first = self.expect(
             TokenKind::Ident,
             ParseError::ExpectedImportName {
@@ -330,9 +339,12 @@ impl<'a> Parser<'a> {
             let mut end = first.span.end;
             while self.look.kind == TokenKind::PunctSlash {
                 self.bump(); // /
-                let seg = self.expect(TokenKind::Ident, ParseError::ExpectedImportName {
-                    span: self.look.span,
-                })?;
+                let seg = self.expect(
+                    TokenKind::Ident,
+                    ParseError::ExpectedImportName {
+                        span: self.look.span,
+                    },
+                )?;
                 end = seg.span.end;
                 self.bump();
             }

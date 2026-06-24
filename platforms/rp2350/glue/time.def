@@ -1,0 +1,2 @@
+: platform.time.now_us ( -- i64 ) performs {mmio} ;
+: platform.time.reboot ( -- ) performs {} ;

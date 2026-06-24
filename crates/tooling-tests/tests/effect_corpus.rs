@@ -178,15 +178,15 @@ fn corpus() {
                 panic!(
                     "fixture {fixture_name} went green: observed={observed}, \
                      target={target}. Update ledger entries for slice {slice}.",
-                    target=xf.target,
-                    slice=xf._slice
+                    target = xf.target,
+                    slice = xf._slice
                 );
             } else {
                 panic!(
                     "regression: {fixture_name} expected current={xf_current}, \
                      target={xf_target}, but got unexpected outcome={observed}",
-                    xf_current=xf.current,
-                    xf_target=xf.target
+                    xf_current = xf.current,
+                    xf_target = xf.target
                 );
             }
         } else {
@@ -214,13 +214,8 @@ fn corpus() {
         }
     }
 
-    eprintln!(
-        "Corpus: {total} fixtures, {pass_count} pass, {xfail_count} xfail"
-    );
-    assert!(
-        total > 0,
-        "corpus directory is empty — no fixtures to run"
-    );
+    eprintln!("Corpus: {total} fixtures, {pass_count} pass, {xfail_count} xfail");
+    assert!(total > 0, "corpus directory is empty — no fixtures to run");
 }
 
 // ---------------------------------------------------------------------------
@@ -254,9 +249,15 @@ fn e_iface_effect_mismatch() {
         .args(["--emit=ir", "Main.mod"])
         .output()
         .unwrap();
-    assert!(!out.status.success(), "expected iface error for effect mismatch");
+    assert!(
+        !out.status.success(),
+        "expected iface error for effect mismatch"
+    );
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("error[E2219]"), "expected E2219 (word effect mismatch), got: {stderr}");
+    assert!(
+        stderr.contains("error[E2219]"),
+        "expected E2219 (word effect mismatch), got: {stderr}"
+    );
 }
 
 // ---------------------------------------------------------------------------

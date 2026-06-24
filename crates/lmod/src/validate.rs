@@ -7,7 +7,7 @@
 //! Every method returns `Result` or `Option`; the `parse` constructor runs
 //! the full suite of checks from §9 steps 1–2 before exposing any data.
 
-use crate::header::{LmodHeader, HEADER_SIZE, LMOD_MAGIC, FORMAT_VER};
+use crate::header::{LmodHeader, FORMAT_VER, HEADER_SIZE, LMOD_MAGIC};
 use crate::reloc::{RelocEntry, RELOC_ENTRY_SIZE};
 
 // ---------------------------------------------------------------------------
@@ -131,11 +131,20 @@ impl<'a> Container<'a> {
         // Build a sorted list of (start, end) ranges, then verify monotonicity.
         let mut ranges: [(u32, u32); 6] = [
             (0, HEADER_SIZE), // header (implicit)
-            (hdr.modinfo_off, hdr.modinfo_off.saturating_add(hdr.modinfo_len)),
+            (
+                hdr.modinfo_off,
+                hdr.modinfo_off.saturating_add(hdr.modinfo_len),
+            ),
             (hdr.code_off, hdr.code_off.saturating_add(hdr.code_len)),
-            (hdr.rodata_off, hdr.rodata_off.saturating_add(hdr.rodata_len)),
+            (
+                hdr.rodata_off,
+                hdr.rodata_off.saturating_add(hdr.rodata_len),
+            ),
             (hdr.data_off, hdr.data_off.saturating_add(hdr.data_len)),
-            (hdr.reloc_off, hdr.reloc_off.saturating_add(reloc_bytes as u32)),
+            (
+                hdr.reloc_off,
+                hdr.reloc_off.saturating_add(reloc_bytes as u32),
+            ),
         ];
 
         // Sort by start offset (insertion sort for tiny array).
@@ -233,8 +242,8 @@ impl<'a> Container<'a> {
         if index >= self.hdr.reloc_count {
             return None;
         }
-        let entry_off = (self.hdr.reloc_off as usize)
-            + (index as usize) * RELOC_ENTRY_SIZE as usize;
+        let entry_off =
+            (self.hdr.reloc_off as usize) + (index as usize) * RELOC_ENTRY_SIZE as usize;
         crate::reloc::decode_entry(self.data, entry_off)
     }
 
@@ -313,17 +322,23 @@ mod tests {
         let modinfo_start = layout.modinfo_off as usize;
         // Write a minimal LangModInfo: magic (4) + ver (2) + flags (2) + abi_hash (8) = 16 bytes
         mi[modinfo_start..modinfo_start + 4].copy_from_slice(&[0x44, 0x4f, 0x4d, 0x4c]); // LMOD magic
-        // version (2) and flags (2) are already zero from memset
+                                                                                         // version (2) and flags (2) are already zero from memset
         mi[modinfo_start + 8..modinfo_start + 16].copy_from_slice(&42u64.to_le_bytes()); // abi_hash
 
         let code_start = layout.code_off as usize;
-        for i in 0..64 { mi[code_start + i] = 0xcc; }
+        for i in 0..64 {
+            mi[code_start + i] = 0xcc;
+        }
 
         let rodata_start = layout.rodata_off as usize;
-        for i in 0..16 { mi[rodata_start + i] = i as u8; }
+        for i in 0..16 {
+            mi[rodata_start + i] = i as u8;
+        }
 
         let data_start = layout.data_off as usize;
-        for i in 0..8 { mi[data_start + i] = 0xff; }
+        for i in 0..8 {
+            mi[data_start + i] = 0xff;
+        }
 
         // Write reloc entries.
         let reloc_start = layout.reloc_off as usize;
@@ -588,8 +603,10 @@ mod tests {
         // Set it to 8 (before the 72-byte header boundary → overlaps header).
         buf[64..68].copy_from_slice(&8u32.to_le_bytes());
         buf[68..72].copy_from_slice(&33u32.to_le_bytes()); // sig_len
-        assert!(Container::parse(&buf).is_err(),
-            "sig_off before header must be rejected");
+        assert!(
+            Container::parse(&buf).is_err(),
+            "sig_off before header must be rejected"
+        );
     }
 
     #[test]
@@ -599,8 +616,10 @@ mod tests {
         // sig_off past end of container.
         buf[64..68].copy_from_slice(&(total + 100).to_le_bytes());
         buf[68..72].copy_from_slice(&33u32.to_le_bytes());
-        assert!(Container::parse(&buf).is_err(),
-            "sig_off past end must be rejected");
+        assert!(
+            Container::parse(&buf).is_err(),
+            "sig_off past end must be rejected"
+        );
     }
 
     // -------------------------------------------------------------------
@@ -613,8 +632,10 @@ mod tests {
         // reloc_off is at offset 44 in the 72-byte header.
         // Set it to 10 (inside the header area).
         buf[44..48].copy_from_slice(&10u32.to_le_bytes());
-        assert!(Container::parse(&buf).is_err(),
-            "reloc_off inside header must be rejected");
+        assert!(
+            Container::parse(&buf).is_err(),
+            "reloc_off inside header must be rejected"
+        );
     }
 
     #[test]
@@ -623,8 +644,9 @@ mod tests {
         // reloc_count is at offset 40 in the 72-byte header.
         buf[40..44].copy_from_slice(&u32::MAX.to_le_bytes());
         // This should be rejected by the validate step.
-        assert!(Container::parse(&buf).is_err(),
-            "reloc_count overflow must be rejected");
+        assert!(
+            Container::parse(&buf).is_err(),
+            "reloc_count overflow must be rejected"
+        );
     }
-
 }

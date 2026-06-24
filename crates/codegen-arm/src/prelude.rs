@@ -49,14 +49,10 @@ impl<'a> ArmThumbBackend<'a> {
                 self.out.write(b"\t.syntax unified\n");
                 self.out.write(b"\t.thumb\n");
                 self.out.write(b"\t.section .text\n");
-                self.out.write(b"\t.thumb_func\n");
                 self.out.write(b"\t.global __lang_trap\n");
-                self.out.write(b"\t.type __lang_trap, %function\n");
-                self.out.write(b"__lang_trap:\n");
                 self.out.write(b"\t.global __stack_overflow\n");
-                self.out.write(b"\t.type __stack_overflow, %function\n");
-                self.out.write(b"__stack_overflow:\n");
-                self.out.write(b"\tb __lang_trap\n");
+                self.out.write(b"\t.extern __lang_trap\n");
+                self.out.write(b"\t.extern __stack_overflow\n");
                 Ok(())
             }
         }

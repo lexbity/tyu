@@ -115,7 +115,7 @@ fn encode_thumb_bl(insn: &mut [u8], offset: i64) -> Result<(), ()> {
         return Err(()); // misaligned
     }
     let half = offset >> 1; // convert bytes to halfwords
-    // Check signed 24-bit range (±16MB)
+                            // Check signed 24-bit range (±16MB)
     if half > 0x7FFFFF || half < -0x800000 {
         return Err(());
     }
@@ -152,22 +152,34 @@ fn encode_thumb_bl(insn: &mut [u8], offset: i64) -> Result<(), ()> {
 /// Decode a Thumb BL (branch-and-link) instruction back to a byte offset.
 /// The reverse of `encode_thumb_bl`.
 fn decode_thumb_bl(insn: &[u8]) -> Result<i64, ()> {
-    if insn.len() < 4 { return Err(()); }
+    if insn.len() < 4 {
+        return Err(());
+    }
     let hw0 = u16::from_le_bytes([insn[0], insn[1]]);
     let hw1 = u16::from_le_bytes([insn[2], insn[3]]);
 
     // Check fixed bits: hw0[15:11] = 11110, hw0[7:6] = 11?, hw0[5] = 1
-    if (hw0 & 0xF800) != 0xF000 { return Err(()); }
-    if (hw0 & 0x00C0) != 0x00C0 { return Err(()); }
-    if (hw0 & 0x0020) != 0x0020 { return Err(()); }
+    if (hw0 & 0xF800) != 0xF000 {
+        return Err(());
+    }
+    if (hw0 & 0x00C0) != 0x00C0 {
+        return Err(());
+    }
+    if (hw0 & 0x0020) != 0x0020 {
+        return Err(());
+    }
     // hw1[15:11] = 11111, hw1[14] = 1, hw1[12] = 1
-    if (hw1 & 0xF800) != 0xF800 { return Err(()); }
-    if (hw1 & 0x5000) != 0x5000 { return Err(()); }
+    if (hw1 & 0xF800) != 0xF800 {
+        return Err(());
+    }
+    if (hw1 & 0x5000) != 0x5000 {
+        return Err(());
+    }
 
     let s: u32 = ((hw0 >> 10) & 1) as u32;
     let j1: u32 = ((hw0 >> 6) & 1) as u32;
     let j2: u32 = ((hw0 >> 7) & 1) as u32;
-    let imm10_low: u32 = (hw0 & 0x1F) as u32;  // bits 4:0 = offset[16:12]
+    let imm10_low: u32 = (hw0 & 0x1F) as u32; // bits 4:0 = offset[16:12]
     let imm11: u32 = (hw1 & 0x7FF) as u32;
 
     // I1 = J1 ^ (S ^ 1), I2 = J2 ^ (S ^ 1)
@@ -269,7 +281,11 @@ mod tests {
         let hw1 = u16::from_le_bytes(buf[2..4].try_into().unwrap());
 
         // Verify it's a valid BL instruction (first hw bits 15-11 = 11110, bits 9-8 = 11)
-        assert_eq!((hw0 >> 11) & 0x1F, 0b11110, "not a BL instruction (hw0 top)");
+        assert_eq!(
+            (hw0 >> 11) & 0x1F,
+            0b11110,
+            "not a BL instruction (hw0 top)"
+        );
         // Check opcode bits 9-8 = 11 (BL)
         assert_eq!((hw0 >> 8) & 0x3, 0b11, "not a BL instruction (opcode)");
 
@@ -288,7 +304,7 @@ mod tests {
         apply_import_reloc(&mut buf, 0, 5, p, 0).unwrap();
 
         // For BL target = site: offset = -4 (PC adjustment), half = -2
-        // S = 1 (negative), J1 = ... 
+        // S = 1 (negative), J1 = ...
         // The instruction should still be valid
         let hw0 = u16::from_le_bytes(buf[0..2].try_into().unwrap());
         assert_eq!((hw0 >> 11) & 0x1F, 0b11110);
@@ -385,27 +401,37 @@ mod tests {
         let cases: [i64; 4] = [4, 0, 0x200, 0x7FE];
         for &off in &cases {
             let mut insn = [0u8; 4];
-            assert!(encode_thumb_bl(&mut insn, off).is_ok(),
-                "encode_thumb_bl({off:#x}) must succeed");
+            assert!(
+                encode_thumb_bl(&mut insn, off).is_ok(),
+                "encode_thumb_bl({off:#x}) must succeed"
+            );
             let decoded = decode_thumb_bl(&insn).unwrap_or(i64::MIN);
-            assert_eq!(decoded, off,
-                "encode→decode round-trip failed for offset {off:#x}, got {decoded:#x}");
+            assert_eq!(
+                decoded, off,
+                "encode→decode round-trip failed for offset {off:#x}, got {decoded:#x}"
+            );
         }
     }
 
     #[test]
     fn thumb_bl_out_of_range_rejected() {
         let mut insn = [0u8; 4];
-        assert!(encode_thumb_bl(&mut insn, 0x0100_0000).is_err(),
-            "BL offset +16MB+1 must be rejected");
-        assert!(encode_thumb_bl(&mut insn, -0x0100_0000 - 2).is_err(),
-            "BL offset -16MB-2 must be rejected");
+        assert!(
+            encode_thumb_bl(&mut insn, 0x0100_0000).is_err(),
+            "BL offset +16MB+1 must be rejected"
+        );
+        assert!(
+            encode_thumb_bl(&mut insn, -0x0100_0000 - 2).is_err(),
+            "BL offset -16MB-2 must be rejected"
+        );
     }
 
     #[test]
     fn thumb_bl_misaligned_rejected() {
         let mut insn = [0u8; 4];
-        assert!(encode_thumb_bl(&mut insn, 1).is_err(),
-            "BL misaligned offset must be rejected");
+        assert!(
+            encode_thumb_bl(&mut insn, 1).is_err(),
+            "BL misaligned offset must be rejected"
+        );
     }
 }

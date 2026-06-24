@@ -2,6 +2,7 @@
 name = "diag-core"
 version = "0.1.0"
 edition = "2021"
+description = "Diagnostic record schema and decoder helpers."
 
 [features]
 default = []

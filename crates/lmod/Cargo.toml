@@ -2,6 +2,7 @@
 name = "lmod"
 version = "0.1.0"
 edition = "2021"
+description = "Core `.lmod` module format and loader data structures."
 
 # no_std, no alloc — shared by producer and on-device loader.
 # No dependencies: the codec works with raw integers, not ir types.

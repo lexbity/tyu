@@ -1,10 +1,11 @@
 //! End-to-end build test for x86_64-unknown-none.
 //!
-//! B-1: basic ELF structure (magic, 64-bit class).
+//! B-1: basic `.lmod` structure.
 //! B-2: cache-hit detection via stderr "cache hit" marker.
 
 use std::process::Command;
 
+use lmod::validate::Container;
 use tyu::test_helpers::*;
 
 const MINIMAL_MAIN: &str = "\
@@ -22,35 +23,48 @@ fn build_image(src: &str, dir_label: &str) -> std::path::PathBuf {
     let out_dir = dir.join("out");
 
     let s = Command::new(env!("CARGO"))
-        .current_dir(&workspace_root()).args(["build", "-q", "-p", "langc"]).status().expect("cargo build");
+        .current_dir(&workspace_root())
+        .args(["build", "-q", "-p", "langc"])
+        .status()
+        .expect("cargo build");
     assert!(s.success(), "cargo build failed");
 
     let output = Command::new(tyu_exe())
-        .args(["build", "--target=x86_64-unknown-none",
-               &format!("--sysroot={}", sysroot.display()),
-               &format!("--out-dir={}", out_dir.display()),
-               &main_mod.to_string_lossy()])
-        .output().expect("tyu build");
+        .args([
+            "build",
+            "--target=x86_64-unknown-none",
+            &format!("--sysroot={}", sysroot.display()),
+            &format!("--out-dir={}", out_dir.display()),
+            &main_mod.to_string_lossy(),
+        ])
+        .output()
+        .expect("tyu build");
 
     if !output.status.success() {
-        panic!("tyu build failed:\n{}", String::from_utf8_lossy(&output.stderr));
+        panic!(
+            "tyu build failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
-    out_dir.join("image.elf")
+    out_dir.join("Main.lmod")
 }
 
 // ---------------------------------------------------------------------------
-// B-1: Basic ELF structure
+// B-1: Basic .lmod structure
 // ---------------------------------------------------------------------------
 
 #[test]
-fn build_minimal_x86_64_none_elf() {
-    if !require_tools(&["langc", "fasm", "ld"]) { return; }
+fn build_minimal_x86_64_none_lmod() {
+    if !require_tools(&["langc", "fasm", "ld"]) {
+        return;
+    }
 
     let image = build_image(MINIMAL_MAIN, "minimal_x86_64");
     assert!(image.exists());
     let data = std::fs::read(&image).unwrap();
-    assert_eq!(&data[..4], b"\x7fELF");
-    assert_eq!(data[4], 2);
+    let container = Container::parse(&data).unwrap();
+    assert_eq!(container.header().format_ver, lmod::header::FORMAT_VER);
+    assert!(!container.code().is_empty(), ".lmod must carry code");
 }
 
 // ---------------------------------------------------------------------------
@@ -59,7 +73,9 @@ fn build_minimal_x86_64_none_elf() {
 
 #[test]
 fn build_cache_skips_rebuild() {
-    if !require_tools(&["langc", "fasm", "ld"]) { return; }
+    if !require_tools(&["langc", "fasm", "ld"]) {
+        return;
+    }
 
     let dir = temp_dir("cached_build");
     let main_mod = dir.join("main.mod");
@@ -68,31 +84,44 @@ fn build_cache_skips_rebuild() {
     let out_dir = dir.join("out");
 
     let s = Command::new(env!("CARGO"))
-        .current_dir(&workspace_root()).args(["build", "-q", "-p", "langc"]).status().expect("cargo build");
+        .current_dir(&workspace_root())
+        .args(["build", "-q", "-p", "langc"])
+        .status()
+        .expect("cargo build");
     assert!(s.success(), "cargo build failed");
 
     // First build — populates the cache.
     let first = Command::new(tyu_exe())
-        .args(["build", "--target=x86_64-unknown-none",
-               &format!("--sysroot={}", sysroot.display()),
-               &format!("--out-dir={}", out_dir.display()),
-               &main_mod.to_string_lossy()])
-        .output().expect("first tyu build");
+        .args([
+            "build",
+            "--target=x86_64-unknown-none",
+            &format!("--sysroot={}", sysroot.display()),
+            &format!("--out-dir={}", out_dir.display()),
+            &main_mod.to_string_lossy(),
+        ])
+        .output()
+        .expect("first tyu build");
     assert!(first.status.success());
 
     // Second build with identical source — should hit cache.
     let second = Command::new(tyu_exe())
-        .args(["build", "--target=x86_64-unknown-none",
-               &format!("--sysroot={}", sysroot.display()),
-               &format!("--out-dir={}", out_dir.display()),
-               &main_mod.to_string_lossy()])
-        .output().expect("second tyu build");
+        .args([
+            "build",
+            "--target=x86_64-unknown-none",
+            &format!("--sysroot={}", sysroot.display()),
+            &format!("--out-dir={}", out_dir.display()),
+            &main_mod.to_string_lossy(),
+        ])
+        .output()
+        .expect("second tyu build");
     assert!(second.status.success());
 
     let stderr = String::from_utf8_lossy(&second.stderr);
-    assert!(stderr.contains("cache hit"),
+    assert!(
+        stderr.contains("cache hit"),
         "B-2: second build with unchanged source must show 'cache hit' on stderr, got: {}",
-        stderr);
+        stderr
+    );
 
-    assert!(out_dir.join("image.elf").exists());
+    assert!(out_dir.join("Main.lmod").exists());
 }

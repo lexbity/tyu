@@ -581,7 +581,10 @@ fn too_many_decls_rejected() {
     }
     src.push_str("end;\n");
     let result = parse(&src);
-    assert!(result.is_err(), "260 declarations must overflow FixedVec<DeclAst, 256>");
+    assert!(
+        result.is_err(),
+        "260 declarations must overflow FixedVec<DeclAst, 256>"
+    );
     match result {
         Err(ParseError::TooManyItems { .. }) => {} // expected
         Err(e) => panic!("expected TooManyItems, got {:?}", e),

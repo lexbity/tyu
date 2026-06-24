@@ -2,6 +2,7 @@
 name = "hosted"
 version = "0.1.0"
 edition = "2021"
+description = "Host-side runtime glue for Tyu binaries."
 
 [lib]
 doctest = false

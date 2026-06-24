@@ -4,7 +4,7 @@
 //! payload in-place and unwraps the CEK from a `WrappedCekSlot` using the
 //! platform's KEK.
 
-use lmod::enc::{NONCE_LEN, TAG_LEN, CEK_LEN, WRAP_LEN};
+use lmod::enc::{CEK_LEN, NONCE_LEN, TAG_LEN, WRAP_LEN};
 
 /// Error returned when AEAD authentication fails.
 #[derive(Debug)]
@@ -44,7 +44,10 @@ pub fn decrypt_payload(
 /// the wrapped slot).  Legacy slots that were created with a deterministic
 /// zero nonce will have `[0u8; 12]` in that position and will still unwrap
 /// correctly — the consumer change is strictly backward-compatible.
-pub fn unwrap_cek(kek: &[u8; CEK_LEN], wrapped: &[u8; WRAP_LEN]) -> Result<[u8; CEK_LEN], AeadError> {
+pub fn unwrap_cek(
+    kek: &[u8; CEK_LEN],
+    wrapped: &[u8; WRAP_LEN],
+) -> Result<[u8; CEK_LEN], AeadError> {
     use chacha20poly1305::aead::{AeadInPlace, KeyInit};
     use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 
@@ -60,7 +63,9 @@ pub fn unwrap_cek(kek: &[u8; CEK_LEN], wrapped: &[u8; WRAP_LEN]) -> Result<[u8; 
     let mut cek_buf = [0u8; CEK_LEN];
     cek_buf.copy_from_slice(&wrapped[NONCE_LEN..NONCE_LEN + CEK_LEN]);
     let tag_start = NONCE_LEN + CEK_LEN;
-    let tag: &[u8; TAG_LEN] = (&wrapped[tag_start..tag_start + TAG_LEN]).try_into().unwrap();
+    let tag: &[u8; TAG_LEN] = (&wrapped[tag_start..tag_start + TAG_LEN])
+        .try_into()
+        .unwrap();
 
     let aead_tag = chacha20poly1305::Tag::from_slice(tag);
     cipher
@@ -72,8 +77,8 @@ pub fn unwrap_cek(kek: &[u8; CEK_LEN], wrapped: &[u8; WRAP_LEN]) -> Result<[u8; 
 
 #[cfg(test)]
 mod tests {
-    use chacha20poly1305::KeyInit;
     use super::*;
+    use chacha20poly1305::KeyInit;
 
     /// Encrypt-then-decrypt roundtrip with non-empty AAD.
     #[test]
@@ -89,13 +94,18 @@ mod tests {
         let anonce = Nonce::from_slice(&nonce);
 
         let mut buf = plaintext.to_vec();
-        let tag = cipher.encrypt_in_place_detached(anonce, aad, &mut buf).unwrap();
+        let tag = cipher
+            .encrypt_in_place_detached(anonce, aad, &mut buf)
+            .unwrap();
 
         // Now decrypt with our function.
         let mut dec_buf = buf.clone();
         let tag_arr: &[u8; TAG_LEN] = tag.as_slice().try_into().unwrap();
         decrypt_payload(&key, &nonce, tag_arr, aad, &mut dec_buf).unwrap();
-        assert_eq!(&dec_buf, plaintext, "decrypted plaintext must match original");
+        assert_eq!(
+            &dec_buf, plaintext,
+            "decrypted plaintext must match original"
+        );
     }
 
     #[test]
@@ -121,9 +131,17 @@ mod tests {
         let cipher = ChaCha20Poly1305::new(Key::from_slice(&enc_key));
         let anonce = Nonce::from_slice(&nonce);
         let mut buf = plaintext.to_vec();
-        let tag = cipher.encrypt_in_place_detached(anonce, b"", &mut buf).unwrap();
+        let tag = cipher
+            .encrypt_in_place_detached(anonce, b"", &mut buf)
+            .unwrap();
 
-        let result = decrypt_payload(&dec_key, &nonce, tag.as_slice().try_into().unwrap(), b"", &mut buf);
+        let result = decrypt_payload(
+            &dec_key,
+            &nonce,
+            tag.as_slice().try_into().unwrap(),
+            b"",
+            &mut buf,
+        );
         assert!(result.is_err(), "wrong key must fail decryption");
     }
 
@@ -189,7 +207,9 @@ mod tests {
         let cipher = ChaCha20Poly1305::new(Key::from_slice(&wrap_kek));
         let zero_nonce = Nonce::from_slice(&[0u8; NONCE_LEN]);
         let mut cek_buf = cek;
-        let wrap_tag = cipher.encrypt_in_place_detached(zero_nonce, b"", &mut cek_buf).unwrap();
+        let wrap_tag = cipher
+            .encrypt_in_place_detached(zero_nonce, b"", &mut cek_buf)
+            .unwrap();
 
         let mut wrapped = [0u8; WRAP_LEN];
         wrapped[..NONCE_LEN].copy_from_slice(&[0u8; NONCE_LEN]);
@@ -218,7 +238,9 @@ mod tests {
         let cipher = ChaCha20Poly1305::new(Key::from_slice(&key));
         let anonce = Nonce::from_slice(&nonce);
         let mut buf = plaintext.to_vec();
-        let tag = cipher.encrypt_in_place_detached(anonce, aad_a, &mut buf).unwrap();
+        let tag = cipher
+            .encrypt_in_place_detached(anonce, aad_a, &mut buf)
+            .unwrap();
         let tag_arr: &[u8; TAG_LEN] = tag.as_slice().try_into().unwrap();
 
         // Decrypt with aad_b — must fail.

@@ -158,9 +158,8 @@ mod tests {
     #[test]
     fn new_from_range_works() {
         let data = build_modpack(&[b"test"]);
-        let mut iter = unsafe {
-            ModpackIter::new_from_range(data.as_ptr(), data.as_ptr().add(data.len()))
-        };
+        let mut iter =
+            unsafe { ModpackIter::new_from_range(data.as_ptr(), data.as_ptr().add(data.len())) };
         assert_eq!(iter.next_blob().unwrap(), b"test");
         assert!(iter.next_blob().is_none());
     }

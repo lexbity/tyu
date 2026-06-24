@@ -41,10 +41,7 @@ impl PlacePath {
 /// `->` is deleted; `.` auto-projects through pointers.
 ///
 /// Returns `PlaceParseFailed` if the token stream does not match.
-pub fn parse_place_path(
-    lex: &mut Lexer<'_>,
-    slice: &[u8],
-) -> Result<PlacePath, TcError> {
+pub fn parse_place_path(lex: &mut Lexer<'_>, slice: &[u8]) -> Result<PlacePath, TcError> {
     // Probe-based parsing: work on a copy of the lexer and only advance
     // the real lexer when we know the full place is valid.
     let mut probe = *lex;
@@ -66,11 +63,13 @@ pub fn parse_place_path(
                 let seg = step_probe.next();
                 match seg.kind {
                     TokenKind::Ident => {
-                        let field = TypeAtom::new(&slice[seg.span.start..seg.span.end])
-                            .ok_or(TcError::PlaceParseFailed {
+                        let field = TypeAtom::new(&slice[seg.span.start..seg.span.end]).ok_or(
+                            TcError::PlaceParseFailed {
                                 span: Span::new(seg.span.start, seg.span.end),
-                            })?;
-                        steps.push(Step::Field(field))
+                            },
+                        )?;
+                        steps
+                            .push(Step::Field(field))
                             .map_err(|_| TcError::PlaceTooDeep {
                                 span: Span::new(root.start, seg.span.end),
                             })?;
@@ -80,10 +79,12 @@ pub fn parse_place_path(
                     TokenKind::Number => {
                         let n = crate::typecheck::util::parse_u32_any(
                             &slice[seg.span.start..seg.span.end],
-                        ).ok_or(TcError::PlaceParseFailed {
+                        )
+                        .ok_or(TcError::PlaceParseFailed {
                             span: Span::new(seg.span.start, seg.span.end),
                         })?;
-                        steps.push(Step::Index(n))
+                        steps
+                            .push(Step::Index(n))
                             .map_err(|_| TcError::PlaceTooDeep {
                                 span: Span::new(root.start, seg.span.end),
                             })?;
@@ -106,7 +107,8 @@ pub fn parse_place_path(
                             }
                         }
                         let expr_end = last_end - 1;
-                        steps.push(Step::DynamicIndex(Span::new(expr_start, expr_end)))
+                        steps
+                            .push(Step::DynamicIndex(Span::new(expr_start, expr_end)))
                             .map_err(|_| TcError::PlaceTooDeep {
                                 span: Span::new(root.start, expr_end),
                             })?;

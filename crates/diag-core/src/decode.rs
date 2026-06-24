@@ -61,17 +61,14 @@ impl ModinfoIndex {
                 return None;
             }
 
-            let meta_hash = u64::from_le_bytes(
-                data[meta_off..meta_off + 8].try_into().ok()?,
-            );
+            let meta_hash = u64::from_le_bytes(data[meta_off..meta_off + 8].try_into().ok()?);
             // The hash in the meta entry must match the export's sym_hash
             // (abi-contract §3 invariant).
             if meta_hash != exp.sym_hash {
                 return None;
             }
 
-            let effects =
-                u16::from_le_bytes(data[meta_off + 8..meta_off + 10].try_into().ok()?);
+            let effects = u16::from_le_bytes(data[meta_off + 8..meta_off + 10].try_into().ok()?);
             let requires_caps =
                 u16::from_le_bytes(data[meta_off + 10..meta_off + 12].try_into().ok()?);
             let stack_bound =
@@ -155,10 +152,7 @@ impl ModinfoIndex {
 pub enum DecodeError {
     /// The `.lang.modinfo` `abi_hash` does not match the expected value
     /// for the running image.  A stale map would produce wrong names.
-    StaleMap {
-        expected: u64,
-        actual: u64,
-    },
+    StaleMap { expected: u64, actual: u64 },
 }
 
 impl std::fmt::Display for DecodeError {
@@ -257,16 +251,13 @@ mod tests {
 
     /// Helper: the expected abi_hash for test vectors.
     fn test_abi_hash() -> u64 {
-        lmod::abi_hash::compute_abi_hash(8, 64, 2)
+        lmod::abi_hash::compute_abi_hash(1, 8, 64, 2)
     }
 
     /// Build a minimal `.lang.modinfo` byte array for testing.
-    fn make_modinfo(
-        abi_hash: u64,
-        exports: &[(&str, u16, u16, u32)],
-    ) -> Vec<u8> {
-        use lmod::modinfo;
+    fn make_modinfo(abi_hash: u64, exports: &[(&str, u16, u16, u32)]) -> Vec<u8> {
         use lmod::hash::fnv1a_u64;
+        use lmod::modinfo;
 
         let export_entries: Vec<modinfo::ExportEntry<'_>> = exports
             .iter()
@@ -323,11 +314,7 @@ mod tests {
     fn modinfo_index_multiple_exports() {
         let data = make_modinfo(
             test_abi_hash(),
-            &[
-                ("add", 0, 0, 10),
-                ("sub", 0, 0, 20),
-                ("mul", 2, 1, 30),
-            ],
+            &[("add", 0, 0, 10), ("sub", 0, 0, 20), ("mul", 2, 1, 30)],
         );
         let idx = ModinfoIndex::from_modinfo_bytes(&data).unwrap();
         assert_eq!(idx.len(), 3);
@@ -462,6 +449,9 @@ mod tests {
 
         let diag = resolve(&record, &idx);
         let text = diag.to_string();
-        assert!(!text.contains("line"), "no line info should not emit 'line'");
+        assert!(
+            !text.contains("line"),
+            "no line info should not emit 'line'"
+        );
     }
 }

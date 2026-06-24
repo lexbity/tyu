@@ -1,5 +1,9 @@
 #![no_std]
 #![deny(unsafe_op_in_unsafe_fn)]
+//! Intermediate representation, ABI contract, and verifier support for Tyu.
+//!
+//! The crate defines the load-bearing IR and related compatibility types used
+//! by the front end, semantics pass, and code generators.
 
 use frontend::{fixed::FixedVec, parse::Output, span::Span};
 

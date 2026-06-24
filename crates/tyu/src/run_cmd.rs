@@ -5,10 +5,10 @@ use crate::build;
 use crate::runner::Runner;
 
 /// Exit codes for failure classes (matches common convention):
-const EXIT_HANG: i32 = 124;         // timeout
-const EXIT_NO_COMPLETION: i32 = 1;  // S\n missing
-const EXIT_FAIL_MARKER: i32 = 2;    // F byte seen
-const EXIT_MISMATCH: i32 = 3;       // wrong QEMU exit code
+const EXIT_HANG: i32 = 124; // timeout
+const EXIT_NO_COMPLETION: i32 = 1; // S\n missing
+const EXIT_FAIL_MARKER: i32 = 2; // F byte seen
+const EXIT_MISMATCH: i32 = 3; // wrong QEMU exit code
 
 /// Execute the `run` subcommand.
 pub fn run(args: &RunArgs) -> Result<(), String> {
@@ -21,12 +21,14 @@ pub fn run(args: &RunArgs) -> Result<(), String> {
         match r.as_str() {
             "native" => Runner::Native,
             "qemu" => {
-                let spec = args.target.spec().qemu
+                let spec = args
+                    .target
+                    .spec()
+                    .qemu
                     .ok_or("target has no QEMU spec — cannot use --runner=qemu")?;
                 Runner::Qemu(spec)
             }
             other => return Err(format!("unknown runner '{}'", other)),
-
         }
     } else {
         Runner::for_target(args.target)

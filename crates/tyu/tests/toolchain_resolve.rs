@@ -15,7 +15,9 @@ fn make_tc() -> tyu::project::ToolchainConfig {
 #[test]
 fn resolve_via_manifest() {
     let mut manifest = ProjectManifest::default();
-    manifest.toolchain.insert("x86_64-unknown-none".into(), make_tc());
+    manifest
+        .toolchain
+        .insert("x86_64-unknown-none".into(), make_tc());
 
     let flags = std::collections::HashMap::new();
     let target = codegen_core::Target::X86_64UnknownNone;
@@ -92,6 +94,12 @@ fn toolchain_check_does_not_panic() {
     let target = codegen_core::Target::X86_64UnknownNone;
     let report = tyu::toolchain::toolchain_check(target, &manifest);
     // Should not panic. Should contain some output.
-    assert!(report.contains("compiler"), "report should mention compiler");
-    assert!(report.contains("assembler"), "report should mention assembler");
+    assert!(
+        report.contains("compiler"),
+        "report should mention compiler"
+    );
+    assert!(
+        report.contains("assembler"),
+        "report should mention assembler"
+    );
 }

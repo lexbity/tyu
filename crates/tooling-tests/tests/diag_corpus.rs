@@ -30,28 +30,42 @@ fn tool_available(name: &str) -> bool {
 }
 
 fn require_tools(tools: &[&str]) -> bool {
-    let missing: Vec<&str> = tools.iter().filter(|t| !tool_available(t)).copied().collect();
+    let missing: Vec<&str> = tools
+        .iter()
+        .filter(|t| !tool_available(t))
+        .copied()
+        .collect();
     if missing.is_empty() {
         return true;
     }
     if std::env::var("CI").is_ok() {
-        panic!("Required tools not available under CI: {}", missing.join(", "));
+        panic!(
+            "Required tools not available under CI: {}",
+            missing.join(", ")
+        );
     }
-    eprintln!("SKIP: required tools not available ({})", missing.join(", "));
+    eprintln!(
+        "SKIP: required tools not available ({})",
+        missing.join(", ")
+    );
     false
 }
 
 fn temp_dir(label: &str) -> PathBuf {
-    let dir = std::env::temp_dir()
-        .join("diag_corpus")
-        .join(format!("{}_{}", label, std::process::id()));
+    let dir =
+        std::env::temp_dir()
+            .join("diag_corpus")
+            .join(format!("{}_{}", label, std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
 
 fn langc_exe() -> PathBuf {
-    common::workspace_root().join("target").join("debug").join("langc")
+    common::workspace_root()
+        .join("target")
+        .join("debug")
+        .join("langc")
 }
 
 fn sysroot_dir() -> PathBuf {
@@ -63,11 +77,7 @@ fn sysroot_dir() -> PathBuf {
 // ---------------------------------------------------------------------------
 
 /// Build a linked ELF from a fixture source, with `-g --checks=all`.
-fn build_fixture_elf(
-    dir: &Path,
-    fixture_src: &str,
-    target: codegen_core::Target,
-) -> PathBuf {
+fn build_fixture_elf(dir: &Path, fixture_src: &str, target: codegen_core::Target) -> PathBuf {
     let triple = std::str::from_utf8(target.triple()).unwrap();
 
     // Write fixture.
@@ -103,7 +113,10 @@ fn build_fixture_elf(
         .join("x86_64-unknown-none");
     let runtime_o = dir.join("runtime.o");
     let fasm_status = Command::new("fasm")
-        .args([rt_dir.join("runtime.asm").to_str().unwrap(), runtime_o.to_str().unwrap()])
+        .args([
+            rt_dir.join("runtime.asm").to_str().unwrap(),
+            runtime_o.to_str().unwrap(),
+        ])
         .status()
         .unwrap();
     assert!(fasm_status.success(), "fasm runtime");
@@ -126,12 +139,18 @@ fn build_fixture_elf(
 /// Run an ELF under QEMU, capture output, parse D records.
 fn capture_b_side(image: &Path) -> Vec<u8> {
     let output = Command::new("qemu-system-x86_64")
-        .arg("-machine").arg("q35")
-        .arg("-m").arg("32M")
-        .arg("-display").arg("none")
-        .arg("-device").arg("isa-debug-exit,iobase=0x501,iosize=0x02")
-        .arg("-debugcon").arg("stdio")
-        .arg("-kernel").arg(image)
+        .arg("-machine")
+        .arg("q35")
+        .arg("-m")
+        .arg("32M")
+        .arg("-display")
+        .arg("none")
+        .arg("-device")
+        .arg("isa-debug-exit,iobase=0x501,iosize=0x02")
+        .arg("-debugcon")
+        .arg("stdio")
+        .arg("-kernel")
+        .arg(image)
         .output()
         .expect("qemu");
     output.stdout
@@ -159,9 +178,7 @@ fn capture_a_side(image: &Path, target: codegen_core::Target) -> Option<String> 
 
 #[test]
 fn corpus_subtype_fail_21() {
-    if !require_tools(&[
-        "langc", "fasm", "ld", "qemu-system-x86_64", "nm",
-    ]) {
+    if !require_tools(&["langc", "fasm", "ld", "qemu-system-x86_64", "nm"]) {
         return;
     }
     ensure_langc();
@@ -189,7 +206,11 @@ end;
     let b_diag = extract_b_diag(&stdout).expect("B-side must emit a D record");
     assert_eq!(b_diag.trap_code, 21, "B-side trap_code mismatch");
     assert!(b_diag.valid, "B-side must have valid=1 for __lang_trap_loc");
-    assert_eq!(b_diag.origin, diag_core::origin::IN_GUEST, "B-side origin must be IN_GUEST");
+    assert_eq!(
+        b_diag.origin,
+        diag_core::origin::IN_GUEST,
+        "B-side origin must be IN_GUEST"
+    );
 
     // A-side: escalate.
     let a_diag = capture_a_side(&image, target).expect("A-side must produce a diagnostic");
@@ -205,7 +226,10 @@ end;
         "A-side must name the word 'main', got: {}",
         a_diag,
     );
-    eprintln!("B: code={} valid={} line={}", b_diag.trap_code, b_diag.valid, b_diag.source_line);
+    eprintln!(
+        "B: code={} valid={} line={}",
+        b_diag.trap_code, b_diag.valid, b_diag.source_line
+    );
     eprintln!("A: {}", a_diag);
 }
 
@@ -215,9 +239,7 @@ end;
 
 #[test]
 fn corpus_stack_overflow_10() {
-    if !require_tools(&[
-        "langc", "fasm", "ld", "qemu-system-x86_64", "nm",
-    ]) {
+    if !require_tools(&["langc", "fasm", "ld", "qemu-system-x86_64", "nm"]) {
         return;
     }
     ensure_langc();
@@ -243,7 +265,10 @@ end;
     // B-side: capture D record (from __stack_overflow).
     let stdout = capture_b_side(&image);
     let b_diag = extract_b_diag(&stdout).expect("B-side must emit a D record for overflow");
-    assert_eq!(b_diag.trap_code, 10, "B-side trap_code must be 10 (STACK_OVERFLOW)");
+    assert_eq!(
+        b_diag.trap_code, 10,
+        "B-side trap_code must be 10 (STACK_OVERFLOW)"
+    );
     // valid=0 because __stack_overflow has no payload registers.
     assert!(!b_diag.valid, "stack overflow must have valid=0");
     assert_eq!(b_diag.origin, diag_core::origin::IN_GUEST);
@@ -256,7 +281,10 @@ end;
         "A-side must mention STACK_OVERFLOW (10), got: {}",
         a_diag,
     );
-    eprintln!("B: code={} valid={} ds_depth={}", b_diag.trap_code, b_diag.valid, b_diag.ds_depth);
+    eprintln!(
+        "B: code={} valid={} ds_depth={}",
+        b_diag.trap_code, b_diag.valid, b_diag.ds_depth
+    );
     eprintln!("A: {}", a_diag);
 }
 
@@ -266,9 +294,7 @@ end;
 
 #[test]
 fn corpus_contract_fail_20() {
-    if !require_tools(&[
-        "langc", "fasm", "ld", "qemu-system-x86_64", "nm",
-    ]) {
+    if !require_tools(&["langc", "fasm", "ld", "qemu-system-x86_64", "nm"]) {
         return;
     }
     ensure_langc();
@@ -298,7 +324,10 @@ end;
     // B-side: capture D record.
     let stdout = capture_b_side(&image);
     let b_diag = extract_b_diag(&stdout).expect("B-side must emit a D record for contract fail");
-    assert_eq!(b_diag.trap_code, 20, "B-side trap_code must be 20 (CONTRACT_FAIL)");
+    assert_eq!(
+        b_diag.trap_code, 20,
+        "B-side trap_code must be 20 (CONTRACT_FAIL)"
+    );
     assert!(b_diag.valid, "B-side must have valid=1");
 
     // A-side: escalate.
@@ -309,7 +338,10 @@ end;
         "A-side must mention CONTRACT_FAIL (20), got: {}",
         a_diag,
     );
-    eprintln!("B: code={} valid={} line={}", b_diag.trap_code, b_diag.valid, b_diag.source_line);
+    eprintln!(
+        "B: code={} valid={} line={}",
+        b_diag.trap_code, b_diag.valid, b_diag.source_line
+    );
     eprintln!("A: {}", a_diag);
 }
 

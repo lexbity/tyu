@@ -14,8 +14,8 @@ pub const MODINFO_HEADER_SIZE: u32 = 32;
 
 pub const EXPORT_ENTRY_SIZE: u32 = 16; // u64 sym_hash + u32 name_off + u32 value_off
 pub const IMPORT_ENTRY_SIZE: u32 = 12; // u64 sym_hash + u32 name_off
-pub const WORD_META_SIZE: u32 = 16;    // u64 sym_hash + u16 effects + u16 requires_caps + u32 stack_bound
-pub const RES_META_SIZE: u32 = 16;     // u64 res_hash + u8 sharing_class + u8[3] _pad + u32 lock_prim
+pub const WORD_META_SIZE: u32 = 16; // u64 sym_hash + u16 effects + u16 requires_caps + u32 stack_bound
+pub const RES_META_SIZE: u32 = 16; // u64 res_hash + u8 sharing_class + u8[3] _pad + u32 lock_prim
 
 /// Flags for the `LangModInfo.flags` field.
 pub const MODINFO_FLAG_HAS_ISR: u16 = 0x0001;
@@ -138,14 +138,24 @@ pub fn encode_into<'a>(
     let mut off: usize = 0;
 
     // 1. Fixed header (32 bytes)
-    poke_u32(buf, off, LMOD_MAGIC); off += 4;
-    poke_u16(buf, off, MODINFO_VER); off += 2;
-    poke_u16(buf, off, flags);               off += 2; // flags
-    poke_u64(buf, off, abi_hash_val);        off += 8; // abi_hash (abi-contract §5)
-    let name_off_pos = off; poke_u32(buf, off, 0); off += 4; // placeholder
-    let name_len_pos = off; poke_u32(buf, off, 0); off += 4; // placeholder
-    poke_u32(buf, off, export_count);        off += 4;
-    poke_u32(buf, off, import_count);        off += 4;
+    poke_u32(buf, off, LMOD_MAGIC);
+    off += 4;
+    poke_u16(buf, off, MODINFO_VER);
+    off += 2;
+    poke_u16(buf, off, flags);
+    off += 2; // flags
+    poke_u64(buf, off, abi_hash_val);
+    off += 8; // abi_hash (abi-contract §5)
+    let name_off_pos = off;
+    poke_u32(buf, off, 0);
+    off += 4; // placeholder
+    let name_len_pos = off;
+    poke_u32(buf, off, 0);
+    off += 4; // placeholder
+    poke_u32(buf, off, export_count);
+    off += 4;
+    poke_u32(buf, off, import_count);
+    off += 4;
     // header = 32 bytes
 
     // 2. Name table — module name
@@ -178,37 +188,49 @@ pub fn encode_into<'a>(
 
     // 3. Export entries
     let export_entries_off = off as u32;
-    let word_meta_base = export_entries_off
-        + export_count * EXPORT_ENTRY_SIZE
-        + import_count * IMPORT_ENTRY_SIZE;
+    let word_meta_base =
+        export_entries_off + export_count * EXPORT_ENTRY_SIZE + import_count * IMPORT_ENTRY_SIZE;
 
     for (i, e) in exports.iter().enumerate() {
         let value_off = word_meta_base + i as u32 * WORD_META_SIZE;
-        poke_u64(buf, off, e.sym_hash); off += 8;
-        poke_u32(buf, off, export_name_offs[i]); off += 4;
-        poke_u32(buf, off, value_off); off += 4;
+        poke_u64(buf, off, e.sym_hash);
+        off += 8;
+        poke_u32(buf, off, export_name_offs[i]);
+        off += 4;
+        poke_u32(buf, off, value_off);
+        off += 4;
     }
 
     // 4. Import entries
     for (i, imp) in imports.iter().enumerate() {
-        poke_u64(buf, off, imp.sym_hash); off += 8;
-        poke_u32(buf, off, import_name_offs[i]); off += 4;
+        poke_u64(buf, off, imp.sym_hash);
+        off += 8;
+        poke_u32(buf, off, import_name_offs[i]);
+        off += 4;
     }
 
     // 5. Word meta entries
     for e in exports.iter() {
-        poke_u64(buf, off, e.sym_hash); off += 8;
-        poke_u16(buf, off, e.effects); off += 2;
-        poke_u16(buf, off, e.requires_caps); off += 2;
-        poke_u32(buf, off, e.stack_bound); off += 4;
+        poke_u64(buf, off, e.sym_hash);
+        off += 8;
+        poke_u16(buf, off, e.effects);
+        off += 2;
+        poke_u16(buf, off, e.requires_caps);
+        off += 2;
+        poke_u32(buf, off, e.stack_bound);
+        off += 4;
     }
 
     // 5b. Resource meta entries
     for r in res_metas.iter() {
-        poke_u64(buf, off, r.res_hash); off += 8;
-        buf[off] = r.sharing_class; off += 1;
-        buf[off..off + 3].fill(0); off += 3;
-        poke_u32(buf, off, r.lock_prim); off += 4;
+        poke_u64(buf, off, r.res_hash);
+        off += 8;
+        buf[off] = r.sharing_class;
+        off += 1;
+        buf[off..off + 3].fill(0);
+        off += 3;
+        poke_u32(buf, off, r.lock_prim);
+        off += 4;
     }
 
     // 6. Patch header offsets
@@ -290,14 +312,22 @@ pub fn export_entries_offset(data: &[u8]) -> Option<usize> {
     off += hdr.module_name_len as usize;
     off = (off + 3) & !3;
     for _ in 0..hdr.export_count {
-        while off < data.len() && data[off] != 0 { off += 1; }
-        if off >= data.len() { return None; }
+        while off < data.len() && data[off] != 0 {
+            off += 1;
+        }
+        if off >= data.len() {
+            return None;
+        }
         off += 1;
     }
     off = (off + 3) & !3;
     for _ in 0..hdr.import_count {
-        while off < data.len() && data[off] != 0 { off += 1; }
-        if off >= data.len() { return None; }
+        while off < data.len() && data[off] != 0 {
+            off += 1;
+        }
+        if off >= data.len() {
+            return None;
+        }
         off += 1;
     }
     off = (off + 3) & !3;
@@ -310,17 +340,29 @@ pub fn export_entries_offset(data: &[u8]) -> Option<usize> {
 /// Read one export entry by index.
 pub fn read_export<'a>(data: &'a [u8], index: u32) -> Option<ParsedExport<'a>> {
     let hdr = decode(data)?;
-    if index >= hdr.export_count { return None; }
+    if index >= hdr.export_count {
+        return None;
+    }
     let entries_off = export_entries_offset(data)?;
     let entry_off = entries_off + (index as usize) * EXPORT_ENTRY_SIZE as usize;
     let sym_hash = u64::from_le_bytes(data[entry_off..entry_off + 8].try_into().ok()?);
-    let name_off = u32::from_le_bytes(data[entry_off + 8..entry_off + 12].try_into().ok()?) as usize;
+    let name_off =
+        u32::from_le_bytes(data[entry_off + 8..entry_off + 12].try_into().ok()?) as usize;
     let value_off = u32::from_le_bytes(data[entry_off + 12..entry_off + 16].try_into().ok()?);
-    if name_off >= data.len() { return None; }
+    if name_off >= data.len() {
+        return None;
+    }
     let name_bytes = &data[name_off..];
-    let end = name_bytes.iter().position(|&b| b == 0).unwrap_or(name_bytes.len());
+    let end = name_bytes
+        .iter()
+        .position(|&b| b == 0)
+        .unwrap_or(name_bytes.len());
     let name = &data[name_off..name_off + end];
-    Some(ParsedExport { sym_hash, name, value_off })
+    Some(ParsedExport {
+        sym_hash,
+        name,
+        value_off,
+    })
 }
 
 /// Read one resource-meta entry by index.
@@ -370,7 +412,7 @@ mod tests {
     use crate::hash::fnv1a_u64;
 
     fn test_abi_hash() -> u64 {
-        crate::abi_hash::compute_abi_hash(8, 64, 2)
+        crate::abi_hash::compute_abi_hash(1, 8, 64, 2)
     }
 
     #[test]
@@ -428,9 +470,9 @@ mod tests {
         let n = encode_into(&mut buf, b"Abc", &[], &[], ah, 0, &[]).unwrap();
         let data = &buf[..n];
         assert_eq!(data[0..4], [0x44, 0x4f, 0x4d, 0x4c]); // "LMOD" LE
-        assert_eq!(data[4..6], [2, 0]);  // version
-        assert_eq!(data[6..8], [0, 0]);  // flags
-        // abi_hash lives at [8..16]; skip byte-checking it (varies).
+        assert_eq!(data[4..6], [2, 0]); // version
+        assert_eq!(data[6..8], [0, 0]); // flags
+                                        // abi_hash lives at [8..16]; skip byte-checking it (varies).
         assert_eq!(data[16..20], [32, 0, 0, 0]); // name_off = 32 (header size)
         assert_eq!(data[20..24], [3, 0, 0, 0]); // name_len = 3
         assert_eq!(data[24..28], [0, 0, 0, 0]); // export_count = 0
@@ -550,8 +592,8 @@ mod tests {
             stack_bound: 0,
         };
         let exports = [export];
-        let encoded_len = encode_into(&mut buf, b"M", &exports, &[], 0, 0, &[])
-            .expect("encode minimal module");
+        let encoded_len =
+            encode_into(&mut buf, b"M", &exports, &[], 0, 0, &[]).expect("encode minimal module");
 
         // Word meta starts after header + module name strings +
         // 1 export entry (16 bytes) + 0 import entries.
@@ -563,7 +605,9 @@ mod tests {
 
         // effects at offset 8 within the 16-byte word_meta entry.
         let effects = u16::from_le_bytes(
-            buf[word_meta_off + 8..word_meta_off + 10].try_into().unwrap()
+            buf[word_meta_off + 8..word_meta_off + 10]
+                .try_into()
+                .unwrap(),
         );
         assert_eq!(effects, 0b0000_0101u16, "effects must survive round-trip");
 
@@ -584,11 +628,14 @@ mod tests {
             + hdr2.export_count as usize * EXPORT_ENTRY_SIZE as usize
             + hdr2.import_count as usize * IMPORT_ENTRY_SIZE as usize;
         let effects2 = u16::from_le_bytes(
-            buf2[word_meta_off2 + 8..word_meta_off2 + 10].try_into().unwrap()
+            buf2[word_meta_off2 + 8..word_meta_off2 + 10]
+                .try_into()
+                .unwrap(),
         );
         assert_eq!(effects2, 0, "zero-effects export must decode to 0");
         assert_ne!(
-            &buf[..encoded_len], &buf2[..len2],
+            &buf[..encoded_len],
+            &buf2[..len2],
             "differing effects must produce differing modinfo bytes"
         );
     }

@@ -198,7 +198,9 @@ pub fn decode_enc_header(bytes: &[u8]) -> Option<EncHeader> {
     tag.copy_from_slice(&bytes[4 + NONCE_LEN..4 + NONCE_LEN + TAG_LEN]);
 
     let wrapped_count = u32::from_le_bytes(
-        bytes[4 + NONCE_LEN + TAG_LEN..4 + NONCE_LEN + TAG_LEN + 4].try_into().ok()?,
+        bytes[4 + NONCE_LEN + TAG_LEN..4 + NONCE_LEN + TAG_LEN + 4]
+            .try_into()
+            .ok()?,
     ) as usize;
 
     let fixed_len = 36;
@@ -228,9 +230,7 @@ pub fn decode_enc_header(bytes: &[u8]) -> Option<EncHeader> {
         if off + WRAPPED_SLOT_SIZE > bytes.len() {
             return None;
         }
-        let key_id = u64::from_le_bytes(
-            bytes[off..off + 8].try_into().ok()?,
-        );
+        let key_id = u64::from_le_bytes(bytes[off..off + 8].try_into().ok()?);
         off += 8;
         let wrap_scheme = bytes[off];
         off += 1;
@@ -238,7 +238,11 @@ pub fn decode_enc_header(bytes: &[u8]) -> Option<EncHeader> {
         let mut wrapped = [0u8; WRAP_LEN];
         wrapped.copy_from_slice(&bytes[off..off + WRAP_LEN]);
         off += WRAP_LEN;
-        wrapped_slots.push(WrappedCekSlot { key_id, wrap_scheme, wrapped });
+        wrapped_slots.push(WrappedCekSlot {
+            key_id,
+            wrap_scheme,
+            wrapped,
+        });
     }
 
     Some(EncHeader {
@@ -264,7 +268,11 @@ mod tests {
         for (i, b) in wrapped.iter_mut().enumerate() {
             *b = seed.wrapping_add(i as u8);
         }
-        WrappedCekSlot { key_id, wrap_scheme: WRAP_SCHEME_SYMMETRIC_CHACHA20POLY1305, wrapped }
+        WrappedCekSlot {
+            key_id,
+            wrap_scheme: WRAP_SCHEME_SYMMETRIC_CHACHA20POLY1305,
+            wrapped,
+        }
     }
 
     fn make_eh(enc_mode: EncMode, slot_count: usize) -> EncHeader {
@@ -305,7 +313,10 @@ mod tests {
         assert_eq!(decoded.tag, eh.tag);
         assert_eq!(decoded.wrapped_slots.len(), 1);
         assert_eq!(decoded.wrapped_slots[0].key_id, 1000);
-        assert_eq!(decoded.wrapped_slots[0].wrapped, eh.wrapped_slots[0].wrapped);
+        assert_eq!(
+            decoded.wrapped_slots[0].wrapped,
+            eh.wrapped_slots[0].wrapped
+        );
     }
 
     #[test]
@@ -403,8 +414,13 @@ mod tests {
         let eh = EncHeader {
             enc_mode: EncMode::Fleet,
             aead_id: AEAD_CHACHA20POLY1305,
-            nonce: [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c],
-            tag: [0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f],
+            nonce: [
+                0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c,
+            ],
+            tag: [
+                0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d,
+                0x1e, 0x1f,
+            ],
             wrapped_slots: vec![slot],
         };
         let mut buf = vec![0u8; eh.wire_len()];
@@ -428,9 +444,21 @@ mod tests {
     #[test]
     fn enc_header_roundtrip_device_n() {
         let slots = vec![
-            WrappedCekSlot { key_id: 0, wrap_scheme: WRAP_SCHEME_SYMMETRIC_CHACHA20POLY1305, wrapped: [0u8; WRAP_LEN] },
-            WrappedCekSlot { key_id: 1, wrap_scheme: WRAP_SCHEME_SYMMETRIC_CHACHA20POLY1305, wrapped: [1u8; WRAP_LEN] },
-            WrappedCekSlot { key_id: 2, wrap_scheme: WRAP_SCHEME_SYMMETRIC_CHACHA20POLY1305, wrapped: [2u8; WRAP_LEN] },
+            WrappedCekSlot {
+                key_id: 0,
+                wrap_scheme: WRAP_SCHEME_SYMMETRIC_CHACHA20POLY1305,
+                wrapped: [0u8; WRAP_LEN],
+            },
+            WrappedCekSlot {
+                key_id: 1,
+                wrap_scheme: WRAP_SCHEME_SYMMETRIC_CHACHA20POLY1305,
+                wrapped: [1u8; WRAP_LEN],
+            },
+            WrappedCekSlot {
+                key_id: 2,
+                wrap_scheme: WRAP_SCHEME_SYMMETRIC_CHACHA20POLY1305,
+                wrapped: [2u8; WRAP_LEN],
+            },
         ];
         let eh = EncHeader {
             enc_mode: EncMode::Device,
@@ -472,7 +500,11 @@ mod tests {
             let expected = enc_header_len(*n);
             let mut buf = vec![0u8; expected];
             let written = encode_enc_header(&mut buf, &eh).unwrap();
-            assert_eq!(written, expected, "enc_header_len({}) does not match encoded size", n);
+            assert_eq!(
+                written, expected,
+                "enc_header_len({}) does not match encoded size",
+                n
+            );
         }
     }
 
@@ -498,8 +530,10 @@ mod tests {
         let mut buf = vec![0u8; 36];
         buf[0] = EncMode::Fleet as u8;
         buf[1] = 2; // not AEAD_CHACHA20POLY1305, not 0 — forward compat
-        assert!(decode_enc_header(&buf).is_some(),
-            "future aead_id must be accepted for forward compat");
+        assert!(
+            decode_enc_header(&buf).is_some(),
+            "future aead_id must be accepted for forward compat"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -543,8 +577,10 @@ mod tests {
         let mut buf = vec![0u8; full_len];
         encode_enc_header(&mut buf, &eh).unwrap();
         let decoded = decode_enc_header(&buf).unwrap();
-        assert_eq!(decoded.wrapped_slots[0].wrap_scheme, 1,
-            "wrap_scheme must survive round-trip");
+        assert_eq!(
+            decoded.wrapped_slots[0].wrap_scheme, 1,
+            "wrap_scheme must survive round-trip"
+        );
     }
 
     #[test]
@@ -561,8 +597,10 @@ mod tests {
         let full_len = enc_header_len(1);
         let mut buf = vec![0u8; full_len];
         encode_enc_header(&mut buf, &eh).unwrap();
-        assert!(decode_enc_header(&buf).is_none(),
-            "aead_id == 0 must be rejected");
+        assert!(
+            decode_enc_header(&buf).is_none(),
+            "aead_id == 0 must be rejected"
+        );
     }
 
     #[test]
@@ -578,8 +616,11 @@ mod tests {
         // Set a reserved byte (at offset 3 in the header, after enc_mode(1) + aead_id(1))
         buf[3] = 0xFF; // this is a pad/reserved byte — decode must tolerate
         let decoded = decode_enc_header(&buf).unwrap();
-        assert_eq!(decoded.enc_mode, EncMode::Fleet,
-            "non-zero pad byte must be tolerated");
+        assert_eq!(
+            decoded.enc_mode,
+            EncMode::Fleet,
+            "non-zero pad byte must be tolerated"
+        );
         assert_eq!(decoded.aead_id, AEAD_CHACHA20POLY1305);
     }
 
@@ -597,8 +638,10 @@ mod tests {
         let full_len = enc_header_len(255);
         let mut buf = vec![0u8; full_len];
         encode_enc_header(&mut buf, &eh).unwrap();
-        assert!(decode_enc_header(&buf).is_none(),
-            "wrapped_count > 64 must be rejected");
+        assert!(
+            decode_enc_header(&buf).is_none(),
+            "wrapped_count > 64 must be rejected"
+        );
     }
 
     #[test]
@@ -607,8 +650,10 @@ mod tests {
         // Any regression in the encoder will change these bytes.
         let slot = make_slot(42, 0xAB);
         let nonce: [u8; 12] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
-        let tag: [u8; 16] = [0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87,
-                             0x88, 0x89, 0x8A, 0x8B, 0x8C, 0x8D, 0x8E, 0x8F];
+        let tag: [u8; 16] = [
+            0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89, 0x8A, 0x8B, 0x8C, 0x8D,
+            0x8E, 0x8F,
+        ];
         let eh = EncHeader {
             enc_mode: EncMode::Fleet,
             aead_id: AEAD_CHACHA20POLY1305,
@@ -630,7 +675,10 @@ mod tests {
         assert_eq!(&buf[4..16], &nonce[..], "nonce at offset 4");
         // Verify the tag is at the expected position.
         let tag_start = 4 + NONCE_LEN;
-        assert_eq!(&buf[tag_start..tag_start + TAG_LEN], &tag[..],
-            "tag at offset 4+NONCE_LEN");
+        assert_eq!(
+            &buf[tag_start..tag_start + TAG_LEN],
+            &tag[..],
+            "tag at offset 4+NONCE_LEN"
+        );
     }
 }

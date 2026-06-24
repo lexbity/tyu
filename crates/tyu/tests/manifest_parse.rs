@@ -1,7 +1,7 @@
 //! Tests for the project manifest (tyu.toml) parser.
 
-use tyu::project::{parse_project_manifest, resolve_target, ProjectManifest};
 use std::path::Path;
+use tyu::project::{parse_project_manifest, resolve_target, ProjectManifest};
 
 #[test]
 fn project_section() {
@@ -104,7 +104,10 @@ fn find_manifest_walks_up() {
     std::fs::write(&path, "[project]\nmain = \"main.mod\"\n").unwrap();
 
     let found = tyu::project::find_manifest(&dir.join("sub"));
-    assert!(found.is_some(), "find_manifest should find tyu.toml in parent");
+    assert!(
+        found.is_some(),
+        "find_manifest should find tyu.toml in parent"
+    );
     assert_eq!(found.unwrap(), path);
 }
 

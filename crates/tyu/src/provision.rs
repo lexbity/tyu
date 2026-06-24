@@ -31,7 +31,8 @@ impl DeviceRegistry {
             if path.extension().and_then(|s| s.to_str()) != Some("key") {
                 continue;
             }
-            let device_id = path.file_stem()
+            let device_id = path
+                .file_stem()
                 .and_then(|s| s.to_str())
                 .map(|s| s.to_string())
                 .ok_or_else(|| format!("invalid device key filename: {}", path.display()))?;
@@ -44,7 +45,8 @@ impl DeviceRegistry {
             if bytes.len() != 32 {
                 return Err(format!(
                     "device key in '{}' must be 32 bytes, got {}",
-                    path.display(), bytes.len()
+                    path.display(),
+                    bytes.len()
                 ));
             }
             let mut kek = [0u8; 32];
@@ -125,7 +127,11 @@ mod tests {
     #[test]
     fn rejects_invalid_hex() {
         let dir = tmp_dir("dr_hex");
-        std::fs::write(dir.join("bad.key"), "zz1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef").unwrap();
+        std::fs::write(
+            dir.join("bad.key"),
+            "zz1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+        )
+        .unwrap();
         let result = DeviceRegistry::load(&dir);
         assert!(result.is_err(), "invalid hex should be rejected");
     }

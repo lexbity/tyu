@@ -1,10 +1,9 @@
+use super::super::SuspendBlocker;
 use super::*;
 use crate::typecheck::error::EscapeKind;
 use crate::typecheck::value::PLACE_NONE;
-use super::super::SuspendBlocker;
 
 impl<'a, 'r> IrWordGen<'a, 'r> {
-
     pub(super) fn compile_name(
         &mut self,
         mut cur: lir::BlockId,
@@ -139,7 +138,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         Ok(cur)
     }
 
-
     pub(super) fn compile_local_ref(
         &mut self,
         cur: lir::BlockId,
@@ -162,14 +160,17 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 } else {
                     name_abs
                 };
-                return Err(TcError::BorrowLocalReuse { span: name_abs, first: origin });
+                return Err(TcError::BorrowLocalReuse {
+                    span: name_abs,
+                    first: origin,
+                });
             }
             return Err(TcError::LocalNotLive { span: name_abs });
         }
 
         // Linear borrow-typed locals (PTR_MUT): consume on first ref.
-        let is_mut_borrow = self.local_tys[idx] == TypeAtom::PTR_MUT
-            && self.local_place[idx] != PLACE_NONE;
+        let is_mut_borrow =
+            self.local_tys[idx] == TypeAtom::PTR_MUT && self.local_place[idx] != PLACE_NONE;
         if is_mut_borrow {
             self.local_live[idx] = false;
         }
@@ -213,7 +214,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         Ok(cur)
     }
 
-
     pub(super) fn compile_env_word(
         &mut self,
         cur: lir::BlockId,
@@ -241,7 +241,10 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
 
         // S8: self-recursive call → DIVERGE.
         if name == self.word.name.as_bytes() {
-            self.word.performs = self.word.performs.union(EffectSet::from_bits(EffectSet::DIVERGE));
+            self.word.performs = self
+                .word
+                .performs
+                .union(EffectSet::from_bits(EffectSet::DIVERGE));
             // S9: 5040 — self-recursion in a bounded context.
             if self.ctx.ambient_forbids.contains(EffectSet::DIVERGE) {
                 return Err(TcError::DivergeInBounded { span: name_abs });
@@ -381,7 +384,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         // S-8: raw pointer casts (as ptr / as ptr_mut) produce Value::Ptr
         // with PLACE_NONE (untyped — the provenance is lost in the cast).
         let push_val = if to_ty == TypeAtom::PTR || to_ty == TypeAtom::PTR_MUT {
-            Value::Ptr { ty: TypeAtom::EMPTY, mutable: to_ty == TypeAtom::PTR_MUT, place: PLACE_NONE }
+            Value::Ptr {
+                ty: TypeAtom::EMPTY,
+                mutable: to_ty == TypeAtom::PTR_MUT,
+                place: PLACE_NONE,
+            }
         } else {
             Value::Plain(to_ty)
         };
@@ -462,7 +469,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         Ok(cur)
     }
 
-
     pub(super) fn compile_stack_op(
         &mut self,
         cur: lir::BlockId,
@@ -479,7 +485,10 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             if matches!(top, Value::Ptr { mutable: true, place: p, .. } if p != PLACE_NONE)
                 || matches!(top, Value::MmioPtr { mutable: true, .. })
             {
-                return Err(TcError::BorrowDupMut { span: name_abs, first: name_abs });
+                return Err(TcError::BorrowDupMut {
+                    span: name_abs,
+                    first: name_abs,
+                });
             }
             if is_iso_type(self.iso, top_ty) {
                 return Err(TcError::IsoDup { span: name_abs });
@@ -521,7 +530,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         }
         Ok(cur)
     }
-
 
     pub(super) fn compile_destruct_bind(
         &mut self,
@@ -734,7 +742,10 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 span: Span::new(span.start + tok.span.start, span.start + tok.span.end),
             })?;
             if v == Value::Plain(TypeAtom::SCOPED) {
-                return Err(TcError::BorrowEscape { span, kind: EscapeKind::AtClose });
+                return Err(TcError::BorrowEscape {
+                    span,
+                    kind: EscapeKind::AtClose,
+                });
             }
             let ty = v.to_type_atom();
             let lname = TypeAtom::new(&slice[name.span.start..name.span.end]).ok_or(
@@ -773,7 +784,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         Ok(cur)
     }
 
-
     pub(super) fn compile_quotation(
         &mut self,
         cur: lir::BlockId,
@@ -798,6 +808,4 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         push(stack, sp, Value::Quot(q_span))?;
         Ok(cur)
     }
-
-
 }

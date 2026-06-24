@@ -22,27 +22,30 @@
 
 # __lang_writec ( a0:byte -- )
 # Emit low byte of a0 via RISC-V semihosting SYS_WRITEC.
-# Preserves s2-s11 (callee-saved).
+# Preserves s2-s11 (callee-saved) AND a0, so callers emitting a run of equal
+# bytes (e.g. `li a0, 0; jal __lang_writec` repeated) keep their value across
+# calls instead of seeing the clobbered SYS_WRITEC operation number.
 __lang_writec:
     sw a0, -4(sp)
     addi sp, sp, -4
     li a0, 0x03                     # SYS_WRITEC
     mv a1, sp
     semihost_call
+    lw a0, 0(sp)                    # restore caller's byte value
     addi sp, sp, 4
     ret
 
 # __lang_sys_exit ( a1:reason -- )
 # Terminate via RISC-V semihosting SYS_EXIT with reason code in a1.
 # Never returns.
+# For 32-bit RISC-V semihosting, SYS_EXIT takes the reason code DIRECTLY in the
+# parameter register (a1) — not a pointer to a block (that is the 64-bit form).
+# Passing a pointer makes QEMU see an unrecognized reason and exit with status 1
+# instead of terminating cleanly on ADP_Stopped_ApplicationExit.
 __lang_sys_exit:
-    sw a1, -4(sp)
-    addi sp, sp, -4
-    mv a1, sp
-    li a0, 0x18                     # SYS_EXIT
+    li a0, 0x18                     # SYS_EXIT; a1 already holds the reason
     semihost_call
-    addi sp, sp, 4
-    ebreak
+    ebreak                          # should not reach here
 
 # __lang_fail_exit ( -- )
 # Terminate with ADP_Stopped_ApplicationExit (0x20026).
@@ -54,10 +57,19 @@ __lang_fail_exit:
 # -----------------------------------------------------------------
 # Entry point
 # -----------------------------------------------------------------
+#
+# Placed in `.text.init` so the linker can position it at the very start of
+# DRAM (0x80000000).  With `-bios none`, the `virt` machine resets straight to
+# 0x80000000, so the first instruction there MUST be the entry point.
+.section .text.init
 
 .globl __lang_start
 .type __lang_start, @function
 __lang_start:
+    # Native call/scratch stack sp = __stack_top (grows downward).  Booting
+    # with `-bios none` means no firmware has set sp, so we must establish it
+    # before any helper that spills to the native stack (e.g. __lang_writec).
+    la sp, __stack_top
     # DS pointer s2 = __lang_ds_base (low address, grows upward)
     la s2, __lang_ds_base
     # DS limit s3 = __lang_ds_limit (exclusive upper bound)
@@ -219,6 +231,9 @@ emit_diag_header:
 
     j __lang_fail_exit
 
+# Remaining runtime code returns to the ordinary `.text` section.
+.section .text
+
 # -----------------------------------------------------------------
 # __lang_trap_loc — trap with source location (debug_trap_loc=true)
 #
@@ -295,6 +310,85 @@ __stack_overflow:
 .include "../include/semihosting-riscv.s"
 
 # -----------------------------------------------------------------
+# platform.gpio words — synthetic latch for smoke tests
+# -----------------------------------------------------------------
+.globl w_a6b1202e57aa7cc9
+.type w_a6b1202e57aa7cc9, @function
+w_a6b1202e57aa7cc9:
+    addi s2, s2, -8
+    la t0, __lang_gpio_state
+    sb zero, 0(t0)
+    ret
+
+.globl w_eb1d0a3c5e7c2e92
+.type w_eb1d0a3c5e7c2e92, @function
+w_eb1d0a3c5e7c2e92:
+    addi s2, s2, -8
+    lbu t1, 4(s2)
+    la t0, __lang_gpio_state
+    sb t1, 0(t0)
+    ret
+
+.globl w_034a1ff17acf93d3
+.type w_034a1ff17acf93d3, @function
+w_034a1ff17acf93d3:
+    addi s2, s2, -4
+    la t0, __lang_gpio_state
+    lbu t1, 0(t0)
+    sw t1, 0(s2)
+    ret
+
+# -----------------------------------------------------------------
+# platform.uart/time words — semihosting + monotonic stub
+# -----------------------------------------------------------------
+.globl w_6f29c37992fecaf8
+.type w_6f29c37992fecaf8, @function
+w_6f29c37992fecaf8:
+    addi s2, s2, -4
+    ret
+
+.globl w_38276faeb09bf91e
+.type w_38276faeb09bf91e, @function
+w_38276faeb09bf91e:
+    addi s2, s2, -4
+    lw a0, 0(s2)
+    jal __lang_writec
+    ret
+
+.globl w_38126baeb0899648
+.type w_38126baeb0899648, @function
+w_38126baeb0899648:
+    addi s2, s2, -4
+    sw zero, 0(s2)
+    addi s2, s2, 4
+    sw zero, 0(s2)
+    addi s2, s2, 4
+    ret
+
+.globl w_6a5791a972f2fbd0
+.type w_6a5791a972f2fbd0, @function
+w_6a5791a972f2fbd0:
+    la t0, __lang_time_counter
+    lw t1, 0(t0)
+    lw t2, 4(t0)
+    addi t1, t1, 1
+    bnez t1, 1f
+    addi t2, t2, 1
+1:
+    sw t1, 0(t0)
+    sw t2, 4(t0)
+    sw t1, 0(s2)
+    addi s2, s2, 4
+    sw t2, 0(s2)
+    addi s2, s2, 4
+    ret
+
+.globl w_46f6f74f7859ca64
+.type w_46f6f74f7859ca64, @function
+w_46f6f74f7859ca64:
+    j __lang_fail_exit
+
+# -----------------------------------------------------------------
 # BSS — DS region, high-water, native stack
 # -----------------------------------------------------------------
 .section .bss
@@ -315,11 +409,24 @@ __lang_ds_high:
 __lang_v_emitted:
     .word 0
 
+.globl __lang_gpio_state
+__lang_gpio_state:
+    .word 0
+
+.globl __lang_time_counter
+__lang_time_counter:
+    .word 0
+    .word 0
+
+.section .data
 .globl __lang_expected_abi_hash
 __lang_expected_abi_hash:
-    .word 0x53048547
-    .word 0x0445187d
+    # compute_abi_hash(ARCH_TAG_RISCV=3, slot=4, word=32, MODINFO_VER=2) = 0xa7df1edbd11ba544, recipe v2
+    .word 0xd11ba544
+    .word 0xa7df1edb
 
+    # return to BSS for the native stack
+    .section .bss
     # Native stack — 32 KB (grows downward, sp initialized by crt0)
     .space 32768
 __stack_top:

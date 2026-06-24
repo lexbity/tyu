@@ -1,15 +1,14 @@
 use super::*;
 
-mod literals;
-mod memory;
 pub(super) mod borrow;
 mod channels;
 mod control;
-mod tasks;
+mod literals;
+mod memory;
 mod names;
+mod tasks;
 
 impl<'a, 'r> IrWordGen<'a, 'r> {
-
     pub(super) fn compile_quote_span(
         &mut self,
         cur: lir::BlockId,
@@ -57,10 +56,8 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 if dot.kind == TokenKind::PunctDot {
                     let num2 = probe.next();
                     if num2.kind == TokenKind::Number {
-                        let float_span = Span::new(
-                            span.start + tok.span.start,
-                            span.start + num2.span.end,
-                        );
+                        let float_span =
+                            Span::new(span.start + tok.span.start, span.start + num2.span.end);
                         return Err(TcError::FloatSyntax { span: float_span });
                     }
                 }
@@ -85,7 +82,9 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 // S-14: `->` is deleted; `.` auto-projects through pointers.
                 TokenKind::PunctArrow => {
                     // Migration hint: use `.` instead of `->`.
-                    return Err(TcError::Internal { span: Span::new(span.start + tok.span.start, span.start + tok.span.end) });
+                    return Err(TcError::Internal {
+                        span: Span::new(span.start + tok.span.start, span.start + tok.span.end),
+                    });
                 }
                 TokenKind::PunctDot => {
                     // `.` handles field access, static index, and dynamic index
@@ -96,7 +95,9 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 }
                 TokenKind::PunctApostrophe => {
                     // S-14: `'` is type-only.  In term position it's a migration hint.
-                    return Err(TcError::Internal { span: Span::new(span.start + tok.span.start, span.start + tok.span.end) });
+                    return Err(TcError::Internal {
+                        span: Span::new(span.start + tok.span.start, span.start + tok.span.end),
+                    });
                 }
                 TokenKind::PunctAmp | TokenKind::PunctAmpBang => {
                     self.compile_addr_of(cur, stack, sp, span, slice, tok, &mut lex)?
@@ -158,5 +159,4 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
 
         Ok(cur)
     }
-
 }

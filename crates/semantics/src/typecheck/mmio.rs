@@ -612,7 +612,10 @@ pub fn qualname_to_placepath(name: &[u8], name_span: Span) -> PlacePath {
     // Find the first dot — root is everything before it.
     let first_dot = name.iter().position(|&b| b == b'.');
     let (root_full, seg_off_init) = if let Some(dot_pos) = first_dot {
-        (Span::new(name_span.start, name_span.start + dot_pos), dot_pos + 1)
+        (
+            Span::new(name_span.start, name_span.start + dot_pos),
+            dot_pos + 1,
+        )
     } else {
         // No dots: the entire name is the root, no steps.
         return PlacePath {
@@ -675,7 +678,9 @@ pub fn resolve_mmio_place(
             let idx = if step_len >= 2 {
                 match *place.steps.get(1).expect("step_len >= 2") {
                     Step::Index(n) => Some(n),
-                    Step::DynamicIndex(_) => return Err(TcError::MmioArrayIndexNonArray { span: place_span }),
+                    Step::DynamicIndex(_) => {
+                        return Err(TcError::MmioArrayIndexNonArray { span: place_span })
+                    }
                     _ => None,
                 }
             } else {
@@ -690,7 +695,11 @@ pub fn resolve_mmio_place(
     // After reg_name [+ Index], the next step (if any) is a Field.
     let field_offset = if reg_idx.is_some() { 2 } else { 1 };
     let want_field = if step_len > field_offset {
-        match *place.steps.get(field_offset).expect("step_len > field_offset") {
+        match *place
+            .steps
+            .get(field_offset)
+            .expect("step_len > field_offset")
+        {
             Step::Field(f) => Some(f),
             _ => return Err(TcError::MmioFieldNotFound { span: place_span }),
         }

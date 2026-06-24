@@ -8,11 +8,10 @@ use core::fmt;
 use chacha20poly1305::aead::{Aead, AeadInPlace, KeyInit, OsRng, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use lmod::enc::{
-    enc_header_len, encode_enc_header, EncHeader, EncMode, WrappedCekSlot,
-    AEAD_CHACHA20POLY1305, CEK_LEN, NONCE_LEN, TAG_LEN, WRAP_LEN,
-    WRAP_SCHEME_SYMMETRIC_CHACHA20POLY1305,
+    enc_header_len, encode_enc_header, EncHeader, EncMode, WrappedCekSlot, AEAD_CHACHA20POLY1305,
+    CEK_LEN, NONCE_LEN, TAG_LEN, WRAP_LEN, WRAP_SCHEME_SYMMETRIC_CHACHA20POLY1305,
 };
-use lmod::header::{encode_header, compute_layout, LMOD_FLAG_ENCRYPTED, HEADER_SIZE, FORMAT_VER};
+use lmod::header::{compute_layout, encode_header, FORMAT_VER, HEADER_SIZE, LMOD_FLAG_ENCRYPTED};
 use lmod::validate::Container;
 use rand_core::RngCore;
 
@@ -103,8 +102,14 @@ fn build_encrypted_container(
     let cek = Key::from_slice(cek_bytes);
 
     let layout = compute_layout(
-        hdr.abi_hash, hdr.modinfo_len, hdr.code_len, hdr.rodata_len,
-        hdr.data_len, hdr.bss_len, hdr.reloc_count, eh_len_u32,
+        hdr.abi_hash,
+        hdr.modinfo_len,
+        hdr.code_len,
+        hdr.rodata_len,
+        hdr.data_len,
+        hdr.bss_len,
+        hdr.reloc_count,
+        eh_len_u32,
     );
 
     let total = layout.total_len as usize;
@@ -137,9 +142,8 @@ fn build_encrypted_container(
             let reloc_start = layout.reloc_off as usize;
             for i in 0..reloc_count {
                 let entry_off = reloc_start + i * lmod::reloc::RELOC_ENTRY_SIZE as usize;
-                let site_off = u32::from_le_bytes(
-                    out[entry_off..entry_off + 4].try_into().unwrap()
-                );
+                let site_off =
+                    u32::from_le_bytes(out[entry_off..entry_off + 4].try_into().unwrap());
                 let adjusted = site_off.wrapping_add(delta);
                 out[entry_off..entry_off + 4].copy_from_slice(&adjusted.to_le_bytes());
             }
@@ -154,13 +158,22 @@ fn build_encrypted_container(
     aad.extend_from_slice(&eh_bytes);
     aad.extend_from_slice(mi);
     if reloc_bytes > 0 {
-        aad.extend_from_slice(&out[layout.reloc_off as usize..layout.reloc_off as usize + reloc_bytes]);
+        aad.extend_from_slice(
+            &out[layout.reloc_off as usize..layout.reloc_off as usize + reloc_bytes],
+        );
     }
 
     // Encrypt payload.
     let cipher = ChaCha20Poly1305::new(cek);
     let aead_nonce = Nonce::from_slice(&eh.nonce);
-    let ciphertext = cipher.encrypt(aead_nonce, Payload { msg: payload, aad: &aad })
+    let ciphertext = cipher
+        .encrypt(
+            aead_nonce,
+            Payload {
+                msg: payload,
+                aad: &aad,
+            },
+        )
         .map_err(|_| EncError::PayloadEncryptionFailed)?;
 
     // Write encrypted code.
@@ -170,17 +183,15 @@ fn build_encrypted_container(
     if hdr.rodata_len > 0 {
         let ro_start = co + hdr.code_len as usize;
         let ro_len = hdr.rodata_len as usize;
-        out[ro_start..ro_start + ro_len].copy_from_slice(
-            &ciphertext[hdr.code_len as usize..hdr.code_len as usize + ro_len]
-        );
+        out[ro_start..ro_start + ro_len]
+            .copy_from_slice(&ciphertext[hdr.code_len as usize..hdr.code_len as usize + ro_len]);
     }
 
     if hdr.data_len > 0 {
         let data_start = layout.data_off as usize;
         let payload_off = (hdr.code_len + hdr.rodata_len) as usize;
-        out[data_start..data_start + hdr.data_len as usize].copy_from_slice(
-            &ciphertext[payload_off..payload_off + hdr.data_len as usize]
-        );
+        out[data_start..data_start + hdr.data_len as usize]
+            .copy_from_slice(&ciphertext[payload_off..payload_off + hdr.data_len as usize]);
     }
 
     // Write AEAD tag into enc-header.
@@ -209,7 +220,7 @@ pub fn encrypt_fleet(input: &[u8], kek: &[u8; 32]) -> Result<Vec<u8>, EncError> 
 
     let payload = {
         let mut p = Vec::with_capacity(
-            container.code().len() + container.rodata().len() + container.data().len()
+            container.code().len() + container.rodata().len() + container.data().len(),
         );
         p.extend_from_slice(container.code());
         p.extend_from_slice(container.rodata());
@@ -236,7 +247,10 @@ pub fn encrypt_fleet(input: &[u8], kek: &[u8; 32]) -> Result<Vec<u8>, EncError> 
 /// `input` is the raw bytes of a packed `.lmod`.  `device_keys` is a list
 /// of `(device_id, 32-byte-KEK)` pairs.  Returns the encrypted container
 /// bytes on success.
-pub fn encrypt_device(input: &[u8], device_keys: &[(String, [u8; 32])]) -> Result<Vec<u8>, EncError> {
+pub fn encrypt_device(
+    input: &[u8],
+    device_keys: &[(String, [u8; 32])],
+) -> Result<Vec<u8>, EncError> {
     let container = Container::parse(input).map_err(|_| EncError::InvalidContainer)?;
 
     let mut cek_bytes = [0u8; CEK_LEN];
@@ -246,7 +260,7 @@ pub fn encrypt_device(input: &[u8], device_keys: &[(String, [u8; 32])]) -> Resul
 
     let payload = {
         let mut p = Vec::with_capacity(
-            container.code().len() + container.rodata().len() + container.data().len()
+            container.code().len() + container.rodata().len() + container.data().len(),
         );
         p.extend_from_slice(container.code());
         p.extend_from_slice(container.rodata());
@@ -254,7 +268,9 @@ pub fn encrypt_device(input: &[u8], device_keys: &[(String, [u8; 32])]) -> Resul
         p
     };
 
-    let slots: Vec<WrappedCekSlot> = device_keys.iter().enumerate()
+    let slots: Vec<WrappedCekSlot> = device_keys
+        .iter()
+        .enumerate()
         .map(|(idx, (_, kek))| wrap_cek(kek, &cek_bytes, idx as u64))
         .collect();
 
@@ -298,9 +314,7 @@ mod tests {
     /// Return the code+rodata+data payload as the library saw it.
     fn original_payload(input: &[u8]) -> Vec<u8> {
         let c = Container::parse(input).unwrap();
-        let mut p = Vec::with_capacity(
-            c.code().len() + c.rodata().len() + c.data().len()
-        );
+        let mut p = Vec::with_capacity(c.code().len() + c.rodata().len() + c.data().len());
         p.extend_from_slice(c.code());
         p.extend_from_slice(c.rodata());
         p.extend_from_slice(c.data());
@@ -326,16 +340,13 @@ mod tests {
 
     /// Reconstruct the AEAD AAD as the loader would, then decrypt the payload.
     /// Returns the original plaintext (code+rodata+data) on success.
-    fn decrypt_payload(
-        encrypted: &[u8],
-        cek: &[u8; CEK_LEN],
-    ) -> Result<Vec<u8>, ()> {
+    fn decrypt_payload(encrypted: &[u8], cek: &[u8; CEK_LEN]) -> Result<Vec<u8>, ()> {
         let c = Container::parse(encrypted).map_err(|_| ())?;
         let hdr = c.header();
 
         // Collect the ciphertext (code + rodata + data, contiguous).
         let mut ct = Vec::with_capacity(
-            hdr.code_len as usize + hdr.rodata_len as usize + hdr.data_len as usize
+            hdr.code_len as usize + hdr.rodata_len as usize + hdr.data_len as usize,
         );
         ct.extend_from_slice(c.code());
         ct.extend_from_slice(c.rodata());
@@ -373,21 +384,31 @@ mod tests {
         let cipher = ChaCha20Poly1305::new(Key::from_slice(cek));
         let nonce = Nonce::from_slice(&eh.nonce);
         cipher
-            .decrypt(nonce, Payload { msg: &ct_with_tag, aad: &aad })
+            .decrypt(
+                nonce,
+                Payload {
+                    msg: &ct_with_tag,
+                    aad: &aad,
+                },
+            )
             .map_err(|_| ())
     }
 
     #[test]
     fn fleet_encrypt_roundtrips_and_actually_encrypts() {
-        let input = make_plaintext_lmod_with_code(&[0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]);
+        let input =
+            make_plaintext_lmod_with_code(&[0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88]);
         let kek = [0xab; 32];
 
         let enc = encrypt_fleet(&input, &kek).unwrap();
         let c = Container::parse(&enc).unwrap();
 
         // (a) Payload is NOT plaintext — encryption actually happened.
-        assert_ne!(c.code(), &input_code(&input)[..],
-            "code must be encrypted, not copied");
+        assert_ne!(
+            c.code(),
+            &input_code(&input)[..],
+            "code must be encrypted, not copied"
+        );
 
         // (b) Unwrap the CEK with the KEK.
         let eh = lmod::enc::decode_enc_header(&enc[HEADER_SIZE as usize..]).unwrap();
@@ -395,10 +416,12 @@ mod tests {
             .expect("CEK must unwrap with correct KEK");
 
         // (c) Decrypt with CEK + loader-style AAD; must recover original payload.
-        let pt = decrypt_payload(&enc, &cek)
-            .expect("must authenticate + decrypt");
-        assert_eq!(pt, original_payload(&input),
-            "decrypt must recover original payload");
+        let pt = decrypt_payload(&enc, &cek).expect("must authenticate + decrypt");
+        assert_eq!(
+            pt,
+            original_payload(&input),
+            "decrypt must recover original payload"
+        );
 
         // (d) Tamper a ciphertext byte → AEAD authentication fails.
         let mut bad = enc.clone();
@@ -428,22 +451,24 @@ mod tests {
         let eh = lmod::enc::decode_enc_header(&enc[HEADER_SIZE as usize..]).unwrap();
         assert_eq!(eh.wrapped_slots.len(), 3);
 
-        let cek0 = unwrap_cek_with_kek(&keys[0].1, &eh.wrapped_slots[0])
-            .expect("slot 0 must unwrap");
-        let cek1 = unwrap_cek_with_kek(&keys[1].1, &eh.wrapped_slots[1])
-            .expect("slot 1 must unwrap");
-        let cek2 = unwrap_cek_with_kek(&keys[2].1, &eh.wrapped_slots[2])
-            .expect("slot 2 must unrap");
+        let cek0 =
+            unwrap_cek_with_kek(&keys[0].1, &eh.wrapped_slots[0]).expect("slot 0 must unwrap");
+        let cek1 =
+            unwrap_cek_with_kek(&keys[1].1, &eh.wrapped_slots[1]).expect("slot 1 must unwrap");
+        let cek2 =
+            unwrap_cek_with_kek(&keys[2].1, &eh.wrapped_slots[2]).expect("slot 2 must unrap");
 
         assert_eq!(cek0, cek1, "all device slots must wrap the same CEK");
         assert_eq!(cek1, cek2, "all device slots must wrap the same CEK");
 
         // Verify round-trip with each unwrapped CEK.
         for cek in &[cek0, cek1, cek2] {
-            let pt = decrypt_payload(&enc, cek)
-                .expect("each unwrapped CEK must decrypt");
-            assert_eq!(pt, original_payload(&input),
-                "decrypt with each slot's CEK must recover original payload");
+            let pt = decrypt_payload(&enc, cek).expect("each unwrapped CEK must decrypt");
+            assert_eq!(
+                pt,
+                original_payload(&input),
+                "decrypt with each slot's CEK must recover original payload"
+            );
         }
     }
 

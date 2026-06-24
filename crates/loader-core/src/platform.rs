@@ -82,12 +82,12 @@ pub enum PlacementPolicy {
 }
 
 // ---------------------------------------------------------------------------
-// Trust tier
+// Trust level
 // ---------------------------------------------------------------------------
 
 /// Trust level for a loaded module (module-format-and-loading.md §6.1).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Tier {
+pub enum TrustLevel {
     /// Baked into firmware; whole-image secure boot.
     Zero,
     /// External/updatable; verify per-module signature.
@@ -96,13 +96,13 @@ pub enum Tier {
     Two,
 }
 
-impl Tier {
+impl TrustLevel {
     /// Numeric rank: 0 = Zero, 1 = One, 2 = Two.
     pub fn rank(self) -> u32 {
         match self {
-            Tier::Zero => 0,
-            Tier::One => 1,
-            Tier::Two => 2,
+            TrustLevel::Zero => 0,
+            TrustLevel::One => 1,
+            TrustLevel::Two => 2,
         }
     }
 }
@@ -139,9 +139,9 @@ pub trait LoaderPlatform {
 
     /// Verify a signature/MAC over the signed region.
     ///
-    /// Default: trust unconditionally (Tier 0).
+    /// Default: reject unless overridden by the platform.
     fn verify_sig(&self, _signed: &[u8], _sig: &[u8]) -> bool {
-        true
+        false
     }
 
     /// The `abi_hash` that the runtime expects.
@@ -152,9 +152,9 @@ pub trait LoaderPlatform {
         u32::MAX
     }
 
-    /// The trust tier this platform operates at.
-    fn trust_tier(&self) -> Tier {
-        Tier::Zero
+    /// The trust level this platform operates at.
+    fn trust_level(&self) -> TrustLevel {
+        TrustLevel::Zero
     }
 
     /// The placement policy for this target.
@@ -175,7 +175,12 @@ pub trait LoaderPlatform {
     /// The default implementation returns `Err` — platforms without
     /// encryption support leave this unimplemented.
     #[cfg(feature = "encryption")]
-    fn unwrap_cek(&self, _key_id: u64, _wrapped: &[u8], _out_cek: &mut [u8; 32]) -> Result<(), u32> {
+    fn unwrap_cek(
+        &self,
+        _key_id: u64,
+        _wrapped: &[u8],
+        _out_cek: &mut [u8; 32],
+    ) -> Result<(), u32> {
         Err(crate::load::E_ENC_NO_KEY)
     }
 }

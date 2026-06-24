@@ -1,0 +1,31 @@
+[platform]
+name = "linux-x86_64-hosted"
+compiler-interface = 1
+description = "x86_64 hosted runtime"
+
+[[platform.isa]]
+triple = "x86_64-unknown-linux-gnu"
+arch = "x86_64"
+default = true
+expected_abi_hash = "0xf2f245c307c5986a"
+
+[metal]
+path = "."
+startup = "linux-x86_64-hosted.asm"
+linker = ""
+
+[capabilities.gpio]
+glue = "platform/gpio"
+
+[deploy]
+method = "elf-qemu"
+boot = "raw_vectors"
+
+[debug]
+diag_transport = "stdio"
+rsp = ""
+probe = ""
+probe_config = ""
+
+[test]
+rung = "untested"

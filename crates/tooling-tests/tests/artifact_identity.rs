@@ -37,9 +37,7 @@ fn tyu_bin_dir_override_is_authoritative() {
     );
 
     // Running the stub must surface exit code 209.
-    let output = Command::new(&resolved)
-        .output()
-        .expect("stub must execute");
+    let output = Command::new(&resolved).output().expect("stub must execute");
     assert_eq!(
         output.status.code(),
         Some(209),

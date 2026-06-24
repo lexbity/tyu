@@ -12,8 +12,8 @@ use lmod::enc::EncMode;
 use tyu::test_helpers::*;
 
 use hosted::loader::HostedLoaderPlatform;
-use loader_core::platform::Tier;
 use loader_core::load::{load_module, LoadedSet, E_ENC_NO_KEY};
+use loader_core::platform::TrustLevel;
 use loader_core::symbols::SymMap;
 
 const PASS_MOD: &str = "\
@@ -23,8 +23,20 @@ module Main;\nimport platform/testio { testio.write-byte };\n\
 fn ensure_tools() {
     let status = Command::new(env!("CARGO"))
         .current_dir(&workspace_root())
-        .args(["build", "-q", "-p", "langc", "-p", "lmod-pack", "-p", "lmod-encrypt", "-p", "lmod-sign"])
-        .status().expect("cargo build");
+        .args([
+            "build",
+            "-q",
+            "-p",
+            "langc",
+            "-p",
+            "lmod-pack",
+            "-p",
+            "lmod-encrypt",
+            "-p",
+            "lmod-sign",
+        ])
+        .status()
+        .expect("cargo build");
     assert!(status.success(), "cargo build failed");
 }
 
@@ -45,7 +57,7 @@ fn load_with_kek(signed_path: &PathBuf, kek: &[u8; 32]) -> Result<(), u32> {
     let bsize = (container.code().len() + 4095) & !4095;
 
     let mut plat = HostedLoaderPlatform::new(abi_hash)
-        .with_key(&[0xab; 32], Tier::One)
+        .with_key(&[0xab; 32], TrustLevel::One)
         .with_kek(kek);
     plat.reserve(bsize).map_err(|_| 1u32)?;
 
@@ -67,9 +79,12 @@ pub extern "C" fn stub_fn() {}
 fn allocate_runtime_page() -> usize {
     let page = unsafe {
         libc::mmap(
-            std::ptr::null_mut(), 4096,
+            std::ptr::null_mut(),
+            4096,
             libc::PROT_READ | libc::PROT_WRITE,
-            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS, -1, 0,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+            -1,
+            0,
         )
     };
     assert_ne!(page, libc::MAP_FAILED, "mmap failed");
@@ -83,16 +98,25 @@ fn allocate_runtime_page() -> usize {
 #[ignore = "pre-existing: deploy device needs --key-sign — fix in Slice 5 (crypto)"]
 #[test]
 fn deploy_device_produces_n_slots() {
-    if !require_tools(&["langc", "fasm", "ld", "lmod-pack", "lmod-encrypt", "lmod-sign"]) { return; }
+    if !require_tools(&[
+        "langc",
+        "fasm",
+        "ld",
+        "lmod-pack",
+        "lmod-encrypt",
+        "lmod-sign",
+    ]) {
+        return;
+    }
     ensure_tools();
 
     let dir = temp_dir("d3");
     let main_mod = dir.join("Main.mod");
     std::fs::write(&main_mod, PASS_MOD).unwrap();
-    let keys_dir = create_device_keys(&dir, &[
-        ("device-a", &[0xaa; 32]),
-        ("device-b", &[0xbb; 32]),
-    ]);
+    let keys_dir = create_device_keys(
+        &dir,
+        &[("device-a", &[0xaa; 32]), ("device-b", &[0xbb; 32])],
+    );
     let sysroot = workspace_root().join("sysroot");
     let out_dir = dir.join("out");
 
@@ -107,14 +131,26 @@ fn deploy_device_produces_n_slots() {
             "--sign",
             &main_mod.to_string_lossy(),
         ])
-        .output().expect("tyu deploy");
-    assert!(output.status.success(), "deploy device failed:\n{}", String::from_utf8_lossy(&output.stderr));
+        .output()
+        .expect("tyu deploy");
+    assert!(
+        output.status.success(),
+        "deploy device failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let facts = introspect_lmod(&out_dir.join("deploy").join("signed.lmod"));
     assert!(facts.encrypted, "D-3: device artifact must be encrypted");
-    assert!(facts.signed,    "D-3: device artifact must be signed");
-    assert_eq!(facts.enc_mode, Some(EncMode::Device), "D-3: enc_mode must be Device");
-    assert_eq!(facts.slot_count, 2, "D-3: must have 2 slots for 2 device keys");
+    assert!(facts.signed, "D-3: device artifact must be signed");
+    assert_eq!(
+        facts.enc_mode,
+        Some(EncMode::Device),
+        "D-3: enc_mode must be Device"
+    );
+    assert_eq!(
+        facts.slot_count, 2,
+        "D-3: must have 2 slots for 2 device keys"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -127,16 +163,25 @@ fn deploy_device_produces_n_slots() {
 #[ignore = "pre-existing: deploy device needs --key-sign — fix in Slice 5 (crypto)"]
 #[test]
 fn deploy_device_isolation_via_loader() {
-    if !require_tools(&["langc", "fasm", "ld", "lmod-pack", "lmod-encrypt", "lmod-sign"]) { return; }
+    if !require_tools(&[
+        "langc",
+        "fasm",
+        "ld",
+        "lmod-pack",
+        "lmod-encrypt",
+        "lmod-sign",
+    ]) {
+        return;
+    }
     ensure_tools();
 
     let dir = temp_dir("d4");
     let main_mod = dir.join("Main.mod");
     std::fs::write(&main_mod, PASS_MOD).unwrap();
-    let keys_dir = create_device_keys(&dir, &[
-        ("device-a", &[0xaa; 32]),
-        ("device-b", &[0xbb; 32]),
-    ]);
+    let keys_dir = create_device_keys(
+        &dir,
+        &[("device-a", &[0xaa; 32]), ("device-b", &[0xbb; 32])],
+    );
     let sysroot = workspace_root().join("sysroot");
     let out_dir = dir.join("out");
 
@@ -151,19 +196,29 @@ fn deploy_device_isolation_via_loader() {
             "--sign",
             &main_mod.to_string_lossy(),
         ])
-        .output().expect("tyu deploy");
-    assert!(output.status.success(), "deploy device failed:\n{}", String::from_utf8_lossy(&output.stderr));
+        .output()
+        .expect("tyu deploy");
+    assert!(
+        output.status.success(),
+        "deploy device failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let signed = out_dir.join("deploy").join("signed.lmod");
 
     // Loading with a's key must succeed.
-    assert!(load_with_kek(&signed, &[0xaa; 32]).is_ok(),
-        "D-4: device-a's KEK must decrypt the artifact");
+    assert!(
+        load_with_kek(&signed, &[0xaa; 32]).is_ok(),
+        "D-4: device-a's KEK must decrypt the artifact"
+    );
 
     // Loading with c's key (not in the device set) must fail.
     let result = load_with_kek(&signed, &[0xcc; 32]);
-    assert_eq!(result.unwrap_err(), E_ENC_NO_KEY,
-        "D-4: device-c's KEK must not decrypt device-a/b artifact");
+    assert_eq!(
+        result.unwrap_err(),
+        E_ENC_NO_KEY,
+        "D-4: device-c's KEK must not decrypt device-a/b artifact"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -172,7 +227,16 @@ fn deploy_device_isolation_via_loader() {
 
 #[test]
 fn deploy_device_missing_keysdir_errors() {
-    if !require_tools(&["langc", "fasm", "ld", "lmod-pack", "lmod-encrypt", "lmod-sign"]) { return; }
+    if !require_tools(&[
+        "langc",
+        "fasm",
+        "ld",
+        "lmod-pack",
+        "lmod-encrypt",
+        "lmod-sign",
+    ]) {
+        return;
+    }
     ensure_tools();
 
     let dir = temp_dir("d6");
@@ -192,8 +256,12 @@ fn deploy_device_missing_keysdir_errors() {
             "--sign",
             &main_mod.to_string_lossy(),
         ])
-        .output().expect("tyu deploy");
-    assert!(!output.status.success(), "D-6: deploy must fail without --device-keys");
+        .output()
+        .expect("tyu deploy");
+    assert!(
+        !output.status.success(),
+        "D-6: deploy must fail without --device-keys"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -202,7 +270,16 @@ fn deploy_device_missing_keysdir_errors() {
 
 #[test]
 fn deploy_device_empty_keysdir_errors() {
-    if !require_tools(&["langc", "fasm", "ld", "lmod-pack", "lmod-encrypt", "lmod-sign"]) { return; }
+    if !require_tools(&[
+        "langc",
+        "fasm",
+        "ld",
+        "lmod-pack",
+        "lmod-encrypt",
+        "lmod-sign",
+    ]) {
+        return;
+    }
     ensure_tools();
 
     let dir = temp_dir("d7");
@@ -224,9 +301,16 @@ fn deploy_device_empty_keysdir_errors() {
             "--sign",
             &main_mod.to_string_lossy(),
         ])
-        .output().expect("tyu deploy");
-    assert!(!output.status.success(), "D-7: deploy must fail with empty keys dir");
+        .output()
+        .expect("tyu deploy");
+    assert!(
+        !output.status.success(),
+        "D-7: deploy must fail with empty keys dir"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("no device keys found"),
-        "D-7: stderr must mention empty keys dir, got: {}", stderr);
+    assert!(
+        stderr.contains("no device keys found"),
+        "D-7: stderr must mention empty keys dir, got: {}",
+        stderr
+    );
 }

@@ -2,6 +2,7 @@
 name = "loader-core"
 version = "0.1.0"
 edition = "2021"
+description = "Core loader implementation for Tyu `.lmod` modules."
 
 # no_std — used by on-device loader and host-side testing.
 # CI runs both: `cargo test --workspace` (no encryption feature) and

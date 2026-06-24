@@ -52,6 +52,8 @@ fn main() {
 
     eprintln!(
         "signed {} -> {} (scheme=HMAC-SHA256, {} bytes)",
-        args[1], args[2], out.len(),
+        args[1],
+        args[2],
+        out.len(),
     );
 }

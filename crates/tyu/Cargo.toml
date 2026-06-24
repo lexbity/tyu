@@ -2,6 +2,7 @@
 name = "tyu"
 version = "0.1.0"
 edition = "2021"
+description = "Project-level build, run, test, deploy, and toolchain CLI."
 
 [[bin]]
 name = "tyu"

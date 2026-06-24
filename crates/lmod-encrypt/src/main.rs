@@ -22,14 +22,20 @@ fn main() {
         process::exit(2);
     });
 
-    let mode = args.iter().find_map(|a| a.strip_prefix("--mode=")).unwrap_or("fleet");
+    let mode = args
+        .iter()
+        .find_map(|a| a.strip_prefix("--mode="))
+        .unwrap_or("fleet");
 
     let result = match mode {
         "fleet" => {
-            let kek_hex = args.iter().find_map(|a| a.strip_prefix("--kek=")).unwrap_or_else(|| {
-                eprintln!("error: --kek=<hex-key> is required for fleet mode");
-                process::exit(2);
-            });
+            let kek_hex = args
+                .iter()
+                .find_map(|a| a.strip_prefix("--kek="))
+                .unwrap_or_else(|| {
+                    eprintln!("error: --kek=<hex-key> is required for fleet mode");
+                    process::exit(2);
+                });
             let kek_bytes = hex::decode(kek_hex).unwrap_or_else(|e| {
                 eprintln!("error: invalid KEK hex: {}", e);
                 process::exit(2);
@@ -43,17 +49,24 @@ fn main() {
             lmod_encrypt::encrypt_fleet(&data, &kek)
         }
         "device" => {
-            let devices_str = args.iter().find_map(|a| a.strip_prefix("--devices=")).unwrap_or_else(|| {
-                eprintln!("error: --devices=<id1,id2,...> is required for device mode");
-                process::exit(2);
-            });
-            let keys_dir = args.iter().find_map(|a| a.strip_prefix("--device-keys=")).unwrap_or_else(|| {
-                eprintln!("error: --device-keys=<dir> is required for device mode");
-                process::exit(2);
-            });
+            let devices_str = args
+                .iter()
+                .find_map(|a| a.strip_prefix("--devices="))
+                .unwrap_or_else(|| {
+                    eprintln!("error: --devices=<id1,id2,...> is required for device mode");
+                    process::exit(2);
+                });
+            let keys_dir = args
+                .iter()
+                .find_map(|a| a.strip_prefix("--device-keys="))
+                .unwrap_or_else(|| {
+                    eprintln!("error: --device-keys=<dir> is required for device mode");
+                    process::exit(2);
+                });
             let keys_path = PathBuf::from(keys_dir);
 
-            let device_ids: Vec<&str> = devices_str.split(',')
+            let device_ids: Vec<&str> = devices_str
+                .split(',')
                 .map(|s| s.trim())
                 .filter(|s| !s.is_empty())
                 .collect();
@@ -74,7 +87,10 @@ fn main() {
                     process::exit(2);
                 });
                 if kek_bytes.len() != 32 {
-                    eprintln!("error: device key in '{}' must be 32 bytes (64 hex chars)", key_file.display());
+                    eprintln!(
+                        "error: device key in '{}' must be 32 bytes (64 hex chars)",
+                        key_file.display()
+                    );
                     process::exit(2);
                 }
                 let mut kek = [0u8; 32];
@@ -102,5 +118,11 @@ fn main() {
         process::exit(2);
     });
 
-    eprintln!("encrypted {} -> {} (mode={}, {} bytes)", args[1], args[2], mode, out.len());
+    eprintln!(
+        "encrypted {} -> {} (mode={}, {} bytes)",
+        args[1],
+        args[2],
+        mode,
+        out.len()
+    );
 }

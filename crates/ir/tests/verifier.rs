@@ -1,8 +1,8 @@
 use frontend::{fixed::FixedVec, span::Span};
 
 use ir::{
-    Atom, Block, BlockId, CapSet, EffectSet, Op, OpKind, Sig, StackBound, TypeId, Word,
-    TY_BOOL, TY_EMPTY, TY_I64, TY_MMIO, TY_PTR, TY_PTR_MUT, TY_STR,
+    Atom, Block, BlockId, CapSet, EffectSet, Op, OpKind, Sig, StackBound, TypeId, Word, TY_BOOL,
+    TY_EMPTY, TY_I64, TY_MMIO, TY_PTR, TY_PTR_MUT, TY_STR,
 };
 
 fn atom(bytes: &[u8]) -> Atom {
@@ -1001,14 +1001,32 @@ fn verify_accepts_stack_64_exact() {
     // Exactly 64 pushes should succeed (pop them all before Ret).
     let mut ops: FixedVec<Op, 96> = FixedVec::new();
     for _ in 0..30 {
-        ops.push(Op { kind: OpKind::ConstI64(0), span: Span::UNKNOWN }).unwrap();
+        ops.push(Op {
+            kind: OpKind::ConstI64(0),
+            span: Span::UNKNOWN,
+        })
+        .unwrap();
     }
     for _ in 0..30 {
-        ops.push(Op { kind: OpKind::Drop { ty: TY_I64 }, span: Span::UNKNOWN }).unwrap();
+        ops.push(Op {
+            kind: OpKind::Drop { ty: TY_I64 },
+            span: Span::UNKNOWN,
+        })
+        .unwrap();
     }
-    ops.push(Op { kind: OpKind::Ret, span: Span::UNKNOWN }).unwrap();
+    ops.push(Op {
+        kind: OpKind::Ret,
+        span: Span::UNKNOWN,
+    })
+    .unwrap();
     let mut blocks: FixedVec<Block, 16> = FixedVec::new();
-    blocks.push(Block { id: BlockId(0), entry_stack: FixedVec::new(), ops }).unwrap();
+    blocks
+        .push(Block {
+            id: BlockId(0),
+            entry_stack: FixedVec::new(),
+            ops,
+        })
+        .unwrap();
     let w = Word {
         name: atom(b"w"),
         sig: Sig::empty(),
@@ -1030,15 +1048,35 @@ fn verify_accepts_stack_64_exact() {
 fn word_with_two_blocks(b0_ops: &[OpKind], b1_ops: &[OpKind]) -> Word {
     let mut ops0: FixedVec<Op, 96> = FixedVec::new();
     for &kind in b0_ops {
-        ops0.push(Op { kind, span: Span::UNKNOWN }).unwrap();
+        ops0.push(Op {
+            kind,
+            span: Span::UNKNOWN,
+        })
+        .unwrap();
     }
     let mut ops1: FixedVec<Op, 96> = FixedVec::new();
     for &kind in b1_ops {
-        ops1.push(Op { kind, span: Span::UNKNOWN }).unwrap();
+        ops1.push(Op {
+            kind,
+            span: Span::UNKNOWN,
+        })
+        .unwrap();
     }
     let mut blocks: FixedVec<Block, 16> = FixedVec::new();
-    blocks.push(Block { id: BlockId(0), entry_stack: FixedVec::new(), ops: ops0 }).unwrap();
-    blocks.push(Block { id: BlockId(1), entry_stack: FixedVec::new(), ops: ops1 }).unwrap();
+    blocks
+        .push(Block {
+            id: BlockId(0),
+            entry_stack: FixedVec::new(),
+            ops: ops0,
+        })
+        .unwrap();
+    blocks
+        .push(Block {
+            id: BlockId(1),
+            entry_stack: FixedVec::new(),
+            ops: ops1,
+        })
+        .unwrap();
     Word {
         name: atom(b"w"),
         sig: Sig::empty(),
@@ -1057,7 +1095,13 @@ fn verify_accepts_brif_asymmetric() {
     // BrIf with different then/else targets where both branches lead to
     // blocks with consistent stack state.
     let w = word_with_two_blocks(
-        &[OpKind::ConstBool(true), OpKind::BrIf { then_tgt: BlockId(1), else_tgt: BlockId(1) }],
+        &[
+            OpKind::ConstBool(true),
+            OpKind::BrIf {
+                then_tgt: BlockId(1),
+                else_tgt: BlockId(1),
+            },
+        ],
         &[OpKind::Ret],
     );
     ir::verify_word(&w).unwrap();
@@ -1071,20 +1115,65 @@ fn verify_rejects_brif_asymmetric_mismatch() {
     // then_tgt=1 expects empty stack → mismatch.
     // else_tgt=2 expects 1 i64 → match on that side.
     let mut ops0: FixedVec<Op, 96> = FixedVec::new();
-    ops0.push(Op { kind: OpKind::ConstI64(0), span: Span::UNKNOWN }).unwrap();
-    ops0.push(Op { kind: OpKind::ConstBool(true), span: Span::UNKNOWN }).unwrap();
-    ops0.push(Op { kind: OpKind::BrIf { then_tgt: BlockId(1), else_tgt: BlockId(2) }, span: Span::UNKNOWN }).unwrap();
+    ops0.push(Op {
+        kind: OpKind::ConstI64(0),
+        span: Span::UNKNOWN,
+    })
+    .unwrap();
+    ops0.push(Op {
+        kind: OpKind::ConstBool(true),
+        span: Span::UNKNOWN,
+    })
+    .unwrap();
+    ops0.push(Op {
+        kind: OpKind::BrIf {
+            then_tgt: BlockId(1),
+            else_tgt: BlockId(2),
+        },
+        span: Span::UNKNOWN,
+    })
+    .unwrap();
     let mut ops1: FixedVec<Op, 96> = FixedVec::new();
-    ops1.push(Op { kind: OpKind::Ret, span: Span::UNKNOWN }).unwrap();
+    ops1.push(Op {
+        kind: OpKind::Ret,
+        span: Span::UNKNOWN,
+    })
+    .unwrap();
     let mut ops2: FixedVec<Op, 96> = FixedVec::new();
-    ops2.push(Op { kind: OpKind::Drop { ty: TY_I64 }, span: Span::UNKNOWN }).unwrap();
-    ops2.push(Op { kind: OpKind::Ret, span: Span::UNKNOWN }).unwrap();
+    ops2.push(Op {
+        kind: OpKind::Drop { ty: TY_I64 },
+        span: Span::UNKNOWN,
+    })
+    .unwrap();
+    ops2.push(Op {
+        kind: OpKind::Ret,
+        span: Span::UNKNOWN,
+    })
+    .unwrap();
     let mut entry_stack = FixedVec::new();
     entry_stack.push(TY_I64).unwrap();
     let mut blocks: FixedVec<Block, 16> = FixedVec::new();
-    blocks.push(Block { id: BlockId(0), entry_stack: FixedVec::new(), ops: ops0 }).unwrap();
-    blocks.push(Block { id: BlockId(1), entry_stack: FixedVec::new(), ops: ops1 }).unwrap();
-    blocks.push(Block { id: BlockId(2), entry_stack, ops: ops2 }).unwrap();
+    blocks
+        .push(Block {
+            id: BlockId(0),
+            entry_stack: FixedVec::new(),
+            ops: ops0,
+        })
+        .unwrap();
+    blocks
+        .push(Block {
+            id: BlockId(1),
+            entry_stack: FixedVec::new(),
+            ops: ops1,
+        })
+        .unwrap();
+    blocks
+        .push(Block {
+            id: BlockId(2),
+            entry_stack,
+            ops: ops2,
+        })
+        .unwrap();
     let w = Word {
         name: atom(b"w"),
         sig: Sig::empty(),
@@ -1111,18 +1200,50 @@ fn verify_rejects_brif_asymmetric_mismatch() {
 fn verify_accepts_back_edge() {
     // Block 0 branches to block 1; block 1 branches back to block 0.
     let mut b0_ops: FixedVec<Op, 96> = FixedVec::new();
-    b0_ops.push(Op { kind: OpKind::ConstI64(0), span: Span::UNKNOWN }).unwrap();
-    b0_ops.push(Op { kind: OpKind::Br { target: BlockId(1) }, span: Span::UNKNOWN }).unwrap();
+    b0_ops
+        .push(Op {
+            kind: OpKind::ConstI64(0),
+            span: Span::UNKNOWN,
+        })
+        .unwrap();
+    b0_ops
+        .push(Op {
+            kind: OpKind::Br { target: BlockId(1) },
+            span: Span::UNKNOWN,
+        })
+        .unwrap();
     let mut b1_ops: FixedVec<Op, 96> = FixedVec::new();
-    b1_ops.push(Op { kind: OpKind::Drop { ty: TY_I64 }, span: Span::UNKNOWN }).unwrap();
-    b1_ops.push(Op { kind: OpKind::Br { target: BlockId(0) }, span: Span::UNKNOWN }).unwrap();
+    b1_ops
+        .push(Op {
+            kind: OpKind::Drop { ty: TY_I64 },
+            span: Span::UNKNOWN,
+        })
+        .unwrap();
+    b1_ops
+        .push(Op {
+            kind: OpKind::Br { target: BlockId(0) },
+            span: Span::UNKNOWN,
+        })
+        .unwrap();
     // b0 entry empty; ConstI64 pushes i64 then Br goes to b1 with [i64].
     // b1 entry matches [i64]; Drop removes it, Br returns to b0 with [].
     let mut blocks: FixedVec<Block, 16> = FixedVec::new();
     let mut b1_entry = FixedVec::new();
     b1_entry.push(TY_I64).unwrap();
-    blocks.push(Block { id: BlockId(0), entry_stack: FixedVec::new(), ops: b0_ops }).unwrap();
-    blocks.push(Block { id: BlockId(1), entry_stack: b1_entry, ops: b1_ops }).unwrap();
+    blocks
+        .push(Block {
+            id: BlockId(0),
+            entry_stack: FixedVec::new(),
+            ops: b0_ops,
+        })
+        .unwrap();
+    blocks
+        .push(Block {
+            id: BlockId(1),
+            entry_stack: b1_entry,
+            ops: b1_ops,
+        })
+        .unwrap();
     let w = Word {
         name: atom(b"w"),
         sig: Sig::empty(),
@@ -1331,7 +1452,7 @@ fn verify_accepts_check_subtype() {
 
 #[cfg(test)]
 mod proptests {
-    use ir::{CapSet, EffectSet, OpKind, StackBound, TY_I64, TY_BOOL};
+    use ir::{CapSet, EffectSet, OpKind, StackBound, TY_BOOL, TY_I64};
     use proptest::prelude::*;
 
     fn make_word(ops: &[OpKind]) -> ir::Word {
@@ -1392,7 +1513,9 @@ mod proptests {
             any::<bool>().prop_map(OpKind::ConstBool),
             // Br with arbitrary u16 target — may produce invalid targets but
             // the verifier must not panic, only return Err.
-            any::<u16>().prop_map(|id| OpKind::Br { target: ir::BlockId(id) }),
+            any::<u16>().prop_map(|id| OpKind::Br {
+                target: ir::BlockId(id)
+            }),
             // Drop/Dup/Cast with arbitrary TypeId
             arb_type_id().prop_map(|ty| OpKind::Drop { ty }),
             arb_type_id().prop_map(|ty| OpKind::Dup { ty }),

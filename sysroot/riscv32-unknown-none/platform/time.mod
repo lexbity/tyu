@@ -1,0 +1,7 @@
+module platform/time;
+:: platform.time.now_us ( -- i64 )
+:: platform.time.reboot ( -- )
+
+export { platform.time.now_us platform.time.reboot }
+
+end;

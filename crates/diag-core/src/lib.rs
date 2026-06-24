@@ -170,9 +170,9 @@ impl DiagRecord {
 #[cfg(test)]
 mod tests {
     extern crate alloc;
-    use alloc::vec;
     use super::*;
     use crate::claims;
+    use alloc::vec;
 
     // -----------------------------------------------------------------------
     // encode_header — always available
@@ -369,9 +369,15 @@ mod tests {
         assert!(!decoded.valid, "valid=false must survive round-trip");
         // word_hash and source_line carry whatever was encoded (here 0).
         assert_eq!(decoded.word_hash, 0, "word_hash preserved even for valid=0");
-        assert_eq!(decoded.source_line, 0, "source_line preserved even for valid=0");
+        assert_eq!(
+            decoded.source_line, 0,
+            "source_line preserved even for valid=0"
+        );
         // trap_pc is authoritative for hardware faults.
-        assert_eq!(decoded.trap_pc, 0x8000_1234, "trap_pc is authoritative for valid=0");
+        assert_eq!(
+            decoded.trap_pc, 0x8000_1234,
+            "trap_pc is authoritative for valid=0"
+        );
     }
 
     #[cfg(feature = "std")]
@@ -483,7 +489,10 @@ mod tests {
             }
         };
         rec.encode_header(&mut buf).unwrap();
-        assert!(DiagRecord::parse(&buf).is_some(), "slot_count=0 always valid");
+        assert!(
+            DiagRecord::parse(&buf).is_some(),
+            "slot_count=0 always valid"
+        );
     }
 
     #[cfg(feature = "std")]

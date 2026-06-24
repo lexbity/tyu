@@ -2,6 +2,7 @@
 name = "lmod-sign"
 version = "0.1.0"
 edition = "2021"
+description = "Signing tooling for `.lmod` modules."
 
 [lib]
 name = "lmod_sign"

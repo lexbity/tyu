@@ -12,13 +12,18 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use common::*;
 use lmod::header::HEADER_SIZE;
 use lmod::validate::Container;
 use loader_core::load::{E_ENC_AUTH_FAIL, E_SIG_INVALID};
-use common::*;
 
 fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap().to_path_buf()
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf()
 }
 
 fn exe(name: &str) -> PathBuf {
@@ -26,8 +31,11 @@ fn exe(name: &str) -> PathBuf {
 }
 
 fn temp_dir(label: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join("tyu_contract_enc")
-        .join(format!("{}_{}", label, std::process::id()));
+    let dir = std::env::temp_dir().join("tyu_contract_enc").join(format!(
+        "{}_{}",
+        label,
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -38,24 +46,59 @@ fn temp_dir(label: &str) -> PathBuf {
 fn build_encrypt_sign(source: &str, kek: &[u8; 32], sign_key: &[u8; 32], label: &str) -> PathBuf {
     let dir = temp_dir(label);
     std::fs::write(dir.join("M.mod"), source).unwrap();
-    assert!(Command::new(exe("langc")).current_dir(&dir)
-        .args(["--emit=obj", "--target=x86_64-unknown-linux-gnu", "--out-dir=.", "M.mod"])
-        .status().unwrap().success(), "langc failed");
+    assert!(
+        Command::new(exe("langc"))
+            .current_dir(&dir)
+            .args([
+                "--emit=obj",
+                "--target=x86_64-unknown-linux-gnu",
+                "--out-dir=.",
+                "M.mod"
+            ])
+            .status()
+            .unwrap()
+            .success(),
+        "langc failed"
+    );
     let lmod = dir.join("test.lmod");
-    assert!(Command::new(exe("lmod-pack")).current_dir(&dir)
-        .args(["Main.o", "test.lmod"]).status().unwrap().success(), "lmod-pack failed");
+    assert!(
+        Command::new(exe("lmod-pack"))
+            .current_dir(&dir)
+            .args(["Main.o", "test.lmod"])
+            .status()
+            .unwrap()
+            .success(),
+        "lmod-pack failed"
+    );
 
     let encrypted = dir.join("encrypted.lmod");
-    assert!(Command::new(exe("lmod-encrypt"))
-        .args([lmod.to_str().unwrap(), encrypted.to_str().unwrap(),
-               "--mode=fleet", &format!("--kek={}", hex::encode(kek))])
-        .status().unwrap().success(), "lmod-encrypt failed");
+    assert!(
+        Command::new(exe("lmod-encrypt"))
+            .args([
+                lmod.to_str().unwrap(),
+                encrypted.to_str().unwrap(),
+                "--mode=fleet",
+                &format!("--kek={}", hex::encode(kek))
+            ])
+            .status()
+            .unwrap()
+            .success(),
+        "lmod-encrypt failed"
+    );
 
     let signed = dir.join("signed.lmod");
-    assert!(Command::new(exe("lmod-sign"))
-        .args([encrypted.to_str().unwrap(), signed.to_str().unwrap(),
-               &format!("--key={}", hex::encode(sign_key))])
-        .status().unwrap().success(), "lmod-sign failed");
+    assert!(
+        Command::new(exe("lmod-sign"))
+            .args([
+                encrypted.to_str().unwrap(),
+                signed.to_str().unwrap(),
+                &format!("--key={}", hex::encode(sign_key))
+            ])
+            .status()
+            .unwrap()
+            .success(),
+        "lmod-sign failed"
+    );
     signed
 }
 
@@ -80,7 +123,10 @@ fn fleet_encrypt_decrypts_in_loader() {
     let source = "module Main;\n: main ( -- i64 ) 42 ;\nexport { main };\nend;\n";
     let signed = build_encrypt_sign(source, &kek, &sign_key, "cct2");
     let result = load_signed(&signed, &kek, &sign_key);
-    assert!(result.is_ok(), "fleet-encrypted artifact must load successfully via the real loader");
+    assert!(
+        result.is_ok(),
+        "fleet-encrypted artifact must load successfully via the real loader"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -100,17 +146,35 @@ fn tampered_payload_byte_fails_in_loader() {
     // Step 1: build and encrypt (no signing yet).
     let dir = temp_dir("cct3");
     std::fs::write(dir.join("M.mod"), source).unwrap();
-    assert!(Command::new(exe("langc")).current_dir(&dir)
-        .args(["--emit=obj", "--target=x86_64-unknown-linux-gnu", "--out-dir=.", "M.mod"])
-        .status().unwrap().success());
+    assert!(Command::new(exe("langc"))
+        .current_dir(&dir)
+        .args([
+            "--emit=obj",
+            "--target=x86_64-unknown-linux-gnu",
+            "--out-dir=.",
+            "M.mod"
+        ])
+        .status()
+        .unwrap()
+        .success());
     let lmod = dir.join("test.lmod");
-    assert!(Command::new(exe("lmod-pack")).current_dir(&dir)
-        .args(["Main.o", "test.lmod"]).status().unwrap().success());
+    assert!(Command::new(exe("lmod-pack"))
+        .current_dir(&dir)
+        .args(["Main.o", "test.lmod"])
+        .status()
+        .unwrap()
+        .success());
     let encrypted = dir.join("encrypted.lmod");
     assert!(Command::new(exe("lmod-encrypt"))
-        .args([lmod.to_str().unwrap(), encrypted.to_str().unwrap(),
-               "--mode=fleet", &format!("--kek={}", hex::encode(kek))])
-        .status().unwrap().success());
+        .args([
+            lmod.to_str().unwrap(),
+            encrypted.to_str().unwrap(),
+            "--mode=fleet",
+            &format!("--kek={}", hex::encode(kek))
+        ])
+        .status()
+        .unwrap()
+        .success());
 
     // Step 2: flip one byte in the code section of the encrypted artifact.
     let mut data = std::fs::read(&encrypted).unwrap();
@@ -123,14 +187,22 @@ fn tampered_payload_byte_fails_in_loader() {
     std::fs::write(&tampered, &data).unwrap();
     let signed = dir.join("signed.lmod");
     assert!(Command::new(exe("lmod-sign"))
-        .args([tampered.to_str().unwrap(), signed.to_str().unwrap(),
-               &format!("--key={}", hex::encode(sign_key))])
-        .status().unwrap().success());
+        .args([
+            tampered.to_str().unwrap(),
+            signed.to_str().unwrap(),
+            &format!("--key={}", hex::encode(sign_key))
+        ])
+        .status()
+        .unwrap()
+        .success());
 
     // Step 4: load with correct KEK — must fail with E_ENC_AUTH_FAIL.
     let result = load_signed(&signed, &kek, &sign_key);
-    assert_eq!(result.unwrap_err(), E_ENC_AUTH_FAIL,
-        "tampered payload (re-signed) must fail AEAD authentication in the loader");
+    assert_eq!(
+        result.unwrap_err(),
+        E_ENC_AUTH_FAIL,
+        "tampered payload (re-signed) must fail AEAD authentication in the loader"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -151,24 +223,45 @@ fn tampered_modinfo_aad_fails_in_loader() {
     // Step 1: build and encrypt.
     let dir = temp_dir("cct4");
     std::fs::write(dir.join("M.mod"), source).unwrap();
-    assert!(Command::new(exe("langc")).current_dir(&dir)
-        .args(["--emit=obj", "--target=x86_64-unknown-linux-gnu", "--out-dir=.", "M.mod"])
-        .status().unwrap().success());
+    assert!(Command::new(exe("langc"))
+        .current_dir(&dir)
+        .args([
+            "--emit=obj",
+            "--target=x86_64-unknown-linux-gnu",
+            "--out-dir=.",
+            "M.mod"
+        ])
+        .status()
+        .unwrap()
+        .success());
     let lmod = dir.join("test.lmod");
-    assert!(Command::new(exe("lmod-pack")).current_dir(&dir)
-        .args(["Main.o", "test.lmod"]).status().unwrap().success());
+    assert!(Command::new(exe("lmod-pack"))
+        .current_dir(&dir)
+        .args(["Main.o", "test.lmod"])
+        .status()
+        .unwrap()
+        .success());
     let encrypted = dir.join("encrypted.lmod");
     assert!(Command::new(exe("lmod-encrypt"))
-        .args([lmod.to_str().unwrap(), encrypted.to_str().unwrap(),
-               "--mode=fleet", &format!("--kek={}", hex::encode(kek))])
-        .status().unwrap().success());
+        .args([
+            lmod.to_str().unwrap(),
+            encrypted.to_str().unwrap(),
+            "--mode=fleet",
+            &format!("--kek={}", hex::encode(kek))
+        ])
+        .status()
+        .unwrap()
+        .success());
 
     // Step 2: mutate one byte in the modinfo region.
     let mut data = std::fs::read(&encrypted).unwrap();
     let c = Container::parse(&data).unwrap();
     let mi_off = c.header().modinfo_off as usize;
     // Ensure there is at least one modinfo byte to tamper.
-    assert!(c.modinfo().len() > 4, "modinfo must have at least 4 bytes for tampering");
+    assert!(
+        c.modinfo().len() > 4,
+        "modinfo must have at least 4 bytes for tampering"
+    );
     data[mi_off + 4] ^= 0x01;
 
     // Step 3: write tampered blob and sign it.
@@ -176,21 +269,29 @@ fn tampered_modinfo_aad_fails_in_loader() {
     std::fs::write(&tampered, &data).unwrap();
     let signed = dir.join("signed.lmod");
     assert!(Command::new(exe("lmod-sign"))
-        .args([tampered.to_str().unwrap(), signed.to_str().unwrap(),
-               &format!("--key={}", hex::encode(sign_key))])
-        .status().unwrap().success());
+        .args([
+            tampered.to_str().unwrap(),
+            signed.to_str().unwrap(),
+            &format!("--key={}", hex::encode(sign_key))
+        ])
+        .status()
+        .unwrap()
+        .success());
 
     // Step 4: load with correct KEK — must fail with E_ENC_AUTH_FAIL.
     let result = load_signed(&signed, &kek, &sign_key);
-    assert_eq!(result.unwrap_err(), E_ENC_AUTH_FAIL,
-        "tampered modinfo (AAD-covered, re-signed) must fail AEAD authentication");
+    assert_eq!(
+        result.unwrap_err(),
+        E_ENC_AUTH_FAIL,
+        "tampered modinfo (AAD-covered, re-signed) must fail AEAD authentication"
+    );
 }
 
 // ---------------------------------------------------------------------------
 // Rewritten encrypt_then_sign_pipeline — via real loader (Rule A)
 // ---------------------------------------------------------------------------
 //
-// 1. Encrypt → sign → load at Tier-1 with correct keys → Ok.
+// 1. Encrypt → sign → load at TrustLevel-One with correct keys → Ok.
 // 2. Tamper a header byte → do NOT re-sign → load → E_SIG_INVALID.
 //    (The header is inside the signed region; mutation invalidates the HMAC.)
 
@@ -201,9 +302,12 @@ fn signed_artifact_loads_and_tampered_header_fails() {
     let source = "module Main;\n: main ( -- i64 ) 7 ;\nexport { main };\nend;\n";
     let signed = build_encrypt_sign(source, &kek, &sign_key, "cct_sign");
 
-    // Part 1: genuine artifact loads successfully at Tier 1.
+    // Part 1: genuine artifact loads successfully at TrustLevel One.
     let result = load_signed(&signed, &kek, &sign_key);
-    assert!(result.is_ok(), "properly signed+encrypted artifact must load at Tier 1");
+    assert!(
+        result.is_ok(),
+        "properly signed+encrypted artifact must load at TrustLevel One"
+    );
 
     // Part 2: tamper one byte in the signed region, do NOT re-sign.
     let mut data = std::fs::read(&signed).unwrap();
@@ -221,6 +325,9 @@ fn signed_artifact_loads_and_tampered_header_fails() {
         .tier_one(&sign_key)
         .with_kek(&kek);
     let result = h.load(&container);
-    assert_eq!(result.unwrap_err(), E_SIG_INVALID,
-        "tampered signed region (no re-sign) must fail with E_SIG_INVALID");
+    assert_eq!(
+        result.unwrap_err(),
+        E_SIG_INVALID,
+        "tampered signed region (no re-sign) must fail with E_SIG_INVALID"
+    );
 }

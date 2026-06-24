@@ -1,7 +1,6 @@
 use super::*;
 
 impl<'a, 'r> IrWordGen<'a, 'r> {
-
     /// Check if a number token contains `e`/`E` (reserved float exponent syntax).
     /// Returns an error if found, unless the token is `0x`-prefixed (hex).
     fn check_float_exponent(bytes: &[u8], span: Span) -> Result<(), TcError> {
@@ -33,7 +32,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         Ok(cur)
     }
 
-
     pub(super) fn compile_string(
         &mut self,
         cur: lir::BlockId,
@@ -55,7 +53,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         Ok(cur)
     }
 
-
     pub(super) fn compile_bool_literal(
         &mut self,
         cur: lir::BlockId,
@@ -68,7 +65,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         self.emit_op(cur, lir::OpKind::ConstBool(name == b"true"), name_abs)?;
         Ok(())
     }
-
 
     pub(super) fn compile_enum_variant(
         &mut self,
@@ -102,6 +98,4 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         }
         Ok(false)
     }
-
-
 }

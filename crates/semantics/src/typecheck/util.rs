@@ -468,4 +468,3 @@ pub fn write_stack(out: &mut dyn Output, stack: &[Value; 256], sp: usize) {
         }
     }
 }
-

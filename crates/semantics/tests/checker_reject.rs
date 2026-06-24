@@ -20,7 +20,13 @@ fn if_branch_type_mismatch() {
 #[test]
 fn if_branch_depth_mismatch() {
     let (env, len) = builtin_env();
-    check_err("true [ 1 2 ] [ 3 ] if drop drop", &[], &[], &env[..len], 3246);
+    check_err(
+        "true [ 1 2 ] [ 3 ] if drop drop",
+        &[],
+        &[],
+        &env[..len],
+        3246,
+    );
 }
 
 #[test]
@@ -46,7 +52,13 @@ fn while_cond_not_bool() {
 #[test]
 fn while_body_depth() {
     let (env, len) = builtin_env();
-    check_err("[ dup 0 > ] [ 1 ] while", &[b"i64"], &[b"i64"], &env[..len], 3257);
+    check_err(
+        "[ dup 0 > ] [ 1 ] while",
+        &[b"i64"],
+        &[b"i64"],
+        &env[..len],
+        3257,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -113,7 +125,13 @@ fn return_type_value_mismatch() {
 fn while_cond_modified_stack() {
     let (env, len) = builtin_env();
     // Condition body pushes 2 values, net +1 → WhileCondModifiedStack
-    check_err("[ 1 2 ] [ drop ] while", &[b"i64"], &[b"i64"], &env[..len], 3254);
+    check_err(
+        "[ 1 2 ] [ drop ] while",
+        &[b"i64"],
+        &[b"i64"],
+        &env[..len],
+        3254,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -165,7 +183,13 @@ fn if_cond_missing() {
 fn while_body_not_quotation() {
     let (env, len) = builtin_env();
     // Body is a value, not a quotation → WhileBodyNotQuot
-    check_err("[ dup 0 > ] 1 while", &[b"i64"], &[b"i64"], &env[..len], 3252);
+    check_err(
+        "[ dup 0 > ] 1 while",
+        &[b"i64"],
+        &[b"i64"],
+        &env[..len],
+        3252,
+    );
 }
 
 #[test]
@@ -174,8 +198,6 @@ fn while_cond_not_quotation() {
     // Condition is a value, not a quotation → WhileCondNotQuot
     check_err("1 [ drop ] while", &[b"i64"], &[b"i64"], &env[..len], 3253);
 }
-
-
 
 // ---------------------------------------------------------------------------
 // Stack underflow
@@ -212,7 +234,18 @@ fn checks_off_still_rejects_type_mismatch() {
     let (env, len) = builtin_env();
     let dbs = Dbs::new();
     // Type-mismatch errors are not gated by ChecksMode.
-    check("true 1 +", &[], &[], &env[..len], &dbs, ChecksMode::Off, |result| {
-        assert!(result.is_err(), "type mismatch must be rejected even with Off");
-    });
+    check(
+        "true 1 +",
+        &[],
+        &[],
+        &env[..len],
+        &dbs,
+        ChecksMode::Off,
+        |result| {
+            assert!(
+                result.is_err(),
+                "type mismatch must be rejected even with Off"
+            );
+        },
+    );
 }

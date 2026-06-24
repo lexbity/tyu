@@ -34,8 +34,5 @@ fn main() {
         process::exit(2);
     }
 
-    eprintln!(
-        "packed {} -> {} ({} bytes)",
-        args[1], args[2], output.len(),
-    );
+    eprintln!("packed {} -> {} ({} bytes)", args[1], args[2], output.len(),);
 }

@@ -17,22 +17,29 @@ use std::thread;
 
 fn langc_exe() -> std::path::PathBuf {
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap().parent().unwrap();
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
     workspace.join("target").join("debug").join("langc")
 }
 
 fn repo_sysroot() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap().parent().unwrap().join("sysroot")
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("sysroot")
 }
 
 const OPS: &[&str] = &[
-    "MintMut",     // &!a
-    "MintShared",  // &a
-    "Consume",     // drop
-    "Dup",         // dup
-    "Bind",        // => x
-    "Ref",         // x
+    "MintMut",    // &!a
+    "MintShared", // &a
+    "Consume",    // drop
+    "Dup",        // dup
+    "Bind",       // => x
+    "Ref",        // x
 ];
 
 /// Oracle: given a sequence of operation names, returns:
@@ -48,17 +55,23 @@ fn oracle(ops: &[&str]) -> Option<u32> {
     for &op in ops {
         match op {
             "MintMut" => {
-                if live_mut || live_shr { return Some(5021); }
+                if live_mut || live_shr {
+                    return Some(5021);
+                }
                 live_mut = true;
                 stack_depth += 1;
             }
             "MintShared" => {
-                if live_mut { return Some(5021); }
+                if live_mut {
+                    return Some(5021);
+                }
                 live_shr = true;
                 stack_depth += 1;
             }
             "Consume" => {
-                if stack_depth == 0 { return Some(3202); }
+                if stack_depth == 0 {
+                    return Some(3202);
+                }
                 stack_depth -= 1;
                 if stack_depth == 0 {
                     live_mut = false;
@@ -66,12 +79,18 @@ fn oracle(ops: &[&str]) -> Option<u32> {
                 }
             }
             "Dup" => {
-                if stack_depth == 0 { return Some(3202); }
-                if live_mut { return Some(5022); } // dup of &! is error; & dup is OK
+                if stack_depth == 0 {
+                    return Some(3202);
+                }
+                if live_mut {
+                    return Some(5022);
+                } // dup of &! is error; & dup is OK
                 stack_depth += 1;
             }
             "Bind" => {
-                if stack_depth == 0 { return Some(3202); }
+                if stack_depth == 0 {
+                    return Some(3202);
+                }
                 local_is_mut = Some(live_mut);
                 local_used = false;
                 // The borrow is now shelved in the local, but still live
@@ -83,7 +102,9 @@ fn oracle(ops: &[&str]) -> Option<u32> {
                 match local_is_mut {
                     None => return Some(3210), // WordNotFound (x was never bound)
                     Some(true) => {
-                        if local_used { return Some(5023); } // second ref
+                        if local_used {
+                            return Some(5023);
+                        } // second ref
                         local_used = true;
                         local_is_mut = None; // consumed
                         live_mut = true;
@@ -107,15 +128,24 @@ fn compile_seq(ops: &[&str], dir: &std::path::Path) -> Option<u32> {
     let mut net_stack = 0i32;
     for &op in ops {
         match op {
-            "MintMut" | "MintShared" | "Dup" | "Ref" => { body.extend_from_slice(match op {
-                "MintMut" => b"&!a ",
-                "MintShared" => b"&a ",
-                "Dup" => b"dup ",
-                "Ref" => b"x ",
-                _ => unreachable!(),
-            }); net_stack += 1; }
-            "Consume" => { body.extend_from_slice(b"drop "); net_stack -= 1; }
-            "Bind" => { body.extend_from_slice(b"=> x "); net_stack -= 1; }
+            "MintMut" | "MintShared" | "Dup" | "Ref" => {
+                body.extend_from_slice(match op {
+                    "MintMut" => b"&!a ",
+                    "MintShared" => b"&a ",
+                    "Dup" => b"dup ",
+                    "Ref" => b"x ",
+                    _ => unreachable!(),
+                });
+                net_stack += 1;
+            }
+            "Consume" => {
+                body.extend_from_slice(b"drop ");
+                net_stack -= 1;
+            }
+            "Bind" => {
+                body.extend_from_slice(b"=> x ");
+                net_stack -= 1;
+            }
             _ => {}
         }
     }
@@ -126,11 +156,13 @@ fn compile_seq(ops: &[&str], dir: &std::path::Path) -> Option<u32> {
     body.extend_from_slice(b"] 0 ;\nend;\n");
 
     let mut src = Vec::new();
-    src.extend_from_slice(b"module Main;\n\
+    src.extend_from_slice(
+        b"module Main;\n\
 import platform/linux { };\n\
 resource a : u32 = 0;\n\
 : main ( -- i64 )\n\
-  a lock [ ");
+  a lock [ ",
+    );
     src.extend_from_slice(&body);
 
     let mod_path = dir.join("seq.mod");
@@ -147,7 +179,8 @@ resource a : u32 = 0;\n\
         None
     } else {
         let stderr = String::from_utf8_lossy(&out.stderr);
-        stderr.split("error[E")
+        stderr
+            .split("error[E")
             .nth(1)
             .and_then(|s| s.split(']').next())
             .and_then(|s| s.parse::<u32>().ok())
@@ -175,7 +208,10 @@ fn test_all_sequences(max_len: usize, dir: &std::path::Path) {
                     mismatches += 1;
                 }
                 (Some(o), None) => {
-                    eprintln!("MISMATCH [{}]: oracle E{o}, compiler accepted", seq.join(" "));
+                    eprintln!(
+                        "MISMATCH [{}]: oracle E{o}, compiler accepted",
+                        seq.join(" ")
+                    );
                     mismatches += 1;
                 }
                 (None, Some(c)) => {
@@ -194,8 +230,13 @@ fn test_all_sequences(max_len: usize, dir: &std::path::Path) {
         }
     }
 
-    eprintln!("borrow_property: {tested} sequences tested (len ≤ {max_len}), {mismatches} mismatches");
-    assert_eq!(mismatches, 0, "{mismatches} oracle/compiler mismatches found");
+    eprintln!(
+        "borrow_property: {tested} sequences tested (len ≤ {max_len}), {mismatches} mismatches"
+    );
+    assert_eq!(
+        mismatches, 0,
+        "{mismatches} oracle/compiler mismatches found"
+    );
 }
 
 fn spawn_test(f: impl FnOnce() + Send + 'static) {

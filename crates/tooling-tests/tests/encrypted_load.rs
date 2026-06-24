@@ -12,12 +12,17 @@ mod common;
 use std::path::PathBuf;
 use std::process::Command;
 
+use common::*;
 use lmod::validate::Container;
 use loader_core::load::{E_ENC_NO_KEY, E_SIG_INVALID};
-use common::*;
 
 fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap().to_path_buf()
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf()
 }
 
 fn exe(name: &str) -> PathBuf {
@@ -25,8 +30,10 @@ fn exe(name: &str) -> PathBuf {
 }
 
 fn temp_dir(label: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join("tyu_enc_load")
-        .join(format!("{}_{}", label, std::process::id()));
+    let dir =
+        std::env::temp_dir()
+            .join("tyu_enc_load")
+            .join(format!("{}_{}", label, std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -37,23 +44,55 @@ fn temp_dir(label: &str) -> PathBuf {
 fn build_encrypt_sign(source: &str, kek: &[u8; 32], label: &str) -> PathBuf {
     let dir = temp_dir(label);
     std::fs::write(dir.join("M.mod"), source).unwrap();
-    assert!(Command::new(exe("langc")).current_dir(&dir)
-        .args(["--emit=obj", "--target=x86_64-unknown-linux-gnu", "--out-dir=.", "M.mod"])
-        .status().unwrap().success(), "langc failed");
+    assert!(
+        Command::new(exe("langc"))
+            .current_dir(&dir)
+            .args([
+                "--emit=obj",
+                "--target=x86_64-unknown-linux-gnu",
+                "--out-dir=.",
+                "M.mod"
+            ])
+            .status()
+            .unwrap()
+            .success(),
+        "langc failed"
+    );
     let lmod = dir.join("test.lmod");
-    assert!(Command::new(exe("lmod-pack")).current_dir(&dir)
-        .args(["Main.o", "test.lmod"]).status().unwrap().success(), "lmod-pack failed");
+    assert!(
+        Command::new(exe("lmod-pack"))
+            .current_dir(&dir)
+            .args(["Main.o", "test.lmod"])
+            .status()
+            .unwrap()
+            .success(),
+        "lmod-pack failed"
+    );
 
     let encrypted = dir.join("encrypted.lmod");
-    assert!(Command::new(exe("lmod-encrypt"))
-        .args([lmod.to_str().unwrap(), encrypted.to_str().unwrap(),
-               "--mode=fleet", &format!("--kek={}", hex::encode(kek))])
-        .status().unwrap().success(), "lmod-encrypt failed");
+    assert!(
+        Command::new(exe("lmod-encrypt"))
+            .args([
+                lmod.to_str().unwrap(),
+                encrypted.to_str().unwrap(),
+                "--mode=fleet",
+                &format!("--kek={}", hex::encode(kek))
+            ])
+            .status()
+            .unwrap()
+            .success(),
+        "lmod-encrypt failed"
+    );
 
     let signed = dir.join("signed.lmod");
-    assert!(Command::new(exe("lmod-sign"))
-        .args([encrypted.to_str().unwrap(), signed.to_str().unwrap()])
-        .status().unwrap().success(), "lmod-sign failed");
+    assert!(
+        Command::new(exe("lmod-sign"))
+            .args([encrypted.to_str().unwrap(), signed.to_str().unwrap()])
+            .status()
+            .unwrap()
+            .success(),
+        "lmod-sign failed"
+    );
     signed
 }
 
@@ -62,18 +101,45 @@ fn build_encrypt_sign(source: &str, kek: &[u8; 32], label: &str) -> PathBuf {
 fn build_encrypt_only(source: &str, kek: &[u8; 32], label: &str) -> PathBuf {
     let dir = temp_dir(label);
     std::fs::write(dir.join("M.mod"), source).unwrap();
-    assert!(Command::new(exe("langc")).current_dir(&dir)
-        .args(["--emit=obj", "--target=x86_64-unknown-linux-gnu", "--out-dir=.", "M.mod"])
-        .status().unwrap().success(), "langc failed");
+    assert!(
+        Command::new(exe("langc"))
+            .current_dir(&dir)
+            .args([
+                "--emit=obj",
+                "--target=x86_64-unknown-linux-gnu",
+                "--out-dir=.",
+                "M.mod"
+            ])
+            .status()
+            .unwrap()
+            .success(),
+        "langc failed"
+    );
     let lmod = dir.join("test.lmod");
-    assert!(Command::new(exe("lmod-pack")).current_dir(&dir)
-        .args(["Main.o", "test.lmod"]).status().unwrap().success(), "lmod-pack failed");
+    assert!(
+        Command::new(exe("lmod-pack"))
+            .current_dir(&dir)
+            .args(["Main.o", "test.lmod"])
+            .status()
+            .unwrap()
+            .success(),
+        "lmod-pack failed"
+    );
 
     let encrypted = dir.join("encrypted.lmod");
-    assert!(Command::new(exe("lmod-encrypt"))
-        .args([lmod.to_str().unwrap(), encrypted.to_str().unwrap(),
-               "--mode=fleet", &format!("--kek={}", hex::encode(kek))])
-        .status().unwrap().success(), "lmod-encrypt failed");
+    assert!(
+        Command::new(exe("lmod-encrypt"))
+            .args([
+                lmod.to_str().unwrap(),
+                encrypted.to_str().unwrap(),
+                "--mode=fleet",
+                &format!("--kek={}", hex::encode(kek))
+            ])
+            .status()
+            .unwrap()
+            .success(),
+        "lmod-encrypt failed"
+    );
     encrypted
 }
 
@@ -129,15 +195,19 @@ fn encrypted_wrong_kek_fails() {
         .tier_one(&[0xab; 32])
         .with_kek(&wrong_kek);
     let result = h.load(&container);
-    assert_eq!(result.unwrap_err(), E_ENC_NO_KEY, "wrong KEK must give E_ENC_NO_KEY (E-3)");
+    assert_eq!(
+        result.unwrap_err(),
+        E_ENC_NO_KEY,
+        "wrong KEK must give E_ENC_NO_KEY (E-3)"
+    );
 }
 
 // ---------------------------------------------------------------------------
-// E-4: Unsigned encrypted module at Tier One must fail with E_SIG_INVALID
+// E-4: Unsigned encrypted module at TrustLevel One must fail with E_SIG_INVALID
 // ---------------------------------------------------------------------------
 //
 // The loader checks signature (LD-3/4) before decryption (LD-5+).  An
-// encrypted container without LMOD_FLAG_SIGNED presented to a Tier-1
+// encrypted container without LMOD_FLAG_SIGNED presented to a TrustLevel-One
 // platform fails at LD-4 with E_SIG_INVALID.
 
 #[test]
@@ -151,6 +221,9 @@ fn encrypted_unsigned_rejected() {
         .tier_one(&[0xab; 32])
         .with_kek(&kek);
     let result = h.load(&container);
-    assert_eq!(result.unwrap_err(), E_SIG_INVALID,
-        "unsigned encrypted module at Tier One must give E_SIG_INVALID (E-4)");
+    assert_eq!(
+        result.unwrap_err(),
+        E_SIG_INVALID,
+        "unsigned encrypted module at TrustLevel One must give E_SIG_INVALID (E-4)"
+    );
 }

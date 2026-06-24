@@ -2,6 +2,7 @@
 name = "harness-core"
 version = "0.1.0"
 edition = "2021"
+description = "Shared host-side test harness utilities for Tyu."
 
 # no_std, no alloc — pure byte-level analysis shared by the on-device loader
 # (via loader-core) and the host harness (tyu, execution-tests).

@@ -2,6 +2,7 @@
 name = "lang-assemble"
 version = "0.1.0"
 edition = "2021"
+description = "Assembly emission glue for Tyu code generation."
 
 [[bin]]
 name = "lang-assemble"

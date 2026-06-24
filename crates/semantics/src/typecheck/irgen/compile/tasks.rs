@@ -2,7 +2,6 @@ use super::*;
 use crate::typecheck::context::{ContextKind, FrameParam};
 
 impl<'a, 'r> IrWordGen<'a, 'r> {
-
     pub(super) fn compile_task_spawn(
         &mut self,
         cur: lir::BlockId,
@@ -35,7 +34,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         Ok(cur)
     }
 
-
     pub(super) fn compile_task_run(
         &mut self,
         mut cur: lir::BlockId,
@@ -48,7 +46,10 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         // S7: suspend gate at the run call site — forbidders (Lock, MutBorrow,
         // Isr) and ReadBorrow liveness stop the call.  Undeclared is NOT
         // checked because Handler discharges SUSPEND for the body.
-        if let Some(s) = self.ctx.forbidding_span(EffectSet::from_bits(EffectSet::SUSPEND)) {
+        if let Some(s) = self
+            .ctx
+            .forbidding_span(EffectSet::from_bits(EffectSet::SUSPEND))
+        {
             return Err(TcError::SuspendForbidden { span: s });
         }
         if self.any_scoped_live(stack, *sp) {
@@ -65,7 +66,8 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         // S7: snapshot performs before compiling the body, so we can compute
         // the delta and discharge SUSPEND from outward propagation.
         let before = self.word.performs;
-        self.ctx.push(ContextKind::Handler, FrameParam::None, name_abs)?;
+        self.ctx
+            .push(ContextKind::Handler, FrameParam::None, name_abs)?;
         cur = self.compile_quote_span(cur, stack, sp, body_span, false, observer)?;
         self.ctx.pop();
         let body_delta = self.word.performs.minus(before);
@@ -83,6 +85,4 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         }
         Ok(cur)
     }
-
-
 }

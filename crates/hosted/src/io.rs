@@ -24,4 +24,3 @@ pub fn stdout(bytes: &[u8]) -> Result<(), Errno> {
 pub fn stderr(bytes: &[u8]) -> Result<(), Errno> {
     write_all(STDERR_FD, bytes)
 }
-

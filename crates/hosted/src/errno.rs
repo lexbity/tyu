@@ -9,4 +9,3 @@ impl Errno {
         Self(value)
     }
 }
-

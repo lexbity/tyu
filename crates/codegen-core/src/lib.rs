@@ -1,5 +1,9 @@
 #![no_std]
 #![deny(unsafe_op_in_unsafe_fn)]
+//! Shared target descriptions and backend traits for Tyu code generation.
+//!
+//! Key entry points include `Target`, `TargetSpec`, `AsmMode`,
+//! `AssemblerKind`, `FeatureSet`, `CodegenBackend`, and `CodegenError`.
 
 pub mod backend;
 pub mod emit_mode;

@@ -195,9 +195,7 @@ fn ci_missing_tools_hard_error() {
     let riscv_tools = ["riscv64-unknown-elf-as", "qemu-system-riscv32"];
     let all_available = riscv_tools.iter().all(|t| tool_available(t));
     if all_available {
-        eprintln!(
-            "SKIP: CI=1 test skipped because all riscv32 tools are present"
-        );
+        eprintln!("SKIP: CI=1 test skipped because all riscv32 tools are present");
         return;
     }
     ensure_langc();

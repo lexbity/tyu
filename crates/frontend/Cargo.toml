@@ -2,6 +2,7 @@
 name = "frontend"
 version = "0.1.0"
 edition = "2021"
+description = "Lexer, parser, spans, and token handling for Tyu source files."
 
 [lib]
 doctest = false
@@ -10,4 +11,3 @@ doctest = false
 
 [dev-dependencies]
 proptest = "1"
-

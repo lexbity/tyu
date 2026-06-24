@@ -40,7 +40,10 @@ fn stack_dup() {
     let (env, len) = builtin_env();
     check_ok_with("42 dup drop drop", &[], &[], &env[..len], |w: &Word| {
         let b0 = w.blocks.get(0).unwrap();
-        assert!(b0.ops.iter().any(|op| matches!(op.kind, OpKind::Dup { .. })));
+        assert!(b0
+            .ops
+            .iter()
+            .any(|op| matches!(op.kind, OpKind::Dup { .. })));
     });
 }
 
@@ -49,7 +52,10 @@ fn stack_drop() {
     let (env, len) = builtin_env();
     check_ok_with("42 drop", &[], &[], &env[..len], |w: &Word| {
         let b0 = w.blocks.get(0).unwrap();
-        assert!(b0.ops.iter().any(|op| matches!(op.kind, OpKind::Drop { .. })));
+        assert!(b0
+            .ops
+            .iter()
+            .any(|op| matches!(op.kind, OpKind::Drop { .. })));
     });
 }
 
@@ -58,7 +64,10 @@ fn stack_swap() {
     let (env, len) = builtin_env();
     check_ok_with("1 2 swap drop drop", &[], &[], &env[..len], |w: &Word| {
         let b0 = w.blocks.get(0).unwrap();
-        assert!(b0.ops.iter().any(|op| matches!(op.kind, OpKind::Swap { .. })));
+        assert!(b0
+            .ops
+            .iter()
+            .any(|op| matches!(op.kind, OpKind::Swap { .. })));
     });
 }
 
@@ -102,7 +111,13 @@ fn comparison() {
     let (env, len) = builtin_env();
     check_ok_with("1 2 < drop", &[], &[], &env[..len], |w: &Word| {
         let b0 = w.blocks.get(0).unwrap();
-        assert!(b0.ops.iter().any(|op| matches!(op.kind, OpKind::Cmp { kind: CmpKind::Lt, .. })));
+        assert!(b0.ops.iter().any(|op| matches!(
+            op.kind,
+            OpKind::Cmp {
+                kind: CmpKind::Lt,
+                ..
+            }
+        )));
     });
 }
 
@@ -128,7 +143,10 @@ fn string_literal() {
     let (env, len) = builtin_env();
     check_ok_with(r#""hello" drop"#, &[], &[], &env[..len], |w: &Word| {
         let b0 = w.blocks.get(0).unwrap();
-        assert!(b0.ops.iter().any(|op| matches!(op.kind, OpKind::ConstStr { .. })));
+        assert!(b0
+            .ops
+            .iter()
+            .any(|op| matches!(op.kind, OpKind::ConstStr { .. })));
     });
 }
 
@@ -159,17 +177,29 @@ fn word_with_outputs() {
 #[test]
 fn if_expression() {
     let (env, len) = builtin_env();
-    check_ok_with("true [ 1 ] [ 2 ] if drop", &[], &[], &env[..len], |w: &Word| {
-        assert!(w.blocks.len() >= 3);
-    });
+    check_ok_with(
+        "true [ 1 ] [ 2 ] if drop",
+        &[],
+        &[],
+        &env[..len],
+        |w: &Word| {
+            assert!(w.blocks.len() >= 3);
+        },
+    );
 }
 
 #[test]
 fn if_with_input_output() {
     let (env, len) = builtin_env();
-    check_ok_with("[ 1 ] [ 2 ] if drop", &[b"bool"], &[], &env[..len], |w: &Word| {
-        assert!(w.blocks.len() >= 3);
-    });
+    check_ok_with(
+        "[ 1 ] [ 2 ] if drop",
+        &[b"bool"],
+        &[],
+        &env[..len],
+        |w: &Word| {
+            assert!(w.blocks.len() >= 3);
+        },
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -186,9 +216,10 @@ fn while_loop() {
         &env[..len],
         |w: &Word| {
             assert!(w.blocks.len() >= 2);
-            let has_back_edge = w.blocks.iter().any(|b| {
-                b.ops.iter().any(|op| matches!(op.kind, OpKind::Br { .. }))
-            });
+            let has_back_edge = w
+                .blocks
+                .iter()
+                .any(|b| b.ops.iter().any(|op| matches!(op.kind, OpKind::Br { .. })));
             assert!(has_back_edge, "while loop must produce a back-edge Br");
         },
     );
@@ -287,21 +318,37 @@ fn deep_stack_operations() {
 #[test]
 fn chained_arithmetic() {
     let (env, len) = builtin_env();
-    check_ok_with("1 2 + 3 + 4 + 5 + drop", &[], &[], &env[..len], |w: &Word| {
-        let b0 = w.blocks.get(0).unwrap();
-        let add_count = b0.ops.iter().filter(|op| matches!(op.kind, OpKind::AddI64)).count();
-        assert_eq!(add_count, 4, "chained addition must produce 4 AddI64 ops");
-    });
+    check_ok_with(
+        "1 2 + 3 + 4 + 5 + drop",
+        &[],
+        &[],
+        &env[..len],
+        |w: &Word| {
+            let b0 = w.blocks.get(0).unwrap();
+            let add_count = b0
+                .ops
+                .iter()
+                .filter(|op| matches!(op.kind, OpKind::AddI64))
+                .count();
+            assert_eq!(add_count, 4, "chained addition must produce 4 AddI64 ops");
+        },
+    );
 }
 
 #[test]
 fn mixed_boolean() {
     let (env, len) = builtin_env();
-    check_ok_with("true false and not drop", &[], &[], &env[..len], |w: &Word| {
-        let b0 = w.blocks.get(0).unwrap();
-        assert!(b0.ops.iter().any(|op| matches!(op.kind, OpKind::AndBool)));
-        assert!(b0.ops.iter().any(|op| matches!(op.kind, OpKind::NotBool)));
-    });
+    check_ok_with(
+        "true false and not drop",
+        &[],
+        &[],
+        &env[..len],
+        |w: &Word| {
+            let b0 = w.blocks.get(0).unwrap();
+            assert!(b0.ops.iter().any(|op| matches!(op.kind, OpKind::AndBool)));
+            assert!(b0.ops.iter().any(|op| matches!(op.kind, OpKind::NotBool)));
+        },
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -311,45 +358,83 @@ fn mixed_boolean() {
 #[test]
 fn dup_of_dup() {
     let (env, len) = builtin_env();
-    check_ok_with("42 dup dup drop drop drop", &[], &[], &env[..len], |w: &Word| {
-        assert!(w.blocks.len() >= 1);
-    });
+    check_ok_with(
+        "42 dup dup drop drop drop",
+        &[],
+        &[],
+        &env[..len],
+        |w: &Word| {
+            assert!(w.blocks.len() >= 1);
+        },
+    );
 }
 
 #[test]
 fn swap_rotate_pattern() {
     let (env, len) = builtin_env();
-    check_ok_with("1 2 3 swap drop swap drop drop", &[], &[], &env[..len], |w: &Word| {
-        let b0 = w.blocks.get(0).unwrap();
-        let swap_count = b0.ops.iter().filter(|op| matches!(op.kind, OpKind::Swap { .. })).count();
-        assert!(swap_count >= 2);
-    });
+    check_ok_with(
+        "1 2 3 swap drop swap drop drop",
+        &[],
+        &[],
+        &env[..len],
+        |w: &Word| {
+            let b0 = w.blocks.get(0).unwrap();
+            let swap_count = b0
+                .ops
+                .iter()
+                .filter(|op| matches!(op.kind, OpKind::Swap { .. }))
+                .count();
+            assert!(swap_count >= 2);
+        },
+    );
 }
 
 #[test]
 fn nested_if() {
     let (env, len) = builtin_env();
-    check_ok_with("true [ true [ 1 ] [ 2 ] if ] [ 3 ] if drop", &[], &[], &env[..len], |w: &Word| {
-        assert!(w.blocks.len() >= 5);
-    });
+    check_ok_with(
+        "true [ true [ 1 ] [ 2 ] if ] [ 3 ] if drop",
+        &[],
+        &[],
+        &env[..len],
+        |w: &Word| {
+            assert!(w.blocks.len() >= 5);
+        },
+    );
 }
 
 #[test]
 fn deep_nested_if() {
     let (env, len) = builtin_env();
-    check_ok_with("true [ true [ true [ 1 ] [ 2 ] if ] [ 3 ] if ] [ 4 ] if drop", &[], &[], &env[..len], |w: &Word| {
-        assert!(w.blocks.len() >= 7);
-    });
+    check_ok_with(
+        "true [ true [ true [ 1 ] [ 2 ] if ] [ 3 ] if ] [ 4 ] if drop",
+        &[],
+        &[],
+        &env[..len],
+        |w: &Word| {
+            assert!(w.blocks.len() >= 7);
+        },
+    );
 }
 
 #[test]
 fn multiple_strings() {
     let (env, len) = builtin_env();
-    check_ok_with(r#""a" "b" "c" drop drop drop"#, &[], &[], &env[..len], |w: &Word| {
-        let b0 = w.blocks.get(0).unwrap();
-        let str_count = b0.ops.iter().filter(|op| matches!(op.kind, OpKind::ConstStr { .. })).count();
-        assert_eq!(str_count, 3);
-    });
+    check_ok_with(
+        r#""a" "b" "c" drop drop drop"#,
+        &[],
+        &[],
+        &env[..len],
+        |w: &Word| {
+            let b0 = w.blocks.get(0).unwrap();
+            let str_count = b0
+                .ops
+                .iter()
+                .filter(|op| matches!(op.kind, OpKind::ConstStr { .. }))
+                .count();
+            assert_eq!(str_count, 3);
+        },
+    );
 }
 
 #[test]
@@ -366,7 +451,11 @@ fn comparison_chain() {
     let (env, len) = builtin_env();
     check_ok_with("1 2 < 3 4 < and drop", &[], &[], &env[..len], |w: &Word| {
         let b0 = w.blocks.get(0).unwrap();
-        let cmp_count = b0.ops.iter().filter(|op| matches!(op.kind, OpKind::Cmp { .. })).count();
+        let cmp_count = b0
+            .ops
+            .iter()
+            .filter(|op| matches!(op.kind, OpKind::Cmp { .. }))
+            .count();
         assert_eq!(cmp_count, 2);
     });
 }
@@ -374,9 +463,15 @@ fn comparison_chain() {
 #[test]
 fn while_with_body() {
     let (env, len) = builtin_env();
-    check_ok_with("[ dup 0 > ] [ 1 - ] while", &[b"i64"], &[b"i64"], &env[..len], |w: &Word| {
-        assert!(w.blocks.len() >= 2);
-    });
+    check_ok_with(
+        "[ dup 0 > ] [ 1 - ] while",
+        &[b"i64"],
+        &[b"i64"],
+        &env[..len],
+        |w: &Word| {
+            assert!(w.blocks.len() >= 2);
+        },
+    );
 }
 
 #[test]
@@ -390,17 +485,29 @@ fn const_str_drop() {
 #[test]
 fn if_without_else_value() {
     let (env, len) = builtin_env();
-    check_ok_with("true [ ] [ ] if", &[b"i64"], &[b"i64"], &env[..len], |w: &Word| {
-        assert!(w.blocks.len() >= 3);
-    });
+    check_ok_with(
+        "true [ ] [ ] if",
+        &[b"i64"],
+        &[b"i64"],
+        &env[..len],
+        |w: &Word| {
+            assert!(w.blocks.len() >= 3);
+        },
+    );
 }
 
 #[test]
 fn while_countdown() {
     let (env, len) = builtin_env();
-    check_ok_with("[ dup 0 > ] [ 1 - ] while", &[b"i64"], &[b"i64"], &env[..len], |w: &Word| {
-        assert!(w.blocks.len() >= 2);
-    });
+    check_ok_with(
+        "[ dup 0 > ] [ 1 - ] while",
+        &[b"i64"],
+        &[b"i64"],
+        &env[..len],
+        |w: &Word| {
+            assert!(w.blocks.len() >= 2);
+        },
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -427,7 +534,9 @@ fn builtin_words_contains_dup() {
 #[test]
 fn builtin_words_contains_platform_task_yield() {
     let words = semantics::typecheck::builtin_words();
-    assert!(words.iter().any(|w| w.name.as_bytes() == b"platform.task.yield"));
+    assert!(words
+        .iter()
+        .any(|w| w.name.as_bytes() == b"platform.task.yield"));
 }
 
 // ---------------------------------------------------------------------------

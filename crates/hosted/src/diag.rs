@@ -21,4 +21,3 @@ pub fn error_simple(code: u32, msg: &[u8]) -> Result<(), Errno> {
     let _ = io::stderr(msg);
     io::stderr(b"\n")
 }
-

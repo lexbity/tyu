@@ -313,7 +313,7 @@ end;\n",
         .unwrap();
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("error[E3506]"));
+    assert!(stderr.contains("error[E5020]"));
 }
 
 #[test]
@@ -412,8 +412,14 @@ fn cur_word_id_is_full_64bit_not_truncated() {
     // upper 32 bits, so the old `as u32` truncation (now removed) was
     // semantically wrong for all of them.
     let words = [
-        "main", "f", "g", "helper", "test", "trigger-trap",
-        "platform.task.yield", "testio.write-byte",
+        "main",
+        "f",
+        "g",
+        "helper",
+        "test",
+        "trigger-trap",
+        "platform.task.yield",
+        "testio.write-byte",
     ];
     for word in &words {
         let hash = fnv1a_u64(word.as_bytes());
@@ -530,4 +536,3 @@ fn debug_trap_loc_emits_64bit_word_hash() {
          (otherwise the truncation wouldn't matter)"
     );
 }
-

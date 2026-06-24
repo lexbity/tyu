@@ -1,0 +1,3 @@
+: platform.uart.init ( usize -- ) performs {mmio} ;
+: platform.uart.tx ( u8 -- ) performs {mmio} ;
+: platform.uart.rx ( -- u8 bool ) performs {mmio} ;

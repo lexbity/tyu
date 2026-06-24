@@ -1,0 +1,60 @@
+[platform]
+name = "rp2350"
+compiler-interface = 1
+description = "Raspberry Pi Pico 2 / RP2350 custom platform"
+
+[[platform.isa]]
+triple = "armv7m-unknown-none"
+arch = "arm"
+default = true
+expected_abi_hash = "0xac34c6b7f7c80145"
+metal = { path = "metal/armv7m", startup = "runtime.asm", linker = "link.ld" }
+
+[[platform.isa]]
+triple = "riscv32-unknown-none"
+arch = "riscv"
+expected_abi_hash = "0xa7df1edbd11ba544"
+metal = { path = "metal/riscv32", startup = "runtime.asm", linker = "link.ld" }
+
+[metal]
+path = "metal/armv7m"
+startup = "runtime.asm"
+linker = "link.ld"
+
+[memory]
+flash = { name = "FLASH", origin = 0x10000000, length = 0x00400000, exec = "xip" }
+sram = { name = "SRAM", origin = 0x20000000, length = 0x00084000 }
+ds_region = "SRAM"
+ds_size = 0x4000
+
+[capabilities.gpio]
+glue = "glue/gpio"
+
+[capabilities.uart]
+glue = "glue/uart"
+
+[capabilities.time]
+glue = "glue/time"
+
+[deploy]
+method = "uf2"
+boot = "image_def"
+
+[[deploy.step]]
+run = "picotool"
+args = ["load", "{elf}", "-f", "-x"]
+
+[debug]
+diag_transport = "uart0"
+rsp = "probe"
+probe = "openocd"
+probe_config = "rp2350.cfg"
+
+[test]
+rung = "hardware"
+target = "crates/tyu/tests/platform_hil.rs"
+evidence = "docs/hil/rp2350.md"
+
+[secure_boot]
+supported = false
+encryption_implies_secure_boot = true

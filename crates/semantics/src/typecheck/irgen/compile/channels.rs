@@ -1,7 +1,6 @@
 use super::*;
 
 impl<'a, 'r> IrWordGen<'a, 'r> {
-
     pub(super) fn compile_channel_send(
         &mut self,
         cur: lir::BlockId,
@@ -45,7 +44,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         Ok(cur)
     }
 
-
     pub(super) fn compile_channel_recv(
         &mut self,
         cur: lir::BlockId,
@@ -87,6 +85,4 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         )?;
         Ok(cur)
     }
-
-
 }

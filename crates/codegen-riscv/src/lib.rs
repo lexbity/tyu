@@ -1,5 +1,9 @@
 #![no_std]
 #![deny(unsafe_op_in_unsafe_fn)]
+//! RISC-V code generation backend for Tyu.
+//!
+//! The public surface is centered on `RiscVBackend`, with support modules in
+//! `ophelpers`, `postlude`, `prelude`, and `word`.
 
 use codegen_core::{AsmMode, CodegenBackend, CodegenError};
 use frontend::{
@@ -57,16 +61,26 @@ impl<'a> RiscVBackend<'a> {
         mode: AsmMode,
     ) -> Self {
         Self {
-            module, src, out, mode,
+            module,
+            src,
+            out,
+            mode,
             label_id: 0,
             str_len: 0,
             str_spans: [Span::UNKNOWN; 128],
             str_ids: [0u32; 128],
             debug_trap_loc,
             cur_word_id: 0,
-            mi_exports: [ModInfoExport { name: lir::AT_EMPTY, effects: 0, requires_caps: 0, stack_bound: 0 }; 64],
+            mi_exports: [ModInfoExport {
+                name: lir::AT_EMPTY,
+                effects: 0,
+                requires_caps: 0,
+                stack_bound: 0,
+            }; 64],
             mi_export_count: 0,
-            mi_imports: [ModInfoImport { name: lir::AT_EMPTY }; 64],
+            mi_imports: [ModInfoImport {
+                name: lir::AT_EMPTY,
+            }; 64],
             mi_import_count: 0,
             expected_abi_hash: 0,
             uses_tasks: false,
@@ -83,28 +97,63 @@ impl<'a> RiscVBackend<'a> {
     }
 
     pub(crate) fn emit_modinfo_section(&mut self) -> Result<(), CodegenError> {
-        if self.mode != AsmMode::Object { return Ok(()); }
+        if self.mode != AsmMode::Object {
+            return Ok(());
+        }
         let export_count = self.mi_export_count;
         let import_count = self.mi_import_count;
-        let mut export_entries = [lmod::modinfo::ExportEntry { sym_hash: 0, name: b"", effects: 0, requires_caps: 0, stack_bound: 0 }; 64];
+        let mut export_entries = [lmod::modinfo::ExportEntry {
+            sym_hash: 0,
+            name: b"",
+            effects: 0,
+            requires_caps: 0,
+            stack_bound: 0,
+        }; 64];
         for i in 0..export_count {
             let mi = &self.mi_exports[i];
             let name = mi.name.as_bytes();
-            export_entries[i] = lmod::modinfo::ExportEntry { sym_hash: lmod::hash::fnv1a_u64(name), name, effects: mi.effects, requires_caps: mi.requires_caps, stack_bound: mi.stack_bound };
+            export_entries[i] = lmod::modinfo::ExportEntry {
+                sym_hash: lmod::hash::fnv1a_u64(name),
+                name,
+                effects: mi.effects,
+                requires_caps: mi.requires_caps,
+                stack_bound: mi.stack_bound,
+            };
         }
-        let mut import_entries = [lmod::modinfo::ImportEntry { sym_hash: 0, name: b"" }; 64];
+        let mut import_entries = [lmod::modinfo::ImportEntry {
+            sym_hash: 0,
+            name: b"",
+        }; 64];
         for i in 0..import_count {
             let name = self.mi_imports[i].name.as_bytes();
-            import_entries[i] = lmod::modinfo::ImportEntry { sym_hash: lmod::hash::fnv1a_u64(name), name };
+            import_entries[i] = lmod::modinfo::ImportEntry {
+                sym_hash: lmod::hash::fnv1a_u64(name),
+                name,
+            };
         }
         let module_name = ophelpers::slice_span(self.src, self.module.name);
         let mut buf = [0u8; 8192];
-        let abi_hash = if self.expected_abi_hash != 0 { self.expected_abi_hash } else { lmod::abi_hash::compute_abi_hash(4, 32, lmod::modinfo::MODINFO_VER) };
-        if let Some(size) = lmod::modinfo::encode_into(&mut buf, module_name, &export_entries[..export_count], &import_entries[..import_count], abi_hash, 0, &[]) {
+        let abi_hash = if self.expected_abi_hash != 0 {
+            self.expected_abi_hash
+        } else {
+            lmod::abi_hash::compute_abi_hash(3, 4, 32, lmod::modinfo::MODINFO_VER)
+        };
+        if let Some(size) = lmod::modinfo::encode_into(
+            &mut buf,
+            module_name,
+            &export_entries[..export_count],
+            &import_entries[..import_count],
+            abi_hash,
+            0,
+            &[],
+        ) {
             self.out.write(b"\t.section .lang.modinfo\n\t.byte ");
             if size > 0 {
                 ophelpers::write_u32(self.out, buf[0] as u32);
-                for i in 1..size { self.out.write(b","); ophelpers::write_u32(self.out, buf[i] as u32); }
+                for i in 1..size {
+                    self.out.write(b",");
+                    ophelpers::write_u32(self.out, buf[i] as u32);
+                }
             }
             self.out.write(b"\n");
         }
@@ -113,9 +162,20 @@ impl<'a> RiscVBackend<'a> {
 }
 
 impl<'a> CodegenBackend for RiscVBackend<'a> {
-    fn emit_prelude(&mut self) -> Result<(), CodegenError> { RiscVBackend::emit_prelude(self) }
-    fn emit_word(&mut self, w: &lir::Word) -> Result<(), CodegenError> { RiscVBackend::emit_word(self, w) }
-    fn emit_postlude(&mut self) -> Result<(), CodegenError> { RiscVBackend::emit_postlude(self) }
-    fn emit_extern_word(&mut self, name: &[u8]) -> Result<(), CodegenError> { RiscVBackend::emit_extern_word(self, name); Ok(()) }
-    fn set_expected_abi_hash(&mut self, hash: u64) { self.expected_abi_hash = hash; }
+    fn emit_prelude(&mut self) -> Result<(), CodegenError> {
+        RiscVBackend::emit_prelude(self)
+    }
+    fn emit_word(&mut self, w: &lir::Word) -> Result<(), CodegenError> {
+        RiscVBackend::emit_word(self, w)
+    }
+    fn emit_postlude(&mut self) -> Result<(), CodegenError> {
+        RiscVBackend::emit_postlude(self)
+    }
+    fn emit_extern_word(&mut self, name: &[u8]) -> Result<(), CodegenError> {
+        RiscVBackend::emit_extern_word(self, name);
+        Ok(())
+    }
+    fn set_expected_abi_hash(&mut self, hash: u64) {
+        self.expected_abi_hash = hash;
+    }
 }

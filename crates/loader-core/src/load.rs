@@ -1,7 +1,7 @@
 //! Loader driver — the target-independent half of `__lang_load_module`.
 //!
-//! Implements module-format-and-loading.md §9 (loader algorithm) for Tier 0
-//! (no signature verification, no Tier-2 re-derivation).
+//! Implements module-format-and-loading.md §9 (loader algorithm) for TrustLevel Zero
+//! (no signature verification, no TrustLevel-Two re-derivation).
 //!
 //! Phase 9 additions: transactional rollback, `__lang_mod_init` hook,
 //! load-once enforcement, failure atomicity.
@@ -13,10 +13,10 @@ use lmod::validate::Container;
 
 // Re-export the error type and legacy numeric shims for external callers.
 pub use crate::error::{
-    E_ABI_MISMATCH, E_BAD_CONTAINER, E_RELOC_UNSUPPORTED, E_SIG_INVALID, E_SYMBOL_UNRESOLVED,
-    E_SYMBOL_CONFLICT, E_MODULE_DECLARES_ISR, E_RESOURCE_SHARING_MISMATCH,
-    E_CONTAINER_ENCRYPTED, E_MODULE_ALREADY_LOADED, E_STACK_BOUND_UNVERIFIABLE,
-    E_ENC_UNSUPPORTED, E_ENC_REQUIRES_SIGNED, E_ENC_NO_KEY, E_ENC_AUTH_FAIL, E_ENC_BAD_HEADER,
+    E_ABI_MISMATCH, E_BAD_CONTAINER, E_CONTAINER_ENCRYPTED, E_ENC_AUTH_FAIL, E_ENC_BAD_HEADER,
+    E_ENC_NO_KEY, E_ENC_REQUIRES_SIGNED, E_ENC_UNSUPPORTED, E_MODULE_ALREADY_LOADED,
+    E_MODULE_DECLARES_ISR, E_RELOC_UNSUPPORTED, E_RESOURCE_SHARING_MISMATCH, E_SIG_INVALID,
+    E_STACK_BOUND_UNVERIFIABLE, E_SYMBOL_CONFLICT, E_SYMBOL_UNRESOLVED,
 };
 
 /// Name of the optional per-module init word.
@@ -59,7 +59,7 @@ impl<'a, 'e, const N: usize> Drop for RollbackGuard<'a, 'e, N> {
 
 /// Intentionally empty — allocation release is a future phase.
 /// Phase 9 guarantees symbol-map atomicity; allocation cleanup is
-/// process-scoped for Tier 0 (exiting frees all mmap'd regions).
+/// process-scoped for TrustLevel Zero (exiting frees all mmap'd regions).
 
 /// A fixed-capacity set of module identifiers used to enforce load-once.
 ///
@@ -119,7 +119,7 @@ pub struct LoadedModule {
 // Loader algorithm
 // ---------------------------------------------------------------------------
 
-/// Run the loader algorithm (§9 steps 1–9) for a Tier-0 (unsigned) module,
+/// Run the loader algorithm (§9 steps 1–9) for a TrustLevel-Zero (unsigned) module,
 /// with Phase 9 transactional rollback and init-hook support.
 ///
 /// - On success, the module's exports are registered in `global_map`.
@@ -156,14 +156,14 @@ pub fn load_module<'a>(
 
     // Signed-flag consistency check (module-format §3).
     if hdr.flags & lmod::header::LMOD_FLAG_SIGNED != 0
-        && platform.trust_tier().rank() < crate::platform::Tier::One.rank()
+        && platform.trust_level().rank() < crate::platform::TrustLevel::One.rank()
     {
         return Err(LoadError::SigInvalid);
     }
 
-    // Step 4: Signature verification (Tier ≥ 1).
+    // Step 4: Signature verification (TrustLevel ≥ 1).
     let raw_bytes = container.raw_bytes();
-    if platform.trust_tier().rank() >= crate::platform::Tier::One.rank() {
+    if platform.trust_level().rank() >= crate::platform::TrustLevel::One.rank() {
         let region_len = lmod::sig::signed_region_len(hdr);
         if region_len > raw_bytes.len() {
             return Err(LoadError::BadContainer);
@@ -189,11 +189,13 @@ pub fn load_module<'a>(
 
     if hdr.flags & lmod::header::LMOD_FLAG_ENCRYPTED != 0 {
         #[cfg(not(feature = "encryption"))]
-        { return Err(LoadError::EncUnsupported); }
+        {
+            return Err(LoadError::EncUnsupported);
+        }
 
         #[cfg(feature = "encryption")]
         {
-            if platform.trust_tier().rank() < crate::platform::Tier::One.rank() {
+            if platform.trust_level().rank() < crate::platform::TrustLevel::One.rank() {
                 return Err(LoadError::EncRequiresSigned);
             }
             // Parse enc-header.
@@ -205,7 +207,10 @@ pub fn load_module<'a>(
             let mut cek = [0u8; 32];
             let mut cek_found = false;
             for slot in &eh.wrapped_slots {
-                if platform.unwrap_cek(slot.key_id, &slot.wrapped, &mut cek).is_ok() {
+                if platform
+                    .unwrap_cek(slot.key_id, &slot.wrapped, &mut cek)
+                    .is_ok()
+                {
                     cek_found = true;
                     break;
                 }
@@ -228,12 +233,14 @@ pub fn load_module<'a>(
             aad_header.copy_from_slice(&raw_bytes[..lmod::header::HEADER_SIZE as usize]);
             aad_header[16..20].copy_from_slice(&aad_total_len.to_le_bytes());
             // Clear the SIGNED flag — it was added after encryption.
-            let aad_flags = u16::from_le_bytes([aad_header[6], aad_header[7]]) & !lmod::header::LMOD_FLAG_SIGNED;
+            let aad_flags = u16::from_le_bytes([aad_header[6], aad_header[7]])
+                & !lmod::header::LMOD_FLAG_SIGNED;
             aad_header[6..8].copy_from_slice(&aad_flags.to_le_bytes());
             // sig_len was 0 before signing (no trailer).
             aad_header[68..72].copy_from_slice(&0u32.to_le_bytes());
             aad_buf.extend_from_slice(&aad_header);
-            let mut eh_for_aad = eh_bytes[..lmod::enc::enc_header_len(eh.wrapped_slots.len())].to_vec();
+            let mut eh_for_aad =
+                eh_bytes[..lmod::enc::enc_header_len(eh.wrapped_slots.len())].to_vec();
             let tag_off_in_eh = 4 + lmod::enc::NONCE_LEN;
             eh_for_aad[tag_off_in_eh..tag_off_in_eh + lmod::enc::TAG_LEN].fill(0);
             aad_buf.extend_from_slice(&eh_for_aad);
@@ -285,16 +292,22 @@ pub fn load_module<'a>(
     }
 
     if code_len > 0 {
-        unsafe { code_region.as_mut_slice().copy_from_slice(container.code()); }
+        unsafe {
+            code_region.as_mut_slice().copy_from_slice(container.code());
+        }
     }
     if let Some(ref mut ro) = rodata_region {
         if rodata_len > 0 {
-            unsafe { ro.as_mut_slice().copy_from_slice(container.rodata()); }
+            unsafe {
+                ro.as_mut_slice().copy_from_slice(container.rodata());
+            }
         }
     }
     if let Some(ref mut rw) = data_region {
         if data_len > 0 {
-            unsafe { rw.as_mut_slice()[..data_len].copy_from_slice(container.data()); }
+            unsafe {
+                rw.as_mut_slice()[..data_len].copy_from_slice(container.data());
+            }
         }
     }
 
@@ -337,60 +350,77 @@ pub fn load_module<'a>(
                         // Append rodata+data after code in the code region.
                         cs[code_len..code_len + rodata_len].copy_from_slice(&tmp[..rodata_len]);
                         if data_len > 0 {
-                            cs[code_len + rodata_len..payload_len].copy_from_slice(
-                                &tmp[rodata_len..rodata_len + data_len]
-                            );
+                            cs[code_len + rodata_len..payload_len]
+                                .copy_from_slice(&tmp[rodata_len..rodata_len + data_len]);
                         }
                         // Decrypt the full payload in place (code region).
                         crate::crypto::chacha20poly1305::decrypt_payload(
-                            cek, &decrypted_nonce, &decrypted_tag, &aad_buf,
+                            cek,
+                            &decrypted_nonce,
+                            &decrypted_tag,
+                            &aad_buf,
                             &mut cs[..payload_len],
-                        ).map_err(|_| LoadError::EncAuthFail)?;
+                        )
+                        .map_err(|_| LoadError::EncAuthFail)?;
 
                         // Scatter back to rodata and data regions.
                         if rodata_len > 0 {
                             if let Some(ref mut ro) = rodata_region {
                                 let ro_slice = unsafe { ro.as_mut_slice() };
-                                ro_slice[..rodata_len].copy_from_slice(&cs[code_len..code_len + rodata_len]);
+                                ro_slice[..rodata_len]
+                                    .copy_from_slice(&cs[code_len..code_len + rodata_len]);
                             }
                         }
                         if data_len > 0 {
                             if let Some(ref mut rw) = data_region {
                                 let rw_slice = unsafe { rw.as_mut_slice() };
-                                rw_slice[..data_len].copy_from_slice(&cs[code_len + rodata_len..payload_len]);
+                                rw_slice[..data_len]
+                                    .copy_from_slice(&cs[code_len + rodata_len..payload_len]);
                             }
                         }
                     } else {
                         // Not enough extra space — use a temp Vec (rare).
                         let mut payload_buf = alloc::vec![0u8; payload_len];
                         payload_buf[..code_len].copy_from_slice(&cs[..code_len]);
-                        payload_buf[code_len..code_len + rodata_len].copy_from_slice(&tmp[..rodata_len]);
-                        payload_buf[code_len + rodata_len..payload_len].copy_from_slice(
-                            &tmp[rodata_len..rodata_len + data_len]
-                        );
+                        payload_buf[code_len..code_len + rodata_len]
+                            .copy_from_slice(&tmp[..rodata_len]);
+                        payload_buf[code_len + rodata_len..payload_len]
+                            .copy_from_slice(&tmp[rodata_len..rodata_len + data_len]);
                         crate::crypto::chacha20poly1305::decrypt_payload(
-                            cek, &decrypted_nonce, &decrypted_tag, &aad_buf, &mut payload_buf,
-                        ).map_err(|_| LoadError::EncAuthFail)?;
+                            cek,
+                            &decrypted_nonce,
+                            &decrypted_tag,
+                            &aad_buf,
+                            &mut payload_buf,
+                        )
+                        .map_err(|_| LoadError::EncAuthFail)?;
                         cs[..code_len].copy_from_slice(&payload_buf[..code_len]);
                         if rodata_len > 0 {
                             if let Some(ref mut ro) = rodata_region {
                                 let ro_slice = unsafe { ro.as_mut_slice() };
-                                ro_slice[..rodata_len].copy_from_slice(&payload_buf[code_len..code_len + rodata_len]);
+                                ro_slice[..rodata_len]
+                                    .copy_from_slice(&payload_buf[code_len..code_len + rodata_len]);
                             }
                         }
                         if data_len > 0 {
                             if let Some(ref mut rw) = data_region {
                                 let rw_slice = unsafe { rw.as_mut_slice() };
-                                rw_slice[..data_len].copy_from_slice(&payload_buf[code_len + rodata_len..payload_len]);
+                                rw_slice[..data_len].copy_from_slice(
+                                    &payload_buf[code_len + rodata_len..payload_len],
+                                );
                             }
                         }
                     }
                 } else {
                     // Only code section — decrypt directly in code region.
                     crate::crypto::chacha20poly1305::decrypt_payload(
-                        cek, &decrypted_nonce, &decrypted_tag, &aad_buf,
+                        cek,
+                        &decrypted_nonce,
+                        &decrypted_tag,
+                        &aad_buf,
                         &mut cs[..code_len],
-                    ).map_err(|_| LoadError::EncAuthFail)?;
+                    )
+                    .map_err(|_| LoadError::EncAuthFail)?;
                 }
             }
         }
@@ -402,10 +432,14 @@ pub fn load_module<'a>(
     for i in 0..container.reloc_count() {
         let entry = container.reloc_entry(i).ok_or(LoadError::BadContainer)?;
         let site_off = entry.site_off as u64;
-        if site_off < container_code_off { continue; }
+        if site_off < container_code_off {
+            continue;
+        }
         let local_off = (site_off - container_code_off) as usize;
         let need = if entry.kind == 1 { 8 } else { 4 };
-        if local_off + need > code_len { return Err(LoadError::BadContainer); }
+        if local_off + need > code_len {
+            return Err(LoadError::BadContainer);
+        }
         let sym = sym_guard
             .map
             .lookup_by_hash(entry.sym_hash)
@@ -430,18 +464,21 @@ pub fn load_module<'a>(
     if !modinfo_data.is_empty() {
         let mi = lmod::modinfo::decode(modinfo_data).ok_or(LoadError::BadContainer)?;
         for ei in 0..mi.export_count {
-            let exp = lmod::modinfo::read_export(modinfo_data, ei).ok_or(LoadError::BadContainer)?;
-            if exp.name == MOD_INIT_NAME { continue; }
+            let exp =
+                lmod::modinfo::read_export(modinfo_data, ei).ok_or(LoadError::BadContainer)?;
+            if exp.name == MOD_INIT_NAME {
+                continue;
+            }
             sym_guard.map.register(exp.name, code_base as usize)?;
         }
     }
 
-    // Phase 13: Tier-2 stack_bound re-derivation.
+    // Phase 13: TrustLevel-Two stack_bound re-derivation.
     // Trust relationship: the producer's `stamped` bound must be AT LEAST the
     // independently-re-derived bound.  Reject when `rederived > stamped`
     // (producer under-declared) or when the scanner returns `⊤` and the
     // producer claims a finite bound the loader cannot confirm.
-    if platform.trust_tier().rank() >= crate::platform::Tier::Two.rank() {
+    if platform.trust_level().rank() >= crate::platform::TrustLevel::Two.rank() {
         let code_slice = unsafe { code_region.as_mut_slice() };
         let arch = crate::rederive::Arch::detect_from_code(code_slice);
         let slot_bytes: u32 = match arch {
@@ -454,14 +491,19 @@ pub fn load_module<'a>(
         if !modinfo_data.is_empty() {
             let mi = lmod::modinfo::decode(modinfo_data).ok_or(LoadError::BadContainer)?;
             for ei in 0..mi.export_count {
-                let exp = lmod::modinfo::read_export(modinfo_data, ei).ok_or(LoadError::BadContainer)?;
-                if exp.name == MOD_INIT_NAME { continue; }
+                let exp =
+                    lmod::modinfo::read_export(modinfo_data, ei).ok_or(LoadError::BadContainer)?;
+                if exp.name == MOD_INIT_NAME {
+                    continue;
+                }
                 let stamped = read_word_meta_stack_bound(modinfo_data, exp.value_off)?;
                 if stamped == crate::rederive::TOP_SENTINEL {
                     // Producer could not bound either — reject (no finite bound).
                     return Err(LoadError::BadContainer);
                 }
-                if rederived == crate::rederive::TOP_SENTINEL && stamped != crate::rederive::TOP_SENTINEL {
+                if rederived == crate::rederive::TOP_SENTINEL
+                    && stamped != crate::rederive::TOP_SENTINEL
+                {
                     // Scanner cannot confirm the producer's finite claim.
                     return Err(LoadError::StackBoundUnverifiable);
                 }
@@ -492,12 +534,10 @@ pub fn load_module<'a>(
 
     Ok(LoadedModule {
         code: code_region,
-        rodata: rodata_region.unwrap_or_else(|| unsafe {
-            Region::from_raw_parts(core::ptr::null_mut(), 0)
-        }),
-        data: data_region.unwrap_or_else(|| unsafe {
-            Region::from_raw_parts(core::ptr::null_mut(), 0)
-        }),
+        rodata: rodata_region
+            .unwrap_or_else(|| unsafe { Region::from_raw_parts(core::ptr::null_mut(), 0) }),
+        data: data_region
+            .unwrap_or_else(|| unsafe { Region::from_raw_parts(core::ptr::null_mut(), 0) }),
         init_addr,
         abi_hash: hdr.abi_hash,
     })
@@ -546,7 +586,7 @@ fn lookup_mod_init<'a>(container: &'a Container<'a>, code_base: u64) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::platform::Tier;
+    use crate::platform::TrustLevel;
     use alloc::vec;
 
     /// Static buffer for TestPlatform allocations (page-aligned, 64KB).
@@ -556,12 +596,15 @@ mod tests {
     struct TestPlatform {
         expected_hash: u64,
         fail: bool,
+        trust_level: TrustLevel,
     }
     impl LoaderPlatform for TestPlatform {
         fn alloc_exec(&mut self, len: usize) -> Result<Region, u32> {
             let buf = unsafe { &mut *core::ptr::addr_of_mut!(TEST_BUF) };
             let used = unsafe { TEST_BUF_USED };
-            if used + len > buf.len() { return Err(1); }
+            if used + len > buf.len() {
+                return Err(1);
+            }
             let ptr = unsafe { buf.as_mut_ptr().add(used) };
             unsafe { TEST_BUF_USED = used + len };
             unsafe { Ok(Region::from_raw_parts(ptr, len)) }
@@ -573,10 +616,18 @@ mod tests {
             self.alloc_exec(len)
         }
         fn make_exec(&mut self, _r: &mut Region) -> Result<(), u32> {
-            if self.fail { Err(1) } else { Ok(()) }
+            if self.fail {
+                Err(1)
+            } else {
+                Ok(())
+            }
         }
-        fn expected_abi_hash(&self) -> u64 { self.expected_hash }
-        fn trust_tier(&self) -> Tier { Tier::Zero }
+        fn expected_abi_hash(&self) -> u64 {
+            self.expected_hash
+        }
+        fn trust_level(&self) -> TrustLevel {
+            self.trust_level
+        }
     }
 
     #[test]
@@ -615,12 +666,12 @@ mod tests {
         let mut set = LoadedSet::<8>::new();
         assert!(set.insert(42).is_ok());
         assert!(set.insert(42).is_err()); // duplicate
-        assert!(set.insert(99).is_ok());  // different hash
+        assert!(set.insert(99).is_ok()); // different hash
     }
 
     #[test]
-    fn signed_flag_without_tier_1_rejected() {
-        // Build a module with the SIGNED flag set, but use a Tier-0 platform.
+    fn signed_flag_without_trust_level_one_rejected() {
+        // Build a module with the SIGNED flag set, but use a TrustLevel-One platform.
         let mut mi_buf = [0u8; 128];
         let mi_size = lmod::modinfo::encode_into(&mut mi_buf, b"T", &[], &[], 0, 0, &[]).unwrap();
         let mut raw = build_minimal_lmod_with_modinfo(&mi_buf[..mi_size], 64);
@@ -630,10 +681,17 @@ mod tests {
 
         let mut map: SymMap<'_, 256> = SymMap::new();
         let mut set = LoadedSet::<64>::new();
-        // This platform defaults to Tier 0 — signed module should be rejected.
-        let mut plat = TestPlatform { expected_hash: 0, fail: false };
+        // This platform is TrustLevel One and does not override verify_sig.
+        let mut plat = TestPlatform {
+            expected_hash: 0,
+            fail: false,
+            trust_level: TrustLevel::One,
+        };
         let result = load_module(&container, &mut plat, &mut map, &mut set);
-        assert!(result.is_err(), "signed module on Tier 0 should be rejected");
+        assert!(
+            result.is_err(),
+            "signed module on TrustLevel One should be rejected"
+        );
         assert_eq!(result.unwrap_err(), E_SIG_INVALID);
     }
 
@@ -645,17 +703,24 @@ mod tests {
         raw[6] |= 0x02; // set ENCRYPTED flag
 
         let container = lmod::validate::Container::parse(&raw).unwrap();
-        assert_ne!(container.header().flags & lmod::header::LMOD_FLAG_ENCRYPTED, 0);
+        assert_ne!(
+            container.header().flags & lmod::header::LMOD_FLAG_ENCRYPTED,
+            0
+        );
 
         let mut map: SymMap<'_, 256> = SymMap::new();
         let mut set = LoadedSet::<64>::new();
-        let mut plat = TestPlatform { expected_hash: 0, fail: false };
+        let mut plat = TestPlatform {
+            expected_hash: 0,
+            fail: false,
+            trust_level: TrustLevel::Zero,
+        };
         let result = load_module(&container, &mut plat, &mut map, &mut set);
 
         #[cfg(not(feature = "encryption"))]
         assert_eq!(result.unwrap_err(), E_ENC_UNSUPPORTED);
         #[cfg(feature = "encryption")]
-        // With encryption feature but Tier-0, should fail with E_ENC_REQUIRES_SIGNED.
+        // With encryption feature but TrustLevel Zero, should fail with E_ENC_REQUIRES_SIGNED.
         assert_eq!(result.unwrap_err(), E_ENC_REQUIRES_SIGNED);
     }
 
@@ -691,12 +756,16 @@ mod tests {
             lmod::modinfo::ExportEntry {
                 sym_hash: lmod::hash::fnv1a_u64(b"__lang_mod_init"),
                 name: b"__lang_mod_init",
-                effects: 0, requires_caps: 0, stack_bound: 0,
+                effects: 0,
+                requires_caps: 0,
+                stack_bound: 0,
             },
             lmod::modinfo::ExportEntry {
                 sym_hash: lmod::hash::fnv1a_u64(b"user_word"),
                 name: b"user_word",
-                effects: 0, requires_caps: 0, stack_bound: 0,
+                effects: 0,
+                requires_caps: 0,
+                stack_bound: 0,
             },
         ];
         let mut mi_buf = [0u8; 256];
@@ -723,7 +792,11 @@ mod tests {
         let container = lmod::validate::Container::parse(&bytes).unwrap();
         let mut map: SymMap<'_, 256> = SymMap::new();
         let mut set = LoadedSet::<64>::new();
-        let mut plat = TestPlatform { expected_hash: 0, fail: false };
+        let mut plat = TestPlatform {
+            expected_hash: 0,
+            fail: false,
+            trust_level: TrustLevel::Zero,
+        };
         // This will fail (unresolved symbols) but must not panic.
         let _result = load_module(&container, &mut plat, &mut map, &mut set);
     }
@@ -749,14 +822,14 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
-    // FullPlatform — a Tier One platform with owned bump allocator,
+    // FullPlatform — a TrustLevel One platform with owned bump allocator,
     // real HMAC verification, and (when "encryption" feature is active)
     // real CEK unwrapping.
     // -------------------------------------------------------------------
 
+    use crate::symbols::SymEntry;
     use alloc::vec::Vec;
     use core::cell::Cell;
-    use crate::symbols::SymEntry;
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
     type FullHmacSha256 = Hmac<Sha256>;
@@ -781,7 +854,9 @@ mod tests {
         }
         fn alloc(&self, len: usize) -> Result<Region, u32> {
             let used = self.used.get();
-            if used + len > self.buf.len() { return Err(1); }
+            if used + len > self.buf.len() {
+                return Err(1);
+            }
             let ptr = self.buf.as_ptr() as *mut u8;
             let region = unsafe { Region::from_raw_parts(ptr.add(used), len) };
             self.used.set(used + len);
@@ -790,18 +865,32 @@ mod tests {
     }
 
     impl LoaderPlatform for FullPlatform {
-        fn alloc_exec(&mut self, len: usize) -> Result<Region, u32> { self.alloc(len) }
-        fn alloc_ro(&mut self, len: usize) -> Result<Region, u32> { self.alloc(len) }
-        fn alloc_rw(&mut self, len: usize) -> Result<Region, u32> { self.alloc(len) }
-        fn make_exec(&mut self, _r: &mut Region) -> Result<(), u32> {
-            if self.fail_make_exec { Err(1) } else { Ok(()) }
+        fn alloc_exec(&mut self, len: usize) -> Result<Region, u32> {
+            self.alloc(len)
         }
-        fn expected_abi_hash(&self) -> u64 { self.hash }
-        fn trust_tier(&self) -> crate::platform::Tier { crate::platform::Tier::One }
+        fn alloc_ro(&mut self, len: usize) -> Result<Region, u32> {
+            self.alloc(len)
+        }
+        fn alloc_rw(&mut self, len: usize) -> Result<Region, u32> {
+            self.alloc(len)
+        }
+        fn make_exec(&mut self, _r: &mut Region) -> Result<(), u32> {
+            if self.fail_make_exec {
+                Err(1)
+            } else {
+                Ok(())
+            }
+        }
+        fn expected_abi_hash(&self) -> u64 {
+            self.hash
+        }
+        fn trust_level(&self) -> crate::platform::TrustLevel {
+            crate::platform::TrustLevel::One
+        }
 
         fn verify_sig(&self, signed: &[u8], sig: &[u8]) -> bool {
-            let mut mac = FullHmacSha256::new_from_slice(&self.kek)
-                .expect("HMAC accepts 32-byte key");
+            let mut mac =
+                FullHmacSha256::new_from_slice(&self.kek).expect("HMAC accepts 32-byte key");
             mac.update(signed);
             mac.finalize().into_bytes().as_slice() == sig
         }
@@ -809,15 +898,15 @@ mod tests {
         #[cfg(feature = "encryption")]
         fn unwrap_cek(&self, _key_id: u64, wrapped: &[u8], out: &mut [u8; 32]) -> Result<(), u32> {
             let w: &[u8; 60] = wrapped.try_into().map_err(|_| 1u32)?;
-            let cek = crate::crypto::chacha20poly1305::unwrap_cek(&self.kek, w)
-                .map_err(|_| 1u32)?;
+            let cek =
+                crate::crypto::chacha20poly1305::unwrap_cek(&self.kek, w).map_err(|_| 1u32)?;
             *out = cek;
             Ok(())
         }
     }
 
     /// Build a minimal .lmod whose code section carries `code_bytes` and which
-    /// exports a word named "main" with a given stack bound (Tier-2 test).
+    /// exports a word named "main" with a given stack bound (TrustLevel-Two test).
     fn build_lmod_with_code(code_bytes: &[u8], abi_hash: u64, export_main: bool) -> Vec<u8> {
         let code_len = code_bytes.len() as u32;
         let exports = if export_main {
@@ -835,7 +924,8 @@ mod tests {
         let mi_size = lmod::modinfo::encode_into(&mut mi_buf, b"T", &exports, &[], abi_hash, 0, &[])
             .unwrap_or(0) as u32;
         let reloc_count = 0u32;
-        let layout = lmod::header::compute_layout(abi_hash, mi_size, code_len, 0, 0, 0, reloc_count, 0);
+        let layout =
+            lmod::header::compute_layout(abi_hash, mi_size, code_len, 0, 0, 0, reloc_count, 0);
         let total = layout.total_len as usize;
         let mut buf = alloc::vec![0u8; total];
         lmod::header::encode_header(&mut buf, &layout);
@@ -848,8 +938,7 @@ mod tests {
 
     /// Sign a .lmod container with HMAC-SHA256 using the given key.
     fn sign_lmod(data: &[u8], key: &[u8; 32]) -> Vec<u8> {
-        let mut header = lmod::header::decode_header(data)
-            .expect("valid header for signing");
+        let mut header = lmod::header::decode_header(data).expect("valid header for signing");
         header.flags |= lmod::header::LMOD_FLAG_SIGNED;
         let region_len = lmod::sig::signed_region_len(&header);
         let sig_off = region_len as u32;
@@ -863,8 +952,7 @@ mod tests {
         signed_region[64..68].copy_from_slice(&sig_off.to_le_bytes());
         signed_region[68..72].copy_from_slice(&sig_len.to_le_bytes());
 
-        let mut mac = FullHmacSha256::new_from_slice(key)
-            .expect("HMAC accepts 32-byte key");
+        let mut mac = FullHmacSha256::new_from_slice(key).expect("HMAC accepts 32-byte key");
         mac.update(&signed_region);
         let sig_bytes = mac.finalize().into_bytes();
 
@@ -899,7 +987,8 @@ mod tests {
         let wrap_cipher = ChaCha20Poly1305::new(Key::from_slice(kek));
         let zero_nonce = Nonce::from_slice(&[0u8; NONCE_LEN]);
         let mut cek_buf = cek;
-        let wrap_tag = wrap_cipher.encrypt_in_place_detached(zero_nonce, b"", &mut cek_buf)
+        let wrap_tag = wrap_cipher
+            .encrypt_in_place_detached(zero_nonce, b"", &mut cek_buf)
             .expect("wrap");
         let mut wrapped = [0u8; WRAP_LEN];
         wrapped[..NONCE_LEN].copy_from_slice(&[0u8; NONCE_LEN]);
@@ -933,8 +1022,14 @@ mod tests {
         };
 
         let layout = lmod::header::compute_layout(
-            hdr.abi_hash, hdr.modinfo_len, hdr.code_len, hdr.rodata_len,
-            hdr.data_len, hdr.bss_len, hdr.reloc_count, eh_len,
+            hdr.abi_hash,
+            hdr.modinfo_len,
+            hdr.code_len,
+            hdr.rodata_len,
+            hdr.data_len,
+            hdr.bss_len,
+            hdr.reloc_count,
+            eh_len,
         );
 
         let total = layout.total_len as usize;
@@ -954,7 +1049,8 @@ mod tests {
 
         // Write modinfo
         let mi = container.modinfo();
-        out[layout.modinfo_off as usize..layout.modinfo_off as usize + mi.len()].copy_from_slice(mi);
+        out[layout.modinfo_off as usize..layout.modinfo_off as usize + mi.len()]
+            .copy_from_slice(mi);
 
         // Write reloc (if any)
         if hdr.reloc_count > 0 {
@@ -977,7 +1073,14 @@ mod tests {
 
         let cipher = ChaCha20Poly1305::new(Key::from_slice(&cek));
         let aead_nonce = Nonce::from_slice(&nonce);
-        let ciphertext = cipher.encrypt(aead_nonce, Payload { msg: &payload, aad: &aad })
+        let ciphertext = cipher
+            .encrypt(
+                aead_nonce,
+                Payload {
+                    msg: &payload,
+                    aad: &aad,
+                },
+            )
             .expect("encrypt payload");
 
         // Write encrypted code/rodata/data
@@ -987,15 +1090,14 @@ mod tests {
             let ro_start = co + hdr.code_len as usize;
             let ro_len = hdr.rodata_len as usize;
             out[ro_start..ro_start + ro_len].copy_from_slice(
-                &ciphertext[hdr.code_len as usize..hdr.code_len as usize + ro_len]
+                &ciphertext[hdr.code_len as usize..hdr.code_len as usize + ro_len],
             );
         }
         if hdr.data_len > 0 {
             let data_start = layout.data_off as usize;
             let payload_off = (hdr.code_len + hdr.rodata_len) as usize;
-            out[data_start..data_start + hdr.data_len as usize].copy_from_slice(
-                &ciphertext[payload_off..payload_off + hdr.data_len as usize]
-            );
+            out[data_start..data_start + hdr.data_len as usize]
+                .copy_from_slice(&ciphertext[payload_off..payload_off + hdr.data_len as usize]);
         }
 
         // Write AEAD tag into enc-header
@@ -1011,7 +1113,7 @@ mod tests {
     fn signed_encrypted_module_loads_and_runs() {
         let kek = [0xabu8; 32];
         let ret_insn = [0xC3u8];
-        let abi_hash = lmod::abi_hash::compute_abi_hash(8, 64, lmod::modinfo::MODINFO_VER);
+        let abi_hash = lmod::abi_hash::compute_abi_hash(1, 8, 64, lmod::modinfo::MODINFO_VER);
 
         let plain = build_lmod_with_code(&ret_insn, abi_hash, true);
         let (enc, _cek) = encrypt_lmod(&plain, &kek);
@@ -1029,8 +1131,11 @@ mod tests {
         map.len = 1;
 
         let result = load_module(&container, &mut plat, &mut map, &mut set);
-        assert!(result.is_ok(),
-            "signed+encrypted module must load, got {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "signed+encrypted module must load, got {:?}",
+            result.err()
+        );
     }
 
     #[cfg(feature = "encryption")]
@@ -1038,7 +1143,7 @@ mod tests {
     fn signed_encrypted_tampered_ciphertext_rejected() {
         let kek = [0xabu8; 32];
         let ret_insn = [0xC3u8];
-        let abi_hash = lmod::abi_hash::compute_abi_hash(8, 64, lmod::modinfo::MODINFO_VER);
+        let abi_hash = lmod::abi_hash::compute_abi_hash(1, 8, 64, lmod::modinfo::MODINFO_VER);
 
         let plain = build_lmod_with_code(&ret_insn, abi_hash, true);
         let (enc, _cek) = encrypt_lmod(&plain, &kek);
@@ -1053,12 +1158,19 @@ mod tests {
         let mut plat = FullPlatform::new(abi_hash, kek);
         let mut map: SymMap<'_, 256> = SymMap::new();
         let mut set = LoadedSet::<64>::new();
-        map.entries[0] = Some(SymEntry { hash: 0, name: &[], addr: 0 });
+        map.entries[0] = Some(SymEntry {
+            hash: 0,
+            name: &[],
+            addr: 0,
+        });
         map.len = 1;
 
         let result = load_module(&container, &mut plat, &mut map, &mut set);
-        assert_eq!(result.unwrap_err(), LoadError::EncAuthFail,
-            "tampered ciphertext must yield EncAuthFail");
+        assert_eq!(
+            result.unwrap_err(),
+            LoadError::EncAuthFail,
+            "tampered ciphertext must yield EncAuthFail"
+        );
     }
 
     // -------------------------------------------------------------------
@@ -1069,7 +1181,7 @@ mod tests {
     fn rollback_on_make_exec_failure() {
         let kek = [0xabu8; 32];
         let ret_insn = [0xC3u8];
-        let abi_hash = lmod::abi_hash::compute_abi_hash(8, 64, lmod::modinfo::MODINFO_VER);
+        let abi_hash = lmod::abi_hash::compute_abi_hash(1, 8, 64, lmod::modinfo::MODINFO_VER);
 
         let plain = build_lmod_with_code(&ret_insn, abi_hash, true); // exports "main"
         let signed = sign_lmod(&plain, &kek); // not encrypted — faster
@@ -1089,17 +1201,29 @@ mod tests {
         let set_len_before = set.len;
 
         let result = load_module(&container, &mut plat, &mut map, &mut set);
-        assert!(result.is_err(), "load_module must fail when make_exec fails");
+        assert!(
+            result.is_err(),
+            "load_module must fail when make_exec fails"
+        );
         // global_map must be restored: sentinel survives, "main" export is rolled back.
-        assert_eq!(map.len(), saved_len,
-            "global_map must be restored to pre-load length after failure");
-        assert!(map.lookup_by_name(b"__sentinel").is_some(),
-            "sentinel symbol must survive rollback");
-        assert!(map.lookup_by_name(b"main").is_none(),
-            "partial export 'main' must be rolled back");
+        assert_eq!(
+            map.len(),
+            saved_len,
+            "global_map must be restored to pre-load length after failure"
+        );
+        assert!(
+            map.lookup_by_name(b"__sentinel").is_some(),
+            "sentinel symbol must survive rollback"
+        );
+        assert!(
+            map.lookup_by_name(b"main").is_none(),
+            "partial export 'main' must be rolled back"
+        );
         // loaded_set must be unchanged.
-        assert_eq!(set.len, set_len_before,
-            "loaded_set must be unchanged after failed load");
+        assert_eq!(
+            set.len, set_len_before,
+            "loaded_set must be unchanged after failed load"
+        );
         assert!(set.contains(0x1234), "loaded_set entries must survive");
     }
 
@@ -1129,7 +1253,7 @@ mod tests {
     fn isr_module_rejected() {
         let code = [0xC3u8];
         let key = [0xabu8; 32];
-        let abi_hash = lmod::abi_hash::compute_abi_hash(8, 64, lmod::modinfo::MODINFO_VER);
+        let abi_hash = lmod::abi_hash::compute_abi_hash(1, 8, 64, lmod::modinfo::MODINFO_VER);
         // Build modinfo with HAS_ISR flag set.
         let exports = [];
         let mut mi_buf = [0u8; 512];
@@ -1148,7 +1272,7 @@ mod tests {
         let co = layout.code_off as usize;
         raw[co..co + code.len()].copy_from_slice(&code);
 
-        // FullPlatform is Tier One — sign the module before loading.
+        // FullPlatform is TrustLevel One — sign the module before loading.
         let signed = sign_lmod(&raw, &key);
         let container = lmod::validate::Container::parse(&signed).unwrap();
         let mut plat = FullPlatform::new(abi_hash, key);
@@ -1161,7 +1285,7 @@ mod tests {
     #[test]
     fn sharing_class_mismatch_rejected() {
         let code = [0xC3u8];
-        let abi_hash = lmod::abi_hash::compute_abi_hash(8, 64, lmod::modinfo::MODINFO_VER);
+        let abi_hash = lmod::abi_hash::compute_abi_hash(1, 8, 64, lmod::modinfo::MODINFO_VER);
         // Build modinfo with a res_meta entry that has non-zero sharing_class.
         let res_meta = lmod::modinfo::ResMetaEntry {
             res_hash: lmod::hash::fnv1a_u64(b"some_resource"),
@@ -1171,9 +1295,9 @@ mod tests {
         let exports = [];
         let mut mi_buf = [0u8; 512];
         // encode_into needs module_name, exports, imports, abi_hash, flags, res_metas
-        let mi_size = lmod::modinfo::encode_into(
-            &mut mi_buf, b"T", &exports, &[], abi_hash, 0, &[res_meta],
-        ).unwrap() as u32;
+        let mi_size =
+            lmod::modinfo::encode_into(&mut mi_buf, b"T", &exports, &[], abi_hash, 0, &[res_meta])
+                .unwrap() as u32;
 
         let code_len = code.len() as u32;
         let layout = lmod::header::compute_layout(abi_hash, mi_size, code_len, 0, 0, 0, 0, 0);
@@ -1185,7 +1309,7 @@ mod tests {
         let co = layout.code_off as usize;
         raw[co..co + code.len()].copy_from_slice(&code);
 
-        // FullPlatform is Tier One — sign the module before loading.
+        // FullPlatform is TrustLevel One — sign the module before loading.
         let key = [0xabu8; 32];
         let signed = sign_lmod(&raw, &key);
         let container = lmod::validate::Container::parse(&signed).unwrap();
@@ -1204,7 +1328,7 @@ mod tests {
     fn double_load_rejected() {
         let code = [0xC3u8];
         let key = [0xabu8; 32];
-        let abi_hash = lmod::abi_hash::compute_abi_hash(8, 64, lmod::modinfo::MODINFO_VER);
+        let abi_hash = lmod::abi_hash::compute_abi_hash(1, 8, 64, lmod::modinfo::MODINFO_VER);
         let plain = build_lmod_with_code(&code, abi_hash, false);
         let signed = sign_lmod(&plain, &key);
         let container = lmod::validate::Container::parse(&signed).unwrap();
@@ -1231,17 +1355,21 @@ fn dispatch_import_reloc(
 ) -> Result<(), LoadError> {
     // Determine addend based on relocation kind.
     let addend = match kind {
-        1 => 0,           // R_X86_64_64
-        2 | 3 => -4,      // R_X86_64_PC32 / R_X86_64_PLT32
-        4 => 0,           // R_ARM_ABS32
-        5 => -4,          // R_ARM_THM_CALL (PC = site + 4)
-        6 => -4,          // R_ARM_THM_JUMP24
-        7 => 0,           // R_ARM_REL32
+        1 => 0,      // R_X86_64_64
+        2 | 3 => -4, // R_X86_64_PC32 / R_X86_64_PLT32
+        4 => 0,      // R_ARM_ABS32
+        5 => -4,     // R_ARM_THM_CALL (PC = site + 4)
+        6 => -4,     // R_ARM_THM_JUMP24
+        7 => 0,      // R_ARM_REL32
         _ => 0,
     };
     match kind {
-        1 | 2 | 3 => crate::reloc_x86_64::apply_import_reloc(code, site_off, kind, sym_addr, addend),
-        4 | 5 | 6 | 7 => crate::reloc_arm::apply_import_reloc(code, site_off, kind, sym_addr, addend),
+        1 | 2 | 3 => {
+            crate::reloc_x86_64::apply_import_reloc(code, site_off, kind, sym_addr, addend)
+        }
+        4 | 5 | 6 | 7 => {
+            crate::reloc_arm::apply_import_reloc(code, site_off, kind, sym_addr, addend)
+        }
         8 | 9 => crate::reloc_riscv::apply_import_reloc(code, site_off, kind, sym_addr, addend),
         _ => Err(LoadError::RelocUnsupported),
     }

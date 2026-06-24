@@ -9,9 +9,7 @@ use std::thread;
 
 use frontend::fixed::FixedVec;
 use frontend::span::Span;
-use ir::{
-    CapSet, EffectSet, StackBound,
-};
+use ir::{CapSet, EffectSet, StackBound};
 use semantics::typecheck::irgen::arena::ArenaAllocator;
 
 fn spawn_stack(f: impl FnOnce() + Send + 'static) {

@@ -44,32 +44,59 @@ const BOOL: &[u8] = b"bool";
 const QUOT: &[u8] = b"quot";
 
 const ZERO_B: StackBound = StackBound::ID;
-const POP_B: StackBound = StackBound { net: -1, high: High::Slots(0) };
-const DUP_B: StackBound = StackBound { net: 1, high: High::Slots(1) };
-const CALL_B: StackBound = StackBound { net: 0, high: High::Top };
+const POP_B: StackBound = StackBound {
+    net: -1,
+    high: High::Slots(0),
+};
+const DUP_B: StackBound = StackBound {
+    net: 1,
+    high: High::Slots(1),
+};
+const CALL_B: StackBound = StackBound {
+    net: 0,
+    high: High::Top,
+};
 
-fn mk(name: &[u8], inp: &[&[u8]], out: &[&[u8]], performs: EffectSet, bound: StackBound) -> WordEntry {
+fn mk(
+    name: &[u8],
+    inp: &[&[u8]],
+    out: &[&[u8]],
+    performs: EffectSet,
+    bound: StackBound,
+) -> WordEntry {
     entry(name, inp, out, performs, bound)
 }
 
 fn make_table() -> alloc::vec::Vec<WordEntry> {
     alloc::vec![
-        mk(b"dup",     &[I64],         &[I64, I64],      EffectSet::empty(), DUP_B),
-        mk(b"drop",    &[I64],         &[],               EffectSet::empty(), POP_B),
-        mk(b"swap",    &[I64, I64],    &[I64, I64],      EffectSet::empty(), ZERO_B),
-        mk(b"+",       &[I64, I64],    &[I64],           EffectSet::empty(), POP_B),
-        mk(b"-",       &[I64, I64],    &[I64],           EffectSet::empty(), POP_B),
-        mk(b"*",       &[I64, I64],    &[I64],           EffectSet::empty(), POP_B),
-        mk(b">",       &[I64, I64],    &[BOOL],          EffectSet::empty(), POP_B),
-        mk(b"<",       &[I64, I64],    &[BOOL],          EffectSet::empty(), POP_B),
-        mk(b">=",      &[I64, I64],    &[BOOL],          EffectSet::empty(), POP_B),
-        mk(b"<=",      &[I64, I64],    &[BOOL],          EffectSet::empty(), POP_B),
-        mk(b"==",      &[I64, I64],    &[BOOL],          EffectSet::empty(), POP_B),
-        mk(b"and",     &[BOOL, BOOL],  &[BOOL],          EffectSet::empty(), POP_B),
-        mk(b"or",      &[BOOL, BOOL],  &[BOOL],          EffectSet::empty(), POP_B),
-        mk(b"not",     &[BOOL],        &[BOOL],          EffectSet::empty(), ZERO_B),
-        mk(b"call",    &[QUOT],        &[],              EffectSet::empty(), CALL_B),
-        mk(b"platform.task.yield", &[], &[], EffectSet::from_bits(EffectSet::SUSPEND), ZERO_B),
+        mk(b"dup", &[I64], &[I64, I64], EffectSet::empty(), DUP_B),
+        mk(b"drop", &[I64], &[], EffectSet::empty(), POP_B),
+        mk(
+            b"swap",
+            &[I64, I64],
+            &[I64, I64],
+            EffectSet::empty(),
+            ZERO_B
+        ),
+        mk(b"+", &[I64, I64], &[I64], EffectSet::empty(), POP_B),
+        mk(b"-", &[I64, I64], &[I64], EffectSet::empty(), POP_B),
+        mk(b"*", &[I64, I64], &[I64], EffectSet::empty(), POP_B),
+        mk(b">", &[I64, I64], &[BOOL], EffectSet::empty(), POP_B),
+        mk(b"<", &[I64, I64], &[BOOL], EffectSet::empty(), POP_B),
+        mk(b">=", &[I64, I64], &[BOOL], EffectSet::empty(), POP_B),
+        mk(b"<=", &[I64, I64], &[BOOL], EffectSet::empty(), POP_B),
+        mk(b"==", &[I64, I64], &[BOOL], EffectSet::empty(), POP_B),
+        mk(b"and", &[BOOL, BOOL], &[BOOL], EffectSet::empty(), POP_B),
+        mk(b"or", &[BOOL, BOOL], &[BOOL], EffectSet::empty(), POP_B),
+        mk(b"not", &[BOOL], &[BOOL], EffectSet::empty(), ZERO_B),
+        mk(b"call", &[QUOT], &[], EffectSet::empty(), CALL_B),
+        mk(
+            b"platform.task.yield",
+            &[],
+            &[],
+            EffectSet::from_bits(EffectSet::SUSPEND),
+            ZERO_B
+        ),
     ]
 }
 

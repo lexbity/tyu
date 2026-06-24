@@ -2,6 +2,7 @@
 name = "lmod-encrypt"
 version = "0.1.0"
 edition = "2021"
+description = "Encryption tooling for `.lmod` modules."
 
 [lib]
 name = "lmod_encrypt"

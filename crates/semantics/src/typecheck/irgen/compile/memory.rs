@@ -1,10 +1,9 @@
-use super::*;
 use super::borrow::{mint_id, scan_conflict};
+use super::*;
 use crate::typecheck::place::parse_place_path;
 use crate::typecheck::value::PLACE_NONE;
 
 impl<'a, 'r> IrWordGen<'a, 'r> {
-
     #[allow(dead_code)]
     pub(super) fn compile_field_access(
         &mut self,
@@ -76,7 +75,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         Ok(cur)
     }
 
-
     #[allow(dead_code)]
     pub(super) fn compile_index(
         &mut self,
@@ -112,14 +110,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 )
                 .map_err(|_| TcError::IndexError { span: op_span })?;
                 let inner = Span::new(span.start + par.start + 1, span.start + par.end - 1);
-                cur = self.compile_span(
-                    cur,
-                    stack,
-                    sp,
-                    inner,
-                    allow_locals,
-                    observer,
-                )?;
+                cur = self.compile_span(cur, stack, sp, inner, allow_locals, observer)?;
                 is_dynamic = true;
             }
             _ => {
@@ -250,7 +241,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         Ok(cur)
     }
 
-
     pub(super) fn compile_addr_of(
         &mut self,
         cur: lir::BlockId,
@@ -271,8 +261,8 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         abs_path.root = Span::new(base + abs_path.root.start, base + abs_path.root.end);
         abs_path.full = Span::new(base + abs_path.full.start, base + abs_path.full.end);
         let place_abs = abs_path.full;
-        let root_atom =
-            TypeAtom::new(&self.src[abs_path.root.start..abs_path.root.end]).unwrap_or(TypeAtom::EMPTY);
+        let root_atom = TypeAtom::new(&self.src[abs_path.root.start..abs_path.root.end])
+            .unwrap_or(TypeAtom::EMPTY);
         let mut const_addr: Option<u64> = None;
 
         if let Some(res) = resolve_mmio_place(self.mmio, self.src, &abs_path, place_abs)? {
@@ -315,13 +305,24 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             if let Some(pointee) = self.resolve_place_pointee_ty(&abs_path, place_abs)? {
                 // S-3: mint a borrow ledger entry; scan for conflicts.
                 scan_conflict(
-                    stack, *sp, &self.ledger, self.ledger_len,
-                    &self.local_place, &self.local_live, &self.local_tys, self.local_len,
-                    root_atom, mut_tok, place_abs,
+                    stack,
+                    *sp,
+                    &self.ledger,
+                    self.ledger_len,
+                    &self.local_place,
+                    &self.local_live,
+                    &self.local_tys,
+                    self.local_len,
+                    root_atom,
+                    mut_tok,
+                    place_abs,
                 )?;
                 let place = mint_id(
-                    &mut self.ledger, &mut self.ledger_len,
-                    root_atom, pointee, place_abs,
+                    &mut self.ledger,
+                    &mut self.ledger_len,
+                    root_atom,
+                    pointee,
+                    place_abs,
                 )?;
                 push(
                     stack,
@@ -350,7 +351,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         Ok(cur)
     }
 
-
     /// S-14: unified `.` operator — handles field access, static index, and
     /// dynamic index with auto-projection (value-extract vs pointer-address).
     pub(super) fn compile_dot_op(
@@ -376,7 +376,8 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 match base {
                     Value::Ptr { ty, mutable, place } => {
                         // Auto-projection: `.x` on a Ptr → field address (old -> behavior).
-                        let Some(sinfo) = self.nominals.structs.iter().find(|s| s.name == ty) else {
+                        let Some(sinfo) = self.nominals.structs.iter().find(|s| s.name == ty)
+                        else {
                             return Err(TcError::FieldNotFound { span: op_span });
                         };
                         let mut offset: u32 = 0;
@@ -390,20 +391,38 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                                 found = Some(field.ty);
                                 break;
                             }
-                            offset = offset.checked_add(fsize)
+                            offset = offset
+                                .checked_add(fsize)
                                 .ok_or(TcError::FieldSizeError { span: op_span })?;
                         }
                         let Some(field_ty) = found else {
                             return Err(TcError::FieldNotFound { span: op_span });
                         };
-                        let base_tid = if mutable { lir::TY_PTR_MUT } else { lir::TY_PTR };
-                        self.emit_op(cur, lir::OpKind::PtrAddConst { ty: base_tid, offset }, op_span)?;
-                        stack[*sp - 1] = Value::Ptr { ty: field_ty, mutable, place };
+                        let base_tid = if mutable {
+                            lir::TY_PTR_MUT
+                        } else {
+                            lir::TY_PTR
+                        };
+                        self.emit_op(
+                            cur,
+                            lir::OpKind::PtrAddConst {
+                                ty: base_tid,
+                                offset,
+                            },
+                            op_span,
+                        )?;
+                        stack[*sp - 1] = Value::Ptr {
+                            ty: field_ty,
+                            mutable,
+                            place,
+                        };
                         Ok(cur)
                     }
                     Value::Plain(struct_ty) => {
                         // Auto-projection: `.x` on a value → field extraction.
-                        let Some(sinfo) = self.nominals.structs.iter().find(|s| s.name == struct_ty) else {
+                        let Some(sinfo) =
+                            self.nominals.structs.iter().find(|s| s.name == struct_ty)
+                        else {
                             return Err(TcError::FieldNotFound { span: op_span });
                         };
                         let mut offset: u32 = 0;
@@ -417,14 +436,22 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                                 found = Some(field.ty);
                                 break;
                             }
-                            offset = offset.checked_add(fsize)
+                            offset = offset
+                                .checked_add(fsize)
                                 .ok_or(TcError::FieldSizeError { span: op_span })?;
                         }
                         let Some(field_ty) = found else {
                             return Err(TcError::FieldNotFound { span: op_span });
                         };
                         let struct_tid = self.ty_id_of_type(struct_ty, op_span)?;
-                        self.emit_op(cur, lir::OpKind::PtrAddConst { ty: struct_tid, offset }, op_span)?;
+                        self.emit_op(
+                            cur,
+                            lir::OpKind::PtrAddConst {
+                                ty: struct_tid,
+                                offset,
+                            },
+                            op_span,
+                        )?;
                         let field_tid = self.ty_id_of_type(field_ty, op_span)?;
                         self.emit_op(cur, lir::OpKind::Load { ty: field_tid }, op_span)?;
                         let _ = pop(stack, sp);
@@ -436,9 +463,9 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             }
             TokenKind::Number => {
                 // .N — static index (old 'N behavior)
-                let const_idx = crate::typecheck::util::parse_u32_any(
-                    &slice[next.span.start..next.span.end],
-                ).ok_or(TcError::IndexError { span: op_span })?;
+                let const_idx =
+                    crate::typecheck::util::parse_u32_any(&slice[next.span.start..next.span.end])
+                        .ok_or(TcError::IndexError { span: op_span })?;
                 let base_pos = *sp - 1;
                 let base = stack[base_pos];
                 let (elem_ty, scale, out_kind, base_tid) = match base {
@@ -464,7 +491,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                         }
                         let size = type_size_bytes(elem, self.nominals)
                             .ok_or(TcError::IndexError { span: op_span })?;
-                        let tid = if mutable { lir::TY_PTR_MUT } else { lir::TY_PTR };
+                        let tid = if mutable {
+                            lir::TY_PTR_MUT
+                        } else {
+                            lir::TY_PTR
+                        };
                         (elem, size, IndexOut::Ptr(mutable), tid)
                     }
                     Value::MmioPlace(MmioResolved::Reg(reg)) => {
@@ -482,19 +513,34 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 };
                 match out_kind {
                     IndexOut::Value => {
-                        stack[base_pos] = Value::Ptr { ty: elem_ty, mutable: false, place: PLACE_NONE };
+                        stack[base_pos] = Value::Ptr {
+                            ty: elem_ty,
+                            mutable: false,
+                            place: PLACE_NONE,
+                        };
                     }
                     IndexOut::Ptr(mutable) => {
                         let base_place = match stack[base_pos] {
                             Value::Ptr { place, .. } => place,
                             _ => PLACE_NONE,
                         };
-                        stack[base_pos] = Value::Ptr { ty: elem_ty, mutable, place: base_place };
+                        stack[base_pos] = Value::Ptr {
+                            ty: elem_ty,
+                            mutable,
+                            place: base_place,
+                        };
                     }
                     IndexOut::Mmio => {}
                 }
                 let offset = const_idx.saturating_mul(scale);
-                self.emit_op(cur, lir::OpKind::PtrAddConst { ty: base_tid, offset }, op_span)?;
+                self.emit_op(
+                    cur,
+                    lir::OpKind::PtrAddConst {
+                        ty: base_tid,
+                        offset,
+                    },
+                    op_span,
+                )?;
                 if matches!(out_kind, IndexOut::Value) {
                     let tid = self.ty_id_of_type(elem_ty, op_span)?;
                     self.emit_op(cur, lir::OpKind::Load { ty: tid }, op_span)?;
@@ -736,6 +782,4 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             }
         }
     }
-
-
 }

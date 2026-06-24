@@ -8,7 +8,7 @@ use hosted::loader::HostedLoaderPlatform;
 use hosted::mem;
 use lmod::validate::Container;
 use loader_core::load::load_module;
-use loader_core::platform::Tier;
+use loader_core::platform::TrustLevel;
 use loader_core::symbols::SymMap;
 use std::path::PathBuf;
 use std::process::Command;
@@ -19,8 +19,10 @@ use std::process::Command;
 
 pub fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap()
-        .parent().unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .to_path_buf()
 }
 
@@ -29,9 +31,11 @@ pub fn exe(name: &str) -> PathBuf {
 }
 
 pub fn fresh_dir(label: &str) -> PathBuf {
-    let dir = std::env::temp_dir()
-        .join("tyu_lang_tests")
-        .join(format!("{}_{}", label, std::process::id()));
+    let dir = std::env::temp_dir().join("tyu_lang_tests").join(format!(
+        "{}_{}",
+        label,
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -47,16 +51,25 @@ pub fn static_exit_code(source: &str, dir: &PathBuf) -> i32 {
     let out = Command::new(exe("langc"))
         .current_dir(dir)
         .args(["--emit=asm", "S.mod"])
-        .output().unwrap();
-    assert!(out.status.success(), "langc --emit=asm failed:\n{}",
-        String::from_utf8_lossy(&out.stderr));
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "langc --emit=asm failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     std::fs::write(dir.join("S.asm"), &out.stdout).unwrap();
     let status = Command::new("fasm")
         .current_dir(dir)
         .args(["S.asm", "S_bin"])
-        .status().unwrap();
+        .status()
+        .unwrap();
     assert!(status.success(), "fasm failed");
-    Command::new(dir.join("S_bin")).status().unwrap().code().unwrap_or(-1)
+    Command::new(dir.join("S_bin"))
+        .status()
+        .unwrap()
+        .code()
+        .unwrap_or(-1)
 }
 
 /// Compile a .mod to .o and pack to .lmod.  Returns the .lmod path.
@@ -64,8 +77,14 @@ pub fn compile_and_pack(source: &str, out_dir: &PathBuf) -> PathBuf {
     std::fs::write(out_dir.join("M.mod"), source).unwrap();
     let status = Command::new(exe("langc"))
         .current_dir(out_dir)
-        .args(["--emit=obj", "--target=x86_64-unknown-linux-gnu", "--out-dir=.", "M.mod"])
-        .status().unwrap();
+        .args([
+            "--emit=obj",
+            "--target=x86_64-unknown-linux-gnu",
+            "--out-dir=.",
+            "M.mod",
+        ])
+        .status()
+        .unwrap();
     assert!(status.success(), "langc --emit=obj failed");
     let o_path = out_dir.join("Main.o");
     assert!(o_path.exists(), "Main.o not produced");
@@ -73,7 +92,8 @@ pub fn compile_and_pack(source: &str, out_dir: &PathBuf) -> PathBuf {
     let status = Command::new(exe("lmod-pack"))
         .current_dir(out_dir)
         .args(["Main.o", "Main.lmod"])
-        .status().unwrap();
+        .status()
+        .unwrap();
     assert!(status.success(), "lmod-pack failed");
     lmod_path
 }
@@ -88,17 +108,13 @@ pub extern "C" fn extern_c_fn_stub() {}
 /// (__lang_ds_high).  These must stay writable even after code pages
 /// are flipped to RX.
 pub fn allocate_runtime_page() -> usize {
-    let page = unsafe {
-        mem::mmap_anon(4096, mem::prot::READ | mem::prot::WRITE).unwrap() as *mut u8
-    };
+    let page =
+        unsafe { mem::mmap_anon(4096, mem::prot::READ | mem::prot::WRITE).unwrap() as *mut u8 };
     page as usize
 }
 
 /// Register the minimal set of runtime symbols needed to load a module.
-pub fn register_runtime_symbols<'a>(
-    map: &mut SymMap<'a, 256>,
-    ds_high_addr: usize,
-) {
+pub fn register_runtime_symbols<'a>(map: &mut SymMap<'a, 256>, ds_high_addr: usize) {
     let stub = extern_c_fn_stub as usize;
     map.register(b"__stack_overflow", stub).unwrap();
     map.register(b"__lang_ds_high", ds_high_addr).unwrap();
@@ -132,30 +148,30 @@ pub struct LoaderHarness {
     abi_hash: u64,
     sign_key: [u8; 64],
     sign_key_len: usize,
-    tier: loader_core::platform::Tier,
+    trust_level: TrustLevel,
     kek: [u8; 32],
     kek_set: bool,
 }
 
 impl LoaderHarness {
-    /// Create a new harness with a given expected ABI hash and Tier-0 trust.
+    /// Create a new harness with a given expected ABI hash and TrustLevel Zero.
     pub fn new(expected_abi_hash: u64) -> Self {
         LoaderHarness {
             abi_hash: expected_abi_hash,
             sign_key: [0u8; 64],
             sign_key_len: 0,
-            tier: loader_core::platform::Tier::Zero,
+            trust_level: TrustLevel::Zero,
             kek: [0u8; 32],
             kek_set: false,
         }
     }
 
-    /// Set the platform to Tier One with the given HMAC signing key.
+    /// Set the platform to TrustLevel One with the given HMAC signing key.
     pub fn tier_one(mut self, sign_key: &[u8; 32]) -> Self {
         let n = sign_key.len().min(64);
         self.sign_key[..n].copy_from_slice(&sign_key[..n]);
         self.sign_key_len = n;
-        self.tier = loader_core::platform::Tier::One;
+        self.trust_level = TrustLevel::One;
         self
     }
 
@@ -170,7 +186,7 @@ impl LoaderHarness {
     fn build_platform(&self) -> HostedLoaderPlatform {
         let mut plat = HostedLoaderPlatform::new(self.abi_hash);
         if self.sign_key_len > 0 {
-            plat = plat.with_key(&self.sign_key[..self.sign_key_len], self.tier);
+            plat = plat.with_key(&self.sign_key[..self.sign_key_len], self.trust_level);
         }
         if self.kek_set {
             plat = plat.with_kek(&self.kek);
@@ -284,6 +300,9 @@ mod tests {
         let raw = std::fs::read(&lmod_path).unwrap();
         let container = Container::parse(&raw).unwrap();
         let h = LoaderHarness::new(container.header().abi_hash);
-        assert!(h.load(&container).is_ok(), "valid module must load successfully");
+        assert!(
+            h.load(&container).is_ok(),
+            "valid module must load successfully"
+        );
     }
 }

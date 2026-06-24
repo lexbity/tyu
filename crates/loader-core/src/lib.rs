@@ -1,4 +1,9 @@
 #![no_std]
+//! Core loader implementation for Tyu `.lmod` modules.
+//!
+//! Public modules include `error`, `load`, `modpack`, `platform`, `rederive`,
+//! and target-specific relocation helpers. The optional `crypto` module is
+//! compiled when the `encryption` feature is enabled.
 
 extern crate alloc;
 

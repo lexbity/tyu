@@ -86,7 +86,9 @@ pub fn parse_manifest(path: &Path) -> Result<Manifest, String> {
     let text = fs::read_to_string(path)
         .map_err(|e| format!("reading manifest '{}': {}", path.display(), e))?;
     toml::from_str::<ManifestFile>(&text)
-        .map(|mf| Manifest { fixtures: mf.fixtures })
+        .map(|mf| Manifest {
+            fixtures: mf.fixtures,
+        })
         .map_err(|e| format!("parsing manifest '{}': {}", path.display(), e))
 }
 

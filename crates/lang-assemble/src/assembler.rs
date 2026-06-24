@@ -30,8 +30,8 @@ pub struct FasmDriver<'a> {
 
 impl<'a> AssemblerDriver for FasmDriver<'a> {
     fn assemble(&self, input: &[u8], output: &[u8]) -> Result<(), AssembleError> {
-        let status = process::run(self.path, &[input, output])
-            .map_err(|_| AssembleError::LaunchFailed)?;
+        let status =
+            process::run(self.path, &[input, output]).map_err(|_| AssembleError::LaunchFailed)?;
         if status.code != 0 {
             return Err(AssembleError::NonZeroExit);
         }

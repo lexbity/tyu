@@ -2,8 +2,8 @@ use codegen_core::{AsmMode, CodegenError};
 
 use crate::ophelpers::write_u32;
 use crate::task;
-use codegen_core::strings::decode_string_bytes;
 use crate::X86_64HostedBackend;
+use codegen_core::strings::decode_string_bytes;
 
 impl<'a> X86_64HostedBackend<'a> {
     /// Emit the interned string table into the current section.
@@ -12,8 +12,8 @@ impl<'a> X86_64HostedBackend<'a> {
         for i in 0..self.str_len {
             let id = self.str_ids[i];
             let span = self.str_spans[i];
-            let bytes = decode_string_bytes(self.src, span)
-                .ok_or(CodegenError::MalformedStringLiteral)?;
+            let bytes =
+                decode_string_bytes(self.src, span).ok_or(CodegenError::MalformedStringLiteral)?;
 
             self.out.write(b"\n__lang_str_");
             write_u32(self.out, id);

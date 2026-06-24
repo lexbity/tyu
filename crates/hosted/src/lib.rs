@@ -1,5 +1,10 @@
 #![no_std]
 #![deny(unsafe_op_in_unsafe_fn)]
+//! Host-side runtime glue for Tyu binaries and tests.
+//!
+//! The crate wraps the loader/runtime boundary used by `langc`, `tyu`, and
+//! the execution-test harnesses. Optional encryption support is exposed via
+//! the `encryption` feature.
 
 pub mod args;
 pub mod c;

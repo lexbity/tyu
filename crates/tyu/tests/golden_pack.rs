@@ -13,8 +13,10 @@ use std::process::Command;
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap()
-        .parent().unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .to_path_buf()
 }
 
@@ -28,7 +30,8 @@ fn golden_pack_matches_committed() {
     let status = Command::new(env!("CARGO"))
         .current_dir(&workspace_root())
         .args(["build", "-q", "-p", "langc", "-p", "lmod-pack"])
-        .status().expect("cargo build");
+        .status()
+        .expect("cargo build");
     assert!(status.success(), "cargo build failed");
 
     let gold = golden_dir();
@@ -40,7 +43,11 @@ fn golden_pack_matches_committed() {
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(&tmp).unwrap();
 
-    std::fs::write(tmp.join("golden.mod"), std::fs::read(gold.join("golden.mod")).unwrap()).unwrap();
+    std::fs::write(
+        tmp.join("golden.mod"),
+        std::fs::read(gold.join("golden.mod")).unwrap(),
+    )
+    .unwrap();
 
     let output = Command::new(tyu::test_helpers::bin("langc"))
         .args([
@@ -49,11 +56,17 @@ fn golden_pack_matches_committed() {
             &format!("--out-dir={}", tmp.to_string_lossy()),
             tmp.join("golden.mod").to_string_lossy().as_ref(),
         ])
-        .output().expect("langc");
-    assert!(output.status.success(), "langc failed:\n{}", String::from_utf8_lossy(&output.stderr));
+        .output()
+        .expect("langc");
+    assert!(
+        output.status.success(),
+        "langc failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     // Find the .o produced by langc.
-    let o_files: Vec<PathBuf> = std::fs::read_dir(&tmp).unwrap()
+    let o_files: Vec<PathBuf> = std::fs::read_dir(&tmp)
+        .unwrap()
         .filter_map(|e| e.ok())
         .map(|e| e.path())
         .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("o"))
@@ -64,8 +77,12 @@ fn golden_pack_matches_committed() {
     // Pack into a fresh .lmod in temp dir.
     let fresh_lmod = tmp.join("packed.lmod");
     let status = Command::new(tyu::test_helpers::bin("lmod-pack"))
-        .args([o_path.to_string_lossy().as_ref(), fresh_lmod.to_string_lossy().as_ref()])
-        .status().expect("lmod-pack");
+        .args([
+            o_path.to_string_lossy().as_ref(),
+            fresh_lmod.to_string_lossy().as_ref(),
+        ])
+        .status()
+        .expect("lmod-pack");
     assert!(status.success(), "lmod-pack failed");
 
     // Compare against committed golden.

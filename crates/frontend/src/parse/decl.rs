@@ -37,13 +37,21 @@ impl<'a> Parser<'a> {
                 let mut depth = 1u32;
                 while depth > 0 {
                     let t = lex2.next();
-                    if t.kind == TokenKind::Eof { break; }
-                    if t.kind == TokenKind::PunctLBrace { depth += 1; }
-                    if t.kind == TokenKind::PunctRBrace { depth -= 1; }
+                    if t.kind == TokenKind::Eof {
+                        break;
+                    }
+                    if t.kind == TokenKind::PunctLBrace {
+                        depth += 1;
+                    }
+                    if t.kind == TokenKind::PunctRBrace {
+                        depth -= 1;
+                    }
                 }
                 self.lex = lex2;
                 // Error: migration hint
-                return Err(ParseError::ExpectedModule { span: self.look.span });
+                return Err(ParseError::ExpectedModule {
+                    span: self.look.span,
+                });
                 // TODO: proper error message when ParseError gets a migration-hint variant
             }
         }
@@ -54,18 +62,24 @@ impl<'a> Parser<'a> {
                 let brace_span = self.capture_balanced(
                     TokenKind::PunctLBrace,
                     TokenKind::PunctRBrace,
-                    ParseError::ExpectedRBrace { span: self.look.span },
+                    ParseError::ExpectedRBrace {
+                        span: self.look.span,
+                    },
                 )?;
                 let inner = &self.slice(brace_span)[1..brace_span.end - brace_span.start - 1];
                 // Build a fixed buffer mimicking `!{content}` for parse_effect_bits.
                 let mut buf = [0u8; 128];
                 let mut buf_len = 0usize;
-                buf[buf_len] = b'!'; buf_len += 1;
-                buf[buf_len] = b'{'; buf_len += 1;
+                buf[buf_len] = b'!';
+                buf_len += 1;
+                buf[buf_len] = b'{';
+                buf_len += 1;
                 for &b in inner.iter().take(125 - buf_len) {
-                    buf[buf_len] = b; buf_len += 1;
+                    buf[buf_len] = b;
+                    buf_len += 1;
                 }
-                buf[buf_len] = b'}'; buf_len += 1;
+                buf[buf_len] = b'}';
+                buf_len += 1;
                 let (bits, net, high) = parse_effect_bits(&buf[..buf_len]);
                 effect_bits = bits;
                 effect_net = net;
@@ -87,7 +101,9 @@ impl<'a> Parser<'a> {
                     }
                 }
             } else {
-                return Err(ParseError::ExpectedRBrace { span: self.look.span });
+                return Err(ParseError::ExpectedRBrace {
+                    span: self.look.span,
+                });
             }
         }
 
@@ -102,9 +118,10 @@ impl<'a> Parser<'a> {
             match self.look.kind {
                 TokenKind::KwNeeds => {
                     self.bump();
-                    contract_needs = Some(self.capture_quotation(ParseError::ExpectedQuotation {
-                        span: self.look.span,
-                    })?);
+                    contract_needs =
+                        Some(self.capture_quotation(ParseError::ExpectedQuotation {
+                            span: self.look.span,
+                        })?);
                 }
                 TokenKind::KwRequires => {
                     self.bump();
@@ -112,13 +129,19 @@ impl<'a> Parser<'a> {
                         cap_set = Some(self.capture_balanced(
                             TokenKind::PunctLBrace,
                             TokenKind::PunctRBrace,
-                            ParseError::ExpectedRBrace { span: self.look.span },
+                            ParseError::ExpectedRBrace {
+                                span: self.look.span,
+                            },
                         )?);
                     } else if self.look.kind == TokenKind::PunctLBracket {
-                        return Err(ParseError::ExpectedModule { span: self.look.span });
+                        return Err(ParseError::ExpectedModule {
+                            span: self.look.span,
+                        });
                         // TODO: proper migration hint error: "use `needs [` for contracts"
                     } else {
-                        return Err(ParseError::ExpectedQuotation { span: self.look.span });
+                        return Err(ParseError::ExpectedQuotation {
+                            span: self.look.span,
+                        });
                     }
                 }
                 TokenKind::KwEnsures => {

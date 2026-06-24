@@ -1,8 +1,5 @@
 use codegen_core::CodegenError;
-use ir::{
-    Atom, Block, BlockId, CmpKind, OpKind, TrapCode, Word,
-    TY_BOOL, TY_I64, TY_PTR, TY_STR,
-};
+use ir::{Atom, Block, BlockId, CmpKind, OpKind, TrapCode, Word, TY_BOOL, TY_I64, TY_PTR, TY_STR};
 
 mod util;
 use util::*;
@@ -62,7 +59,11 @@ fn emit_dup() {
     run_8mb!({
         let out = emit(&single_block_word(
             sig_0_2(TY_I64, TY_I64),
-            &[OpKind::ConstI64(IMM), OpKind::Dup { ty: TY_I64 }, OpKind::Ret],
+            &[
+                OpKind::ConstI64(IMM),
+                OpKind::Dup { ty: TY_I64 },
+                OpKind::Ret,
+            ],
         ));
         // dup should emit a push or mov
         assert!(
@@ -94,7 +95,10 @@ fn emit_swap() {
             &[
                 OpKind::ConstI64(IMM),
                 OpKind::ConstI64(IMM2),
-                OpKind::Swap { a: TY_I64, b: TY_I64 },
+                OpKind::Swap {
+                    a: TY_I64,
+                    b: TY_I64,
+                },
                 OpKind::Drop { ty: TY_I64 },
                 OpKind::Drop { ty: TY_I64 },
             ],
@@ -112,7 +116,12 @@ fn emit_add() {
     run_8mb!({
         let out = emit(&single_block_word(
             sig_0_1(TY_I64),
-            &[OpKind::ConstI64(IMM), OpKind::ConstI64(IMM2), OpKind::AddI64, OpKind::Ret],
+            &[
+                OpKind::ConstI64(IMM),
+                OpKind::ConstI64(IMM2),
+                OpKind::AddI64,
+                OpKind::Ret,
+            ],
         ));
         assert!(out.contains("add"), "expected add instruction, got: {out}");
     });
@@ -123,7 +132,12 @@ fn emit_sub() {
     run_8mb!({
         let out = emit(&single_block_word(
             sig_0_1(TY_I64),
-            &[OpKind::ConstI64(IMM), OpKind::ConstI64(IMM2), OpKind::SubI64, OpKind::Ret],
+            &[
+                OpKind::ConstI64(IMM),
+                OpKind::ConstI64(IMM2),
+                OpKind::SubI64,
+                OpKind::Ret,
+            ],
         ));
         // Sub is non-commutative: the first operand is subtracted from.
         // The assertion anchors on the mnemonic + at least one operand.
@@ -136,7 +150,12 @@ fn emit_mul() {
     run_8mb!({
         let out = emit(&single_block_word(
             sig_0_1(TY_I64),
-            &[OpKind::ConstI64(IMM), OpKind::ConstI64(IMM2), OpKind::MulI64, OpKind::Ret],
+            &[
+                OpKind::ConstI64(IMM),
+                OpKind::ConstI64(IMM2),
+                OpKind::MulI64,
+                OpKind::Ret,
+            ],
         ));
         assert!(out.contains("imul") || out.contains("mul"), "got: {out}");
     });
@@ -149,17 +168,52 @@ fn emit_mul() {
 fn compare_op(kind: CmpKind, asm: &str) {
     let out = emit(&single_block_word(
         sig_0_1(TY_I64),
-        &[OpKind::ConstI64(IMM), OpKind::ConstI64(IMM2), OpKind::Cmp { out: TY_BOOL, kind }, OpKind::Ret],
+        &[
+            OpKind::ConstI64(IMM),
+            OpKind::ConstI64(IMM2),
+            OpKind::Cmp { out: TY_BOOL, kind },
+            OpKind::Ret,
+        ],
     ));
     assert!(out.contains(asm), "cmp {kind:?} expected {asm}, got: {out}");
 }
 
-#[test] fn emit_cmp_lt() { run_8mb!({ compare_op(CmpKind::Lt, "setl"); }); }
-#[test] fn emit_cmp_le() { run_8mb!({ compare_op(CmpKind::Le, "setle"); }); }
-#[test] fn emit_cmp_gt() { run_8mb!({ compare_op(CmpKind::Gt, "setg"); }); }
-#[test] fn emit_cmp_ge() { run_8mb!({ compare_op(CmpKind::Ge, "setge"); }); }
-#[test] fn emit_cmp_eq() { run_8mb!({ compare_op(CmpKind::Eq, "sete"); }); }
-#[test] fn emit_cmp_ne() { run_8mb!({ compare_op(CmpKind::Ne, "setne"); }); }
+#[test]
+fn emit_cmp_lt() {
+    run_8mb!({
+        compare_op(CmpKind::Lt, "setl");
+    });
+}
+#[test]
+fn emit_cmp_le() {
+    run_8mb!({
+        compare_op(CmpKind::Le, "setle");
+    });
+}
+#[test]
+fn emit_cmp_gt() {
+    run_8mb!({
+        compare_op(CmpKind::Gt, "setg");
+    });
+}
+#[test]
+fn emit_cmp_ge() {
+    run_8mb!({
+        compare_op(CmpKind::Ge, "setge");
+    });
+}
+#[test]
+fn emit_cmp_eq() {
+    run_8mb!({
+        compare_op(CmpKind::Eq, "sete");
+    });
+}
+#[test]
+fn emit_cmp_ne() {
+    run_8mb!({
+        compare_op(CmpKind::Ne, "setne");
+    });
+}
 
 // ---------------------------------------------------------------------------
 // Boolean ops
@@ -170,7 +224,12 @@ fn emit_and() {
     run_8mb!({
         let out = emit(&single_block_word(
             sig_0_1(TY_I64),
-            &[OpKind::ConstI64(1), OpKind::ConstI64(0), OpKind::AndBool, OpKind::Ret],
+            &[
+                OpKind::ConstI64(1),
+                OpKind::ConstI64(0),
+                OpKind::AndBool,
+                OpKind::Ret,
+            ],
         ));
         assert!(out.contains("and"), "got: {out}");
     });
@@ -181,7 +240,12 @@ fn emit_or() {
     run_8mb!({
         let out = emit(&single_block_word(
             sig_0_1(TY_I64),
-            &[OpKind::ConstI64(1), OpKind::ConstI64(0), OpKind::OrBool, OpKind::Ret],
+            &[
+                OpKind::ConstI64(1),
+                OpKind::ConstI64(0),
+                OpKind::OrBool,
+                OpKind::Ret,
+            ],
         ));
         assert!(out.contains("or"), "got: {out}");
     });
@@ -221,12 +285,43 @@ fn epilogue_always_emits_ret() {
 fn emit_br_if() {
     run_8mb!({
         let mut b0_ops: frontend::fixed::FixedVec<ir::Op, 96> = frontend::fixed::FixedVec::new();
-        b0_ops.push(ir::Op { kind: OpKind::ConstBool(true), span: frontend::span::Span::UNKNOWN }).unwrap();
-        b0_ops.push(ir::Op { kind: OpKind::BrIf { then_tgt: BlockId(1), else_tgt: BlockId(2) }, span: frontend::span::Span::UNKNOWN }).unwrap();
+        b0_ops
+            .push(ir::Op {
+                kind: OpKind::ConstBool(true),
+                span: frontend::span::Span::UNKNOWN,
+            })
+            .unwrap();
+        b0_ops
+            .push(ir::Op {
+                kind: OpKind::BrIf {
+                    then_tgt: BlockId(1),
+                    else_tgt: BlockId(2),
+                },
+                span: frontend::span::Span::UNKNOWN,
+            })
+            .unwrap();
         let mut blocks: frontend::fixed::FixedVec<ir::Block, 16> = frontend::fixed::FixedVec::new();
-        blocks.push(ir::Block { id: BlockId(0), entry_stack: frontend::fixed::FixedVec::new(), ops: b0_ops }).unwrap();
-        blocks.push(ir::Block { id: BlockId(1), entry_stack: frontend::fixed::FixedVec::new(), ops: frontend::fixed::FixedVec::new() }).unwrap();
-        blocks.push(ir::Block { id: BlockId(2), entry_stack: frontend::fixed::FixedVec::new(), ops: frontend::fixed::FixedVec::new() }).unwrap();
+        blocks
+            .push(ir::Block {
+                id: BlockId(0),
+                entry_stack: frontend::fixed::FixedVec::new(),
+                ops: b0_ops,
+            })
+            .unwrap();
+        blocks
+            .push(ir::Block {
+                id: BlockId(1),
+                entry_stack: frontend::fixed::FixedVec::new(),
+                ops: frontend::fixed::FixedVec::new(),
+            })
+            .unwrap();
+        blocks
+            .push(ir::Block {
+                id: BlockId(2),
+                entry_stack: frontend::fixed::FixedVec::new(),
+                ops: frontend::fixed::FixedVec::new(),
+            })
+            .unwrap();
         let w = Word {
             name: atom(b"test"),
             sig: sig_0_0(),
@@ -241,8 +336,13 @@ fn emit_br_if() {
         let out = emit(&w);
         // Assert a conditional jump mnemonic (je/jne/jg/jl/etc.)
         assert!(
-            out.contains("je ") || out.contains("jne ") || out.contains("jg ") || out.contains("jl ")
-            || out.contains("jge ") || out.contains("jle ") || out.contains("jmp "),
+            out.contains("je ")
+                || out.contains("jne ")
+                || out.contains("jg ")
+                || out.contains("jl ")
+                || out.contains("jge ")
+                || out.contains("jle ")
+                || out.contains("jmp "),
             "expected conditional jump in br_if output, got: {out}"
         );
     });
@@ -259,7 +359,9 @@ fn emit_trap_if_false() {
             sig_0_1(TY_I64),
             &[
                 OpKind::ConstI64(1),
-                OpKind::TrapIfFalse { code: TrapCode::AssertFail },
+                OpKind::TrapIfFalse {
+                    code: TrapCode::AssertFail,
+                },
                 OpKind::Ret,
             ],
         ));
@@ -277,7 +379,11 @@ fn emit_load() {
         let w = single_block_word(
             sig_0_1(TY_I64),
             &[
-                OpKind::AddrOf { place: atom(b"x"), mutable: true, const_addr: Some(0x1000) },
+                OpKind::AddrOf {
+                    place: atom(b"x"),
+                    mutable: true,
+                    const_addr: Some(0x1000),
+                },
                 OpKind::Load { ty: TY_I64 },
                 OpKind::Ret,
             ],
@@ -293,7 +399,11 @@ fn emit_store() {
         let w = single_block_word(
             sig_0_1(TY_I64),
             &[
-                OpKind::AddrOf { place: atom(b"x"), mutable: true, const_addr: Some(0x1000) },
+                OpKind::AddrOf {
+                    place: atom(b"x"),
+                    mutable: true,
+                    const_addr: Some(0x1000),
+                },
                 OpKind::ConstI64(IMM),
                 OpKind::Store { ty: TY_I64 },
                 OpKind::ConstI64(0),
@@ -315,8 +425,15 @@ fn emit_ptr_add_const() {
         let w = single_block_word(
             sig_0_1(TY_I64),
             &[
-                OpKind::AddrOf { place: atom(b"x"), mutable: false, const_addr: Some(0x1000) },
-                OpKind::PtrAddConst { ty: TY_PTR, offset: 8 },
+                OpKind::AddrOf {
+                    place: atom(b"x"),
+                    mutable: false,
+                    const_addr: Some(0x1000),
+                },
+                OpKind::PtrAddConst {
+                    ty: TY_PTR,
+                    offset: 8,
+                },
                 OpKind::Drop { ty: TY_PTR },
                 OpKind::ConstI64(0),
                 OpKind::Ret,
@@ -336,7 +453,14 @@ fn emit_cast_bool_to_i64() {
     run_8mb!({
         let out = emit(&single_block_word(
             sig_0_1(TY_I64),
-            &[OpKind::ConstBool(true), OpKind::Cast { from: TY_BOOL, to: TY_I64 }, OpKind::Ret],
+            &[
+                OpKind::ConstBool(true),
+                OpKind::Cast {
+                    from: TY_BOOL,
+                    to: TY_I64,
+                },
+                OpKind::Ret,
+            ],
         ));
         // Widening cast from bool to i64 should emit a movzx or similar
         assert!(
@@ -351,10 +475,20 @@ fn emit_bitcast_identity() {
     run_8mb!({
         let out = emit(&single_block_word(
             sig_0_1(TY_I64),
-            &[OpKind::ConstI64(IMM), OpKind::Bitcast { from: TY_I64, to: TY_I64 }, OpKind::Ret],
+            &[
+                OpKind::ConstI64(IMM),
+                OpKind::Bitcast {
+                    from: TY_I64,
+                    to: TY_I64,
+                },
+                OpKind::Ret,
+            ],
         ));
         // Identity bitcast produces at least a ret instruction.
-        assert!(out.contains("ret"), "bitcast must produce output with ret, got: {out}");
+        assert!(
+            out.contains("ret"),
+            "bitcast must produce output with ret, got: {out}"
+        );
     });
 }
 
@@ -367,10 +501,20 @@ fn emit_addr_of_unsupported() {
     run_8mb!({
         let w = single_block_word(
             sig_0_1(TY_PTR),
-            &[OpKind::AddrOf { place: atom(b"x"), mutable: false, const_addr: None }, OpKind::Ret],
+            &[
+                OpKind::AddrOf {
+                    place: atom(b"x"),
+                    mutable: false,
+                    const_addr: None,
+                },
+                OpKind::Ret,
+            ],
         );
         let err = emit_err(&w);
-        assert!(matches!(err, CodegenError::UnsupportedAddrOf), "got: {err:?}");
+        assert!(
+            matches!(err, CodegenError::UnsupportedAddrOf),
+            "got: {err:?}"
+        );
     });
 }
 
@@ -379,10 +523,18 @@ fn emit_check_subtype_unsupported() {
     run_8mb!({
         let w = single_block_word(
             sig_0_1(TY_I64),
-            &[OpKind::ConstI64(42), OpKind::CheckSubtype { ty: TY_I64 }, OpKind::Drop { ty: TY_BOOL }, OpKind::Ret],
+            &[
+                OpKind::ConstI64(42),
+                OpKind::CheckSubtype { ty: TY_I64 },
+                OpKind::Drop { ty: TY_BOOL },
+                OpKind::Ret,
+            ],
         );
         let err = emit_err(&w);
-        assert!(matches!(err, CodegenError::UnsupportedCheckSubtype), "got: {err:?}");
+        assert!(
+            matches!(err, CodegenError::UnsupportedCheckSubtype),
+            "got: {err:?}"
+        );
     });
 }
 
@@ -407,8 +559,11 @@ fn emit_two_adds() {
         let out = emit(&single_block_word(
             sig_0_1(TY_I64),
             &[
-                OpKind::ConstI64(1), OpKind::ConstI64(2), OpKind::AddI64,
-                OpKind::ConstI64(3), OpKind::AddI64,
+                OpKind::ConstI64(1),
+                OpKind::ConstI64(2),
+                OpKind::AddI64,
+                OpKind::ConstI64(3),
+                OpKind::AddI64,
                 OpKind::Ret,
             ],
         ));
@@ -437,7 +592,12 @@ fn emit_mul_commutative() {
     run_8mb!({
         let out = emit(&single_block_word(
             sig_0_1(TY_I64),
-            &[OpKind::ConstI64(3), OpKind::ConstI64(7), OpKind::MulI64, OpKind::Ret],
+            &[
+                OpKind::ConstI64(3),
+                OpKind::ConstI64(7),
+                OpKind::MulI64,
+                OpKind::Ret,
+            ],
         ));
         assert!(out.contains("imul") || out.contains("mul"), "got: {out}");
     });
@@ -447,14 +607,17 @@ fn emit_mul_commutative() {
 // Multi-block label uniqueness (x86:M1)
 // ---------------------------------------------------------------------------
 
-
 #[test]
 fn emit_load_i64_from_ptr() {
     run_8mb!({
         let w = single_block_word(
             sig_0_1(TY_I64),
             &[
-                OpKind::AddrOf { place: atom(b"x"), mutable: false, const_addr: Some(0x1000) },
+                OpKind::AddrOf {
+                    place: atom(b"x"),
+                    mutable: false,
+                    const_addr: Some(0x1000),
+                },
                 OpKind::Load { ty: TY_I64 },
                 OpKind::Ret,
             ],
@@ -474,13 +637,21 @@ fn multi_block_labels_are_unique() {
         let w2 = single_block_word(sig_0_0(), &[]);
         {
             let mut backend = codegen_x86_64::X86_64HostedBackend::new(
-                &mod_ast, b"", &mut out, false, codegen_core::AsmMode::Executable,
+                &mod_ast,
+                b"",
+                &mut out,
+                false,
+                codegen_core::AsmMode::Executable,
             );
             backend.emit_word(&w1).unwrap();
         }
         {
             let mut backend = codegen_x86_64::X86_64HostedBackend::new(
-                &mod_ast, b"", &mut out, false, codegen_core::AsmMode::Executable,
+                &mod_ast,
+                b"",
+                &mut out,
+                false,
+                codegen_core::AsmMode::Executable,
             );
             backend.emit_word(&w2).unwrap();
         }

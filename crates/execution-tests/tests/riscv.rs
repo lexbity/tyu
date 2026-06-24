@@ -20,11 +20,11 @@ fn build_langc() {
 
 #[test]
 fn arithmetic_and_stack_pass() {
-    if !common::require_tools(&[
-        "langc",
-        "riscv64-unknown-elf-as",
-        "riscv64-unknown-elf-ld",
-        "qemu-system-riscv32",
+    if !common::require_tool_groups(&[
+        &["langc"],
+        common::RISCV_AS,
+        common::RISCV_LD,
+        &["qemu-system-riscv32"],
     ]) {
         return;
     }
@@ -52,11 +52,11 @@ fn arithmetic_and_stack_pass() {
 
 #[test]
 fn trap_emits_framed_d_record() {
-    if !common::require_tools(&[
-        "langc",
-        "riscv64-unknown-elf-as",
-        "riscv64-unknown-elf-ld",
-        "qemu-system-riscv32",
+    if !common::require_tool_groups(&[
+        &["langc"],
+        common::RISCV_AS,
+        common::RISCV_LD,
+        &["qemu-system-riscv32"],
     ]) {
         return;
     }
@@ -99,12 +99,14 @@ end;
         .iter()
         .filter(|r| matches!(r, harness_core::Record::Diag(_)))
         .collect();
-    assert!(!d_records.is_empty(), "RISC-V trap output must contain D record");
+    assert!(
+        !d_records.is_empty(),
+        "RISC-V trap output must contain D record"
+    );
 
     for rec in &d_records {
         if let harness_core::Record::Diag(payload) = rec {
-            let diag = diag_core::DiagRecord::parse(payload)
-                .expect("valid DiagRecord on RISC-V");
+            let diag = diag_core::DiagRecord::parse(payload).expect("valid DiagRecord on RISC-V");
             assert_eq!(
                 diag.trap_code, 21,
                 "expected SUBTYPE_FAIL (21), got {}",
@@ -124,11 +126,11 @@ end;
 
 #[test]
 fn trap_overflow_emits_trap_code_10() {
-    if !common::require_tools(&[
-        "langc",
-        "riscv64-unknown-elf-as",
-        "riscv64-unknown-elf-ld",
-        "qemu-system-riscv32",
+    if !common::require_tool_groups(&[
+        &["langc"],
+        common::RISCV_AS,
+        common::RISCV_LD,
+        &["qemu-system-riscv32"],
     ]) {
         return;
     }
@@ -169,8 +171,8 @@ end;
 
     for rec in &records {
         if let harness_core::Record::Diag(payload) = rec {
-            let diag = diag_core::DiagRecord::parse(payload)
-                .expect("valid DiagRecord on RISC-V overflow");
+            let diag =
+                diag_core::DiagRecord::parse(payload).expect("valid DiagRecord on RISC-V overflow");
             assert_eq!(
                 diag.trap_code, 10,
                 "stack overflow must report trap_code=10, got {}",
@@ -188,22 +190,23 @@ end;
 
 #[test]
 fn runtime_exports_required_symbols() {
-    if !common::require_tools(&["riscv64-unknown-elf-as", "riscv64-unknown-elf-nm"]) {
+    if !common::require_tool_groups(&[common::RISCV_AS, common::RISCV_NM]) {
         return;
     }
 
     let target = codegen_core::Target::RiscV32UnknownNone;
     let out_dir = common::temp_dir("riscv_runtime_symcheck");
     let runtime_objs = common::assemble_runtime(target, &out_dir);
-    let nm_bin = "riscv64-unknown-elf-nm";
+    let nm_bin = common::first_available(common::RISCV_NM)
+        .expect("no RISC-V nm available (checked RISCV_NM)");
 
     let mut all_symbols = String::new();
     for obj in &runtime_objs {
-        let output = Command::new(nm_bin)
+        let output = Command::new(&nm_bin)
             .arg("--defined-only")
             .arg(obj)
             .output()
-            .expect("riscv64-unknown-elf-nm invocation failed");
+            .unwrap_or_else(|_| panic!("{nm_bin} invocation failed"));
         assert!(output.status.success(), "nm failed on {:?}", obj);
         all_symbols.push_str(&String::from_utf8_lossy(&output.stdout));
     }
@@ -267,9 +270,22 @@ fn run_qemu_riscv(image: &PathBuf, timeout: std::time::Duration) -> QemuOutcome 
     let mut cmd = Command::new("qemu-system-riscv32");
     cmd.arg("-machine")
         .arg("virt")
+        // Suppress the default OpenSBI firmware so the CPU resets directly into
+        // our kernel at 0x80000000 (otherwise the two overlap and nothing runs).
+        .arg("-bios")
+        .arg("none")
+        // Route semihosting output to a stdio chardev so it lands on stdout
+        // (the default console sends it to QEMU's stderr, which we don't capture).
+        .arg("-display")
+        .arg("none")
+        .arg("-serial")
+        .arg("none")
+        .arg("-monitor")
+        .arg("none")
+        .arg("-chardev")
+        .arg("stdio,id=sh0")
         .arg("-semihosting-config")
-        .arg("enable=on,target=native")
-        .arg("-nographic")
+        .arg("enable=on,target=native,chardev=sh0")
         .arg("-kernel")
         .arg(image);
 
@@ -291,20 +307,29 @@ fn run_qemu_riscv(image: &PathBuf, timeout: std::time::Duration) -> QemuOutcome 
         match child.try_wait() {
             Ok(Some(_)) => {
                 let stdout = stdout_handle.join().unwrap_or_default();
-                return QemuOutcome { stdout, timed_out: false };
+                return QemuOutcome {
+                    stdout,
+                    timed_out: false,
+                };
             }
             Ok(None) => {
                 if start.elapsed() >= timeout {
                     let _ = child.kill();
                     let _ = child.wait();
                     let stdout = stdout_handle.join().unwrap_or_default();
-                    return QemuOutcome { stdout, timed_out: true };
+                    return QemuOutcome {
+                        stdout,
+                        timed_out: true,
+                    };
                 }
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
             Err(_) => {
                 let stdout = stdout_handle.join().unwrap_or_default();
-                return QemuOutcome { stdout, timed_out: false };
+                return QemuOutcome {
+                    stdout,
+                    timed_out: false,
+                };
             }
         }
     }
@@ -354,7 +379,11 @@ fn langc_compile_g(
         .args(&args)
         .status()
         .expect("langc (g) invocation failed");
-    assert!(status.success(), "langc -g --checks=all failed on {}", src.display());
+    assert!(
+        status.success(),
+        "langc -g --checks=all failed on {}",
+        src.display()
+    );
 
     std::fs::read_dir(out_dir)
         .unwrap()
@@ -366,9 +395,11 @@ fn langc_compile_g(
 }
 
 fn temp_dir(label: &str) -> PathBuf {
-    let dir = std::env::temp_dir()
-        .join("tyu_exec_tests")
-        .join(format!("{}_{}", label, std::process::id()));
+    let dir = std::env::temp_dir().join("tyu_exec_tests").join(format!(
+        "{}_{}",
+        label,
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir

@@ -3,7 +3,6 @@ use crate::typecheck::context::FrameParam;
 use crate::typecheck::error::EscapeKind;
 
 impl<'a, 'r> IrWordGen<'a, 'r> {
-
     pub(super) fn compile_return(
         &mut self,
         cur: lir::BlockId,
@@ -17,7 +16,10 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             return Err(TcError::ReturnStackDepth { span });
         }
         if self.any_scoped_live(stack, *sp) {
-            return Err(TcError::BorrowEscape { span, kind: EscapeKind::AtReturn });
+            return Err(TcError::BorrowEscape {
+                span,
+                kind: EscapeKind::AtReturn,
+            });
         }
         for (i, v) in stack.iter().enumerate().take(want) {
             let got = v.to_type_atom();
@@ -28,7 +30,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         self.emit_op(cur, lir::OpKind::Ret, name_abs)?;
         Ok(cur)
     }
-
 
     pub(super) fn compile_call_quote(
         &mut self,
@@ -63,10 +64,17 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         // For each live Ptr on the parent's stack, check if the quotation's
         // word contains an AddrOf op with the same place root.
         for v in stack[..*sp].iter() {
-            if let Value::Ptr { place, mutable: pm, .. } = *v {
-                if place == PLACE_NONE { continue; }
+            if let Value::Ptr {
+                place, mutable: pm, ..
+            } = *v
+            {
+                if place == PLACE_NONE {
+                    continue;
+                }
                 let idx = place.0 as usize;
-                if idx >= self.ledger_len as usize { continue; }
+                if idx >= self.ledger_len as usize {
+                    continue;
+                }
                 // Conservative check: if the parent has a MUTABLE borrow
                 // live, reject the call.  This is stricter than needed but
                 // sound.  A precise check would scan the quotation's ops
@@ -114,7 +122,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         Ok(cur)
     }
 
-
     pub(super) fn compile_scoped_block(
         &mut self,
         mut cur: lir::BlockId,
@@ -159,7 +166,10 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         let tid = self.ty_id_of_type(scoped_ty, span)?;
         self.emit_op(
             cur,
-            lir::OpKind::ScopedEnter { ty: tid, len: enter_len },
+            lir::OpKind::ScopedEnter {
+                ty: tid,
+                len: enter_len,
+            },
             Span::new(span.start + tok.span.start, span.start + tok.span.end),
         )?;
 
@@ -167,8 +177,16 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             .map_err(|_| TcError::TypeParseFailed { span })?;
 
         // Push context frame: MutBorrow forbids SUSPEND, ReadBorrow is transparent.
-        let ctx_kind = if mut_scope { ContextKind::MutBorrow } else { ContextKind::ReadBorrow };
-        self.ctx.push(ctx_kind, FrameParam::Scope(scope_id), Span::new(span.start + tok.span.start, span.start + tok.span.end))?;
+        let ctx_kind = if mut_scope {
+            ContextKind::MutBorrow
+        } else {
+            ContextKind::ReadBorrow
+        };
+        self.ctx.push(
+            ctx_kind,
+            FrameParam::Scope(scope_id),
+            Span::new(span.start + tok.span.start, span.start + tok.span.end),
+        )?;
         cur = self.compile_span(
             cur,
             stack,
@@ -186,6 +204,4 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         self.leave_scope(scope_id);
         Ok(cur)
     }
-
-
 }

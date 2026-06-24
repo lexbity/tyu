@@ -1,5 +1,5 @@
-use hosted::{args::RawArgs, cstr, diag, io};
 use codegen_core::Target;
+use hosted::{args::RawArgs, cstr, diag, io};
 
 pub const HELP: &[u8] = b"lang-assemble (tyu_lang) v0.1.0\n\nUSAGE:\n  lang-assemble [options] <file.asm>\n\nOPTIONS:\n  --help, -h                  Print help\n  --out=<path>                Output file path (default: a.out)\n  --target=<triple>           Target triple (default: x86_64-unknown-linux-gnu)\n                              Supported: x86_64-unknown-linux-gnu\n  --assembler=<path>          Override assembler binary path\n                              (default: determined by target)\n\n";
 
@@ -19,7 +19,10 @@ pub enum ParseResult<'a> {
     Error,
 }
 
-pub unsafe fn parse_args<'a>(argc: isize, argv: *const *const hosted::c::c_char) -> ParseResult<'a> {
+pub unsafe fn parse_args<'a>(
+    argc: isize,
+    argv: *const *const hosted::c::c_char,
+) -> ParseResult<'a> {
     let args = unsafe { RawArgs::new(argc, argv) };
 
     let mut saw_help = false;
@@ -47,7 +50,10 @@ pub unsafe fn parse_args<'a>(argc: isize, argv: *const *const hosted::c::c_char)
             target = match Target::parse(triple) {
                 Some(t) => Some(t),
                 None => {
-                    let _ = diag::error_simple(2004, b"unknown target triple (see --help for supported targets)");
+                    let _ = diag::error_simple(
+                        2004,
+                        b"unknown target triple (see --help for supported targets)",
+                    );
                     return ParseResult::Error;
                 }
             };
@@ -68,7 +74,11 @@ pub unsafe fn parse_args<'a>(argc: isize, argv: *const *const hosted::c::c_char)
 
     if saw_help || args.len() <= 1 {
         let _ = io::stdout(HELP);
-        return if saw_help { ParseResult::Help } else { ParseResult::Error };
+        return if saw_help {
+            ParseResult::Help
+        } else {
+            ParseResult::Error
+        };
     }
 
     let Some(input) = input else {

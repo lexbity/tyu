@@ -262,7 +262,10 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         };
         self.acc = pre_loop_acc.compose(loop_bound);
         // S8: every loop construct is a potential DIVERGE source.
-        self.word.performs = self.word.performs.union(EffectSet::from_bits(EffectSet::DIVERGE));
+        self.word.performs = self
+            .word
+            .performs
+            .union(EffectSet::from_bits(EffectSet::DIVERGE));
         // S9: 5040 — loop in a bounded context.
         if self.ctx.ambient_forbids.contains(EffectSet::DIVERGE) {
             return Err(TcError::DivergeInBounded { span });

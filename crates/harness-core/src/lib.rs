@@ -7,7 +7,7 @@
 
 #![no_std]
 
-pub use loader_core::rederive::{Arch, rederive_stack_high, TOP_SENTINEL};
+pub use loader_core::rederive::{rederive_stack_high, Arch, TOP_SENTINEL};
 
 // ---------------------------------------------------------------------------
 // Framed diagnostic protocol — records & parser
@@ -33,10 +33,7 @@ pub enum Record<'a> {
     /// Protocol version byte (`V` marker, 1-byte payload).
     Version(u8),
     /// Unrecognized marker with valid framing — the parser skips it.
-    Unknown {
-        marker: u8,
-        len: u16,
-    },
+    Unknown { marker: u8, len: u16 },
 }
 
 /// Framed-protocol record iterator.
@@ -81,8 +78,8 @@ impl<'a> Iterator for ParseRecords<'a> {
             self.truncated = true;
             return None;
         }
-        let len = u16::from_le_bytes(self.data[self.pos..self.pos + 2].try_into().unwrap())
-            as usize;
+        let len =
+            u16::from_le_bytes(self.data[self.pos..self.pos + 2].try_into().unwrap()) as usize;
         self.pos += 2;
 
         if self.pos + len > self.data.len() {
@@ -98,9 +95,7 @@ impl<'a> Iterator for ParseRecords<'a> {
             b'H' if len == 4 => {
                 Record::HighWater(u32::from_le_bytes(payload[..4].try_into().unwrap()))
             }
-            b'P' if len == 4 => {
-                Record::Pass(u32::from_le_bytes(payload[..4].try_into().unwrap()))
-            }
+            b'P' if len == 4 => Record::Pass(u32::from_le_bytes(payload[..4].try_into().unwrap())),
             b'D' => Record::Diag(payload),
             b'V' if len == 1 => Record::Version(payload[0]),
             _ => Record::Unknown {
@@ -220,9 +215,7 @@ fn parse_output_legacy(stdout: &[u8]) -> OutputSummary {
             }
             b'H' => {
                 if i + 4 < stdout.len() {
-                    high_slots = u32::from_le_bytes(
-                        stdout[i + 1..i + 5].try_into().unwrap(),
-                    );
+                    high_slots = u32::from_le_bytes(stdout[i + 1..i + 5].try_into().unwrap());
                 }
             }
             _ => {}
@@ -261,13 +254,17 @@ pub fn rederive_elf_high(elf: &[u8], slot_bytes: u8) -> u32 {
     let elf_class = elf[4]; // 1 = ELF32, 2 = ELF64
 
     let (e_phoff, e_phentsize, e_phnum) = if elf_class == 2 {
-        if elf.len() < 0x3a { return 0; }
+        if elf.len() < 0x3a {
+            return 0;
+        }
         let phoff = u64::from_le_bytes(elf[0x20..0x28].try_into().unwrap()) as usize;
         let phent = u16::from_le_bytes(elf[0x36..0x38].try_into().unwrap()) as usize;
         let phnum = u16::from_le_bytes(elf[0x38..0x3a].try_into().unwrap()) as usize;
         (phoff, phent, phnum)
     } else if elf_class == 1 {
-        if elf.len() < 0x2e { return 0; }
+        if elf.len() < 0x2e {
+            return 0;
+        }
         let phoff = u32::from_le_bytes(elf[0x1c..0x20].try_into().unwrap()) as usize;
         let phent = u16::from_le_bytes(elf[0x2a..0x2c].try_into().unwrap()) as usize;
         let phnum = u16::from_le_bytes(elf[0x2c..0x2e].try_into().unwrap()) as usize;
@@ -326,9 +323,9 @@ pub fn rederive_elf_high(elf: &[u8], slot_bytes: u8) -> u32 {
 #[cfg(test)]
 mod tests {
     extern crate alloc;
+    use super::*;
     use alloc::vec;
     use alloc::vec::Vec;
-    use super::*;
 
     // ===================================================================
     // Framed-protocol record reader tests
@@ -475,10 +472,13 @@ mod tests {
         data.extend_from_slice(&framed_complete());
         let records: Vec<Record<'_>> = parse_records(&data).collect();
         assert_eq!(records.len(), 2);
-        assert_eq!(records[0], Record::Unknown {
-            marker: b'X',
-            len: 4,
-        });
+        assert_eq!(
+            records[0],
+            Record::Unknown {
+                marker: b'X',
+                len: 4,
+            }
+        );
         assert_eq!(records[1], Record::Complete);
     }
 
@@ -624,7 +624,10 @@ mod tests {
         data.extend_from_slice(&framed_diag(b"\x46\x53\x48\x00\x01\x02"));
         data.extend_from_slice(&framed_complete());
         let s = parse_output(&data);
-        assert_eq!(s.failures, 0, "D payload bytes must not cause phantom failures");
+        assert_eq!(
+            s.failures, 0,
+            "D payload bytes must not cause phantom failures"
+        );
         assert_eq!(s.diagnostics, 1, "exactly one D record");
         assert!(s.completed, "trailing S record still works");
         assert!(!s.truncated);
@@ -828,7 +831,7 @@ mod tests {
         let phoff = ehdr_size;
         buf[phoff..phoff + 4].copy_from_slice(&1u32.to_le_bytes()); // p_type = PT_LOAD
         buf[phoff + 4..phoff + 8].copy_from_slice(&5u32.to_le_bytes()); // p_flags = PF_X|PF_R
-        // p_offset (4 bytes) = after phdr
+                                                                        // p_offset (4 bytes) = after phdr
         let code_off = (ehdr_size + phdr_size) as u32;
         buf[phoff + 12..phoff + 16].copy_from_slice(&code_off.to_le_bytes());
         // p_filesz (4 bytes)
@@ -900,9 +903,7 @@ mod tests {
         // Two PT_LOAD+PF_X segments; scan takes the max high-water
         let push1 = vec![0x49, 0x83, 0xc7, 0x08]; // 1 slot
         let push3 = vec![
-            0x49, 0x83, 0xc7, 0x08,
-            0x49, 0x83, 0xc7, 0x08,
-            0x49, 0x83, 0xc7, 0x08,
+            0x49, 0x83, 0xc7, 0x08, 0x49, 0x83, 0xc7, 0x08, 0x49, 0x83, 0xc7, 0x08,
         ]; // 3 slots
 
         let phdr_size: usize = 56;

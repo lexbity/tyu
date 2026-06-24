@@ -17,12 +17,22 @@ pub const PARAM_BASE: u16 = 0xFF00;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Value {
     Plain(TypeAtom),
-    Scoped { ty: TypeAtom, scope: u16 },
+    Scoped {
+        ty: TypeAtom,
+        scope: u16,
+    },
     Resource(TypeAtom),
     Quot(Span),
     MmioPlace(MmioResolved),
-    Ptr { ty: TypeAtom, mutable: bool, place: PlaceId },
-    MmioPtr { reg: MmioResolvedReg, mutable: bool },
+    Ptr {
+        ty: TypeAtom,
+        mutable: bool,
+        place: PlaceId,
+    },
+    MmioPtr {
+        reg: MmioResolvedReg,
+        mutable: bool,
+    },
 }
 
 impl Value {

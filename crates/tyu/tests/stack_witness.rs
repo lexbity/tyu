@@ -87,9 +87,7 @@ end;
     objs.sort();
 
     // Assemble runtime and link.
-    let rt_dir = workspace_root()
-        .join("runtime")
-        .join("x86_64-unknown-none");
+    let rt_dir = workspace_root().join("runtime").join("x86_64-unknown-none");
     let runtime_o = dir.join("rt.o");
     let fasm_status = Command::new("fasm")
         .args([
@@ -146,16 +144,12 @@ end;
     );
 
     // The witness check itself should pass (or at least not panic).
-    let _ = tyu::highwater::check_stack_witness(
-        summary.high_slots,
-        summary.diagnostics > 0,
-        &image,
-    );
+    let _ =
+        tyu::highwater::check_stack_witness(summary.high_slots, summary.diagnostics > 0, &image);
 
     eprintln!(
         "stack: declared={:?} measured={}",
-        declared,
-        summary.high_slots,
+        declared, summary.high_slots,
     );
 }
 
@@ -227,9 +221,7 @@ end;
 
 #[test]
 fn stack_witness_from_tyu_test() {
-    if !require_tools(&[
-        "langc", "fasm", "ld", "qemu-system-x86_64",
-    ]) {
+    if !require_tools(&["langc", "fasm", "ld", "qemu-system-x86_64"]) {
         return;
     }
     ensure_langc();

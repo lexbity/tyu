@@ -38,7 +38,10 @@ pub fn scan_conflict(
 ) -> Result<(), TcError> {
     // Scan stack for conflicting borrows.
     for v in stack[..sp].iter() {
-        if let Value::Ptr { place, mutable: m2, .. } = *v {
+        if let Value::Ptr {
+            place, mutable: m2, ..
+        } = *v
+        {
             if place == PLACE_NONE {
                 continue;
             }

@@ -1,4 +1,4 @@
-//! Tier-2 `stack_bound` re-derivation (architecture-specific scanners).
+//! TrustLevel-Two `stack_bound` re-derivation (architecture-specific scanners).
 //!
 //! Re-runs a data-stack depth analysis over the verified code section bytes
 //! to produce a conservative upper bound on stack usage.  The analysis is
@@ -106,19 +106,19 @@ fn rederive_x86_64(code: &[u8], slot_bytes: u32) -> u32 {
         // Backward jump → loop → cannot statically bound push count.
         if b == 0xEB && i + 2 <= code.len() {
             let rel = code[i + 1] as i8 as i64;
-            if rel < 0 { return TOP_SENTINEL; }
+            if rel < 0 {
+                return TOP_SENTINEL;
+            }
         }
         if (0x70..=0x7F).contains(&b) && i + 2 <= code.len() {
             let rel = code[i + 1] as i8 as i64;
-            if rel < 0 { return TOP_SENTINEL; }
+            if rel < 0 {
+                return TOP_SENTINEL;
+            }
         }
 
         // add r15, imm8 — PUSH (DS grows upward: 49 83 c7 XX)
-        if i + 3 < code.len()
-            && b == 0x49
-            && code[i + 1] == 0x83
-            && code[i + 2] == 0xc7
-        {
+        if i + 3 < code.len() && b == 0x49 && code[i + 1] == 0x83 && code[i + 2] == 0xc7 {
             let imm = code[i + 3] as i8 as i64;
             off += imm;
             update_peak(&mut peak, off, slot_bytes);
@@ -126,23 +126,17 @@ fn rederive_x86_64(code: &[u8], slot_bytes: u32) -> u32 {
             continue;
         }
         // sub r15, imm8 — POP (DS shrinks: 49 83 ef XX)
-        if i + 3 < code.len()
-            && b == 0x49
-            && code[i + 1] == 0x83
-            && code[i + 2] == 0xef
-        {
+        if i + 3 < code.len() && b == 0x49 && code[i + 1] == 0x83 && code[i + 2] == 0xef {
             let imm = code[i + 3] as i8 as i64;
             off -= imm;
-            if off < 0 { off = 0; }
+            if off < 0 {
+                off = 0;
+            }
             i += 4;
             continue;
         }
         // add r15, imm32 (49 81 c7 XX XX XX XX) — recognized but not counted.
-        if i + 6 < code.len()
-            && b == 0x49
-            && code[i + 1] == 0x81
-            && code[i + 2] == 0xc7
-        {
+        if i + 6 < code.len() && b == 0x49 && code[i + 1] == 0x81 && code[i + 2] == 0xc7 {
             return TOP_SENTINEL;
         }
         // Any other REX-prefixed instruction targeting register 7 (r15)
@@ -157,9 +151,17 @@ fn rederive_x86_64(code: &[u8], slot_bytes: u32) -> u32 {
             // Opcodes that target r15: 01 (add), 03 (sub), 09 (or), 11 (adc),
             // 13 (sbb), 19 (sbb), 21 (and), 23 (and), 29 (sub), 31 (xor),
             // 39 (cmp), 89 (mov), 8B (mov), 87 (xchg), 85 (test), etc.
-            if rm == 7 && (opc == 0x01 || opc == 0x03 || opc == 0x29
-                || opc == 0x89 || opc == 0x8B || opc == 0x85
-                || opc == 0x09 || opc == 0x21 || opc == 0x31 || opc == 0x39)
+            if rm == 7
+                && (opc == 0x01
+                    || opc == 0x03
+                    || opc == 0x29
+                    || opc == 0x89
+                    || opc == 0x8B
+                    || opc == 0x85
+                    || opc == 0x09
+                    || opc == 0x21
+                    || opc == 0x31
+                    || opc == 0x39)
             {
                 return TOP_SENTINEL;
             }
@@ -205,7 +207,9 @@ fn rederive_arm_thumb(code: &[u8], slot_bytes: u32) -> u32 {
                 } else {
                     // SUB → pop: DS shrinks
                     off -= imm3;
-                    if off < 0 { off = 0; }
+                    if off < 0 {
+                        off = 0;
+                    }
                 }
                 i += 2;
                 continue;
@@ -243,7 +247,9 @@ fn rederive_riscv(code: &[u8], slot_bytes: u32) -> u32 {
             } else if imm < 0 {
                 // pop: DS shrinks
                 off += imm; // add negative = decrement
-                if off < 0 { off = 0; }
+                if off < 0 {
+                    off = 0;
+                }
             }
             // imm == 0 is a no-op (addi s2, s2, 0)
             i += 4;
@@ -290,7 +296,7 @@ mod tests {
             | (0 << 10)                  // op = ADD
             | ((iii as u16) << 7)        // imm3
             | (4 << 4)                   // Rn = R4
-            | 4;                         // Rd = R4
+            | 4; // Rd = R4
         w.to_le_bytes().to_vec()
     }
     // SUBS R4, R4, #imm3 = pop (DS shrinks)
@@ -342,7 +348,9 @@ mod tests {
     fn x86_64_three_pushes() {
         // three pushes of 8 bytes each → 3 slots
         let mut code = Vec::new();
-        for _ in 0..3 { code.extend_from_slice(&encode_add_r15(8)); }
+        for _ in 0..3 {
+            code.extend_from_slice(&encode_add_r15(8));
+        }
         assert_eq!(rederive_stack_high(&code, Arch::X86_64, 8), 3);
     }
 
@@ -359,7 +367,9 @@ mod tests {
     fn x86_64_pops_only_zero_high() {
         // just pops (sub r15) with no prior push → peak = 0
         let mut code = Vec::new();
-        for _ in 0..3 { code.extend_from_slice(&encode_sub_r15(8)); }
+        for _ in 0..3 {
+            code.extend_from_slice(&encode_sub_r15(8));
+        }
         assert_eq!(rederive_stack_high(&code, Arch::X86_64, 8), 0);
     }
 
@@ -398,7 +408,9 @@ mod tests {
     #[test]
     fn arm_thumb_three_pushes() {
         let mut code = Vec::new();
-        for _ in 0..3 { code.extend_from_slice(&encode_thumb_add_r4(4)); }
+        for _ in 0..3 {
+            code.extend_from_slice(&encode_thumb_add_r4(4));
+        }
         assert_eq!(rederive_stack_high(&code, Arch::ArmThumb, 4), 3);
     }
 
@@ -414,7 +426,9 @@ mod tests {
     #[test]
     fn arm_thumb_pops_only_zero_high() {
         let mut code = Vec::new();
-        for _ in 0..3 { code.extend_from_slice(&encode_thumb_sub_r4(4)); }
+        for _ in 0..3 {
+            code.extend_from_slice(&encode_thumb_sub_r4(4));
+        }
         assert_eq!(rederive_stack_high(&code, Arch::ArmThumb, 4), 0);
     }
 
@@ -455,7 +469,9 @@ mod tests {
     #[test]
     fn riscv_three_pushes() {
         let mut code = Vec::new();
-        for _ in 0..3 { code.extend_from_slice(&encode_riscv_addi_s2(4)); }
+        for _ in 0..3 {
+            code.extend_from_slice(&encode_riscv_addi_s2(4));
+        }
         assert_eq!(rederive_stack_high(&code, Arch::RiscV, 4), 3);
     }
 
@@ -471,7 +487,9 @@ mod tests {
     #[test]
     fn riscv_pops_only_zero_high() {
         let mut code = Vec::new();
-        for _ in 0..3 { code.extend_from_slice(&encode_riscv_addi_s2(-8)); }
+        for _ in 0..3 {
+            code.extend_from_slice(&encode_riscv_addi_s2(-8));
+        }
         assert_eq!(rederive_stack_high(&code, Arch::RiscV, 4), 0);
     }
 
@@ -526,21 +544,27 @@ mod tests {
     #[test]
     fn x86_64_push_sequence_nonzero() {
         let mut code = Vec::new();
-        for _ in 0..5 { code.extend_from_slice(&encode_add_r15(8)); }
+        for _ in 0..5 {
+            code.extend_from_slice(&encode_add_r15(8));
+        }
         assert!(rederive_stack_high(&code, Arch::X86_64, 8) > 0);
     }
 
     #[test]
     fn arm_thumb_push_sequence_nonzero() {
         let mut code = Vec::new();
-        for _ in 0..5 { code.extend_from_slice(&encode_thumb_add_r4(4)); }
+        for _ in 0..5 {
+            code.extend_from_slice(&encode_thumb_add_r4(4));
+        }
         assert!(rederive_stack_high(&code, Arch::ArmThumb, 4) > 0);
     }
 
     #[test]
     fn riscv_push_sequence_nonzero() {
         let mut code = Vec::new();
-        for _ in 0..5 { code.extend_from_slice(&encode_riscv_addi_s2(4)); }
+        for _ in 0..5 {
+            code.extend_from_slice(&encode_riscv_addi_s2(4));
+        }
         assert!(rederive_stack_high(&code, Arch::RiscV, 4) > 0);
     }
 
@@ -548,21 +572,27 @@ mod tests {
     #[test]
     fn x86_64_pops_only_zero() {
         let mut code = Vec::new();
-        for _ in 0..5 { code.extend_from_slice(&encode_sub_r15(8)); }
+        for _ in 0..5 {
+            code.extend_from_slice(&encode_sub_r15(8));
+        }
         assert_eq!(rederive_stack_high(&code, Arch::X86_64, 8), 0);
     }
 
     #[test]
     fn arm_thumb_pops_only_zero() {
         let mut code = Vec::new();
-        for _ in 0..5 { code.extend_from_slice(&encode_thumb_sub_r4(4)); }
+        for _ in 0..5 {
+            code.extend_from_slice(&encode_thumb_sub_r4(4));
+        }
         assert_eq!(rederive_stack_high(&code, Arch::ArmThumb, 4), 0);
     }
 
     #[test]
     fn riscv_pops_only_zero() {
         let mut code = Vec::new();
-        for _ in 0..5 { code.extend_from_slice(&encode_riscv_addi_s2(-8)); }
+        for _ in 0..5 {
+            code.extend_from_slice(&encode_riscv_addi_s2(-8));
+        }
         assert_eq!(rederive_stack_high(&code, Arch::RiscV, 4), 0);
     }
 
@@ -574,8 +604,12 @@ mod tests {
     fn loop_yields_top() {
         // Backward jmp over a push → static scan cannot bound iterations.
         let mut code = Vec::new();
-        code.push(0x49); code.push(0x83); code.push(0xc7); code.push(8); // add r15, 8
-        code.push(0xEB); code.push(-6i8 as u8);                         // jmp -6 (back to add)
+        code.push(0x49);
+        code.push(0x83);
+        code.push(0xc7);
+        code.push(8); // add r15, 8
+        code.push(0xEB);
+        code.push(-6i8 as u8); // jmp -6 (back to add)
         assert_eq!(rederive_stack_high(&code, Arch::X86_64, 8), TOP_SENTINEL);
     }
 
@@ -583,8 +617,12 @@ mod tests {
     fn backward_jcc_yields_top() {
         // je rel8 pointing backwards
         let mut code = Vec::new();
-        code.push(0x49); code.push(0x83); code.push(0xc7); code.push(8);
-        code.push(0x74); code.push(-6i8 as u8);  // je -6
+        code.push(0x49);
+        code.push(0x83);
+        code.push(0xc7);
+        code.push(8);
+        code.push(0x74);
+        code.push(-6i8 as u8); // je -6
         assert_eq!(rederive_stack_high(&code, Arch::X86_64, 8), TOP_SENTINEL);
     }
 

@@ -2,6 +2,7 @@
 name = "codegen-core"
 version = "0.1.0"
 edition = "2021"
+description = "Shared target and backend abstractions for Tyu code generation."
 
 [lib]
 doctest = false

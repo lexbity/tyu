@@ -2,6 +2,7 @@
 name = "codegen-riscv"
 version = "0.1.0"
 edition = "2021"
+description = "RISC-V code generation backend for Tyu."
 
 [dependencies]
 frontend     = { path = "../frontend" }

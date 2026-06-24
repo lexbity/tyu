@@ -2,7 +2,7 @@
 
 use std::path::Path;
 use tyu::project::ProjectManifest;
-use tyu::{args, deploy, run_cmd, test_cmd, toolchain, build};
+use tyu::{args, build, deploy, platform, run_cmd, test_cmd, toolchain};
 
 fn main() {
     let cwd = std::env::current_dir().unwrap_or_default();
@@ -17,15 +17,26 @@ fn main() {
     match args::parse() {
         args::Command::Build(mut build_args) => {
             apply_project_to_build(&mut build_args, &project_manifest, &cwd);
-            resolve_profile(&mut build_args.feature_set, build_args.profile.as_deref(), &project_manifest);
+            resolve_profile(
+                &mut build_args.feature_set,
+                build_args.profile.as_deref(),
+                &project_manifest,
+            );
             match build::build(&build_args) {
                 Ok(image) => println!("{}", image.display()),
-                Err(e) => { eprintln!("tyu: build error: {}", e); std::process::exit(1); }
+                Err(e) => {
+                    eprintln!("tyu: build error: {}", e);
+                    std::process::exit(1);
+                }
             }
         }
         args::Command::Run(mut run_args) => {
             apply_project_to_run(&mut run_args, &project_manifest, &cwd);
-            resolve_profile(&mut run_args.feature_set, run_args.profile.as_deref(), &project_manifest);
+            resolve_profile(
+                &mut run_args.feature_set,
+                run_args.profile.as_deref(),
+                &project_manifest,
+            );
             if let Err(e) = run_cmd::run(&run_args) {
                 eprintln!("tyu: run error: {}", e);
                 std::process::exit(1);
@@ -33,15 +44,16 @@ fn main() {
         }
         args::Command::Test(mut test_args) => {
             apply_project_to_test(&mut test_args, &project_manifest, &cwd);
-            resolve_profile(&mut test_args.feature_set, test_args.profile.as_deref(), &project_manifest);
-            eprintln!(
-                "tyu: test features: [{}]",
-                {
-                    let mut buf = [""; 8];
-                    let n = test_args.feature_set.write_flags(&mut buf);
-                    buf[..n].join(", ")
-                }
+            resolve_profile(
+                &mut test_args.feature_set,
+                test_args.profile.as_deref(),
+                &project_manifest,
             );
+            eprintln!("tyu: test features: [{}]", {
+                let mut buf = [""; 8];
+                let n = test_args.feature_set.write_flags(&mut buf);
+                buf[..n].join(", ")
+            });
             if let Err(e) = test_cmd::run(&test_args) {
                 eprintln!("tyu: test error: {}", e);
                 std::process::exit(1);
@@ -50,6 +62,12 @@ fn main() {
         args::Command::Deploy(deploy_args) => {
             if let Err(e) = deploy::run(&deploy_args) {
                 eprintln!("tyu: deploy error: {}", e);
+                std::process::exit(1);
+            }
+        }
+        args::Command::Platform(platform_args) => {
+            if let Err(e) = platform::run(platform_args) {
+                eprintln!("tyu: platform error: {}", e);
                 std::process::exit(1);
             }
         }

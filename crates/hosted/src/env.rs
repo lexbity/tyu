@@ -27,4 +27,3 @@ pub unsafe fn get_str(name: &[u8]) -> Option<&'static [u8]> {
     let n = unsafe { cstr::len(ptr) };
     Some(unsafe { core::slice::from_raw_parts(ptr as *const u8, n) })
 }
-

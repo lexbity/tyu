@@ -11,6 +11,9 @@ public __task_join
 public __task_yield
 public __task_sleep_ms
 public __task_sleep_us
+public w_a6b1202e57aa7cc9
+public w_eb1d0a3c5e7c2e92
+public w_034a1ff17acf93d3
 
 extrn w_1f5962a2ce9803c8 ; main
 
@@ -320,6 +323,35 @@ __task_sleep_us:
   call __task_yield
   ret
 
+; ---------------------------------------------------------------------------
+; platform.gpio words — synthetic latch for smoke tests
+; ---------------------------------------------------------------------------
+
+; platform.gpio.init ( pin mode -- )
+;   fnv1a_u64("platform.gpio.init") = a6b1202e57aa7cc9
+w_a6b1202e57aa7cc9:
+  sub r15, 16
+  mov byte [__lang_gpio_state], 0
+  ret
+
+; platform.gpio.write ( pin bool -- )
+;   fnv1a_u64("platform.gpio.write") = eb1d0a3c5e7c2e92
+w_eb1d0a3c5e7c2e92:
+  sub r15, 16
+  mov al, [r15+8]
+  mov byte [__lang_gpio_state], al
+  ret
+
+; platform.gpio.read ( pin -- bool )
+;   fnv1a_u64("platform.gpio.read") = 034a1ff17acf93d3
+w_034a1ff17acf93d3:
+  sub r15, 8
+  xor rax, rax
+  mov al, [__lang_gpio_state]
+  mov [r15], rax
+  add r15, 8
+  ret
+
 section '.bss' writeable
 public __chan_next
 public __chan_inuse
@@ -351,6 +383,7 @@ public __task_g_tail
 public __task_g_buf
 public __task_ds_mem
 public __task_cs_mem
+public __lang_gpio_state
 __chan_next dq 0
 __chan_inuse rq 16
 __chan_head rq 16
@@ -382,12 +415,14 @@ __task_g_buf rq TASK_GLOBAL_CAP
 __task_ds_mem rb 1048576
 __task_cs_mem rb 1048576
 __mmio_mem rb 65536
+__lang_gpio_state dq 0
 __lang_ds_base rb 65536
 __lang_ds_limit:
 public __lang_ds_high
 __lang_ds_high dq 0
 public __lang_expected_abi_hash
-__lang_expected_abi_hash dq 0x7ff852243aa7202b
+; compute_abi_hash(ARCH_TAG_X86_64=1, slot=8, word=64, MODINFO_VER=2), recipe v2
+__lang_expected_abi_hash dq 0xf2f245c307c5986a
 
 ; ---------------------------------------------------------------------------
 ; Module modpack section (S2 Phase 14) — empty for hosted; FS used instead

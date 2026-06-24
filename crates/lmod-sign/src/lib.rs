@@ -46,8 +46,7 @@ impl fmt::Display for SignError {
 ///
 /// The output is byte-for-byte deterministic for the same input and key.
 pub fn sign(input: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, SignError> {
-    let mut header = lmod::header::decode_header(input)
-        .ok_or(SignError::InvalidHeader)?;
+    let mut header = lmod::header::decode_header(input).ok_or(SignError::InvalidHeader)?;
 
     header.flags |= lmod::header::LMOD_FLAG_SIGNED;
     // The signed region covers everything up to the existing total_len
@@ -57,8 +56,8 @@ pub fn sign(input: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, SignError> {
     // which would drop the first trailer on re-sign.
     let region_len = header.total_len as usize;
     let sig_off = region_len as u32;
-    let sig_len = TRAILER_HEADER_SIZE + sig_len_for_scheme(SCHEME_HMAC_SHA256)
-        .expect("HMAC-SHA256 sig length must be known");
+    let sig_len = TRAILER_HEADER_SIZE
+        + sig_len_for_scheme(SCHEME_HMAC_SHA256).expect("HMAC-SHA256 sig length must be known");
     let new_total = sig_off + sig_len;
 
     // Copy the signed region and patch header fields to post-signing values.
@@ -69,8 +68,7 @@ pub fn sign(input: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, SignError> {
     signed_region[68..72].copy_from_slice(&sig_len.to_le_bytes());
 
     // Compute HMAC-SHA256 over the corrected signed region.
-    let mut mac = HmacSha256::new_from_slice(key)
-        .expect("HMAC accepts 32-byte key");
+    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts 32-byte key");
     mac.update(&signed_region);
     let result = mac.finalize();
     let sig_bytes = result.into_bytes();
@@ -109,11 +107,18 @@ mod tests {
 
         let output = result.unwrap();
         // Must be larger than input (trailer appended).
-        assert!(output.len() > input.len(), "output must have trailer appended");
+        assert!(
+            output.len() > input.len(),
+            "output must have trailer appended"
+        );
 
         // Verify the SIGNED flag is set.
         let hdr = lmod::header::decode_header(&output).unwrap();
-        assert_ne!(hdr.flags & lmod::header::LMOD_FLAG_SIGNED, 0, "SIGNED flag must be set");
+        assert_ne!(
+            hdr.flags & lmod::header::LMOD_FLAG_SIGNED,
+            0,
+            "SIGNED flag must be set"
+        );
 
         // Verify valid trailer at sig_off.
         let trailer = lmod::sig::SigTrailer::parse(&output[hdr.sig_off as usize..]);
@@ -164,10 +169,13 @@ mod tests {
 
         // Read the trailer.
         let trailer_data = &output[sig_off..];
-        let trailer = lmod::sig::SigTrailer::parse(trailer_data)
-            .expect("valid SigTrailer in signed output");
-        assert_eq!(trailer.sig_bytes, expected.as_slice(),
-            "HMAC in trailer must match independently-computed HMAC over signed region");
+        let trailer =
+            lmod::sig::SigTrailer::parse(trailer_data).expect("valid SigTrailer in signed output");
+        assert_eq!(
+            trailer.sig_bytes,
+            expected.as_slice(),
+            "HMAC in trailer must match independently-computed HMAC over signed region"
+        );
     }
 
     #[test]
@@ -179,8 +187,10 @@ mod tests {
         assert_eq!(hdr.sig_len, 0, "pre-sign: sig_len must be 0");
 
         let before = lmod::sig::signed_region_len(&hdr);
-        assert_eq!(before, hdr.total_len as usize,
-            "without trailer, signed_region_len == total_len");
+        assert_eq!(
+            before, hdr.total_len as usize,
+            "without trailer, signed_region_len == total_len"
+        );
 
         let key = [0xabu8; 32];
         let out = sign(&input, &key).unwrap();
@@ -188,8 +198,10 @@ mod tests {
         assert_ne!(hdr2.sig_len, 0, "post-sign: sig_len must be non-zero");
 
         let after = lmod::sig::signed_region_len(&hdr2);
-        assert_eq!(after, hdr2.sig_off as usize,
-            "with trailer, signed_region_len == sig_off");
+        assert_eq!(
+            after, hdr2.sig_off as usize,
+            "with trailer, signed_region_len == sig_off"
+        );
         assert!(after < out.len(), "signed_region must fit within output");
     }
 
@@ -206,15 +218,23 @@ mod tests {
         // All three must be valid (parseable, SIGNED flag present).
         for (i, out) in [&first, &second, &third].iter().enumerate() {
             let hdr = lmod::header::decode_header(out).unwrap();
-            assert_ne!(hdr.flags & lmod::header::LMOD_FLAG_SIGNED, 0,
-                "round {}: SIGNED flag must be set", i + 1);
+            assert_ne!(
+                hdr.flags & lmod::header::LMOD_FLAG_SIGNED,
+                0,
+                "round {}: SIGNED flag must be set",
+                i + 1
+            );
         }
 
         // Each round must produce a larger output (stacking trailers).
-        assert!(first.len() < second.len(),
-            "re-sign must append a new trailer");
-        assert!(second.len() < third.len(),
-            "second re-sign must append another trailer");
+        assert!(
+            first.len() < second.len(),
+            "re-sign must append a new trailer"
+        );
+        assert!(
+            second.len() < third.len(),
+            "second re-sign must append another trailer"
+        );
 
         // The HMAC for the first signature covers the signed region that
         // includes the first trailer.  After second sign, the third output
@@ -222,8 +242,10 @@ mod tests {
         let first_region = &first[..lmod::header::decode_header(&first).unwrap().sig_off as usize];
         let third_hdr = lmod::header::decode_header(&third).unwrap();
         let third_region = &third[..third_hdr.sig_off as usize];
-        assert!(third_region.len() > first_region.len(),
-            "third region must include first + second trailers");
+        assert!(
+            third_region.len() > first_region.len(),
+            "third region must include first + second trailers"
+        );
     }
 
     #[test]
@@ -232,7 +254,7 @@ mod tests {
         // ENCRYPTED flag), then sign it.  This validates the code path
         // in sign() where the signed region includes the enc-header and
         // encrypted payload sections.
-        use lmod::header::{compute_layout, encode_header, LMOD_FLAG_ENCRYPTED, HEADER_SIZE};
+        use lmod::header::{compute_layout, encode_header, HEADER_SIZE, LMOD_FLAG_ENCRYPTED};
 
         let layout = compute_layout(42, 16, 8, 0, 0, 0, 0, 0);
         let total = layout.total_len as usize;
@@ -244,16 +266,24 @@ mod tests {
         buf[mi_start..mi_start + 4].copy_from_slice(b"MODI");
         // Fill code section with plausible encrypted bytes
         let co = hdr.code_off as usize;
-        for i in 0..8 { buf[co + i] = (i ^ 0xFF) as u8; }
+        for i in 0..8 {
+            buf[co + i] = (i ^ 0xFF) as u8;
+        }
 
         let key = [0xabu8; 32];
         let out = sign(&buf, &key).unwrap();
 
         let out_hdr = lmod::header::decode_header(&out).unwrap();
-        assert_ne!(out_hdr.flags & lmod::header::LMOD_FLAG_SIGNED, 0,
-            "encrypted+signed container must have SIGNED flag");
-        assert_ne!(out_hdr.flags & LMOD_FLAG_ENCRYPTED, 0,
-            "ENCRYPTED flag must survive signing");
+        assert_ne!(
+            out_hdr.flags & lmod::header::LMOD_FLAG_SIGNED,
+            0,
+            "encrypted+signed container must have SIGNED flag"
+        );
+        assert_ne!(
+            out_hdr.flags & LMOD_FLAG_ENCRYPTED,
+            0,
+            "ENCRYPTED flag must survive signing"
+        );
 
         // Verify the MAC independently.
         let region = &out[..out_hdr.sig_off as usize];
@@ -261,8 +291,11 @@ mod tests {
         let trailer = lmod::sig::SigTrailer::parse(trailer_data).unwrap();
         let mut mac = HmacSha256::new_from_slice(&key).unwrap();
         mac.update(region);
-        assert_eq!(mac.finalize().into_bytes().as_slice(), trailer.sig_bytes,
-            "encrypted+signed: HMAC must verify");
+        assert_eq!(
+            mac.finalize().into_bytes().as_slice(),
+            trailer.sig_bytes,
+            "encrypted+signed: HMAC must verify"
+        );
     }
 
     #[test]
@@ -276,8 +309,8 @@ mod tests {
         let hdr = lmod::header::decode_header(&output).unwrap();
         let sig_off = hdr.sig_off as usize;
         let trailer_data = &output[sig_off..];
-        let original_trailer = lmod::sig::SigTrailer::parse(trailer_data)
-            .expect("valid SigTrailer");
+        let original_trailer =
+            lmod::sig::SigTrailer::parse(trailer_data).expect("valid SigTrailer");
 
         // Corrupt byte 64 in the signed region (a header field).
         let mut tampered = output.clone();
@@ -289,8 +322,11 @@ mod tests {
         mac.update(tampered_region);
         let after_tamper = mac.finalize().into_bytes();
 
-        assert_ne!(after_tamper.as_slice(), original_trailer.sig_bytes,
-            "tampering a signed-region byte must change the HMAC");
+        assert_ne!(
+            after_tamper.as_slice(),
+            original_trailer.sig_bytes,
+            "tampering a signed-region byte must change the HMAC"
+        );
     }
 
     #[test]
@@ -298,7 +334,8 @@ mod tests {
         // Compare lib output against the Phase 0 golden signed_plain.lmod.
         let gold_dir = {
             let mut p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-            p.pop(); p.pop();
+            p.pop();
+            p.pop();
             p.join("test-goldens")
         };
 
@@ -309,7 +346,8 @@ mod tests {
         let lib_output = sign(&packed, &key).unwrap();
 
         assert_eq!(
-            lib_output.len(), golden.len(),
+            lib_output.len(),
+            golden.len(),
             "signed output size must match golden"
         );
         assert_eq!(

@@ -2,6 +2,7 @@
 name = "ir"
 version = "0.1.0"
 edition = "2021"
+description = "Intermediate representation and verifier types for Tyu."
 
 [lib]
 
@@ -10,4 +11,3 @@ frontend = { path = "../frontend" }
 
 [dev-dependencies]
 proptest = "1"
-

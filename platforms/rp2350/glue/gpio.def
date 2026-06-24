@@ -1,0 +1,3 @@
+: platform.gpio.init ( usize usize -- ) performs {mmio} ;
+: platform.gpio.write ( usize bool -- ) performs {mmio} ;
+: platform.gpio.read ( usize -- bool ) performs {mmio} ;

@@ -7,10 +7,7 @@ use frontend::{
     parse::{ModuleAst, Parser},
     span::Span,
 };
-use ir::{
-    Atom, Block, BlockId, CapSet, EffectSet, Op, OpKind, Sig, StackBound, Word,
-    TY_I64,
-};
+use ir::{Atom, Block, BlockId, CapSet, EffectSet, Op, OpKind, Sig, StackBound, Word, TY_I64};
 
 /// Minimal `Output` that captures bytes in a `Vec`.
 pub struct TestOut(Vec<u8>);
@@ -65,7 +62,11 @@ pub fn empty_module(src: &[u8]) -> ModuleAst {
 pub fn single_block_word(sig: Sig, ops: &[OpKind]) -> Word {
     let mut opv: FixedVec<Op, 96> = FixedVec::new();
     for &k in ops {
-        opv.push(Op { kind: k, span: Span::UNKNOWN }).unwrap();
+        opv.push(Op {
+            kind: k,
+            span: Span::UNKNOWN,
+        })
+        .unwrap();
     }
     Word {
         name: atom(b"test"),
@@ -78,24 +79,46 @@ pub fn single_block_word(sig: Sig, ops: &[OpKind]) -> Word {
         type_sizes: baseline_sizes(),
         blocks: {
             let mut b = FixedVec::new();
-            b.push(Block { id: BlockId(0), entry_stack: FixedVec::new(), ops: opv }).unwrap();
+            b.push(Block {
+                id: BlockId(0),
+                entry_stack: FixedVec::new(),
+                ops: opv,
+            })
+            .unwrap();
             b
         },
     }
 }
 
-pub fn sig_0_0() -> Sig { Sig::empty() }
+pub fn sig_0_0() -> Sig {
+    Sig::empty()
+}
 pub fn sig_0_1(out: ir::TypeId) -> Sig {
-    let mut s = Sig::empty(); s.out_len = 1; s.outputs[0] = out; s
+    let mut s = Sig::empty();
+    s.out_len = 1;
+    s.outputs[0] = out;
+    s
 }
 pub fn sig_0_2(a: ir::TypeId, b: ir::TypeId) -> Sig {
-    let mut s = Sig::empty(); s.out_len = 2; s.outputs[0] = a; s.outputs[1] = b; s
+    let mut s = Sig::empty();
+    s.out_len = 2;
+    s.outputs[0] = a;
+    s.outputs[1] = b;
+    s
 }
 pub fn sig_1_0(inp: ir::TypeId) -> Sig {
-    let mut s = Sig::empty(); s.in_len = 1; s.inputs[0] = inp; s
+    let mut s = Sig::empty();
+    s.in_len = 1;
+    s.inputs[0] = inp;
+    s
 }
 pub fn sig_1_1(inp: ir::TypeId, out: ir::TypeId) -> Sig {
-    let mut s = Sig::empty(); s.in_len = 1; s.inputs[0] = inp; s.out_len = 1; s.outputs[0] = out; s
+    let mut s = Sig::empty();
+    s.in_len = 1;
+    s.inputs[0] = inp;
+    s.out_len = 1;
+    s.outputs[0] = out;
+    s
 }
 
 /// Emit a word and return the output.

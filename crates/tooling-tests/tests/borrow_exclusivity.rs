@@ -7,16 +7,29 @@
 use std::process::Command;
 
 fn langc_exe() -> std::path::PathBuf {
-    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
     workspace.join("target").join("debug").join("langc")
 }
 
 fn repo_sysroot() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap().join("sysroot")
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("sysroot")
 }
 
 fn fresh_dir(label: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join("tyu_borrow_tests").join(format!("{}_{}", label, std::process::id()));
+    let dir = std::env::temp_dir().join("tyu_borrow_tests").join(format!(
+        "{}_{}",
+        label,
+        std::process::id()
+    ));
     let _ = std::fs::create_dir_all(&dir);
     dir
 }
@@ -28,7 +41,9 @@ fn compile_args(src: &[u8], dir: &std::path::Path, extra_args: &[&str]) -> Resul
     cmd.current_dir(dir)
         .arg("--emit=ir")
         .arg(format!("--sysroot={}", repo_sysroot().to_string_lossy()));
-    for a in extra_args { cmd.arg(a); }
+    for a in extra_args {
+        cmd.arg(a);
+    }
     cmd.arg(mod_path.to_str().unwrap());
     let out = cmd.output().map_err(|e| format!("run: {}", e))?;
     if out.status.success() {
@@ -49,7 +64,9 @@ fn compile_expect_err_args(src: &[u8], dir: &std::path::Path, extra_args: &[&str
     cmd.current_dir(dir)
         .arg("--emit=ir")
         .arg(format!("--sysroot={}", repo_sysroot().to_string_lossy()));
-    for a in extra_args { cmd.arg(a); }
+    for a in extra_args {
+        cmd.arg(a);
+    }
     cmd.arg(mod_path.to_str().unwrap());
     let out = cmd.output().unwrap();
     assert!(!out.status.success(), "expected compilation error");
@@ -119,8 +136,10 @@ resource counter : u32 = 0;\n\
 ;\n\
 end;\n";
     let err = compile_expect_err(src, &dir);
-    assert!(err.contains("5021"),
-        "expected E5021 for two simultaneously-live &! borrows, got: {err}");
+    assert!(
+        err.contains("5021"),
+        "expected E5021 for two simultaneously-live &! borrows, got: {err}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -141,8 +160,10 @@ resource counter : u32 = 0;\n\
 ;\n\
 end;\n";
     let err = compile_expect_err(src, &dir);
-    assert!(err.contains("5021"),
-        "expected E5021 for &! + & overlap, got: {err}");
+    assert!(
+        err.contains("5021"),
+        "expected E5021 for &! + & overlap, got: {err}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -163,8 +184,10 @@ resource counter : u32 = 0;\n\
 ;\n\
 end;\n";
     let err = compile_expect_err(src, &dir);
-    assert!(err.contains("5022"),
-        "expected E5022 for dup of &! borrow, got: {err}");
+    assert!(
+        err.contains("5022"),
+        "expected E5022 for dup of &! borrow, got: {err}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -225,8 +248,10 @@ resource counter : u32 = 0;\n\
 ;\n\
 end;\n";
     let err = compile_expect_err(src, &dir);
-    assert!(err.contains("5023"),
-        "expected E5023 for double ref of borrow-typed local, got: {err}");
+    assert!(
+        err.contains("5023"),
+        "expected E5023 for double ref of borrow-typed local, got: {err}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -247,8 +272,10 @@ resource counter : u32 = 0;\n\
 ;\n\
 end;\n";
     let err = compile_expect_err(src, &dir);
-    assert!(err.contains("5021"),
-        "expected E5021 for &! after binding &! local, got: {err}");
+    assert!(
+        err.contains("5021"),
+        "expected E5021 for &! after binding &! local, got: {err}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -350,8 +377,10 @@ resource counter : u32 = 0;\n\
 ;\n\
 end;\n";
     let err = compile_expect_err(src, &dir);
-    assert!(err.contains("3246") || err.contains("IfBranchDepth"),
-        "expected IfBranchDepth for different-depth branches, got: {err}");
+    assert!(
+        err.contains("3246") || err.contains("IfBranchDepth"),
+        "expected IfBranchDepth for different-depth branches, got: {err}"
+    );
 }
 
 // POS: per-iteration mint+consume in while loop
@@ -403,8 +432,10 @@ resource counter : u32 = 0;\n\
 ;\n\
 end;\n";
     let err = compile_expect_err(src, &dir);
-    assert!(err.contains("5021"),
-        "expected E5021 for two &! in lock body, got: {err}");
+    assert!(
+        err.contains("5021"),
+        "expected E5021 for two &! in lock body, got: {err}"
+    );
 }
 
 // POS: lock body with sequential &!R → legal
@@ -458,8 +489,10 @@ resource counter : u32 = 0;\n\
 ;\n\
 end;\n";
     let err = compile_expect_err(src, &dir);
-    assert!(err.contains("5021"),
-        "expected E5021 for call with live parent borrow on same root, got: {err}");
+    assert!(
+        err.contains("5021"),
+        "expected E5021 for call with live parent borrow on same root, got: {err}"
+    );
 }
 
 // POS: two sequential quotation borrows (no overlap) → OK
@@ -513,8 +546,10 @@ import platform/linux { };\n\
 ;\n\
 end;\n";
     let err = compile_expect_err(src, &dir);
-    assert!(err.contains("3523"),
-        "expected E3523 for &! of undefined name, got: {err}");
+    assert!(
+        err.contains("3523"),
+        "expected E3523 for &! of undefined name, got: {err}"
+    );
 }
 
 // POS: ptr_mut param accepted (param seeding)
@@ -527,8 +562,7 @@ fn ptr_mut_param_accepted() {
   0\n\
 ;\n\
 end;\n";
-    compile_args(src, &dir, &["--allow-raw-casts"])
-        .expect("ptr_mut param must compile");
+    compile_args(src, &dir, &["--allow-raw-casts"]).expect("ptr_mut param must compile");
 }
 
 // POS: typed store through raw ptr_mut param
@@ -605,8 +639,10 @@ resource counter : u32 = 0;\n\
 ;\n\
 end;\n";
     let err = compile_expect_err(src, &dir);
-    assert!(err.contains("5021"),
-        "expected E5021 for two live memory mut borrows, got: {err}");
+    assert!(
+        err.contains("5021"),
+        "expected E5021 for two live memory mut borrows, got: {err}"
+    );
 }
 
 // ---------------------------------------------------------------------------

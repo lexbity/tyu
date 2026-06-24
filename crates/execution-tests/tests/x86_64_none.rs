@@ -47,9 +47,7 @@ fn arithmetic_and_stack_pass() {
 
 #[test]
 fn trap_emits_framed_d_record() {
-    if !common::require_tools(&[
-        "langc", "fasm", "ld", "qemu-system-x86_64",
-    ]) {
+    if !common::require_tools(&["langc", "fasm", "ld", "qemu-system-x86_64"]) {
         return;
     }
     build_langc();
@@ -134,10 +132,7 @@ end;
                 diag.trap_code,
             );
             // valid must be 1 (language-emitted trap).
-            assert!(
-                diag.valid,
-                "trap from __lang_trap_loc must have valid=1"
-            );
+            assert!(diag.valid, "trap from __lang_trap_loc must have valid=1");
             // origin must be IN_GUEST (1).
             assert_eq!(diag.origin, diag_core::origin::IN_GUEST);
             // version must be 1.
@@ -171,9 +166,7 @@ end;
 fn trap_slots_contain_sentinels() {
     // Push known values before triggering a trap, then verify they
     // appear in the slot dump in deepest-last order.
-    if !common::require_tools(&[
-        "langc", "fasm", "ld", "qemu-system-x86_64",
-    ]) {
+    if !common::require_tools(&["langc", "fasm", "ld", "qemu-system-x86_64"]) {
         return;
     }
     build_langc();
@@ -216,8 +209,8 @@ end;
     let mut slot_values: Option<Vec<u64>> = None;
     for rec in &records {
         if let harness_core::Record::Diag(payload) = rec {
-            let diag = diag_core::DiagRecord::parse(payload)
-                .expect("valid DiagRecord in slot test");
+            let diag =
+                diag_core::DiagRecord::parse(payload).expect("valid DiagRecord in slot test");
             assert!(
                 diag.slot_count >= 3,
                 "expected at least 3 slots, got {}",
@@ -267,9 +260,7 @@ fn trap_minimal_slots_no_underflow() {
     // Minimal trap (single value on DS) — verify slot_count ≥ 1 and
     // the slot data parses without underflow (agent never reads below
     // __lang_ds_base).
-    if !common::require_tools(&[
-        "langc", "fasm", "ld", "qemu-system-x86_64",
-    ]) {
+    if !common::require_tools(&["langc", "fasm", "ld", "qemu-system-x86_64"]) {
         return;
     }
     build_langc();
@@ -324,10 +315,7 @@ end;
         }
     }
 
-    assert!(
-        slot_count > 0,
-        "at least one D record must be present"
-    );
+    assert!(slot_count > 0, "at least one D record must be present");
     // Total payload must be exactly 35 + slot_count * 8.
     let expected_len = diag_core::DIAG_HEADER_SIZE + slot_count as usize * 8;
     assert!(
@@ -343,9 +331,7 @@ end;
 fn d_record_payload_does_not_phantom_f() {
     // Verify that D record payload bytes containing 0x46 (F), 0x53 (S),
     // 0x48 (H) do not produce phantom markers.
-    if !common::require_tools(&[
-        "langc", "fasm", "ld", "qemu-system-x86_64",
-    ]) {
+    if !common::require_tools(&["langc", "fasm", "ld", "qemu-system-x86_64"]) {
         return;
     }
     build_langc();
@@ -412,8 +398,7 @@ fn runtime_exports_required_symbols() {
     let configs: &[(codegen_core::FeatureSet, &str)] = &[
         (codegen_core::FeatureSet::empty(), "slim"),
         (
-            codegen_core::FeatureSet::empty()
-                .with(codegen_core::Feature::Concurrency),
+            codegen_core::FeatureSet::empty().with(codegen_core::Feature::Concurrency),
             "concurrency",
         ),
         (codegen_core::FeatureSet::all(), "fat"),
@@ -489,7 +474,8 @@ fn runtime_exports_required_symbols() {
             "[{label}] both __lang_trap and __lang_trap_loc must be defined:\n{all_symbols}",
         );
         assert_ne!(
-            trap_addr, loc_addr,
+            trap_addr,
+            loc_addr,
             "[{label}] __lang_trap_loc must differ from __lang_trap: trap={:#x} loc={:#x}",
             trap_addr.unwrap_or(0),
             loc_addr.unwrap_or(0),
@@ -727,7 +713,12 @@ fn run_qemu_x86_64(image: &PathBuf, timeout: std::time::Duration) -> QemuOutcome
 // ---------------------------------------------------------------------------
 
 /// Compile a .mod file with langc (no special flags).
-fn langc_compile(target: codegen_core::Target, src: &Path, out_dir: &Path, is_lib: bool) -> PathBuf {
+fn langc_compile(
+    target: codegen_core::Target,
+    src: &Path,
+    out_dir: &Path,
+    is_lib: bool,
+) -> PathBuf {
     common::langc_compile(target, src, out_dir, is_lib)
 }
 
@@ -781,9 +772,11 @@ fn langc_compile_g(
 
 /// Create a temporary directory for a test.
 fn temp_dir(label: &str) -> PathBuf {
-    let dir = std::env::temp_dir()
-        .join("tyu_exec_tests")
-        .join(format!("{}_{}", label, std::process::id()));
+    let dir = std::env::temp_dir().join("tyu_exec_tests").join(format!(
+        "{}_{}",
+        label,
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir

@@ -1,0 +1,5 @@
+module platform/gpio;
+:: platform.gpio.init ( usize usize -- ) ;
+:: platform.gpio.write ( usize bool -- ) ;
+:: platform.gpio.read ( usize -- bool ) ;
+export { platform.gpio.init platform.gpio.write platform.gpio.read };

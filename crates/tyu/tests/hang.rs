@@ -55,7 +55,12 @@ fn build_fixture(
         .expect("langc produced no .o file")
 }
 
-fn link_and_run(target: codegen_core::Target, objs: &[std::path::PathBuf], dir: &std::path::Path, port: u16) {
+fn link_and_run(
+    target: codegen_core::Target,
+    objs: &[std::path::PathBuf],
+    dir: &std::path::Path,
+    port: u16,
+) {
     let rt_dir = workspace_root()
         .join("runtime")
         .join(std::str::from_utf8(target.triple()).unwrap());
@@ -63,7 +68,10 @@ fn link_and_run(target: codegen_core::Target, objs: &[std::path::PathBuf], dir: 
     // Assemble runtime first.
     let runtime_o = dir.join("runtime.o");
     let fasm_status = Command::new("fasm")
-        .args([rt_dir.join("runtime.asm").to_str().unwrap(), runtime_o.to_str().unwrap()])
+        .args([
+            rt_dir.join("runtime.asm").to_str().unwrap(),
+            runtime_o.to_str().unwrap(),
+        ])
         .status()
         .unwrap();
     assert!(fasm_status.success(), "fasm runtime failed");
@@ -94,9 +102,7 @@ fn link_and_run(target: codegen_core::Target, objs: &[std::path::PathBuf], dir: 
 
 #[test]
 fn hang_poll_loop() {
-    if !require_tools(&[
-        "langc", "fasm", "ld", "qemu-system-x86_64", "nm",
-    ]) {
+    if !require_tools(&["langc", "fasm", "ld", "qemu-system-x86_64", "nm"]) {
         return;
     }
     ensure_langc();
@@ -129,9 +135,7 @@ end;
 
 #[test]
 fn hang_runaway_recursion() {
-    if !require_tools(&[
-        "langc", "fasm", "ld", "qemu-system-x86_64", "nm",
-    ]) {
+    if !require_tools(&["langc", "fasm", "ld", "qemu-system-x86_64", "nm"]) {
         return;
     }
     ensure_langc();
@@ -165,9 +169,7 @@ end;
 
 #[test]
 fn hang_clean_fixture_does_not_classify() {
-    if !require_tools(&[
-        "langc", "fasm", "ld", "qemu-system-x86_64",
-    ]) {
+    if !require_tools(&["langc", "fasm", "ld", "qemu-system-x86_64"]) {
         return;
     }
     ensure_langc();

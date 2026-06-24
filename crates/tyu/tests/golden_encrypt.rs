@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use lmod::enc::EncMode;
-use lmod::header::{HEADER_SIZE, LMOD_FLAG_ENCRYPTED, LMOD_FLAG_SIGNED, FORMAT_VER};
+use lmod::header::{FORMAT_VER, HEADER_SIZE, LMOD_FLAG_ENCRYPTED, LMOD_FLAG_SIGNED};
 use lmod::validate::Container;
 use tyu::test_helpers::{bin, golden_dir, workspace_root};
 
@@ -32,8 +32,18 @@ fn temp_dir(label: &str) -> PathBuf {
 fn build_tools() {
     let status = Command::new(env!("CARGO"))
         .current_dir(&workspace_root())
-        .args(["build", "-q", "-p", "lmod-pack", "-p", "lmod-encrypt", "-p", "lmod-sign"])
-        .status().expect("cargo build");
+        .args([
+            "build",
+            "-q",
+            "-p",
+            "lmod-pack",
+            "-p",
+            "lmod-encrypt",
+            "-p",
+            "lmod-sign",
+        ])
+        .status()
+        .expect("cargo build");
     assert!(status.success(), "cargo build failed");
 }
 
@@ -54,7 +64,8 @@ fn golden_encrypt_structural() {
             "--mode=fleet",
             &format!("--kek={}", KEK_HEX),
         ])
-        .status().expect("lmod-encrypt");
+        .status()
+        .expect("lmod-encrypt");
     assert!(status.success(), "lmod-encrypt failed");
 
     // Parse and check structural properties.
@@ -62,21 +73,47 @@ fn golden_encrypt_structural() {
     let container = Container::parse(&data).unwrap();
     let hdr = container.header();
 
-    assert_ne!(hdr.flags & LMOD_FLAG_ENCRYPTED, 0, "ENCRYPTED flag must be set");
-    assert_eq!(hdr.flags & LMOD_FLAG_SIGNED, 0, "SIGNED flag must NOT be set after encrypt alone");
-    assert_eq!(hdr.format_ver, FORMAT_VER, "format_ver must be {}", FORMAT_VER);
+    assert_ne!(
+        hdr.flags & LMOD_FLAG_ENCRYPTED,
+        0,
+        "ENCRYPTED flag must be set"
+    );
+    assert_eq!(
+        hdr.flags & LMOD_FLAG_SIGNED,
+        0,
+        "SIGNED flag must NOT be set after encrypt alone"
+    );
+    assert_eq!(
+        hdr.format_ver, FORMAT_VER,
+        "format_ver must be {}",
+        FORMAT_VER
+    );
 
     // Check enc-header.
     let eh_bytes = &data[HEADER_SIZE as usize..];
     let eh = lmod::enc::decode_enc_header(eh_bytes).expect("enc-header must decode");
     assert_eq!(eh.enc_mode, EncMode::Fleet, "enc_mode must be Fleet");
-    assert_eq!(eh.wrapped_slots.len(), 1, "fleet mode must have exactly 1 wrapped slot");
+    assert_eq!(
+        eh.wrapped_slots.len(),
+        1,
+        "fleet mode must have exactly 1 wrapped slot"
+    );
 
     // Check payload regions are preserved.
-    assert_eq!(container.code(), container.code(), "code section must be present");
+    assert_eq!(
+        container.code(),
+        container.code(),
+        "code section must be present"
+    );
     assert!(container.code().len() > 0, "code must not be empty");
-    assert!(container.rodata().len() == 0, "rodata should be empty for this test");
-    assert!(container.data().len() == 0, "data should be empty for this test");
+    assert!(
+        container.rodata().len() == 0,
+        "rodata should be empty for this test"
+    );
+    assert!(
+        container.data().len() == 0,
+        "data should be empty for this test"
+    );
 }
 
 #[test]
@@ -97,7 +134,8 @@ fn golden_encrypt_then_sign_structural() {
             "--mode=fleet",
             &format!("--kek={}", KEK_HEX),
         ])
-        .status().expect("lmod-encrypt");
+        .status()
+        .expect("lmod-encrypt");
     assert!(status.success(), "lmod-encrypt failed");
 
     // Sign.
@@ -107,7 +145,8 @@ fn golden_encrypt_then_sign_structural() {
             signed_path.to_string_lossy().as_ref(),
             &format!("--key={}", SIGN_KEY_HEX),
         ])
-        .status().expect("lmod-sign");
+        .status()
+        .expect("lmod-sign");
     assert!(status.success(), "lmod-sign failed");
 
     // Parse signed output.
@@ -116,13 +155,32 @@ fn golden_encrypt_then_sign_structural() {
     let hdr = container.header();
 
     // Both flags must be set.
-    assert_ne!(hdr.flags & LMOD_FLAG_ENCRYPTED, 0, "ENCRYPTED flag must be set after encrypt+sign");
-    assert_ne!(hdr.flags & LMOD_FLAG_SIGNED, 0, "SIGNED flag must be set after encrypt+sign");
-    assert_eq!(hdr.format_ver, FORMAT_VER, "format_ver must be {}", FORMAT_VER);
+    assert_ne!(
+        hdr.flags & LMOD_FLAG_ENCRYPTED,
+        0,
+        "ENCRYPTED flag must be set after encrypt+sign"
+    );
+    assert_ne!(
+        hdr.flags & LMOD_FLAG_SIGNED,
+        0,
+        "SIGNED flag must be set after encrypt+sign"
+    );
+    assert_eq!(
+        hdr.format_ver, FORMAT_VER,
+        "format_ver must be {}",
+        FORMAT_VER
+    );
 
     // Verify signed trailer is present.
     let sig_trailer = lmod::sig::SigTrailer::parse(&data[hdr.sig_off as usize..]);
-    assert!(sig_trailer.is_some(), "signed module must have a valid SigTrailer");
+    assert!(
+        sig_trailer.is_some(),
+        "signed module must have a valid SigTrailer"
+    );
     let trailer = sig_trailer.unwrap();
-    assert_eq!(trailer.scheme, lmod::sig::SCHEME_HMAC_SHA256, "signature scheme must be HMAC-SHA256");
+    assert_eq!(
+        trailer.scheme,
+        lmod::sig::SCHEME_HMAC_SHA256,
+        "signature scheme must be HMAC-SHA256"
+    );
 }

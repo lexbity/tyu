@@ -59,7 +59,10 @@ fn riscv_target_qemu_exit_convention() {
     let qemu = Target::RiscV32UnknownNone.spec().qemu.unwrap();
     assert_eq!(qemu.system_bin, b"qemu-system-riscv32");
     assert_eq!(qemu.machine, b"virt");
-    assert!(matches!(qemu.exit_convention, codegen_core::QemuExitConvention::Semihosting));
+    assert!(matches!(
+        qemu.exit_convention,
+        codegen_core::QemuExitConvention::Semihosting
+    ));
     assert_eq!(qemu.exit_convention.host_pass_exit(), 0);
 }
 
@@ -75,7 +78,10 @@ fn arm_target_spec_fields() {
 #[test]
 fn arm_target_qemu_exit_convention() {
     let qemu = Target::ArmV7MUnknownNone.spec().qemu.unwrap();
-    assert!(matches!(qemu.exit_convention, codegen_core::QemuExitConvention::Semihosting));
+    assert!(matches!(
+        qemu.exit_convention,
+        codegen_core::QemuExitConvention::Semihosting
+    ));
     assert_eq!(qemu.exit_convention.host_pass_exit(), 0);
 }
 
@@ -100,7 +106,11 @@ fn codegen_error_named_variant_codes() {
     assert_eq!(CodegenError::MissingEntryPoint { name: b"x" }.code(), 8002);
     assert_eq!(CodegenError::OutputCapacityExceeded.code(), 8003);
     assert_eq!(
-        CodegenError::InvalidCast { from: ir::TY_I64, to: ir::TY_BOOL }.code(),
+        CodegenError::InvalidCast {
+            from: ir::TY_I64,
+            to: ir::TY_BOOL
+        }
+        .code(),
         8004
     );
     assert_eq!(CodegenError::UnsupportedEmitMode.code(), 8005);
@@ -108,7 +118,10 @@ fn codegen_error_named_variant_codes() {
     assert_eq!(CodegenError::MalformedIr { detail: 0 }.code(), 8007);
     assert_eq!(CodegenError::UnsupportedAddrOf.code(), 8008);
     assert_eq!(
-        CodegenError::UnknownTypeProperties { type_id: ir::TY_I64 }.code(),
+        CodegenError::UnknownTypeProperties {
+            type_id: ir::TY_I64
+        }
+        .code(),
         8009
     );
     assert_eq!(CodegenError::UnsupportedCheckSubtype.code(), 8010);

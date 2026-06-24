@@ -27,7 +27,11 @@ pub fn write_hex(out: &mut dyn Output, v: u64) {
     for i in (0..64).step_by(4).rev() {
         let nib = ((v >> i) & 0xf) as u8;
         if n > 2 || nib != 0 || i == 0 {
-            buf[n] = if nib < 10 { b'0' + nib } else { b'a' + nib - 10 };
+            buf[n] = if nib < 10 {
+                b'0' + nib
+            } else {
+                b'a' + nib - 10
+            };
             n += 1;
         }
     }
@@ -43,7 +47,11 @@ pub fn write_sym_label(out: &mut dyn Output, name: &[u8]) {
     out.write(b"w_");
     for i in (0..64).step_by(4).rev() {
         let nib = ((hash >> i) & 0xf) as u8;
-        out.write(&[if nib < 10 { b'0' + nib } else { b'a' + nib - 10 }]);
+        out.write(&[if nib < 10 {
+            b'0' + nib
+        } else {
+            b'a' + nib - 10
+        }]);
     }
 }
 

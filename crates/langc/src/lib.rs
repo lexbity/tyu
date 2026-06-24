@@ -1,5 +1,9 @@
 #![no_std]
 #![deny(unsafe_op_in_unsafe_fn)]
+//! Single-module Tyu compiler CLI.
+//!
+//! The crate exposes the compiler driver and CLI-facing helpers in `args`,
+//! `driver`, `iface`, `util`, and `main`.
 
 extern crate alloc;
 

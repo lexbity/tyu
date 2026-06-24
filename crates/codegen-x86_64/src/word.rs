@@ -1,5 +1,5 @@
-use codegen_core::{AsmMode, CodegenError};
 use codegen_core::strings::STR_TABLE_CAP;
+use codegen_core::{AsmMode, CodegenError};
 use frontend::span::Span;
 use ir as lir;
 

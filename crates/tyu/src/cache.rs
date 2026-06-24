@@ -31,7 +31,8 @@ pub fn compiler_fingerprint() -> u64 {
     if let Ok(langc) = crate::toolchain::resolve_tool("langc") {
         if let Ok(meta) = fs::metadata(&langc) {
             if let Ok(mtime) = meta.modified() {
-                let nanos = mtime.duration_since(UNIX_EPOCH)
+                let nanos = mtime
+                    .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_nanos() as u64;
                 h = h.wrapping_mul(0x100000001b3);
@@ -48,11 +49,7 @@ pub fn compiler_fingerprint() -> u64 {
 ///   - own source content hash (8 bytes LE)
 ///   - target triple bytes
 ///   - sorted transitive dependency content hashes (each 8 bytes LE)
-pub fn inputs_fingerprint(
-    own_hash: u64,
-    triple: &str,
-    transitive_dep_hashes: &[u64],
-) -> u64 {
+pub fn inputs_fingerprint(own_hash: u64, triple: &str, transitive_dep_hashes: &[u64]) -> u64 {
     let mut buf = Vec::with_capacity(8 + triple.len() + transitive_dep_hashes.len() * 8);
     buf.extend_from_slice(&own_hash.to_le_bytes());
     buf.extend_from_slice(triple.as_bytes());
@@ -200,9 +197,11 @@ mod tests {
     use std::fs;
 
     fn temp_dir(label: &str) -> PathBuf {
-        let dir = std::env::temp_dir()
-            .join("tyu_cache_tests")
-            .join(format!("{}_{}", label, std::process::id()));
+        let dir = std::env::temp_dir().join("tyu_cache_tests").join(format!(
+            "{}_{}",
+            label,
+            std::process::id()
+        ));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
@@ -257,7 +256,10 @@ mod tests {
         let obj = dir.join("out.o");
         fs::write(&obj, b"\x7fELF").unwrap();
         c.insert(1, 2, 3, "test", &obj).unwrap();
-        assert!(c.lookup(99, 2, 3).is_none(), "different compiler_fp must miss");
+        assert!(
+            c.lookup(99, 2, 3).is_none(),
+            "different compiler_fp must miss"
+        );
     }
 
     #[test]
@@ -268,7 +270,10 @@ mod tests {
         let obj = dir.join("out.o");
         fs::write(&obj, b"\x7fELF").unwrap();
         c.insert(1, 2, 3, "test", &obj).unwrap();
-        assert!(c.lookup(1, 99, 3).is_none(), "different inputs_fp must miss");
+        assert!(
+            c.lookup(1, 99, 3).is_none(),
+            "different inputs_fp must miss"
+        );
     }
 
     #[test]

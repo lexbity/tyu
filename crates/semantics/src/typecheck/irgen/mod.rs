@@ -1,16 +1,15 @@
 use crate::typecheck::context::{ContextKind, ContextStack, FrameParam};
 use crate::typecheck::db::{
-    enum_variant_value, is_iso_type, resource_is_isr_reachable, resource_ty, struct_field_ty, IsoDb,
-    NominalDb, ResourceDb, SubtypeInfo,
+    enum_variant_value, is_iso_type, resource_is_isr_reachable, resource_ty, struct_field_ty,
+    IsoDb, NominalDb, ResourceDb, SubtypeInfo,
 };
 use crate::typecheck::error::{ChecksMode, EscapeKind, TcError};
+use crate::typecheck::irgen::compile::borrow::{mint_id, PlaceKey, LEDGER_CAP};
 use crate::typecheck::mmio::mmio_type_width_bytes;
 use crate::typecheck::mmio::{
     access_can_read, access_can_write, field_mask_shift, resolve_mmio_place, MmioDb, MmioResolved,
 };
-use crate::typecheck::parse::{
-    capture_balanced, capture_scoped_block, read_qualified_name,
-};
+use crate::typecheck::parse::{capture_balanced, capture_scoped_block, read_qualified_name};
 use crate::typecheck::place::PlacePath;
 use crate::typecheck::util::parse_u32_any;
 use crate::typecheck::util::{
@@ -18,7 +17,6 @@ use crate::typecheck::util::{
     field_align, find_local, find_subtype, lookup, parse_i64_token, pop, push, region_ref_type,
     slice_span, slice_type_of_elem, type_compatible, type_size_bytes,
 };
-use crate::typecheck::irgen::compile::borrow::{mint_id, PlaceKey, LEDGER_CAP};
 use crate::typecheck::value::{PlaceId, Value, PARAM_BASE, PLACE_NONE};
 use crate::types::{TypeAtom, WordEntry, WordSig};
 use core::mem::MaybeUninit;
@@ -235,7 +233,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             scope_stack: [0u16; 16],
             scope_sp: 0,
             ctx: ContextStack::new(),
-            ledger: [PlaceKey { root: TypeAtom::EMPTY, full: TypeAtom::EMPTY, origin: Span::new(0, 0) }; LEDGER_CAP],
+            ledger: [PlaceKey {
+                root: TypeAtom::EMPTY,
+                full: TypeAtom::EMPTY,
+                origin: Span::new(0, 0),
+            }; LEDGER_CAP],
             ledger_len: 0,
             acc: StackBound::ID,
             terminated: false,
@@ -291,7 +293,12 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         Ok(id)
     }
 
-    pub(super) fn emit_op(&mut self, cur: lir::BlockId, kind: lir::OpKind, span: Span) -> Result<(), TcError> {
+    pub(super) fn emit_op(
+        &mut self,
+        cur: lir::BlockId,
+        kind: lir::OpKind,
+        span: Span,
+    ) -> Result<(), TcError> {
         let op = lir::Op { kind, span };
         let b = self.block_mut(cur)?;
         b.ops.push(op).map_err(|_| TcError::OpTableFull { span })?;
@@ -365,8 +372,8 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
     ) -> Result<Option<TypeAtom>, TcError> {
         // Resolve root type from place root identifier.
         let root_bytes = slice_span(self.src, place.root);
-        let root_atom = TypeAtom::new(root_bytes)
-            .ok_or(TcError::PlaceParseFailed { span: place.root })?;
+        let root_atom =
+            TypeAtom::new(root_bytes).ok_or(TcError::PlaceParseFailed { span: place.root })?;
 
         let mut ty = if let Some(rty) = resource_ty(self.resources, root_atom) {
             rty
@@ -385,7 +392,8 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                     };
                     ty = next;
                 }
-                crate::typecheck::place::Step::Index(_) | crate::typecheck::place::Step::DynamicIndex(_) => {
+                crate::typecheck::place::Step::Index(_)
+                | crate::typecheck::place::Step::DynamicIndex(_) => {
                     let Some(elem) = array_elem_type(ty) else {
                         return Err(TcError::FieldNotFound { span: place_abs });
                     };
@@ -434,7 +442,10 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         sp: usize,
     ) -> Option<SuspendBlocker> {
         // 1. Any frame unconditionally forbids SUSPEND (Lock, MutBorrow, Isr)
-        if let Some(s) = self.ctx.forbidding_span(EffectSet::from_bits(EffectSet::SUSPEND)) {
+        if let Some(s) = self
+            .ctx
+            .forbidding_span(EffectSet::from_bits(EffectSet::SUSPEND))
+        {
             return Some(SuspendBlocker::Frame(s));
         }
         // 2. No SUSPENDABLE capability granted (word didn't declare performs {suspend})
@@ -529,14 +540,20 @@ pub fn build_ir_word<'r>(
         while cap_start < cap_bytes.len() {
             // Skip whitespace and commas.
             while cap_start < cap_bytes.len()
-                && (cap_bytes[cap_start] == b' ' || cap_bytes[cap_start] == b',' || cap_bytes[cap_start] == b'\n')
+                && (cap_bytes[cap_start] == b' '
+                    || cap_bytes[cap_start] == b','
+                    || cap_bytes[cap_start] == b'\n')
             {
                 cap_start += 1;
             }
-            if cap_start >= cap_bytes.len() { break; }
+            if cap_start >= cap_bytes.len() {
+                break;
+            }
             // Find end of this capability name.
             let mut cap_end = cap_start;
-            while cap_end < cap_bytes.len() && cap_bytes[cap_end] != b',' && cap_bytes[cap_end] != b' '
+            while cap_end < cap_bytes.len()
+                && cap_bytes[cap_end] != b','
+                && cap_bytes[cap_end] != b' '
                 && cap_bytes[cap_end] != b'\n'
             {
                 cap_end += 1;
@@ -575,18 +592,27 @@ pub fn build_ir_word<'r>(
                 root_buf[pos] = b'0' + (v % 10) as u8;
                 pos += 1;
                 v /= 10;
-                if v == 0 { break; }
+                if v == 0 {
+                    break;
+                }
             }
             let root_atom = TypeAtom::new(&root_buf[..pos]).unwrap_or(TypeAtom::EMPTY);
             let param_id = PlaceId(PARAM_BASE + i as u16);
             // Add to ledger so the borrow checker knows about this param.
             let _ = mint_id(
-                &mut gen.ledger, &mut gen.ledger_len,
-                root_atom, TypeAtom::EMPTY, Span::new(0, 0),
+                &mut gen.ledger,
+                &mut gen.ledger_len,
+                root_atom,
+                TypeAtom::EMPTY,
+                Span::new(0, 0),
             );
             let idx = stack_start + i;
             if idx < sp {
-                stack[idx] = Value::Ptr { ty: TypeAtom::EMPTY, mutable, place: param_id };
+                stack[idx] = Value::Ptr {
+                    ty: TypeAtom::EMPTY,
+                    mutable,
+                    place: param_id,
+                };
             }
         }
     }

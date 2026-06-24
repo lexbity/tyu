@@ -98,11 +98,7 @@ impl<'a, const N: usize> SymMap<'a, N> {
             return Err(5209); // map full (not in spec band but practical)
         }
 
-        self.entries[self.len] = Some(SymEntry {
-            hash,
-            name,
-            addr,
-        });
+        self.entries[self.len] = Some(SymEntry { hash, name, addr });
         self.len += 1;
         Ok(())
     }
@@ -132,8 +128,7 @@ impl<'a, const N: usize> SymMap<'a, N> {
     /// Look up a symbol by name.  Returns `None` if not found.
     pub fn lookup_by_name(&self, name: &[u8]) -> Option<&SymEntry<'a>> {
         let hash = fnv1a_u64(name);
-        self.lookup_by_hash(hash)
-            .filter(|e| e.name == name)
+        self.lookup_by_hash(hash).filter(|e| e.name == name)
     }
 
     /// Look up a symbol by its FNV-1a 64-bit hash.
@@ -306,7 +301,8 @@ mod tests {
             },
         ];
         let mut buf = [0u8; 768];
-        let size = lmod::modinfo::encode_into(&mut buf, b"MyMod", &exports, &[], 42, 0, &[]).unwrap();
+        let size =
+            lmod::modinfo::encode_into(&mut buf, b"MyMod", &exports, &[], 42, 0, &[]).unwrap();
         let modinfo = &buf[..size];
 
         let mut map: SymMap<'_, 8> = SymMap::new();

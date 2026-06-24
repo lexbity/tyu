@@ -1,5 +1,5 @@
-use codegen_core::{AsmMode, CodegenError};
 use codegen_core::strings::{decode_string_bytes, STR_TABLE_CAP};
+use codegen_core::{AsmMode, CodegenError};
 use frontend::span::Span;
 use ir as lir;
 
@@ -237,32 +237,38 @@ impl<'a> ArmThumbBackend<'a> {
                     lir::CmpKind::Eq => {
                         self.out.write(b"\tcmp r0, r2\n");
                         self.out.write(b"\titt eq\n\tcmpeq r1, r3\n");
-                        self.out.write(b"\tite eq\n\tmoveq r0, #1\n\tmovne r0, #0\n");
+                        self.out
+                            .write(b"\tite eq\n\tmoveq r0, #1\n\tmovne r0, #0\n");
                     }
                     lir::CmpKind::Ne => {
                         self.out.write(b"\tcmp r0, r2\n");
                         self.out.write(b"\titt ne\n\tcmpne r1, r3\n");
-                        self.out.write(b"\tite ne\n\tmovne r0, #1\n\tmoveq r0, #0\n");
+                        self.out
+                            .write(b"\tite ne\n\tmovne r0, #1\n\tmoveq r0, #0\n");
                     }
                     lir::CmpKind::Lt => {
                         self.out.write(b"\tcmp r1, r3\n");
                         self.out.write(b"\tbne 2f\n\tcmp r0, r2\n2:\n");
-                        self.out.write(b"\tite lt\n\tmovlt r0, #1\n\tmovge r0, #0\n");
+                        self.out
+                            .write(b"\tite lt\n\tmovlt r0, #1\n\tmovge r0, #0\n");
                     }
                     lir::CmpKind::Le => {
                         self.out.write(b"\tcmp r1, r3\n");
                         self.out.write(b"\tbne 2f\n\tcmp r0, r2\n2:\n");
-                        self.out.write(b"\tite le\n\tmovle r0, #1\n\tmovgt r0, #0\n");
+                        self.out
+                            .write(b"\tite le\n\tmovle r0, #1\n\tmovgt r0, #0\n");
                     }
                     lir::CmpKind::Gt => {
                         self.out.write(b"\tcmp r1, r3\n");
                         self.out.write(b"\tbne 2f\n\tcmp r0, r2\n2:\n");
-                        self.out.write(b"\tite gt\n\tmovgt r0, #1\n\tmovle r0, #0\n");
+                        self.out
+                            .write(b"\tite gt\n\tmovgt r0, #1\n\tmovle r0, #0\n");
                     }
                     lir::CmpKind::Ge => {
                         self.out.write(b"\tcmp r1, r3\n");
                         self.out.write(b"\tbne 2f\n\tcmp r0, r2\n2:\n");
-                        self.out.write(b"\tite ge\n\tmovge r0, #1\n\tmovlt r0, #0\n");
+                        self.out
+                            .write(b"\tite ge\n\tmovge r0, #1\n\tmovlt r0, #0\n");
                     }
                 }
                 self.out.write(b"\teors r1, r1\n");
@@ -288,7 +294,8 @@ impl<'a> ArmThumbBackend<'a> {
             lir::OpKind::NotBool => {
                 self.emit_pop_two_r0r1();
                 self.out.write(b"\tcmp r0, #0\n");
-                self.out.write(b"\titte ne\n\tmovne r0, #0\n\tmoveq r0, #1\n");
+                self.out
+                    .write(b"\titte ne\n\tmovne r0, #0\n\tmoveq r0, #1\n");
                 self.out.write(b"\teors r1, r1\n");
                 self.emit_push_r0r1();
                 Ok(())
@@ -406,7 +413,10 @@ impl<'a> ArmThumbBackend<'a> {
                 }
                 Ok(())
             }
-            lir::OpKind::AddrOf { const_addr: Some(addr), .. } => {
+            lir::OpKind::AddrOf {
+                const_addr: Some(addr),
+                ..
+            } => {
                 let _ = self.mode; // unused but proves we reach this arm
                 let low = addr as u32;
                 self.emit_const32(low);
@@ -416,9 +426,9 @@ impl<'a> ArmThumbBackend<'a> {
                 self.emit_ds_high_update();
                 Ok(())
             }
-            lir::OpKind::AddrOf { const_addr: None, .. } => {
-                Err(CodegenError::UnsupportedAddrOf)
-            }
+            lir::OpKind::AddrOf {
+                const_addr: None, ..
+            } => Err(CodegenError::UnsupportedAddrOf),
             lir::OpKind::PtrAddConst { offset, .. } => {
                 // Pop pointer (low word, discard high).
                 self.emit_pop_one_r0();
@@ -506,7 +516,8 @@ impl<'a> ArmThumbBackend<'a> {
                 // Normalize to bool if target is bool.
                 if to_name == b"bool" && from_name != b"bool" {
                     self.out.write(b"\tcmp r0, #0\n");
-                    self.out.write(b"\titte ne\n\tmovne r0, #1\n\tmoveq r0, #0\n");
+                    self.out
+                        .write(b"\titte ne\n\tmovne r0, #1\n\tmoveq r0, #0\n");
                     self.out.write(b"\teors r1, r1\n");
                 }
                 // Mask/sign-extend to target width.
@@ -544,15 +555,21 @@ impl<'a> ArmThumbBackend<'a> {
             lir::OpKind::MmioVolLoad { ty, place: _ } => {
                 // Load from the address that's already on the DS (pushed by
                 // MmioPlace or AddrOf). Pop the address, load the value.
-                let (bits, _signed) = prim_bits_signed(_w, ty)
-                    .ok_or(CodegenError::UnsupportedOp { op_name: b"MmioVolLoad" })?;
+                let (bits, _signed) =
+                    prim_bits_signed(_w, ty).ok_or(CodegenError::UnsupportedOp {
+                        op_name: b"MmioVolLoad",
+                    })?;
                 self.emit_pop_one_r0();
                 match bits {
                     8 => self.out.write(b"\tldrb r0, [r0]\n"),
                     16 => self.out.write(b"\tldrh r0, [r0]\n"),
                     32 => self.out.write(b"\tldr r0, [r0]\n"),
                     64 => self.out.write(b"\tldrd r0, r1, [r0]\n"),
-                    _ => return Err(CodegenError::UnsupportedOp { op_name: b"MmioVolLoad" }),
+                    _ => {
+                        return Err(CodegenError::UnsupportedOp {
+                            op_name: b"MmioVolLoad",
+                        })
+                    }
                 }
                 if bits < 64 {
                     self.out.write(b"\teors r1, r1\n");
@@ -561,10 +578,16 @@ impl<'a> ArmThumbBackend<'a> {
                 self.emit_ds_high_update();
                 Ok(())
             }
-            lir::OpKind::MmioVolStore { ty, place: _, access: _ } => {
+            lir::OpKind::MmioVolStore {
+                ty,
+                place: _,
+                access: _,
+            } => {
                 // Pop value (i64), pop address, store.
-                let (bits, _signed) = prim_bits_signed(_w, ty)
-                    .ok_or(CodegenError::UnsupportedOp { op_name: b"MmioVolStore" })?;
+                let (bits, _signed) =
+                    prim_bits_signed(_w, ty).ok_or(CodegenError::UnsupportedOp {
+                        op_name: b"MmioVolStore",
+                    })?;
                 self.emit_pop_two_r0r1();
                 self.emit_pop_one_r2();
                 match bits {
@@ -572,21 +595,39 @@ impl<'a> ArmThumbBackend<'a> {
                     16 => self.out.write(b"\tstrh r0, [r2]\n"),
                     32 => self.out.write(b"\tstr r0, [r2]\n"),
                     64 => self.out.write(b"\tstrd r0, r1, [r2]\n"),
-                    _ => return Err(CodegenError::UnsupportedOp { op_name: b"MmioVolStore" }),
+                    _ => {
+                        return Err(CodegenError::UnsupportedOp {
+                            op_name: b"MmioVolStore",
+                        })
+                    }
                 }
                 Ok(())
             }
-            lir::OpKind::MmioVolLoadField { reg_ty, field_ty, place: _, mask, shift } => {
+            lir::OpKind::MmioVolLoadField {
+                reg_ty,
+                field_ty,
+                place: _,
+                mask,
+                shift,
+            } => {
                 // Load register, extract field via mask+shift.
-                let (rbits, _) = prim_bits_signed(_w, reg_ty)
-                    .ok_or(CodegenError::UnsupportedOp { op_name: b"MmioVolLoadField" })?;
-                let (fbits, f_signed) = prim_bits_signed(_w, field_ty)
-                    .ok_or(CodegenError::UnsupportedOp { op_name: b"MmioVolLoadField" })?;
+                let (rbits, _) =
+                    prim_bits_signed(_w, reg_ty).ok_or(CodegenError::UnsupportedOp {
+                        op_name: b"MmioVolLoadField",
+                    })?;
+                let (fbits, f_signed) =
+                    prim_bits_signed(_w, field_ty).ok_or(CodegenError::UnsupportedOp {
+                        op_name: b"MmioVolLoadField",
+                    })?;
                 self.emit_pop_one_r0();
                 match rbits {
                     32 => self.out.write(b"\tldr r0, [r0]\n"),
                     64 => self.out.write(b"\tldrd r0, r1, [r0]\n"),
-                    _ => return Err(CodegenError::UnsupportedOp { op_name: b"MmioVolLoadField" }),
+                    _ => {
+                        return Err(CodegenError::UnsupportedOp {
+                            op_name: b"MmioVolLoadField",
+                        })
+                    }
                 }
                 // Apply mask and shift
                 if shift > 0 {
@@ -623,16 +664,24 @@ impl<'a> ArmThumbBackend<'a> {
                 self.emit_ds_high_update();
                 Ok(())
             }
-            lir::OpKind::MmioVolStoreField { reg_ty: _, field_ty, place: _, mask, shift } => {
+            lir::OpKind::MmioVolStoreField {
+                reg_ty: _,
+                field_ty,
+                place: _,
+                mask,
+                shift,
+            } => {
                 // Pop value, pop addr, load-modify-write the register.
                 // ARM MMIO registers are assumed 32-bit (the common case on
                 // Cortex-M).  r0 = value low word, r1 = high (discarded).
-                let (fbits, _) = prim_bits_signed(_w, field_ty)
-                    .ok_or(CodegenError::UnsupportedOp { op_name: b"MmioVolStoreField" })?;
+                let (fbits, _) =
+                    prim_bits_signed(_w, field_ty).ok_or(CodegenError::UnsupportedOp {
+                        op_name: b"MmioVolStoreField",
+                    })?;
                 self.emit_pop_two_r0r1();
                 let _ = fbits;
                 self.emit_pop_one_r2(); // r2 = addr
-                // Load current register value (32-bit).
+                                        // Load current register value (32-bit).
                 self.out.write(b"\tldr r3, [r2]\n");
                 // Clear field bits: clear_mask = !(mask << shift) & 0xFFFFFFFF
                 let shifted_mask = mask.wrapping_shl(shift as u32) & 0xFFFFFFFF;
@@ -675,7 +724,8 @@ impl<'a> ArmThumbBackend<'a> {
                 self.out.write(b"\n\tbl __task_spawn\n");
                 // Push returned task ID (r0) onto DS as i64 (high word = 0).
                 self.out.write(b"\tstr r0, [r4]\n\tadds r4, r4, #4\n");
-                self.out.write(b"\teors r1, r1\n\tstr r1, [r4]\n\tadds r4, r4, #4\n");
+                self.out
+                    .write(b"\teors r1, r1\n\tstr r1, [r4]\n\tadds r4, r4, #4\n");
                 self.emit_ds_high_update();
                 Ok(())
             }
@@ -797,7 +847,8 @@ impl<'a> ArmThumbBackend<'a> {
     /// Normalize r0 to 0/1 after a boolean ALU op.
     fn emit_bool_normalize(&mut self) {
         self.out.write(b"\tcmp r0, #0\n");
-        self.out.write(b"\titte ne\n\tmovne r0, #1\n\tmoveq r0, #0\n");
+        self.out
+            .write(b"\titte ne\n\tmovne r0, #1\n\tmoveq r0, #0\n");
     }
 
     // ---- Trap ----
@@ -834,9 +885,7 @@ impl<'a> ArmThumbBackend<'a> {
     /// Idempotent — identical spans yield the same `__lang_str_<id>`.
     fn intern_str(&mut self, span: Span) -> Result<u32, CodegenError> {
         for i in 0..self.str_len {
-            if slice_span(self.src, self.str_spans[i])
-                == slice_span(self.src, span)
-            {
+            if slice_span(self.src, self.str_spans[i]) == slice_span(self.src, span) {
                 return Ok(self.str_ids[i]);
             }
         }

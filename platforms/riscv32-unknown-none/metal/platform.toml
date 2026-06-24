@@ -1,0 +1,52 @@
+[platform]
+name = "riscv32-unknown-none"
+compiler-interface = 1
+description = "RV32 bare-metal runtime"
+
+[[platform.isa]]
+triple = "riscv32-unknown-none"
+arch = "riscv"
+default = true
+expected_abi_hash = "0xa7df1edbd11ba544"
+
+[metal]
+path = "."
+startup = "runtime.asm"
+linker = "link.ld"
+
+[memory]
+sram = { name = "DRAM", origin = 0x80000000, length = 0x08000000, exec = "xip" }
+ds_region = "DRAM"
+ds_size = 0x4000
+
+[features.concurrency]
+unit = "concurrency.asm"
+
+[features.module-loading]
+unit = "modload.asm"
+
+[capabilities.gpio]
+glue = "platform/gpio"
+
+[capabilities.uart]
+glue = "platform/uart"
+
+[capabilities.time]
+glue = "platform/time"
+
+[deploy]
+method = "openocd"
+boot = "raw_vectors"
+
+[[deploy.step]]
+run = "openocd"
+args = ["-f", "{probe_config}", "-c", "program {elf} reset exit"]
+
+[debug]
+diag_transport = "semihosting"
+rsp = "probe"
+probe = "openocd"
+probe_config = "riscv32.cfg"
+
+[test]
+rung = "untested"

@@ -199,7 +199,10 @@ pub fn read_entry(data: &[u8], index: u32) -> Option<ParsedDebugEntry<'_>> {
         return None;
     }
     let name_slice = &data[name_off..];
-    let end = name_slice.iter().position(|&b| b == 0).unwrap_or(name_slice.len());
+    let end = name_slice
+        .iter()
+        .position(|&b| b == 0)
+        .unwrap_or(name_slice.len());
     let name = &data[name_off..name_off + end];
 
     Some(ParsedDebugEntry {
@@ -232,7 +235,10 @@ impl fmt::Debug for DebugEntry<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DebugEntry")
             .field("sym_hash", &format_args!("{:#x}", self.sym_hash))
-            .field("name", &core::str::from_utf8(self.name).unwrap_or("<invalid>"))
+            .field(
+                "name",
+                &core::str::from_utf8(self.name).unwrap_or("<invalid>"),
+            )
             .field("net", &self.net)
             .field("high", &self.high)
             .field("effects", &format_args!("{:#x}", self.effects))
@@ -300,16 +306,17 @@ mod tests {
     fn long_name() {
         roundtrip(&[make_entry(
             "this-is-a-very-long-word-name-that-exceeds-32-bytes",
-            0, 0, 0,
+            0,
+            0,
+            0,
         )]);
     }
 
     #[test]
     fn many_entries() {
         // Build owned names first, then reference them.
-        let names: alloc::vec::Vec<alloc::string::String> = (0..100)
-            .map(|i| alloc::format!("word_{}", i))
-            .collect();
+        let names: alloc::vec::Vec<alloc::string::String> =
+            (0..100).map(|i| alloc::format!("word_{}", i)).collect();
         let entries: alloc::vec::Vec<DebugEntry<'_>> = names
             .iter()
             .enumerate()
@@ -326,10 +333,7 @@ mod tests {
 
     #[test]
     fn for_each_counts_correctly() {
-        let entries = [
-            make_entry("a", 0, 0, 0),
-            make_entry("b", 1, 10, 2),
-        ];
+        let entries = [make_entry("a", 0, 0, 0), make_entry("b", 1, 10, 2)];
         let mut buf = [0u8; 4096];
         let n = encode_into(&mut buf, &entries).unwrap();
         let mut count = 0usize;

@@ -1,7 +1,7 @@
-use codegen_core::{AsmMode, CodegenError};
-use codegen_core::strings::decode_string_bytes;
 use crate::ophelpers::write_u32;
 use crate::ArmThumbBackend;
+use codegen_core::strings::decode_string_bytes;
+use codegen_core::{AsmMode, CodegenError};
 
 impl<'a> ArmThumbBackend<'a> {
     pub fn emit_postlude(&mut self) -> Result<(), CodegenError> {

@@ -1,6 +1,9 @@
 use crate::codegen::{AsmMode, Backend, CodegenBackend};
 use crate::iface::{export_iter, find_decl, find_word_decl};
-use crate::util::{check_word_for_gate, join_path, slice_span, try_load_module_file, MemOut, Stdout};
+use crate::util::{
+    check_word_for_gate, join_path, slice_span, try_load_module_file, MemOut, Stdout,
+};
+use alloc::vec::Vec;
 use codegen_core::{FeatureSet, Target};
 use frontend::parse::{DeclKind, ModuleAst, Parser};
 use hosted::{diag, fs, process};
@@ -131,8 +134,13 @@ pub fn emit_asm_driver(
         }
     };
 
-    let mut gen_backend =
-        codegen_x86_64::X86_64HostedBackend::new(module, src, out, debug_trap_loc, AsmMode::Executable);
+    let mut gen_backend = codegen_x86_64::X86_64HostedBackend::new(
+        module,
+        src,
+        out,
+        debug_trap_loc,
+        AsmMode::Executable,
+    );
     let gen: &mut dyn CodegenBackend = &mut gen_backend;
     if let Err(e) = gen.emit_prelude() {
         let _ = diag::error_simple(e.code(), b"asm emission error");
@@ -295,6 +303,7 @@ pub fn emit_obj_driver(
     // Compute ABI hash before creating the backend (shared across targets).
     let spec = target.spec();
     let abi_hash_val = abi_hash::compute_abi_hash(
+        spec.calling_conv.arch_tag(),
         spec.slot_bytes,
         spec.word_bits,
         modinfo::MODINFO_VER,
@@ -304,21 +313,33 @@ pub fn emit_obj_driver(
     let mut gen: Backend = match target {
         Target::X86_64UnknownLinuxGnu | Target::X86_64UnknownNone => {
             let mut bk = codegen_x86_64::X86_64HostedBackend::new(
-                module, src, &mut mem, debug_trap_loc, AsmMode::Object,
+                module,
+                src,
+                &mut mem,
+                debug_trap_loc,
+                AsmMode::Object,
             );
             bk.set_expected_abi_hash(abi_hash_val);
             Backend::X86(bk)
         }
         Target::ArmV7MUnknownNone => {
             let mut bk = codegen_arm::ArmThumbBackend::new(
-                module, src, &mut mem, debug_trap_loc, AsmMode::Object,
+                module,
+                src,
+                &mut mem,
+                debug_trap_loc,
+                AsmMode::Object,
             );
             bk.set_expected_abi_hash(abi_hash_val);
             Backend::Arm(bk)
         }
         Target::RiscV32UnknownNone => {
             let mut bk = codegen_riscv::RiscVBackend::new(
-                module, src, &mut mem, debug_trap_loc, AsmMode::Object,
+                module,
+                src,
+                &mut mem,
+                debug_trap_loc,
+                AsmMode::Object,
             );
             bk.set_expected_abi_hash(abi_hash_val);
             Backend::RiscV(bk)
@@ -395,9 +416,28 @@ pub fn emit_obj_driver(
     let assembler_bin: &[u8] = match target.spec().assembler {
         codegen_core::AssemblerKind::Fasm => b"fasm",
         codegen_core::AssemblerKind::GasArm => b"arm-none-eabi-as",
-        codegen_core::AssemblerKind::GasRiscV => b"riscv64-unknown-elf-as",
+        codegen_core::AssemblerKind::GasRiscV => b"riscv64-linux-gnu-as",
     };
-    let status = process::run(assembler_bin, &[asm_path, obj_path])
+    let mut asm_args: Vec<&[u8]> = Vec::new();
+    match target.spec().assembler {
+        codegen_core::AssemblerKind::Fasm => {
+            asm_args.push(asm_path);
+            asm_args.push(obj_path);
+        }
+        codegen_core::AssemblerKind::GasArm | codegen_core::AssemblerKind::GasRiscV => {
+            if matches!(
+                target.spec().assembler,
+                codegen_core::AssemblerKind::GasRiscV
+            ) {
+                asm_args.push(b"-march=rv32im");
+                asm_args.push(b"-mabi=ilp32");
+            }
+            asm_args.push(b"-o");
+            asm_args.push(obj_path);
+            asm_args.push(asm_path);
+        }
+    }
+    let status = process::run(assembler_bin, &asm_args)
         .map_err(|_| diag::error_simple(1016, b"failed to run assembler"));
     let status = match status {
         Ok(s) => s,

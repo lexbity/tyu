@@ -12,9 +12,19 @@ pub enum Command {
     Run(RunArgs),
     Test(TestArgs),
     Deploy(DeployArgs),
+    Platform(PlatformArgs),
     ToolchainCheck(ToolchainCheckArgs),
     Clean,
     Help,
+}
+
+/// Arguments for the `platform` subcommand.
+#[derive(Debug)]
+pub enum PlatformArgs {
+    List,
+    Info { name: String, isa: Option<String> },
+    Lint { name: String, all: bool },
+    New { name: String },
 }
 
 /// Arguments for the `toolchain check` subcommand.
@@ -35,6 +45,8 @@ pub enum EncryptMode {
 #[derive(Debug)]
 pub struct DeployArgs {
     pub target: Target,
+    pub platform: Option<String>,
+    pub isa: Option<String>,
     pub input: PathBuf,
     pub include_dirs: Vec<PathBuf>,
     pub sysroot: Option<PathBuf>,
@@ -43,6 +55,7 @@ pub struct DeployArgs {
     pub key_encrypt: Option<String>,
     pub key_sign: Option<String>,
     pub sign: bool,
+    pub commit_otp: bool,
     pub device_keys_dir: Option<PathBuf>,
     pub profile: Option<String>,
     pub feature_set: FeatureSet,
@@ -52,6 +65,8 @@ impl DeployArgs {
     pub fn to_build_args(&self) -> BuildArgs {
         BuildArgs {
             target: self.target,
+            platform: self.platform.clone(),
+            isa: self.isa.clone(),
             input: self.input.clone(),
             include_dirs: self.include_dirs.clone(),
             sysroot: self.sysroot.clone(),
@@ -66,6 +81,8 @@ impl DeployArgs {
 #[derive(Debug)]
 pub struct BuildArgs {
     pub target: Target,
+    pub platform: Option<String>,
+    pub isa: Option<String>,
     pub input: PathBuf,
     pub include_dirs: Vec<PathBuf>,
     pub sysroot: Option<PathBuf>,
@@ -80,6 +97,8 @@ pub struct BuildArgs {
 #[derive(Debug)]
 pub struct RunArgs {
     pub target: Target,
+    pub platform: Option<String>,
+    pub isa: Option<String>,
     pub input: PathBuf,
     pub include_dirs: Vec<PathBuf>,
     pub sysroot: Option<PathBuf>,
@@ -94,6 +113,8 @@ impl RunArgs {
     pub fn to_build_args(&self) -> BuildArgs {
         BuildArgs {
             target: self.target,
+            platform: self.platform.clone(),
+            isa: self.isa.clone(),
             input: self.input.clone(),
             include_dirs: self.include_dirs.clone(),
             sysroot: self.sysroot.clone(),
@@ -127,9 +148,13 @@ pub fn parse() -> Command {
         "run" => parse_run(&args[2..]),
         "test" => parse_test(&args[2..]),
         "deploy" => parse_deploy(&args[2..]),
+        "platform" => parse_platform(&args[2..]),
         "toolchain" => parse_toolchain(&args[2..]),
         "clean" => Command::Clean,
-        "--help" | "-h" => { print_usage(); Command::Help }
+        "--help" | "-h" => {
+            print_usage();
+            Command::Help
+        }
         other => {
             eprintln!("tyu: unknown command '{}'", other);
             Command::Help
@@ -144,10 +169,13 @@ fn print_usage() {
     eprintln!("  build    Compile, assemble, and link an image");
     eprintln!("  run      Build and execute an image");
     eprintln!("  test     Discover and run test suites");
+    eprintln!("  platform Inspect discovered platform packs");
     eprintln!("  clean    Remove build artifacts");
     eprintln!();
     eprintln!("Build/Run options:");
     eprintln!("  --target=<triple>   Target triple");
+    eprintln!("  --platform=<name>   Platform pack name");
+    eprintln!("  --isa=<arch>        ISA filter for platform packs");
     eprintln!("  --profile=<name>    Build profile from tyu.toml [profile.<name>]");
     eprintln!("  --sysroot=<dir>     Sysroot directory");
     eprintln!("  --out-dir=<dir>     Output directory");
@@ -159,6 +187,15 @@ fn print_usage() {
     eprintln!("  --filter=<pat>      Only run suites matching pattern");
     eprintln!("  --manifest=<path>   Path to manifest.toml");
     eprintln!();
+    eprintln!("Platform options:");
+    eprintln!("  tyu platform list                    List discovered packs");
+    eprintln!("  tyu platform info <name> [--isa=A]   Show pack details");
+    eprintln!("  tyu platform lint <name> [--all]     Validate a pack");
+    eprintln!("  tyu platform new <name>              Scaffold a pack");
+    eprintln!();
+    eprintln!("Deploy options:");
+    eprintln!("  --commit-otp        Request the guarded OTP commit path");
+    eprintln!();
     eprintln!("Toolchain options:");
     eprintln!("  tyu toolchain check <target>   Resolve and report tool paths");
     eprintln!();
@@ -169,6 +206,8 @@ fn print_usage() {
 
 fn parse_common(args: &[String]) -> CommonArgs {
     let mut target: Option<Target> = None;
+    let mut platform: Option<String> = None;
+    let mut isa: Option<String> = None;
     let mut input: Option<PathBuf> = None;
     let mut include_dirs: Vec<PathBuf> = Vec::new();
     let mut sysroot: Option<PathBuf> = None;
@@ -184,6 +223,24 @@ fn parse_common(args: &[String]) -> CommonArgs {
             if target.is_none() {
                 eprintln!("tyu: unknown target '{}'", val);
             }
+        } else if a == "--platform" {
+            i += 1;
+            if i < args.len() {
+                platform = Some(args[i].clone());
+            } else {
+                eprintln!("tyu: --platform requires a value");
+            }
+        } else if a == "--isa" {
+            i += 1;
+            if i < args.len() {
+                isa = Some(args[i].clone());
+            } else {
+                eprintln!("tyu: --isa requires a value");
+            }
+        } else if let Some(val) = a.strip_prefix("--platform=") {
+            platform = Some(val.to_string());
+        } else if let Some(val) = a.strip_prefix("--isa=") {
+            isa = Some(val.to_string());
         } else if let Some(val) = a.strip_prefix("--profile=") {
             profile = Some(val.to_string());
         } else if let Some(val) = a.strip_prefix("--sysroot=") {
@@ -211,11 +268,22 @@ fn parse_common(args: &[String]) -> CommonArgs {
         PathBuf::from("target").join("tyu").join(triple)
     });
 
-    CommonArgs { target, input, include_dirs, sysroot, out_dir, profile }
+    CommonArgs {
+        target,
+        platform,
+        isa,
+        input,
+        include_dirs,
+        sysroot,
+        out_dir,
+        profile,
+    }
 }
 
 struct CommonArgs {
     target: Target,
+    platform: Option<String>,
+    isa: Option<String>,
     input: Option<PathBuf>,
     include_dirs: Vec<PathBuf>,
     sysroot: Option<PathBuf>,
@@ -227,10 +295,15 @@ fn parse_build(args: &[String]) -> Command {
     let common = parse_common(args);
     let input = match common.input {
         Some(p) => p,
-        None => { eprintln!("tyu: build requires an input .mod file"); return Command::Help; }
+        None => {
+            eprintln!("tyu: build requires an input .mod file");
+            return Command::Help;
+        }
     };
     Command::Build(BuildArgs {
         target: common.target,
+        platform: common.platform,
+        isa: common.isa,
         input,
         include_dirs: common.include_dirs,
         sysroot: common.sysroot,
@@ -251,7 +324,10 @@ fn parse_run(args: &[String]) -> Command {
         if let Some(val) = a.strip_prefix("--timeout=") {
             let secs: u64 = match val.parse() {
                 Ok(v) => v,
-                Err(_) => { eprintln!("tyu: invalid --timeout"); return Command::Help; }
+                Err(_) => {
+                    eprintln!("tyu: invalid --timeout");
+                    return Command::Help;
+                }
             };
             timeout = Duration::from_secs(secs);
         } else if let Some(val) = a.strip_prefix("--runner=") {
@@ -262,14 +338,24 @@ fn parse_run(args: &[String]) -> Command {
 
     let input = match common.input {
         Some(p) => p,
-        None => { eprintln!("tyu: run requires an input .mod file"); return Command::Help; }
+        None => {
+            eprintln!("tyu: run requires an input .mod file");
+            return Command::Help;
+        }
     };
 
     Command::Run(RunArgs {
-        target: common.target, input, include_dirs: common.include_dirs,
-        sysroot: common.sysroot, out_dir: common.out_dir,
-        profile: common.profile, feature_set: FeatureSet::default(),
-        timeout, runner_override,
+        target: common.target,
+        platform: common.platform,
+        isa: common.isa,
+        input,
+        include_dirs: common.include_dirs,
+        sysroot: common.sysroot,
+        out_dir: common.out_dir,
+        profile: common.profile,
+        feature_set: FeatureSet::default(),
+        timeout,
+        runner_override,
     })
 }
 
@@ -296,11 +382,10 @@ fn parse_test(args: &[String]) -> Command {
         } else if let Some(val) = a.strip_prefix("--features=") {
             let mut set = FeatureSet::empty();
             for chunk in val.split(',') {
-                let f = codegen_core::Feature::parse(chunk)
-                    .unwrap_or_else(|| {
-                        eprintln!("tyu: unknown feature '{}'", chunk);
-                        std::process::exit(1);
-                    });
+                let f = codegen_core::Feature::parse(chunk).unwrap_or_else(|| {
+                    eprintln!("tyu: unknown feature '{}'", chunk);
+                    std::process::exit(1);
+                });
                 set = set.with(f);
             }
             features = Some(set);
@@ -323,7 +408,11 @@ fn parse_test(args: &[String]) -> Command {
     let manifest_path = manifest_path.unwrap_or_else(default_manifest);
 
     Command::Test(TestArgs {
-        target, all_targets, filter, manifest_path, profile,
+        target,
+        all_targets,
+        filter,
+        manifest_path,
+        profile,
         feature_set: features.unwrap_or(FeatureSet::all()),
     })
 }
@@ -339,6 +428,7 @@ fn parse_deploy(args: &[String]) -> Command {
     let mut key_encrypt: Option<String> = None;
     let mut key_sign: Option<String> = None;
     let mut sign = false;
+    let mut commit_otp = false;
     let mut device_keys_dir: Option<PathBuf> = None;
 
     let mut i = 0;
@@ -349,7 +439,10 @@ fn parse_deploy(args: &[String]) -> Command {
                 "none" => EncryptMode::None,
                 "fleet" => EncryptMode::Fleet,
                 "device" => EncryptMode::Device,
-                _ => { eprintln!("tyu: unknown encrypt mode '{}'", val); return Command::Help; }
+                _ => {
+                    eprintln!("tyu: unknown encrypt mode '{}'", val);
+                    return Command::Help;
+                }
             };
         } else if let Some(val) = a.strip_prefix("--key-encrypt=") {
             key_encrypt = Some(val.to_string());
@@ -359,17 +452,24 @@ fn parse_deploy(args: &[String]) -> Command {
             device_keys_dir = Some(PathBuf::from(val));
         } else if a == "--sign" {
             sign = true;
+        } else if a == "--commit-otp" {
+            commit_otp = true;
         }
         i += 1;
     }
 
     let input = match common.input {
         Some(p) => p,
-        None => { eprintln!("tyu: deploy requires an input .mod file"); return Command::Help; }
+        None => {
+            eprintln!("tyu: deploy requires an input .mod file");
+            return Command::Help;
+        }
     };
 
     Command::Deploy(DeployArgs {
         target: common.target,
+        platform: common.platform,
+        isa: common.isa,
         input,
         include_dirs: common.include_dirs,
         sysroot: common.sysroot,
@@ -378,10 +478,92 @@ fn parse_deploy(args: &[String]) -> Command {
         key_encrypt,
         key_sign,
         sign,
+        commit_otp,
         device_keys_dir,
         profile: common.profile,
         feature_set: FeatureSet::default(),
     })
+}
+
+fn parse_platform(args: &[String]) -> Command {
+    if args.is_empty() {
+        eprintln!("tyu: platform requires a subcommand");
+        print_usage();
+        return Command::Help;
+    }
+
+    match args[0].as_str() {
+        "list" => Command::Platform(PlatformArgs::List),
+        "info" => {
+            let mut name: Option<String> = None;
+            let mut isa: Option<String> = None;
+            let mut i = 1;
+            while i < args.len() {
+                let a = &args[i];
+                if let Some(val) = a.strip_prefix("--isa=") {
+                    isa = Some(val.to_string());
+                } else if a == "--isa" {
+                    i += 1;
+                    if i < args.len() {
+                        isa = Some(args[i].clone());
+                    } else {
+                        eprintln!("tyu: --isa requires a value");
+                        return Command::Help;
+                    }
+                } else if a.starts_with('-') {
+                    // Skip unknown flags for now.
+                } else if name.is_none() {
+                    name = Some(a.clone());
+                }
+                i += 1;
+            }
+
+            match name {
+                Some(name) => Command::Platform(PlatformArgs::Info { name, isa }),
+                None => {
+                    eprintln!("tyu: platform info requires a pack name");
+                    Command::Help
+                }
+            }
+        }
+        "lint" => {
+            let mut name: Option<String> = None;
+            let mut all = false;
+            let mut i = 1;
+            while i < args.len() {
+                let a = &args[i];
+                if a == "--all" {
+                    all = true;
+                } else if a.starts_with('-') {
+                    eprintln!("tyu: unknown option '{}'", a);
+                    return Command::Help;
+                } else if name.is_none() {
+                    name = Some(a.clone());
+                }
+                i += 1;
+            }
+
+            match name {
+                Some(name) => Command::Platform(PlatformArgs::Lint { name, all }),
+                None => {
+                    eprintln!("tyu: platform lint requires a pack name");
+                    Command::Help
+                }
+            }
+        }
+        "new" => {
+            if args.len() != 2 {
+                eprintln!("tyu: platform new requires a pack name");
+                return Command::Help;
+            }
+            let name = args[1].clone();
+            Command::Platform(PlatformArgs::New { name })
+        }
+        other => {
+            eprintln!("tyu: unknown platform subcommand '{}'", other);
+            Command::Help
+        }
+    }
 }
 
 fn parse_toolchain(args: &[String]) -> Command {
@@ -396,4 +578,29 @@ fn parse_toolchain(args: &[String]) -> Command {
     Command::ToolchainCheck(ToolchainCheckArgs {
         target: args[1].clone(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn strings(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn parses_platform_new() {
+        match parse_platform(&strings(&["new", "demo"])) {
+            Command::Platform(PlatformArgs::New { name }) => assert_eq!(name, "demo"),
+            other => panic!("unexpected command: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_deploy_commit_otp_flag() {
+        match parse_deploy(&strings(&["--commit-otp", "module.mod"])) {
+            Command::Deploy(args) => assert!(args.commit_otp),
+            other => panic!("unexpected command: {:?}", other),
+        }
+    }
 }

@@ -2,6 +2,7 @@
 name = "langc"
 version = "0.1.0"
 edition = "2021"
+description = "Single-module Tyu compiler CLI."
 
 [lib]
 name = "langc"

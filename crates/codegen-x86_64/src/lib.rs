@@ -1,5 +1,10 @@
 #![no_std]
 #![deny(unsafe_op_in_unsafe_fn)]
+//! x86_64 code generation backend for Tyu.
+//!
+//! The public surface is centered on `X86_64HostedBackend`, with support
+//! modules in `channel`, `mmio`, `ophelpers`, `postlude`, `prelude`,
+//! `region`, `task`, `util`, and `word`.
 
 extern crate alloc;
 
@@ -118,7 +123,9 @@ impl<'a> X86_64HostedBackend<'a> {
                 stack_bound: 0,
             }; 64],
             mi_export_count: 0,
-            mi_imports: [ModInfoImport { name: lir::AT_EMPTY }; 64],
+            mi_imports: [ModInfoImport {
+                name: lir::AT_EMPTY,
+            }; 64],
             mi_import_count: 0,
             expected_abi_hash: 0,
         }
@@ -140,14 +147,13 @@ impl<'a> X86_64HostedBackend<'a> {
         let import_count = self.mi_import_count;
 
         // Build export entries for the encoder.
-        let mut export_entries: [lmod::modinfo::ExportEntry; 64] =
-            [lmod::modinfo::ExportEntry {
-                sym_hash: 0,
-                name: b"",
-                effects: 0,
-                requires_caps: 0,
-                stack_bound: 0,
-            }; 64];
+        let mut export_entries: [lmod::modinfo::ExportEntry; 64] = [lmod::modinfo::ExportEntry {
+            sym_hash: 0,
+            name: b"",
+            effects: 0,
+            requires_caps: 0,
+            stack_bound: 0,
+        }; 64];
         for i in 0..export_count {
             let mi = &self.mi_exports[i];
             let name = mi.name.as_bytes();
@@ -162,18 +168,14 @@ impl<'a> X86_64HostedBackend<'a> {
         }
 
         // Build import entries for the encoder.
-        let mut import_entries: [lmod::modinfo::ImportEntry; 64] =
-            [lmod::modinfo::ImportEntry {
-                sym_hash: 0,
-                name: b"",
-            }; 64];
+        let mut import_entries: [lmod::modinfo::ImportEntry; 64] = [lmod::modinfo::ImportEntry {
+            sym_hash: 0,
+            name: b"",
+        }; 64];
         for i in 0..import_count {
             let name = self.mi_imports[i].name.as_bytes();
             let sym_hash = lmod::hash::fnv1a_u64(name);
-            import_entries[i] = lmod::modinfo::ImportEntry {
-                sym_hash,
-                name,
-            };
+            import_entries[i] = lmod::modinfo::ImportEntry { sym_hash, name };
         }
 
         let module_name = util::slice_span(self.src, self.module.name);
@@ -184,7 +186,7 @@ impl<'a> X86_64HostedBackend<'a> {
             self.expected_abi_hash
         } else {
             // Compute a default hash from the current target contract.
-            lmod::abi_hash::compute_abi_hash(8, 64, lmod::modinfo::MODINFO_VER)
+            lmod::abi_hash::compute_abi_hash(1, 8, 64, lmod::modinfo::MODINFO_VER)
         };
         let size = match lmod::modinfo::encode_into(
             &mut buf,
@@ -192,7 +194,7 @@ impl<'a> X86_64HostedBackend<'a> {
             &export_entries[..export_count],
             &import_entries[..import_count],
             abi_hash,
-            0, // flags (no ISR in current modules)
+            0,   // flags (no ISR in current modules)
             &[], // res_metas (no resources in current modules)
         ) {
             Some(s) => s,

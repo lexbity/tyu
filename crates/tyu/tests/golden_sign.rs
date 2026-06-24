@@ -13,8 +13,10 @@ use std::process::Command;
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap()
-        .parent().unwrap()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
         .to_path_buf()
 }
 
@@ -30,7 +32,8 @@ fn golden_sign_plain_matches_committed() {
     let status = Command::new(env!("CARGO"))
         .current_dir(&workspace_root())
         .args(["build", "-q", "-p", "lmod-sign"])
-        .status().expect("cargo build");
+        .status()
+        .expect("cargo build");
     assert!(status.success(), "cargo build failed");
 
     let gold = golden_dir();
@@ -51,7 +54,8 @@ fn golden_sign_plain_matches_committed() {
             signed_path.to_string_lossy().as_ref(),
             &format!("--key={}", SIGN_KEY),
         ])
-        .status().expect("lmod-sign");
+        .status()
+        .expect("lmod-sign");
     assert!(status.success(), "lmod-sign failed");
 
     // Compare against committed golden.

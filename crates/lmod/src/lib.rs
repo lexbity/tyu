@@ -1,4 +1,8 @@
 #![no_std]
+//! Core `.lmod` module format crate.
+//!
+//! The public modules cover ABI hashing, headers, modinfo, relocation,
+//! signatures, encryption, debug sections, and validation.
 
 extern crate alloc;
 

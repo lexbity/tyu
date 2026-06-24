@@ -1,15 +1,15 @@
-//! S2 Phase 8 — End-to-end hosted load (Tier 0).
+//! S2 Phase 8 — End-to-end hosted load (TrustLevel Zero).
 //!
 //! Compiles a .mod, packs to .lmod, loads dynamically, calls the exported
 //! function, and asserts the result matches a statically-linked build.
 
 mod common;
 
+use common::*;
 use hosted::loader::HostedLoaderPlatform;
 use lmod::validate::Container;
 use loader_core::load::{load_module, LoadedSet};
 use loader_core::symbols::SymMap;
-use common::*;
 
 #[test]
 fn phase8_dynamic_load_matches_static() {
@@ -28,7 +28,7 @@ fn phase8_dynamic_load_matches_static() {
     let data_len = container.data().len();
     let bsize = (code_len + rodata_len + data_len + 4095) & !4095;
 
-    let abi_hash_val = lmod::abi_hash::compute_abi_hash(8, 64, lmod::modinfo::MODINFO_VER);
+    let abi_hash_val = lmod::abi_hash::compute_abi_hash(1, 8, 64, lmod::modinfo::MODINFO_VER);
     let mut plat = HostedLoaderPlatform::new(abi_hash_val);
     plat.reserve(bsize).unwrap();
 
@@ -56,7 +56,10 @@ fn phase8_dynamic_load_matches_static() {
             out("rcx") _, out("rdx") _, out("rsi") _, out("rdi") _,
         );
     }
-    assert_eq!(result, 42, "dynamic load returned {result}, expected {expected}");
+    assert_eq!(
+        result, 42,
+        "dynamic load returned {result}, expected {expected}"
+    );
 }
 
 #[test]
@@ -67,7 +70,7 @@ fn phase8_module_without_runtime_symbols_fails() {
     let container = Container::parse(&raw).unwrap();
 
     let bsize = (container.code().len() + 4095) & !4095;
-    let abi_hash = lmod::abi_hash::compute_abi_hash(8, 64, lmod::modinfo::MODINFO_VER);
+    let abi_hash = lmod::abi_hash::compute_abi_hash(1, 8, 64, lmod::modinfo::MODINFO_VER);
     let mut plat = HostedLoaderPlatform::new(abi_hash);
     plat.reserve(bsize).unwrap();
 

@@ -2,6 +2,7 @@
 name = "codegen-arm"
 version = "0.1.0"
 edition = "2021"
+description = "ARM Thumb code generation backend for Tyu."
 
 [dependencies]
 frontend     = { path = "../frontend" }

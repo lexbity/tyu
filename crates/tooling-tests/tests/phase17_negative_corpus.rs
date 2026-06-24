@@ -8,19 +8,23 @@ mod common;
 use std::path::PathBuf;
 use std::process::Command;
 
+use common::*;
 use hosted::loader::HostedLoaderPlatform;
 use lmod::validate::Container;
-use loader_core::load::{load_module, LoadedSet, E_ENC_AUTH_FAIL, E_ENC_BAD_HEADER, E_ENC_NO_KEY, E_ENC_REQUIRES_SIGNED, E_ENC_UNSUPPORTED};
-use loader_core::platform::Tier;
+use loader_core::load::{
+    load_module, LoadedSet, E_ENC_AUTH_FAIL, E_ENC_BAD_HEADER, E_ENC_NO_KEY, E_ENC_REQUIRES_SIGNED,
+    E_ENC_UNSUPPORTED,
+};
+use loader_core::platform::TrustLevel;
 use loader_core::symbols::SymMap;
-use common::*;
 
 /// Set up the platform and global map for loading.
 fn setup_loader<'a>(
     container: &Container,
     expected_abi_hash: u64,
 ) -> (HostedLoaderPlatform, SymMap<'a, 256>, LoadedSet<64>) {
-    let block_size = container.code().len() + container.rodata().len() + container.data().len() + 32;
+    let block_size =
+        container.code().len() + container.rodata().len() + container.data().len() + 32;
     let block_size = (block_size + 4095) & !4095;
     let mut plat = HostedLoaderPlatform::new(expected_abi_hash);
     plat.reserve(block_size).unwrap();
@@ -68,7 +72,10 @@ fn e_5201_bad_container() {
     raw[0] = 0xFF;
 
     let result = Container::parse(&raw);
-    assert!(result.is_err(), "5201: corrupted container should fail parse");
+    assert!(
+        result.is_err(),
+        "5201: corrupted container should fail parse"
+    );
     assert_eq!(result.unwrap_err().0, 5201);
 }
 
@@ -87,10 +94,13 @@ fn e_5202_signed_flag_without_tier1() {
     raw[6] |= 0x01;
 
     let container = Container::parse(&raw).unwrap();
-    let abi_hash = lmod::abi_hash::compute_abi_hash(8, 64, lmod::modinfo::MODINFO_VER);
+    let abi_hash = lmod::abi_hash::compute_abi_hash(1, 8, 64, lmod::modinfo::MODINFO_VER);
     let (mut plat, mut map, mut set) = setup_loader(&container, abi_hash);
     let result = load_module(&container, &mut plat, &mut map, &mut set);
-    assert!(result.is_err(), "5202: signed flag without signature should fail");
+    assert!(
+        result.is_err(),
+        "5202: signed flag without signature should fail"
+    );
     assert_eq!(result.unwrap_err(), 5202);
 }
 
@@ -102,10 +112,10 @@ fn e_5202_tier1_without_signature() {
     let raw = std::fs::read(&lmod_path).unwrap();
     let container = Container::parse(&raw).unwrap();
 
-    // Use a Tier-1 platform without a valid signature.
-    let abi_hash = lmod::abi_hash::compute_abi_hash(8, 64, lmod::modinfo::MODINFO_VER);
+    // Use a TrustLevel-One platform without a valid signature.
+    let abi_hash = lmod::abi_hash::compute_abi_hash(1, 8, 64, lmod::modinfo::MODINFO_VER);
     let bsize = (container.code().len() + 4095) & !4095;
-    let mut plat_tier1 = HostedLoaderPlatform::new(abi_hash).with_key(b"test-key", Tier::One);
+    let mut plat_tier1 = HostedLoaderPlatform::new(abi_hash).with_key(b"test-key", TrustLevel::One);
     plat_tier1.reserve(bsize).unwrap();
 
     let ds_high_addr = allocate_runtime_page();
@@ -114,7 +124,10 @@ fn e_5202_tier1_without_signature() {
     let mut set = LoadedSet::<64>::new();
 
     let result = load_module(&container, &mut plat_tier1, &mut global_map, &mut set);
-    assert!(result.is_err(), "5202: Tier 1 without signature should fail");
+    assert!(
+        result.is_err(),
+        "5202: TrustLevel One without signature should fail"
+    );
     assert_eq!(result.unwrap_err(), 5202);
 }
 
@@ -130,7 +143,7 @@ fn e_5205_unresolved_symbol() {
     let raw = std::fs::read(&lmod_path).unwrap();
     let container = Container::parse(&raw).unwrap();
 
-    let abi_hash = lmod::abi_hash::compute_abi_hash(8, 64, lmod::modinfo::MODINFO_VER);
+    let abi_hash = lmod::abi_hash::compute_abi_hash(1, 8, 64, lmod::modinfo::MODINFO_VER);
     let bsize = (container.code().len() + 4095) & !4095;
     let mut plat = HostedLoaderPlatform::new(abi_hash);
     plat.reserve(bsize).unwrap();
@@ -156,7 +169,7 @@ fn e_5210_already_loaded() {
     let raw = std::fs::read(&lmod_path).unwrap();
     let container = Container::parse(&raw).unwrap();
 
-    let abi_hash = lmod::abi_hash::compute_abi_hash(8, 64, lmod::modinfo::MODINFO_VER);
+    let abi_hash = lmod::abi_hash::compute_abi_hash(1, 8, 64, lmod::modinfo::MODINFO_VER);
     let (mut plat, mut map, mut set) = setup_loader(&container, abi_hash);
 
     // First load should succeed.
@@ -180,7 +193,7 @@ fn e_5210_already_loaded() {
 // ---------------------------------------------------------------------------
 //
 // Note: this error code only fires when the `encryption` feature is OFF.
-// When the feature IS enabled, a Tier-0 platform returns E_ENC_REQUIRES_SIGNED
+// When the feature IS enabled, a TrustLevel-Zero platform returns E_ENC_REQUIRES_SIGNED
 // (5214) instead — tested by e_5214_encrypted_at_tier0 below.
 
 #[test]
@@ -195,10 +208,13 @@ fn e_5213_encrypted_container_unsupported() {
     raw[6] |= 0x02;
 
     let container = Container::parse(&raw).unwrap();
-    let abi_hash = lmod::abi_hash::compute_abi_hash(8, 64, lmod::modinfo::MODINFO_VER);
+    let abi_hash = lmod::abi_hash::compute_abi_hash(1, 8, 64, lmod::modinfo::MODINFO_VER);
     let (mut plat, mut map, mut set) = setup_loader(&container, abi_hash);
     let result = load_module(&container, &mut plat, &mut map, &mut set);
-    assert!(result.is_err(), "5213: encrypted container should fail without encryption feature");
+    assert!(
+        result.is_err(),
+        "5213: encrypted container should fail without encryption feature"
+    );
     assert_eq!(result.unwrap_err(), E_ENC_UNSUPPORTED);
 }
 
@@ -206,7 +222,7 @@ fn e_5213_encrypted_container_unsupported() {
 // I-NC-1: 5214 — E_ENC_REQUIRES_SIGNED
 // ---------------------------------------------------------------------------
 //
-// LD-6: encrypted container at Tier 0 (feature on) → E_ENC_REQUIRES_SIGNED.
+// LD-6: encrypted container at TrustLevel Zero (feature on) → E_ENC_REQUIRES_SIGNED.
 // This path is only reachable when the encryption feature is enabled.
 
 #[test]
@@ -218,14 +234,17 @@ fn e_5214_encrypted_at_tier0() {
     let mut raw = std::fs::read(&lmod_path).unwrap();
 
     // Set the encrypted flag.  The container has no valid enc-header, but
-    // the Tier-0 check (LD-6) fires before any enc-header parsing.
+    // the TrustLevel-Zero check (LD-6) fires before any enc-header parsing.
     raw[6] |= 0x02;
 
     let container = Container::parse(&raw).unwrap();
-    let abi_hash = lmod::abi_hash::compute_abi_hash(8, 64, lmod::modinfo::MODINFO_VER);
+    let abi_hash = lmod::abi_hash::compute_abi_hash(1, 8, 64, lmod::modinfo::MODINFO_VER);
     let (mut plat, mut map, mut set) = setup_loader(&container, abi_hash);
     let result = load_module(&container, &mut plat, &mut map, &mut set);
-    assert!(result.is_err(), "5214: encrypted at Tier 0 should fail");
+    assert!(
+        result.is_err(),
+        "5214: encrypted at TrustLevel Zero should fail"
+    );
     assert_eq!(result.unwrap_err(), E_ENC_REQUIRES_SIGNED);
 }
 
@@ -234,8 +253,14 @@ fn e_5214_encrypted_at_tier0() {
 // ---------------------------------------------------------------------------
 
 fn exe(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap()
-        .join("target").join("debug").join(name)
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("target")
+        .join("debug")
+        .join(name)
 }
 
 /// Build, compile, pack, encrypt (fleet mode), and sign a test .mod.
@@ -243,23 +268,55 @@ fn exe(name: &str) -> PathBuf {
 fn build_encrypt_sign(source: &str, kek: &[u8; 32], label: &str) -> PathBuf {
     let dir = fresh_dir(label);
     std::fs::write(dir.join("M.mod"), source).unwrap();
-    assert!(Command::new(exe("langc")).current_dir(&dir)
-        .args(["--emit=obj", "--target=x86_64-unknown-linux-gnu", "--out-dir=.", "M.mod"])
-        .status().unwrap().success(), "langc failed");
+    assert!(
+        Command::new(exe("langc"))
+            .current_dir(&dir)
+            .args([
+                "--emit=obj",
+                "--target=x86_64-unknown-linux-gnu",
+                "--out-dir=.",
+                "M.mod"
+            ])
+            .status()
+            .unwrap()
+            .success(),
+        "langc failed"
+    );
     let lmod = dir.join("test.lmod");
-    assert!(Command::new(exe("lmod-pack")).current_dir(&dir)
-        .args(["Main.o", "test.lmod"]).status().unwrap().success(), "lmod-pack failed");
+    assert!(
+        Command::new(exe("lmod-pack"))
+            .current_dir(&dir)
+            .args(["Main.o", "test.lmod"])
+            .status()
+            .unwrap()
+            .success(),
+        "lmod-pack failed"
+    );
 
     let encrypted = dir.join("encrypted.lmod");
-    assert!(Command::new(exe("lmod-encrypt"))
-        .args([lmod.to_str().unwrap(), encrypted.to_str().unwrap(),
-               "--mode=fleet", &format!("--kek={}", hex::encode(kek))])
-        .status().unwrap().success(), "lmod-encrypt failed");
+    assert!(
+        Command::new(exe("lmod-encrypt"))
+            .args([
+                lmod.to_str().unwrap(),
+                encrypted.to_str().unwrap(),
+                "--mode=fleet",
+                &format!("--kek={}", hex::encode(kek))
+            ])
+            .status()
+            .unwrap()
+            .success(),
+        "lmod-encrypt failed"
+    );
 
     let signed = dir.join("signed.lmod");
-    assert!(Command::new(exe("lmod-sign"))
-        .args([encrypted.to_str().unwrap(), signed.to_str().unwrap()])
-        .status().unwrap().success(), "lmod-sign failed");
+    assert!(
+        Command::new(exe("lmod-sign"))
+            .args([encrypted.to_str().unwrap(), signed.to_str().unwrap()])
+            .status()
+            .unwrap()
+            .success(),
+        "lmod-sign failed"
+    );
     signed
 }
 
@@ -267,7 +324,7 @@ fn build_encrypt_sign(source: &str, kek: &[u8; 32], label: &str) -> PathBuf {
 // I-NC-2: 5215 — E_ENC_NO_KEY
 // ---------------------------------------------------------------------------
 //
-// LD-8: fleet-encrypted artifact loaded at Tier 1 with the wrong KEK.
+// LD-8: fleet-encrypted artifact loaded at TrustLevel One with the wrong KEK.
 
 #[test]
 #[cfg(feature = "encryption")]
@@ -283,7 +340,11 @@ fn e_5215_no_matching_kek() {
         .tier_one(&[0xab; 32])
         .with_kek(&wrong_kek);
     let result = h.load(&container);
-    assert_eq!(result.unwrap_err(), E_ENC_NO_KEY, "wrong KEK must give E_ENC_NO_KEY (5215)");
+    assert_eq!(
+        result.unwrap_err(),
+        E_ENC_NO_KEY,
+        "wrong KEK must give E_ENC_NO_KEY (5215)"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -302,18 +363,36 @@ fn e_5216_payload_auth_fail() {
 
     let dir = fresh_dir("e5216");
     std::fs::write(dir.join("M.mod"), source).unwrap();
-    assert!(Command::new(exe("langc")).current_dir(&dir)
-        .args(["--emit=obj", "--target=x86_64-unknown-linux-gnu", "--out-dir=.", "M.mod"])
-        .status().unwrap().success());
+    assert!(Command::new(exe("langc"))
+        .current_dir(&dir)
+        .args([
+            "--emit=obj",
+            "--target=x86_64-unknown-linux-gnu",
+            "--out-dir=.",
+            "M.mod"
+        ])
+        .status()
+        .unwrap()
+        .success());
     let lmod = dir.join("test.lmod");
-    assert!(Command::new(exe("lmod-pack")).current_dir(&dir)
-        .args(["Main.o", "test.lmod"]).status().unwrap().success());
+    assert!(Command::new(exe("lmod-pack"))
+        .current_dir(&dir)
+        .args(["Main.o", "test.lmod"])
+        .status()
+        .unwrap()
+        .success());
 
     let encrypted = dir.join("encrypted.lmod");
     assert!(Command::new(exe("lmod-encrypt"))
-        .args([lmod.to_str().unwrap(), encrypted.to_str().unwrap(),
-               "--mode=fleet", &format!("--kek={}", hex::encode(kek))])
-        .status().unwrap().success());
+        .args([
+            lmod.to_str().unwrap(),
+            encrypted.to_str().unwrap(),
+            "--mode=fleet",
+            &format!("--kek={}", hex::encode(kek))
+        ])
+        .status()
+        .unwrap()
+        .success());
 
     // Flip one byte in the code section of the encrypted ciphertext.
     let mut data = std::fs::read(&encrypted).unwrap();
@@ -327,7 +406,9 @@ fn e_5216_payload_auth_fail() {
     let signed = dir.join("signed.lmod");
     assert!(Command::new(exe("lmod-sign"))
         .args([tampered.to_str().unwrap(), signed.to_str().unwrap()])
-        .status().unwrap().success());
+        .status()
+        .unwrap()
+        .success());
 
     let raw = std::fs::read(&signed).unwrap();
     let container = Container::parse(&raw).unwrap();
@@ -335,8 +416,11 @@ fn e_5216_payload_auth_fail() {
         .tier_one(&[0xab; 32])
         .with_kek(&kek);
     let result = h.load(&container);
-    assert_eq!(result.unwrap_err(), E_ENC_AUTH_FAIL,
-        "tampered payload (re-signed) must give E_ENC_AUTH_FAIL (5216)");
+    assert_eq!(
+        result.unwrap_err(),
+        E_ENC_AUTH_FAIL,
+        "tampered payload (re-signed) must give E_ENC_AUTH_FAIL (5216)"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -344,7 +428,7 @@ fn e_5216_payload_auth_fail() {
 // ---------------------------------------------------------------------------
 //
 // LD-7: set LMOD_FLAG_ENCRYPTED on a plaintext container (no real enc-header),
-// then sign it.  At Tier 1 the signature verifies (LD-4 passes), but the
+// then sign it.  At TrustLevel One the signature verifies (LD-4 passes), but the
 // enc-header is missing/malformed → decode_enc_header returns None →
 // E_ENC_BAD_HEADER.
 
@@ -361,21 +445,25 @@ fn e_5217_bad_enc_header() {
     // enc-header.
     raw[6] |= 0x02;
 
-    // Sign the container so Tier-1 signature verification passes.
+    // Sign the container so TrustLevel-One signature verification passes.
     let enc_flag_set = dir.join("enc_flag.lmod");
     std::fs::write(&enc_flag_set, &raw).unwrap();
     let signed = dir.join("signed.lmod");
-    assert!(Command::new(exe("lmod-sign"))
-        .args([enc_flag_set.to_str().unwrap(), signed.to_str().unwrap()])
-        .status().unwrap().success(), "lmod-sign failed");
+    assert!(
+        Command::new(exe("lmod-sign"))
+            .args([enc_flag_set.to_str().unwrap(), signed.to_str().unwrap()])
+            .status()
+            .unwrap()
+            .success(),
+        "lmod-sign failed"
+    );
 
     let raw = std::fs::read(&signed).unwrap();
     let container = Container::parse(&raw).unwrap();
-    let abi_hash = lmod::abi_hash::compute_abi_hash(8, 64, lmod::modinfo::MODINFO_VER);
+    let abi_hash = lmod::abi_hash::compute_abi_hash(1, 8, 64, lmod::modinfo::MODINFO_VER);
     let bsize = (container.code().len() + 4095) & !4095;
     let sign_key = [0xab; 32]; // must match lmod-sign default
-    let mut plat = HostedLoaderPlatform::new(abi_hash)
-        .with_key(&sign_key, Tier::One);
+    let mut plat = HostedLoaderPlatform::new(abi_hash).with_key(&sign_key, TrustLevel::One);
     plat.reserve(bsize).unwrap();
     let ds_high = allocate_runtime_page();
     let mut map: SymMap<'_, 256> = SymMap::new();

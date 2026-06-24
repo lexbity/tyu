@@ -70,9 +70,15 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 while depth > 0 {
                     let t = lex.next();
                     content_end = t.span.end;
-                    if t.kind == TokenKind::PunctLBrace { depth += 1; }
-                    if t.kind == TokenKind::PunctRBrace { depth -= 1; }
-                    if t.kind == TokenKind::Eof { break; }
+                    if t.kind == TokenKind::PunctLBrace {
+                        depth += 1;
+                    }
+                    if t.kind == TokenKind::PunctRBrace {
+                        depth -= 1;
+                    }
+                    if t.kind == TokenKind::Eof {
+                        break;
+                    }
                 }
                 #[allow(unused_assignments)]
                 let _ = &content_end;
@@ -80,12 +86,16 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                     let inner = &slice[content_start..content_end - 1];
                     let mut buf = [0u8; 128];
                     let mut buf_len = 0usize;
-                    buf[buf_len] = b'!'; buf_len += 1;
-                    buf[buf_len] = b'{'; buf_len += 1;
+                    buf[buf_len] = b'!';
+                    buf_len += 1;
+                    buf[buf_len] = b'{';
+                    buf_len += 1;
                     for &b in inner.iter().take(125 - buf_len) {
-                        buf[buf_len] = b; buf_len += 1;
+                        buf[buf_len] = b;
+                        buf_len += 1;
                     }
-                    buf[buf_len] = b'}'; buf_len += 1;
+                    buf[buf_len] = b'}';
+                    buf_len += 1;
                     performs = Self::parse_effect_set(&buf[..buf_len]);
                 }
             }
@@ -201,16 +211,10 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             // so the suspend blocker uses the quotation's declared performs.
             // We push WordBody if the quotation annotation grants SUSPENDABLE.
             if parsed.performs.contains(EffectSet::SUSPEND) {
-                qgen.ctx.push(ContextKind::WordBody, FrameParam::None, parsed.body)?;
+                qgen.ctx
+                    .push(ContextKind::WordBody, FrameParam::None, parsed.body)?;
             }
-            let cur = qgen.compile_span(
-                cur,
-                &mut stack,
-                &mut sp,
-                parsed.body,
-                false,
-                observer,
-            )?;
+            let cur = qgen.compile_span(cur, &mut stack, &mut sp, parsed.body, false, observer)?;
             while qgen.ctx.depth() > 0 {
                 qgen.ctx.pop();
             }
@@ -224,7 +228,10 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             }
 
             if !qgen.check_no_scoped_live(&stack, sp) {
-                return Err(TcError::BorrowEscape { span: quot_span, kind: EscapeKind::AtClose });
+                return Err(TcError::BorrowEscape {
+                    span: quot_span,
+                    kind: EscapeKind::AtClose,
+                });
             }
             if !qgen.terminated {
                 if sp != sig.out_len as usize {

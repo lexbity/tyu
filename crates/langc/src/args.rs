@@ -390,7 +390,10 @@ mod tests {
 
     #[test]
     fn multiple_emit_is_error() {
-        assert_eq!(err_code(&[b"langc", b"--emit=ast", b"--emit=ir", b"x.mod"]), 2);
+        assert_eq!(
+            err_code(&[b"langc", b"--emit=ast", b"--emit=ir", b"x.mod"]),
+            2
+        );
     }
 
     #[test]
@@ -422,7 +425,10 @@ mod tests {
 
     #[test]
     fn invalid_checks_value() {
-        assert_eq!(err_code(&[b"langc", b"--checks=bogus", b"--emit=ast", b"x.mod"]), 2);
+        assert_eq!(
+            err_code(&[b"langc", b"--checks=bogus", b"--emit=ast", b"x.mod"]),
+            2
+        );
     }
 
     #[test]
@@ -455,7 +461,10 @@ mod tests {
 
     #[test]
     fn unknown_target() {
-        assert_eq!(err_code(&[b"langc", b"--emit=obj", b"--target=unknown-cpu", b"x.mod"]), 2);
+        assert_eq!(
+            err_code(&[b"langc", b"--emit=obj", b"--target=unknown-cpu", b"x.mod"]),
+            2
+        );
     }
 
     #[test]
@@ -470,7 +479,10 @@ mod tests {
 
     #[test]
     fn unknown_long_flag_is_rejected() {
-        assert_eq!(err_code(&[b"langc", b"--bogus-flag", b"--emit=ast", b"x.mod"]), 2);
+        assert_eq!(
+            err_code(&[b"langc", b"--bogus-flag", b"--emit=ast", b"x.mod"]),
+            2
+        );
     }
 
     #[test]
@@ -520,24 +532,14 @@ mod tests {
 
     #[test]
     fn features_no_default_empty() {
-        let cfg = ok(&[
-            b"langc",
-            b"--no-default-features",
-            b"--emit=ast",
-            b"x.mod",
-        ]);
+        let cfg = ok(&[b"langc", b"--no-default-features", b"--emit=ast", b"x.mod"]);
         assert!(!cfg.features.contains(codegen_core::Feature::Concurrency));
         assert!(!cfg.features.contains(codegen_core::Feature::ModuleLoading));
     }
 
     #[test]
     fn features_unknown_value_errs() {
-        let code = err_code(&[
-            b"langc",
-            b"--features=bogus",
-            b"--emit=ast",
-            b"x.mod",
-        ]);
+        let code = err_code(&[b"langc", b"--features=bogus", b"--emit=ast", b"x.mod"]);
         assert_eq!(code, 2);
     }
 }

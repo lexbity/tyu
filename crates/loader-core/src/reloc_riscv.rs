@@ -69,17 +69,12 @@ fn encode_riscv_jal(insn: &mut [u8], offset: i64) -> Result<(), ()> {
     let opcode = existing & 0x7F; // preserve opcode
 
     // JAL immediate bit layout: imm[20|10:1|11|19:12]
-    let imm20 = (u >> 20) & 1;           // bit 20
-    let imm10_1 = (u >> 1) & 0x3FF;     // bits 10:1
-    let imm11 = (u >> 11) & 1;           // bit 11
-    let imm19_12 = (u >> 12) & 0xFF;    // bits 19:12
+    let imm20 = (u >> 20) & 1; // bit 20
+    let imm10_1 = (u >> 1) & 0x3FF; // bits 10:1
+    let imm11 = (u >> 11) & 1; // bit 11
+    let imm19_12 = (u >> 12) & 0xFF; // bits 19:12
 
-    let enc = (imm20 << 31)
-        | (imm10_1 << 21)
-        | (imm11 << 20)
-        | (imm19_12 << 12)
-        | rd
-        | opcode;
+    let enc = (imm20 << 31) | (imm10_1 << 21) | (imm11 << 20) | (imm19_12 << 12) | rd | opcode;
 
     insn[..4].copy_from_slice(&enc.to_le_bytes());
     Ok(())
@@ -87,9 +82,13 @@ fn encode_riscv_jal(insn: &mut [u8], offset: i64) -> Result<(), ()> {
 
 /// Decode a RISC-V JAL instruction back to its byte offset.
 fn decode_riscv_jal(insn: &[u8]) -> Result<i64, ()> {
-    if insn.len() < 4 { return Err(()); }
+    if insn.len() < 4 {
+        return Err(());
+    }
     let u = u32::from_le_bytes(insn[..4].try_into().unwrap());
-    if u & 0x7F != 0x6F { return Err(()); } // not JAL
+    if u & 0x7F != 0x6F {
+        return Err(());
+    } // not JAL
 
     let imm20 = (u >> 31) & 1;
     let imm10_1 = (u >> 21) & 0x3FF;
@@ -98,7 +97,11 @@ fn decode_riscv_jal(insn: &[u8]) -> Result<i64, ()> {
 
     let imm = (imm20 << 20) | (imm19_12 << 12) | (imm11 << 11) | (imm10_1 << 1);
     // Sign-extend from bit 20 (the 21st bit of the 21-bit offset) via i32.
-    let imm = if imm & 0x100000 != 0 { imm | 0xFFE00000 } else { imm };
+    let imm = if imm & 0x100000 != 0 {
+        imm | 0xFFE00000
+    } else {
+        imm
+    };
     Ok(((imm as i32) as i64) * 2) // bytes from halfwords, via i32 to preserve sign
 }
 
@@ -160,13 +163,21 @@ mod tests {
         let mut insn = [0x6Fu8, 0, 0, 0];
         encode_riscv_jal(&mut insn, 0).unwrap();
         let val = u32::from_le_bytes(insn);
-        assert_eq!(val & 0x7F, 0x6F, "JAL opcode must be preserved for offset 0");
+        assert_eq!(
+            val & 0x7F,
+            0x6F,
+            "JAL opcode must be preserved for offset 0"
+        );
         assert_eq!(val & 0xFFFFF80, 0, "offset 0 must have zero imm fields");
         // offset 4 → imm fields become non-zero
         let mut insn = [0x6Fu8, 0, 0, 0];
         encode_riscv_jal(&mut insn, 4).unwrap();
         let val = u32::from_le_bytes(insn);
-        assert_eq!(val & 0x7F, 0x6F, "JAL opcode must be preserved for offset 4");
+        assert_eq!(
+            val & 0x7F,
+            0x6F,
+            "JAL opcode must be preserved for offset 4"
+        );
         assert_ne!(val & 0xFFFFF80, 0, "offset 4 must have non-zero imm fields");
     }
 
@@ -177,15 +188,22 @@ mod tests {
         let cases: [i64; 7] = [4, -4, 0, 0x200, -0x200, 0x10000, -0x10000];
         for &off in &cases {
             let mut insn = [0xEFu8, 0, 0, 0]; // JAL with rd=ra(1) = 0x6F | (1<<7) = 0xEF
-            assert!(encode_riscv_jal(&mut insn, off).is_ok(),
-                "encode_riscv_jal({off:#x}) must succeed");
+            assert!(
+                encode_riscv_jal(&mut insn, off).is_ok(),
+                "encode_riscv_jal({off:#x}) must succeed"
+            );
             let decoded = decode_riscv_jal(&insn).unwrap_or(i64::MIN);
-            assert_eq!(decoded, off,
-                "JAL encode→decode round-trip failed for offset {off:#x}, got {decoded:#x}");
+            assert_eq!(
+                decoded, off,
+                "JAL encode→decode round-trip failed for offset {off:#x}, got {decoded:#x}"
+            );
             // Verify rd preserved.
             let enc = u32::from_le_bytes(insn);
-            assert_eq!((enc >> 7) & 0x1F, 1,
-                "JAL rd=ra must be preserved at offset {off:#x}");
+            assert_eq!(
+                (enc >> 7) & 0x1F,
+                1,
+                "JAL rd=ra must be preserved at offset {off:#x}"
+            );
         }
     }
 }

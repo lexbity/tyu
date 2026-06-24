@@ -2,6 +2,7 @@
 name    = "execution-tests"
 version = "0.1.0"
 edition = "2021"
+description = "QEMU-backed end-to-end execution tests for Tyu."
 
 [dependencies]
 codegen-core = { path = "../codegen-core" }
