@@ -418,6 +418,10 @@ __lang_time_counter:
     .word 0
     .word 0
 
+.globl __mmio_mem
+__mmio_mem:
+    .space 4096
+
 .section .data
 .globl __lang_expected_abi_hash
 __lang_expected_abi_hash:

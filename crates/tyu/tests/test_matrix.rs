@@ -149,7 +149,7 @@ module FailTest;\nimport platform/testio { testio.write-byte };\n\
     std::fs::write(
         &dir.join("manifest.toml"),
         "\
-[[fixture]]\nname = \"fail_test\"\nfile = \"fail_test.mod\"\nrequires = []\n",
+[[fixture]]\nname = \"fail_test\"\nfile = \"fail_test.mod\"\naxes = [\"trap\"]\nrequires = []\n",
     )
     .unwrap();
 
@@ -165,5 +165,5 @@ module FailTest;\nimport platform/testio { testio.write-byte };\n\
         !output.status.success(),
         "failing fixture must produce non-zero exit"
     );
-    assert!(String::from_utf8_lossy(&output.stderr).contains("FAIL"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("verdict=fail"));
 }

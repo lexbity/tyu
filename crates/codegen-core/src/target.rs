@@ -278,6 +278,36 @@ impl QemuExitConvention {
     }
 }
 
+/// A RAM-backed or device-backed scratch address that a QEMU machine answers.
+///
+/// Used by MMIO fixtures to perform a volatile load/store round-trip. The
+/// address must be mapped and accessible without triggering a fault.
+#[derive(Clone, Copy, Debug)]
+pub struct MmioScratch {
+    /// Physical address of the scratch region.
+    pub addr: u64,
+    /// Whether the address is backed by RAM or by a device register.
+    pub backed: ScratchBacking,
+}
+
+/// How the scratch address is backed in the machine.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScratchBacking {
+    Ram,
+    Device,
+}
+
+/// An interrupt source available on a QEMU machine.
+///
+/// When `Some`, the machine can deliver timer interrupts that the kernel can
+/// handle via the `@interrupt` handler mechanism.  The specific variant names
+/// the interrupt controller and delivery mechanism.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InterruptSource {
+    /// ARM Cortex-M SysTick timer at `0xE000E010`.
+    CortexMSysTick,
+}
+
 /// QEMU system-mode invocation parameters for a target.
 pub struct QemuSpec {
     /// The QEMU system binary name, e.g. `b"qemu-system-x86_64"`.
@@ -288,6 +318,14 @@ pub struct QemuSpec {
     pub extra_args: &'static [&'static [u8]],
     /// How guest communicates pass/fail to the host.
     pub exit_convention: QemuExitConvention,
+    /// A RAM-backed or device-backed address for MMIO smoke tests.
+    /// `None` means the machine has no address the MMIO fixture can safely
+    /// use — the `mmio` coverage axis is not required for such targets.
+    pub mmio_scratch: Option<MmioScratch>,
+    /// An interrupt source available on this machine.
+    /// `None` means the machine has no wired interrupt delivery — the
+    /// `interrupt` coverage axis is not required for such targets.
+    pub interrupt_source: Option<InterruptSource>,
 }
 
 // ---------------------------------------------------------------------------
@@ -404,6 +442,15 @@ static X86_64_UNKNOWN_NONE_QEMU: QemuSpec = QemuSpec {
         // guest writes 0 → QEMU exits with (0<<1)|1 = 1
         host_pass_exit: 1,
     },
+    // q35 with -m 32M maps RAM from 0x0; 0x100000 is safely in RAM past the
+    // legacy BIOS/VGA region (0xA0000-0xFFFFF).
+    mmio_scratch: Some(MmioScratch {
+        addr: 0x100000,
+        backed: ScratchBacking::Ram,
+    }),
+    // x86 q35 has no wired interrupt delivery in our setup (no i8259/PIC
+    // programming); the interrupt axis is not required.
+    interrupt_source: None,
 };
 
 static X86_64_UNKNOWN_NONE: TargetSpec = TargetSpec {
@@ -438,6 +485,15 @@ static RISCV32_NONE_QEMU: QemuSpec = QemuSpec {
     machine: b"virt",
     extra_args: &RISCV32_NONE_EXTRA_ARGS,
     exit_convention: QemuExitConvention::Semihosting,
+    // RISC-V virt machine: DRAM starts at 0x80000000; first few pages are safe.
+    mmio_scratch: Some(MmioScratch {
+        addr: 0x80000000,
+        backed: ScratchBacking::Ram,
+    }),
+    // virt has no wired interrupt delivery via CLINT in our runtime yet
+    // (no SiFive CLINT driver); interrupt axis is not required until
+    // follow-on wires CLINT timer delivery.
+    interrupt_source: None,
 };
 
 static RISCV32_UNKNOWN_NONE: TargetSpec = TargetSpec {
@@ -468,6 +524,14 @@ static ARM_V7M_NONE_QEMU: QemuSpec = QemuSpec {
     machine: b"lm3s6965evb",
     extra_args: &ARM_V7M_NONE_EXTRA_ARGS,
     exit_convention: QemuExitConvention::Semihosting,
+    // lm3s6965evb: 256 KB SRAM at 0x20000000-0x2003FFFF.
+    mmio_scratch: Some(MmioScratch {
+        addr: 0x20000000,
+        backed: ScratchBacking::Ram,
+    }),
+    // lm3s6965evb has a Cortex-M3 SysTick timer at 0xE000E010. The
+    // isr_lock_atomicity fixture implements a @interrupt(SysTick) handler.
+    interrupt_source: Some(InterruptSource::CortexMSysTick),
 };
 
 static ARM_V7M_UNKNOWN_NONE: TargetSpec = TargetSpec {

@@ -23,7 +23,7 @@ const systick = SysTick @ 0xE000E010;
   ]
 ;
 
-: main ( -- i64 )
+: isr-lock-atomicity-run ( -- )
   &!systick.LOAD 1 as u32 !u32
   &!systick.VAL 0 as u32 !u32
   &!systick.CTRL 7 as u32 !u32
@@ -37,8 +37,7 @@ const systick = SysTick @ 0xE000E010;
       [ 70 testio.write-byte ]
     if
   ]
-  83 testio.write-byte
-  10 testio.write-byte
-  0
 ;
+
+export { isr-lock-atomicity-run };
 end;

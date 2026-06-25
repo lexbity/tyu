@@ -7,7 +7,17 @@
 
 #![no_std]
 
+extern crate alloc;
+
+pub mod axis;
+pub mod report;
+
+pub use axis::{AxisGate, CoverageAxis, QemuAxisGate};
 pub use loader_core::rederive::{rederive_stack_high, Arch, TOP_SENTINEL};
+pub use report::{
+    render_human, QualificationReport, SelectionReport, SkipReason, SkippedFixture, Verdict,
+    REPORT_SCHEMA_VERSION,
+};
 
 // ---------------------------------------------------------------------------
 // Framed diagnostic protocol — records & parser

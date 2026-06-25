@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use crate::elf_reader::read_elf_section;
+
 /// Read the declared `high` (data-stack high-water bound) for the `main`
 /// word from an ELF's `.lang.debug` or `.lang.modinfo` section.
 ///
@@ -64,97 +66,6 @@ fn lookup_in_modinfo(elf_data: &[u8]) -> Option<u32> {
                 let bound = u32::from_le_bytes(sec[meta_off + 12..meta_off + 16].try_into().ok()?);
                 return Some(bound);
             }
-        }
-    }
-    None
-}
-
-/// Read an ELF section by name. Returns the section data bytes.
-fn read_elf_section<'a>(data: &'a [u8], section_name: &[u8]) -> Option<&'a [u8]> {
-    if data.len() < 64 || &data[0..4] != b"\x7fELF" {
-        return None;
-    }
-    let elf64 = data[4] == 2;
-    let ehdr_size = if elf64 { 64usize } else { 52usize };
-    if data.len() < ehdr_size {
-        return None;
-    }
-
-    let (shoff, shentsz, shnum, shstrndx) = if elf64 {
-        let shoff = u64::from_le_bytes(data[0x28..0x30].try_into().ok()?) as usize;
-        let shentsz = u16::from_le_bytes(data[0x3a..0x3c].try_into().ok()?) as usize;
-        let shnum = u16::from_le_bytes(data[0x3c..0x3e].try_into().ok()?) as usize;
-        let shstrndx = u16::from_le_bytes(data[0x3e..0x40].try_into().ok()?) as usize;
-        (shoff, shentsz, shnum, shstrndx)
-    } else {
-        let shoff = u32::from_le_bytes(data[0x20..0x24].try_into().ok()?) as usize;
-        let shentsz = u16::from_le_bytes(data[0x2e..0x30].try_into().ok()?) as usize;
-        let shnum = u16::from_le_bytes(data[0x30..0x32].try_into().ok()?) as usize;
-        let shstrndx = u16::from_le_bytes(data[0x32..0x34].try_into().ok()?) as usize;
-        (shoff, shentsz, shnum, shstrndx)
-    };
-
-    if shstrndx >= shnum || shentsz < 1 {
-        return None;
-    }
-
-    // Read .shstrtab.
-    let shstr_off = shoff + shstrndx * shentsz;
-    if shstr_off + shentsz > data.len() {
-        return None;
-    }
-    let (str_off, str_size) = if elf64 {
-        let off =
-            u64::from_le_bytes(data[shstr_off + 0x18..shstr_off + 0x20].try_into().ok()?) as usize;
-        let sz =
-            u64::from_le_bytes(data[shstr_off + 0x20..shstr_off + 0x28].try_into().ok()?) as usize;
-        (off, sz)
-    } else {
-        let off =
-            u32::from_le_bytes(data[shstr_off + 0x10..shstr_off + 0x14].try_into().ok()?) as usize;
-        let sz =
-            u32::from_le_bytes(data[shstr_off + 0x14..shstr_off + 0x18].try_into().ok()?) as usize;
-        (off, sz)
-    };
-    if str_off + str_size > data.len() {
-        return None;
-    }
-    let strtab = &data[str_off..str_off + str_size];
-
-    for i in 0..shnum {
-        let sh_off = shoff + i * shentsz;
-        if sh_off + shentsz > data.len() {
-            break;
-        }
-        let (name_off, sec_off, sec_size) = if elf64 {
-            let no = u32::from_le_bytes(data[sh_off..sh_off + 4].try_into().ok()?) as usize;
-            let so =
-                u64::from_le_bytes(data[sh_off + 0x18..sh_off + 0x20].try_into().ok()?) as usize;
-            let sz =
-                u64::from_le_bytes(data[sh_off + 0x20..sh_off + 0x28].try_into().ok()?) as usize;
-            (no, so, sz)
-        } else {
-            let no = u32::from_le_bytes(data[sh_off..sh_off + 4].try_into().ok()?) as usize;
-            let so =
-                u32::from_le_bytes(data[sh_off + 0x10..sh_off + 0x14].try_into().ok()?) as usize;
-            let sz =
-                u32::from_le_bytes(data[sh_off + 0x14..sh_off + 0x18].try_into().ok()?) as usize;
-            (no, so, sz)
-        };
-        if name_off >= str_size {
-            continue;
-        }
-        let name_end = strtab[name_off..]
-            .iter()
-            .position(|&b| b == 0)
-            .unwrap_or(str_size - name_off);
-        let name = &strtab[name_off..name_off + name_end];
-
-        if name == section_name {
-            if sec_off + sec_size > data.len() {
-                return None;
-            }
-            return Some(&data[sec_off..sec_off + sec_size]);
         }
     }
     None

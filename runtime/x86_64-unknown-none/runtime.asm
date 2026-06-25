@@ -545,6 +545,11 @@ __lang_pt_end:
 __lang_gpio_state:
     db 0
 
+    ; RAM-backed register-map scratch for generic emulator fixtures.
+public __mmio_mem
+__mmio_mem:
+    rb 4096
+
     ; Call stack — 64KB
     rb 65536
 __lang_stack_top:

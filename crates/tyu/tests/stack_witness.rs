@@ -22,6 +22,7 @@ const MANIFEST_HEADER: &str = "\
 [[fixture]]
 name = \"test\"
 file = \"test.mod\"
+axes = [\"deep-stack\"]
 requires = []
 ";
 

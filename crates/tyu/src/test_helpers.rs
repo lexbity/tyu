@@ -14,12 +14,7 @@ use lmod::validate::Container;
 
 /// Absolute path to the workspace root (two levels up from `CARGO_MANIFEST_DIR`).
 pub fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf()
+    crate::platform::workspace_root()
 }
 
 /// Path to the `test-goldens/` directory at the workspace root.

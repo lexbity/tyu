@@ -139,6 +139,15 @@ pub struct TestArgs {
     pub manifest_path: PathBuf,
     pub profile: Option<String>,
     pub feature_set: FeatureSet,
+    pub qualify: bool,
+    pub format: ReportFormat,
+    pub report_out: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReportFormat {
+    Human,
+    Json,
 }
 
 pub fn parse() -> Command {
@@ -194,6 +203,9 @@ fn print_usage() {
     eprintln!("  --all-platforms     Run all discovered QEMU-capable platform packs");
     eprintln!("  --filter=<pat>      Only run suites matching pattern");
     eprintln!("  --manifest=<path>   Path to manifest.toml");
+    eprintln!("  --qualify           Fail when required coverage axes are uncovered");
+    eprintln!("  --format=<mode>     Report format: human|json (default: human)");
+    eprintln!("  --report-out=<path> Write structured report JSON to path");
     eprintln!();
     eprintln!("Platform options:");
     eprintln!("  tyu platform list                    List discovered packs");
@@ -378,6 +390,9 @@ fn parse_test(args: &[String]) -> Command {
     let mut manifest_path: Option<PathBuf> = None;
     let mut profile: Option<String> = None;
     let mut features: Option<FeatureSet> = None;
+    let mut qualify = false;
+    let mut format = ReportFormat::Human;
+    let mut report_out: Option<PathBuf> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -412,6 +427,19 @@ fn parse_test(args: &[String]) -> Command {
             filter = Some(val.to_string());
         } else if let Some(val) = a.strip_prefix("--manifest=") {
             manifest_path = Some(PathBuf::from(val));
+        } else if let Some(val) = a.strip_prefix("--format=") {
+            format = match val {
+                "human" => ReportFormat::Human,
+                "json" => ReportFormat::Json,
+                _ => {
+                    eprintln!("tyu: unknown test report format '{}'", val);
+                    return Command::Help;
+                }
+            };
+        } else if let Some(val) = a.strip_prefix("--report-out=") {
+            report_out = Some(PathBuf::from(val));
+        } else if a == "--qualify" {
+            qualify = true;
         } else if a == "--all-targets" {
             all_targets = true;
         } else if a == "--all-platforms" {
@@ -474,6 +502,9 @@ fn parse_test(args: &[String]) -> Command {
         manifest_path,
         profile,
         feature_set: features.unwrap_or(FeatureSet::all()),
+        qualify,
+        format,
+        report_out,
     })
 }
 
@@ -643,6 +674,7 @@ fn parse_toolchain(args: &[String]) -> Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     fn strings(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| s.to_string()).collect()
@@ -691,6 +723,26 @@ mod tests {
                 assert!(args.all_platforms);
                 assert!(args.platform.is_none());
                 assert!(args.isa.is_none());
+            }
+            other => panic!("unexpected command: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_test_qualify_and_report_options() {
+        match parse_test(&strings(&[
+            "--qualify",
+            "--format=json",
+            "--report-out=/tmp/tyu-report.json",
+            "--manifest=fixtures/manifest.toml",
+        ])) {
+            Command::Test(args) => {
+                assert!(args.qualify);
+                assert_eq!(args.format, ReportFormat::Json);
+                assert_eq!(
+                    args.report_out.as_deref(),
+                    Some(Path::new("/tmp/tyu-report.json"))
+                );
             }
             other => panic!("unexpected command: {:?}", other),
         }

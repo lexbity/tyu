@@ -9,3 +9,7 @@ description = "Shared host-side test harness utilities for Tyu."
 # Covers the serial completion protocol parser and ELF code-section scan.
 [dependencies]
 loader-core = { path = "../loader-core" }
+serde = { version = "1", default-features = false, features = ["alloc", "derive"] }
+
+[dev-dependencies]
+serde_json = "1"

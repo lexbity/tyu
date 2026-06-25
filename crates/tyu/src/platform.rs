@@ -7,7 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::args::PlatformArgs;
-use codegen_core::Target;
+use codegen_core::{PlatformCapability, Target};
 use lmod::abi_hash::{compute_abi_hash, RUNTIME_ABI_VERSION};
 use lmod::modinfo::MODINFO_VER;
 
@@ -1507,40 +1507,31 @@ pub fn resolve_platform_selection(
     Ok(ResolvedPlatformSelection { pack, isa, target })
 }
 
-pub fn resolve_platform_selections(root: &Path) -> Result<Vec<ResolvedPlatformSelection>, String> {
-    discover_platforms_in(root)?
-        .into_iter()
-        .map(resolve_default_selection_for_pack)
-        .collect()
-}
-
-fn resolve_default_selection_for_pack(
-    pack: PlatformPack,
-) -> Result<ResolvedPlatformSelection, String> {
-    let isa = pack
-        .manifest
-        .platform
-        .isa
-        .iter()
-        .find(|isa| isa.default)
-        .cloned()
-        .or_else(|| pack.manifest.platform.isa.first().cloned())
-        .ok_or_else(|| format!("platform pack '{}' declares no isa", pack.name()))?;
-    let target = Target::parse(isa.triple.as_bytes())
-        .ok_or_else(|| format!("unknown target triple '{}'", isa.triple))?;
-    Ok(ResolvedPlatformSelection { pack, isa, target })
-}
-
+/// Derive runtime-service capabilities for a bare target by probing the
+/// sysroot for the corresponding platform modules.
+///
+/// This is the single source of runtime-service capability resolution
+/// (FR-12).  No per-target hard-coded match exists; every target resolves
+/// by checking `sysroot/<triple>/platform/<svc>.mod` file presence.
 pub fn capabilities_for_target(target: Target) -> HashSet<String> {
+    let triple = std::str::from_utf8(target.triple()).unwrap_or("");
+    let plat_dir = workspace_root().join("sysroot").join(triple).join("platform");
+
     let mut caps = HashSet::new();
-    match target {
-        Target::X86_64UnknownLinuxGnu => {
-            caps.insert("TaskScheduler".to_string());
-            caps.insert("DynamicAlloc".to_string());
-            caps.insert("Channels".to_string());
-        }
-        _ => {}
+
+    // Channel IPC → Channels capability (hosted target only).
+    if plat_dir.join("channel.mod").exists() {
+        caps.insert(PlatformCapability::Channels.name().to_string());
     }
+    // OS-level task scheduler → TaskScheduler capability (hosted target only).
+    if plat_dir.join("linux.mod").exists() {
+        caps.insert(PlatformCapability::TaskScheduler.name().to_string());
+    }
+    // Dynamic allocation is provided alongside these runtime services.
+    if plat_dir.join("channel.mod").exists() || plat_dir.join("linux.mod").exists() {
+        caps.insert(PlatformCapability::DynamicAlloc.name().to_string());
+    }
+
     caps
 }
 

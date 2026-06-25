@@ -216,6 +216,7 @@ end;
 [[fixture]]
 name = \"clean\"
 file = \"clean.mod\"
+axes = [\"arith\"]
 requires = []
 ",
     )

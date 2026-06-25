@@ -16,8 +16,9 @@ pub use backend::CodegenBackend;
 pub use emit_mode::{AsmMode, EmitMode};
 pub use error::CodegenError;
 pub use target::{
-    AssemblerKind, CallingConv, Endian, Feature, FeatureSet, OutputFormat, PlatformCapability,
-    QemuExitConvention, QemuSpec, Target, TargetSpec,
+    AssemblerKind, CallingConv, Endian, Feature, FeatureSet, InterruptSource, MmioScratch,
+    OutputFormat, PlatformCapability, QemuExitConvention, QemuSpec, ScratchBacking, Target,
+    TargetSpec,
 };
 
 /// Monotonically-increasing revision counter for the codegen + IR format.

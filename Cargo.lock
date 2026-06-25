@@ -277,6 +277,8 @@ name = "harness-core"
 version = "0.1.0"
 dependencies = [
  "loader-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

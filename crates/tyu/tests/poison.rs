@@ -59,6 +59,7 @@ end;
 [[fixture]]
 name = \"poison_fail\"
 file = \"poison_fail.mod\"
+axes = [\"trap\"]
 requires = []
 poison = \"fail-marker\"
 ",
@@ -109,6 +110,7 @@ end;
 [[fixture]]
 name = \"poison_nocomp\"
 file = \"poison_nocomp.mod\"
+axes = [\"trap\"]
 requires = []
 poison = \"no-completion\"
 ",
@@ -159,6 +161,7 @@ end;
 [[fixture]]
 name = \"poison_clean\"
 file = \"poison_clean.mod\"
+axes = [\"trap\"]
 requires = []
 poison = \"fail-marker\"
 ",
@@ -217,6 +220,7 @@ end;
 [[fixture]]
 name = \"simple\"
 file = \"simple.mod\"
+axes = [\"arith\"]
 requires = []
 ",
     )
@@ -271,6 +275,7 @@ end;
 [[fixture]]
 name = \"pass\"
 file = \"pass.mod\"
+axes = [\"arith\"]
 requires = []
 ",
     )
