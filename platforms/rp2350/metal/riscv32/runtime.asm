@@ -113,6 +113,29 @@ __lang_hardfault:
     li a0, 0
     j __lang_trap
 
+# -----------------------------------------------------------------
+# __stack_overflow — data-stack overflow detected at runtime
+#
+# Entered from the emitted DS bounds check (sp < __lang_stack_limit).
+# No payload registers set — valid=0, trap_code=10.  Uses the same
+# emit_diag register convention as __lang_trap.
+# -----------------------------------------------------------------
+.globl __stack_overflow
+.type __stack_overflow, %function
+__stack_overflow:
+    mv s4, s2
+    la t0, __lang_ds_base
+    sub s4, s4, t0
+    srli s4, s4, 2
+
+    li s5, 10                          # trap_code = STACK_OVERFLOW
+    li s6, 0                           # valid = 0
+    li s7, 0                           # source_line = 0
+    li s8, 0                           # word_hash low = 0
+    li s9, 0                           # word_hash high = 0
+
+    j emit_diag
+
 # Diagnostic D record emitter (shared)
 #
 # Emits V (once) + framed D header via __lang_writec, then
@@ -367,9 +390,15 @@ __lang_ds_high:
 __lang_v_emitted:
     .word 0
 
+# Guard zone below the usable native stack: when a word prologue detects
+# sp < __lang_stack_limit it branches to __stack_overflow, which then runs
+# (emits its diagnostic) using this reserved headroom.
+    .space 1024
+.globl __lang_stack_limit
+__lang_stack_limit:
+    .space 32768
 .globl __stack_top
 __stack_top:
-    .space 32768
 
 .section .data
 .globl __lang_expected_abi_hash

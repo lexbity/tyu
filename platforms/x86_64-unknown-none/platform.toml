@@ -43,3 +43,8 @@ probe_config = ""
 rung = "qemu"
 target = "crates/tyu/tests/run_qemu_x86.rs"
 evidence = "evidence/run_qemu_x86.md"
+
+[test.debug_agent]
+supported = true
+target = "crates/tyu/tests/escalate.rs"
+evidence = "evidence/debug_escalate.md"

@@ -245,6 +245,10 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 .word
                 .performs
                 .union(EffectSet::from_bits(EffectSet::DIVERGE));
+            self.acc = self.acc.compose(StackBound {
+                net: 0,
+                high: High::Top,
+            });
             // S9: 5040 — self-recursion in a bounded context.
             if self.ctx.ambient_forbids.contains(EffectSet::DIVERGE) {
                 return Err(TcError::DivergeInBounded { span: name_abs });

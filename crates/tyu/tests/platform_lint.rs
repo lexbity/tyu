@@ -70,6 +70,19 @@ evidence = "tests/demo.rs"
     .replace("__ABI_HASH__", &x86_abi_hash_literal())
 }
 
+fn base_manifest_with_debug_agent() -> String {
+    format!(
+        r#"{base}
+
+[test.debug_agent]
+supported = true
+target = "crates/tyu/tests/escalate.rs"
+evidence = "tests/escalate.md"
+"#,
+        base = base_manifest()
+    )
+}
+
 fn base_startup() -> &'static str {
     "\
 public __lang_start\n\
@@ -191,6 +204,34 @@ fn lint_reports_unbacked_testrung() {
 
     let outcome = lint_pack(&root, "demo", false).unwrap();
     assert_eq!(outcome.errors[0].code, 5407);
+}
+
+#[test]
+fn lint_reports_unbacked_debug_agent() {
+    let root = std::env::temp_dir().join("tyu_platform_lint_debug_agent");
+    let _ = fs::remove_dir_all(&root);
+    let manifest =
+        base_manifest_with_debug_agent().replace("evidence = \"tests/escalate.md\"\n", "");
+    write_pack(&root, &manifest, base_startup(), None);
+
+    let outcome = lint_pack(&root, "demo", false).unwrap();
+    assert_eq!(outcome.errors[0].code, 5412);
+}
+
+#[test]
+fn lint_reports_debug_agent_evidence_missing_on_disk() {
+    let root = std::env::temp_dir().join("tyu_platform_lint_debug_agent_missing");
+    let _ = fs::remove_dir_all(&root);
+    let manifest = base_manifest_with_debug_agent();
+    write_pack(&root, &manifest, base_startup(), None);
+
+    let outcome = lint_pack(&root, "demo", false).unwrap();
+    assert_eq!(outcome.errors[0].code, 5412);
+    assert!(
+        outcome.errors[0].detail.contains("debug-agent evidence"),
+        "{}",
+        format_lint_outcome(&outcome)
+    );
 }
 
 #[test]

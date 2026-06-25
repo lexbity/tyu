@@ -55,6 +55,25 @@ pub fn write_sym_label(out: &mut dyn Output, name: &[u8]) {
     }
 }
 
+pub fn write_res_label(out: &mut dyn Output, module_name: &[u8], resource_name: &[u8]) {
+    let mut hash = fnv1a_u64(module_name);
+    hash ^= 0xff;
+    hash = hash.wrapping_mul(0x100000001b3);
+    for &b in resource_name {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    out.write(b"r_");
+    for i in (0..64).step_by(4).rev() {
+        let nib = ((hash >> i) & 0xf) as u8;
+        out.write(&[if nib < 10 {
+            b'0' + nib
+        } else {
+            b'a' + nib - 10
+        }]);
+    }
+}
+
 pub fn fnv1a_u64(name: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf29ce484222325;
     for &b in name {

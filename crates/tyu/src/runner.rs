@@ -28,6 +28,13 @@ pub enum Runner {
     Device(OpenOcdSpec),
 }
 
+/// How QEMU debug launches should start the guest.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum QemuDebugStart {
+    FrozenAtReset,
+    RunImmediately,
+}
+
 /// OpenOCD configuration for physical device flashing + serial capture.
 #[derive(Clone, Debug)]
 pub struct OpenOcdSpec {
@@ -87,43 +94,20 @@ impl Runner {
         }
     }
 
-    /// Spawn a QEMU process with gdbstub enabled and CPU frozen (`-S`).
+    /// Spawn a QEMU process with gdbstub enabled.
     ///
     /// Returns the child process handle and the port it is listening on.
     /// The caller is responsible for killing the process when done.
     /// This is a building block for A-side escalation (Phase 14).
-    pub fn spawn_debug(spec: &'static QemuSpec, image: &Path, port: u16) -> Result<Child, String> {
-        let bin = std::str::from_utf8(spec.system_bin).map_err(|_| "non-UTF-8 QEMU binary name")?;
-        let machine =
-            std::str::from_utf8(spec.machine).map_err(|_| "non-UTF-8 QEMU machine name")?;
-
-        let mut cmd = Command::new(bin);
-        cmd.arg("-machine").arg(machine);
+    pub fn spawn_debug(
+        spec: &'static QemuSpec,
+        image: &Path,
+        port: u16,
+        mode: QemuDebugStart,
+    ) -> Result<Child, String> {
+        let mut cmd = build_qemu_command(spec, image, Some(port), Some(mode))?;
         cmd.stdout(Stdio::null());
         cmd.stderr(Stdio::null());
-
-        for arg in spec.extra_args {
-            let s = std::str::from_utf8(arg).map_err(|_| "non-UTF-8 QEMU extra arg")?;
-            // Exclude isa-debug-exit device; for debug mode, we control
-            // the target via gdbstub instead.
-            if s.starts_with("-device") || s.starts_with("-debugcon") {
-                continue;
-            }
-            cmd.arg(s);
-        }
-
-        match spec.exit_convention {
-            codegen_core::QemuExitConvention::Semihosting => {
-                cmd.arg("-semihosting-config");
-                cmd.arg("enable=on,target=native");
-            }
-            codegen_core::QemuExitConvention::IsaDebugExit { .. } => {}
-        }
-
-        cmd.arg("-gdb").arg(format!("tcp::{}", port));
-        cmd.arg("-S"); // freeze CPU at startup
-        cmd.arg("-kernel").arg(image);
-
         cmd.spawn()
             .map_err(|e| format!("spawning debug QEMU: {}", e))
     }
@@ -249,32 +233,12 @@ fn run_qemu(
     timeout: Duration,
     gdb_port: Option<u16>,
 ) -> Result<RunOutcome, String> {
-    let bin = std::str::from_utf8(spec.system_bin).map_err(|_| "non-UTF-8 QEMU binary name")?;
-    let machine = std::str::from_utf8(spec.machine).map_err(|_| "non-UTF-8 QEMU machine name")?;
-
-    let mut cmd = Command::new(bin);
-    cmd.arg("-machine").arg(machine);
-
-    for arg in spec.extra_args {
-        let s = std::str::from_utf8(arg).map_err(|_| "non-UTF-8 QEMU extra arg")?;
-        cmd.arg(s);
-    }
-
-    match spec.exit_convention {
-        codegen_core::QemuExitConvention::Semihosting => {
-            cmd.arg("-semihosting-config");
-            cmd.arg("enable=on,target=native");
-        }
-        codegen_core::QemuExitConvention::IsaDebugExit { .. } => {}
-    }
-
-    if let Some(port) = gdb_port {
-        cmd.arg("-gdb").arg(format!("tcp::{}", port));
-        cmd.arg("-S");
-    }
-
-    cmd.arg("-kernel").arg(image);
-
+    let mut cmd = build_qemu_command(
+        spec,
+        image,
+        gdb_port,
+        gdb_port.map(|_| QemuDebugStart::FrozenAtReset),
+    )?;
     spawn_and_wait(&mut cmd, image, timeout)
 }
 
@@ -366,4 +330,183 @@ fn read_serial(
     use std::io::Read;
     file.read(buf)
         .map_err(|e| format!("serial read error: {}", e))
+}
+
+fn build_qemu_command(
+    spec: &QemuSpec,
+    image: &Path,
+    gdb_port: Option<u16>,
+    debug_start: Option<QemuDebugStart>,
+) -> Result<Command, String> {
+    if debug_start.is_some() && gdb_port.is_none() {
+        return Err("debug QEMU launch requires a gdb port".into());
+    }
+
+    let bin = std::str::from_utf8(spec.system_bin).map_err(|_| "non-UTF-8 QEMU binary name")?;
+    let machine = std::str::from_utf8(spec.machine).map_err(|_| "non-UTF-8 QEMU machine name")?;
+    let mut cmd = Command::new(bin);
+    cmd.arg("-machine").arg(machine);
+
+    let debug_mode = gdb_port.is_some() || debug_start.is_some();
+    let extra_args = if debug_mode {
+        filtered_debug_extra_args(spec.extra_args)?
+    } else {
+        collect_qemu_extra_args(spec.extra_args)?
+    };
+    for arg in extra_args {
+        cmd.arg(arg);
+    }
+
+    match spec.exit_convention {
+        codegen_core::QemuExitConvention::Semihosting => {
+            cmd.arg("-semihosting-config");
+            cmd.arg("enable=on,target=native");
+        }
+        codegen_core::QemuExitConvention::IsaDebugExit { .. } => {}
+    }
+
+    if let Some(port) = gdb_port {
+        cmd.arg("-gdb").arg(format!("tcp::{}", port));
+        if debug_start != Some(QemuDebugStart::RunImmediately) {
+            cmd.arg("-S");
+        }
+    }
+
+    cmd.arg("-kernel").arg(image);
+    Ok(cmd)
+}
+
+fn collect_qemu_extra_args(extra_args: &[&[u8]]) -> Result<Vec<String>, String> {
+    extra_args
+        .iter()
+        .map(|arg| {
+            std::str::from_utf8(arg)
+                .map(|s| s.to_owned())
+                .map_err(|_| "non-UTF-8 QEMU extra arg".to_string())
+        })
+        .collect()
+}
+
+fn filtered_debug_extra_args(extra_args: &[&[u8]]) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < extra_args.len() {
+        let arg = std::str::from_utf8(extra_args[i]).map_err(|_| "non-UTF-8 QEMU extra arg")?;
+        match arg {
+            "-device" => {
+                let value =
+                    std::str::from_utf8(extra_args.get(i + 1).ok_or("missing -device value")?)
+                        .map_err(|_| "non-UTF-8 QEMU extra arg")?;
+                if value.starts_with("isa-debug-exit") {
+                    i += 2;
+                    continue;
+                }
+                out.push(arg.to_owned());
+                out.push(value.to_owned());
+                i += 2;
+            }
+            "-debugcon" => {
+                let _value =
+                    std::str::from_utf8(extra_args.get(i + 1).ok_or("missing -debugcon value")?)
+                        .map_err(|_| "non-UTF-8 QEMU extra arg")?;
+                i += 2;
+            }
+            _ => {
+                out.push(arg.to_owned());
+                i += 1;
+            }
+        }
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codegen_core::Target;
+    use std::path::Path;
+
+    fn qemu_args(
+        target: Target,
+        mode: Option<QemuDebugStart>,
+        gdb_port: Option<u16>,
+    ) -> Vec<String> {
+        let spec = target.spec().qemu.expect("target should support qemu");
+        build_qemu_command(spec, Path::new("/tmp/image.elf"), gdb_port, mode)
+            .expect("build qemu command")
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn debug_args_frozen_has_dash_s() {
+        let args = qemu_args(
+            Target::X86_64UnknownNone,
+            Some(QemuDebugStart::FrozenAtReset),
+            Some(1234),
+        );
+        assert!(args
+            .windows(2)
+            .any(|w| w[0] == "-gdb" && w[1] == "tcp::1234"));
+        assert!(args.iter().any(|arg| arg == "-S"));
+    }
+
+    #[test]
+    fn debug_args_running_omits_dash_s() {
+        let args = qemu_args(
+            Target::X86_64UnknownNone,
+            Some(QemuDebugStart::RunImmediately),
+            Some(1234),
+        );
+        assert!(args
+            .windows(2)
+            .any(|w| w[0] == "-gdb" && w[1] == "tcp::1234"));
+        assert!(!args.iter().any(|arg| arg == "-S"));
+    }
+
+    #[test]
+    fn debug_args_x86_strip_debug_exit_pair() {
+        let args = qemu_args(
+            Target::X86_64UnknownNone,
+            Some(QemuDebugStart::FrozenAtReset),
+            Some(1234),
+        );
+        assert!(!args.iter().any(|arg| arg == "-device"));
+        assert!(!args
+            .iter()
+            .any(|arg| arg == "isa-debug-exit,iobase=0x501,iosize=0x02"));
+    }
+
+    #[test]
+    fn debug_args_x86_strip_debugcon_pair() {
+        let args = qemu_args(
+            Target::X86_64UnknownNone,
+            Some(QemuDebugStart::FrozenAtReset),
+            Some(1234),
+        );
+        assert!(!args.iter().any(|arg| arg == "-debugcon"));
+        assert!(!args.iter().any(|arg| arg == "stdio"));
+    }
+
+    #[test]
+    fn debug_args_arm_preserve_nographic() {
+        let args = qemu_args(
+            Target::ArmV7MUnknownNone,
+            Some(QemuDebugStart::FrozenAtReset),
+            Some(1234),
+        );
+        assert!(args.iter().any(|arg| arg == "-nographic"));
+    }
+
+    #[test]
+    fn debug_args_riscv_preserve_bios_none() {
+        let args = qemu_args(
+            Target::RiscV32UnknownNone,
+            Some(QemuDebugStart::FrozenAtReset),
+            Some(1234),
+        );
+        assert!(args.windows(2).any(|w| w[0] == "-bios" && w[1] == "none"));
+        assert!(args.iter().any(|arg| arg == "-nographic"));
+    }
 }

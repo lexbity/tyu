@@ -51,3 +51,8 @@ probe_config = "armv7m.cfg"
 
 [test]
 rung = "untested"
+
+[test.debug_agent]
+supported = true
+target = "crates/tyu/tests/escalate.rs"
+evidence = "evidence/debug_escalate.md"

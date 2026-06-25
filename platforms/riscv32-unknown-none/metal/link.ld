@@ -15,6 +15,9 @@ SECTIONS
 {
     .text : ALIGN(4)
     {
+        /* Entry point first, at the start of DRAM (0x80000000): the `virt`
+           machine resets straight here when booted with `-bios none`. */
+        KEEP(*(.text.init))
         *(.text)
         *(.text.*)
         *(.rodata)

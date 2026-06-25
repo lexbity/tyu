@@ -50,3 +50,8 @@ probe_config = "riscv32.cfg"
 
 [test]
 rung = "untested"
+
+[test.debug_agent]
+supported = true
+target = "crates/tyu/tests/escalate.rs"
+evidence = "evidence/debug_escalate.md"

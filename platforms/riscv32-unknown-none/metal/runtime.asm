@@ -22,27 +22,30 @@
 
 # __lang_writec ( a0:byte -- )
 # Emit low byte of a0 via RISC-V semihosting SYS_WRITEC.
-# Preserves s2-s11 (callee-saved).
+# Preserves s2-s11 (callee-saved) AND a0, so callers emitting a run of equal
+# bytes (e.g. `li a0, 0; jal __lang_writec` repeated) keep their value across
+# calls instead of seeing the clobbered SYS_WRITEC operation number.
 __lang_writec:
     sw a0, -4(sp)
     addi sp, sp, -4
     li a0, 0x03                     # SYS_WRITEC
     mv a1, sp
     semihost_call
+    lw a0, 0(sp)                    # restore caller's byte value
     addi sp, sp, 4
     ret
 
 # __lang_sys_exit ( a1:reason -- )
 # Terminate via RISC-V semihosting SYS_EXIT with reason code in a1.
 # Never returns.
+# For 32-bit RISC-V semihosting, SYS_EXIT takes the reason code DIRECTLY in the
+# parameter register (a1) — not a pointer to a block (that is the 64-bit form).
+# Passing a pointer makes QEMU see an unrecognized reason and exit with status 1
+# instead of terminating cleanly on ADP_Stopped_ApplicationExit.
 __lang_sys_exit:
-    sw a1, -4(sp)
-    addi sp, sp, -4
-    mv a1, sp
-    li a0, 0x18                     # SYS_EXIT
+    li a0, 0x18                     # SYS_EXIT; a1 already holds the reason
     semihost_call
-    addi sp, sp, 4
-    ebreak
+    ebreak                          # should not reach here
 
 # __lang_fail_exit ( -- )
 # Terminate with ADP_Stopped_ApplicationExit (0x20026).
@@ -54,10 +57,19 @@ __lang_fail_exit:
 # -----------------------------------------------------------------
 # Entry point
 # -----------------------------------------------------------------
+#
+# Placed in `.text.init` so the linker can position it at the very start of
+# DRAM (0x80000000).  With `-bios none`, the `virt` machine resets straight to
+# 0x80000000, so the first instruction there MUST be the entry point.
+.section .text.init
 
 .globl __lang_start
 .type __lang_start, @function
 __lang_start:
+    # Native call/scratch stack sp = __stack_top (grows downward).  Booting
+    # with `-bios none` means no firmware has set sp, so we must establish it
+    # before any helper that spills to the native stack (e.g. __lang_writec).
+    la sp, __stack_top
     # DS pointer s2 = __lang_ds_base (low address, grows upward)
     la s2, __lang_ds_base
     # DS limit s3 = __lang_ds_limit (exclusive upper bound)
@@ -218,6 +230,9 @@ emit_diag_header:
     jal __lang_writec
 
     j __lang_fail_exit
+
+# Remaining runtime code returns to the ordinary `.text` section.
+.section .text
 
 # -----------------------------------------------------------------
 # __lang_trap_loc — trap with source location (debug_trap_loc=true)
@@ -412,6 +427,12 @@ __lang_expected_abi_hash:
 
     # return to BSS for the native stack
     .section .bss
+    # Guard zone below the usable stack: when a word prologue detects
+    # sp < __lang_stack_limit it branches to __stack_overflow, which then runs
+    # (emits its diagnostic) using this reserved headroom.
+    .space 1024
+    .globl __lang_stack_limit
+__lang_stack_limit:
     # Native stack — 32 KB (grows downward, sp initialized by crt0)
     .space 32768
 __stack_top:

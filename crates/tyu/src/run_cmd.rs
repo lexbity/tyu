@@ -14,14 +14,15 @@ const EXIT_MISMATCH: i32 = 3; // wrong QEMU exit code
 pub fn run(args: &RunArgs) -> Result<(), String> {
     // Build the image first.
     let build_args = args.to_build_args();
-    let image = build::build(&build_args)?;
+    let ctx = build::resolve_build_context(&build_args)?;
+    let build_out = build::build_resolved(&build_args, ctx).map_err(|e| e.to_string())?;
 
     // Determine the runner.
     let runner = if let Some(r) = &args.runner_override {
         match r.as_str() {
             "native" => Runner::Native,
             "qemu" => {
-                let spec = args
+                let spec = build_out
                     .target
                     .spec()
                     .qemu
@@ -31,11 +32,11 @@ pub fn run(args: &RunArgs) -> Result<(), String> {
             other => return Err(format!("unknown runner '{}'", other)),
         }
     } else {
-        Runner::for_target(args.target)
+        Runner::for_target(build_out.target)
     };
 
     // Run with timeout.
-    let outcome = runner.run(&image, args.timeout)?;
+    let outcome = runner.run(&build_out.execution_image, args.timeout)?;
 
     // Parse output markers.
     let summary = harness_core::parse_output(&outcome.stdout);
@@ -63,8 +64,8 @@ pub fn run(args: &RunArgs) -> Result<(), String> {
     }
 
     // For QEMU targets, check that the exit code matches the expected pass code.
-    if args.target.spec().qemu.is_some() {
-        let spec = args.target.spec().qemu.unwrap();
+    if build_out.target.spec().qemu.is_some() {
+        let spec = build_out.target.spec().qemu.unwrap();
         let expected = spec.exit_convention.host_pass_exit();
         if outcome.exit_code != expected {
             eprintln!(

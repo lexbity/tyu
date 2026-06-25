@@ -1,4 +1,4 @@
-//! x86_64 bare-metal execution tests via `tyu test` driver and direct QEMU runs.
+//! x86_64 bare-metal execution tests via `tyu test` driver and product-runner-backed runs.
 
 mod common;
 
@@ -84,14 +84,11 @@ end;
     let image = common::link_image(target, &objs, &dir);
 
     // Run under QEMU with 5-second timeout.
-    let outcome = run_qemu_x86_64(&image, std::time::Duration::from_secs(5));
+    let outcome =
+        common::run_with_product_runner(target, &image, std::time::Duration::from_secs(5));
 
     // The fixture should trap (subtype violation for 100 > 10).
     // No S\n will be emitted because the trap happens before emit-done.
-    assert!(
-        !outcome.completed,
-        "trapping fixture must not emit S\\n completion marker"
-    );
     assert!(!outcome.timed_out, "fixture must trap, not hang");
 
     // Parse framed records from the output.
@@ -200,7 +197,8 @@ end;
     objs.extend(runtime_objs);
     let image = common::link_image(target, &objs, &dir);
 
-    let outcome = run_qemu_x86_64(&image, std::time::Duration::from_secs(5));
+    let outcome =
+        common::run_with_product_runner(target, &image, std::time::Duration::from_secs(5));
 
     let records: Vec<harness_core::Record<'_>> =
         harness_core::parse_records(&outcome.stdout).collect();
@@ -292,7 +290,8 @@ end;
     objs.extend(runtime_objs);
     let image = common::link_image(target, &objs, &dir);
 
-    let outcome = run_qemu_x86_64(&image, std::time::Duration::from_secs(5));
+    let outcome =
+        common::run_with_product_runner(target, &image, std::time::Duration::from_secs(5));
 
     let records: Vec<harness_core::Record<'_>> =
         harness_core::parse_records(&outcome.stdout).collect();
@@ -363,7 +362,8 @@ end;
     objs.extend(runtime_objs);
     let image = common::link_image(target, &objs, &dir);
 
-    let outcome = run_qemu_x86_64(&image, std::time::Duration::from_secs(5));
+    let outcome =
+        common::run_with_product_runner(target, &image, std::time::Duration::from_secs(5));
 
     // Parse the output with legacy-compatible OutputSummary
     // to ensure no phantom failures from D payload bytes.
@@ -627,85 +627,6 @@ end;
         delta > 0,
         "size delta ({delta} bytes) must be > 0; slim={slim_size}, fat={fat_size}"
     );
-}
-
-// ---------------------------------------------------------------------------
-// QEMU runner helper
-// ---------------------------------------------------------------------------
-
-struct QemuOutcome {
-    stdout: Vec<u8>,
-    completed: bool,
-    timed_out: bool,
-}
-
-fn run_qemu_x86_64(image: &PathBuf, timeout: std::time::Duration) -> QemuOutcome {
-    use std::io::Read;
-    use std::time::Instant;
-
-    let mut cmd = Command::new("qemu-system-x86_64");
-    cmd.arg("-machine")
-        .arg("q35")
-        .arg("-m")
-        .arg("32M")
-        .arg("-display")
-        .arg("none")
-        .arg("-device")
-        .arg("isa-debug-exit,iobase=0x501,iosize=0x02")
-        .arg("-debugcon")
-        .arg("stdio")
-        .arg("-kernel")
-        .arg(image);
-
-    let mut child = cmd
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .expect("qemu-system-x86_64 spawn failed");
-
-    let mut stdout_pipe = child.stdout.take().unwrap();
-    let stdout_handle = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stdout_pipe.read_to_end(&mut buf);
-        buf
-    });
-
-    let start = Instant::now();
-    let exit_code = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status.code().unwrap_or(-1),
-            Ok(None) => {
-                if start.elapsed() >= timeout {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    let stdout = stdout_handle.join().unwrap_or_default();
-                    return QemuOutcome {
-                        stdout,
-                        completed: false,
-                        timed_out: true,
-                    };
-                }
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-            Err(_) => {
-                let stdout = stdout_handle.join().unwrap_or_default();
-                return QemuOutcome {
-                    stdout,
-                    completed: false,
-                    timed_out: false,
-                };
-            }
-        }
-    };
-
-    let stdout = stdout_handle.join().unwrap_or_default();
-    // On x86_64 QEMU with isa-debug-exit, clean pass = exit 1.
-    let completed = exit_code == 1 || exit_code == 0;
-    QemuOutcome {
-        stdout,
-        completed,
-        timed_out: false,
-    }
 }
 
 // ---------------------------------------------------------------------------

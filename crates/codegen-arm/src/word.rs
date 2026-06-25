@@ -1,9 +1,11 @@
 use codegen_core::strings::{decode_string_bytes, STR_TABLE_CAP};
 use codegen_core::{AsmMode, CodegenError};
-use frontend::span::Span;
+use frontend::{parse::DeclKind, span::Span};
 use ir as lir;
 
-use crate::ophelpers::{fnv1a_u64, slice_span, write_hex, write_sym_label, write_u32};
+use crate::ophelpers::{
+    fnv1a_u64, slice_span, write_hex, write_res_label, write_sym_label, write_u32,
+};
 use crate::ArmThumbBackend;
 
 fn prim_bits_signed_ty(ty_name: &[u8]) -> Option<(u16, bool)> {
@@ -28,6 +30,40 @@ fn prim_bits_signed_ty(ty_name: &[u8]) -> Option<(u16, bool)> {
 fn prim_bits_signed(w: &lir::Word, ty: lir::TypeId) -> Option<(u16, bool)> {
     let ty_name = w.types.get(ty.0 as usize).map(|a| a.as_bytes())?;
     prim_bits_signed_ty(ty_name)
+}
+
+fn find_word_decl<'a>(
+    module: &'a frontend::parse::ModuleAst,
+    src: &'a [u8],
+    name: &[u8],
+) -> Option<&'a frontend::parse::DeclAst> {
+    for d in module.decls.iter() {
+        if d.kind != DeclKind::Word {
+            continue;
+        }
+        let dname = slice_span(src, d.name);
+        if dname == name {
+            return Some(d);
+        }
+    }
+    None
+}
+
+fn find_resource_decl<'a>(
+    module: &'a frontend::parse::ModuleAst,
+    src: &'a [u8],
+    name: &[u8],
+) -> Option<&'a frontend::parse::DeclAst> {
+    for d in module.decls.iter() {
+        if d.kind != DeclKind::Resource {
+            continue;
+        }
+        let dname = slice_span(src, d.name);
+        if dname == name {
+            return Some(d);
+        }
+    }
+    None
 }
 
 fn line_col(src: &[u8], offset: usize) -> (u32, u32) {
@@ -112,6 +148,25 @@ impl<'a> ArmThumbBackend<'a> {
         self.out.write(b", %function\n");
         write_sym_label(self.out, w.name.as_bytes());
         self.out.write(b":\n");
+
+        if self.mode == AsmMode::Object {
+            if let Some(decl) = find_word_decl(self.module, self.src, w.name.as_bytes()) {
+                for attr in decl.attrs.iter() {
+                    if let frontend::parse::AttrAst::Interrupt { vector } = attr {
+                        let vec_name = slice_span(self.src, *vector);
+                        if vec_name != b"SysTick" {
+                            return Err(CodegenError::UnsupportedOp {
+                                op_name: b"@interrupt",
+                            });
+                        }
+                        self.out.write(b"\t.global __lang_systick_handler\n");
+                        self.out.write(b"\t.thumb_set __lang_systick_handler, ");
+                        write_sym_label(self.out, w.name.as_bytes());
+                        self.out.write(b"\n");
+                    }
+                }
+            }
+        }
 
         let slots = max_local_slot(w).map(|m| (m as u32) + 1).unwrap_or(0);
         let locals_bytes = slots * 8;
@@ -325,6 +380,14 @@ impl<'a> ArmThumbBackend<'a> {
                 self.emit_push_r0r1();
                 Ok(())
             }
+            lir::OpKind::InterruptDisable => {
+                self.out.write(b"\tcpsid i\n");
+                Ok(())
+            }
+            lir::OpKind::InterruptEnable => {
+                self.out.write(b"\tcpsie i\n");
+                Ok(())
+            }
             lir::OpKind::LocalSet { slot, .. } => {
                 let offset = (slot as u32) * 8;
                 self.out.write(b"\tsubs r4, r4, #8\n");
@@ -452,8 +515,25 @@ impl<'a> ArmThumbBackend<'a> {
                 Ok(())
             }
             lir::OpKind::AddrOf {
-                const_addr: None, ..
-            } => Err(CodegenError::UnsupportedAddrOf),
+                place,
+                const_addr: None,
+                ..
+            } => {
+                if find_resource_decl(self.module, self.src, place.as_bytes()).is_none() {
+                    return Err(CodegenError::UnsupportedAddrOf);
+                }
+                self.out.write(b"\tldr r0, =");
+                write_res_label(
+                    self.out,
+                    slice_span(self.src, self.module.name),
+                    place.as_bytes(),
+                );
+                self.out.write(b"\n\teors r1, r1\n");
+                self.out.write(b"\tstr r0, [r4]\n\tadds r4, r4, #4\n");
+                self.out.write(b"\tstr r1, [r4]\n\tadds r4, r4, #4\n");
+                self.emit_ds_high_update();
+                Ok(())
+            }
             lir::OpKind::PtrAddConst { offset, .. } => {
                 // Pop pointer (low word, discard high).
                 self.emit_pop_one_r0();

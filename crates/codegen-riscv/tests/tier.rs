@@ -83,6 +83,8 @@ fn all_ops() -> Vec<(OpKind, OpSupport)> {
         (OpKind::AndBool, OpSupport::Supported),
         (OpKind::OrBool, OpSupport::Supported),
         (OpKind::NotBool, OpSupport::Supported),
+        (OpKind::InterruptDisable, OpSupport::Supported),
+        (OpKind::InterruptEnable, OpSupport::Supported),
         (
             OpKind::LocalSet {
                 slot: 0,

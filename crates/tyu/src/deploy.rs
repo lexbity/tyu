@@ -14,8 +14,12 @@ pub fn run(args: &DeployArgs) -> Result<(), TyuError> {
     enforce_otp_guardrails(args)?;
 
     let build_args = args.to_build_args();
-    let (target, resolved_out_dir, build_selection) = build::resolve_build_context(&build_args)?;
-    let built_image = build::build(&build_args)?;
+    let ctx = build::resolve_build_context(&build_args)?;
+    let target = ctx.target;
+    let resolved_out_dir = ctx.out_dir.clone();
+    let build_selection = ctx.platform_selection.clone();
+    let build_out = build::build_resolved(&build_args, ctx)?;
+    let built_image = build_out.final_image;
     let workspace_root = platform::workspace_root();
     let selection = match build_selection {
         Some(selection) => selection,

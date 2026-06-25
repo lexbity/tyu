@@ -16,13 +16,16 @@ pub use crate::typecheck::error::{ChecksMode, Output, TcError};
 pub use crate::typecheck::parse::parse_word_sig;
 
 use crate::typecheck::db::{
-    build_iso_db, build_nominal_db, build_resource_db, compute_resource_sharing, ResourceDb,
+    build_iso_db, build_nominal_db, build_resource_db, compute_resource_sharing, IsoDb, NominalDb,
+    ResourceDb,
 };
 use crate::typecheck::irgen::{build_ir_word, lir_atom, NullObserver};
-use crate::typecheck::mmio::build_mmio_db;
+use crate::typecheck::mmio::{build_mmio_db, MmioDb};
 use crate::typecheck::util::{slice_span, write_sig};
 use crate::types::WordEntry;
+use alloc::vec::Vec;
 use frontend::parse::{DeclKind, ModuleAst};
+use frontend::span::Span;
 use ir as lir;
 
 pub fn emit_ir(
@@ -41,6 +44,18 @@ pub fn emit_ir(
     let nominals = build_nominal_db(module, src)?;
     let iso = build_iso_db(module, src)?;
     let mut arena = irgen::arena::ArenaAllocator::new();
+    let summary_env = local_summary_env(
+        module,
+        src,
+        env,
+        subtypes,
+        &mmio,
+        &resources,
+        &nominals,
+        &iso,
+        checks,
+        allow_raw_casts,
+    )?;
 
     out.write(b"module ");
     out.write(slice_span(src, module.name));
@@ -90,7 +105,7 @@ pub fn emit_ir(
         let out_words = build_ir_word(
             decl,
             src,
-            env,
+            &summary_env,
             subtypes,
             &mmio,
             &resources,
@@ -133,6 +148,18 @@ pub fn emit_stackcheck(
     let iso = build_iso_db(module, src)?;
     let mut arena = irgen::arena::ArenaAllocator::new();
     let allow_raw_casts = false;
+    let summary_env = local_summary_env(
+        module,
+        src,
+        env,
+        subtypes,
+        &mmio,
+        &resources,
+        &nominals,
+        &iso,
+        checks,
+        allow_raw_casts,
+    )?;
 
     for decl in module.decls.iter() {
         if decl.kind != DeclKind::Word {
@@ -157,7 +184,7 @@ pub fn emit_stackcheck(
             let _ = build_ir_word(
                 decl,
                 src,
-                env,
+                &summary_env,
                 subtypes,
                 &mmio,
                 &resources,
@@ -202,6 +229,19 @@ where
     // Compute resource sharing from ISR roots before compiling any word body.
     compute_resource_sharing(module, src, resources);
     let mut arena = irgen::arena::ArenaAllocator::new();
+    let summary_env = local_summary_env(
+        module,
+        src,
+        env,
+        subtypes,
+        &mmio,
+        resources,
+        &nominals,
+        &iso,
+        checks,
+        allow_raw_casts,
+    )
+    .map_err(ForEachIrError::Type)?;
 
     for decl in module.decls.iter() {
         if decl.kind != DeclKind::Word {
@@ -224,7 +264,7 @@ where
         let out_words = build_ir_word(
             decl,
             src,
-            env,
+            &summary_env,
             subtypes,
             &mmio,
             resources,
@@ -255,4 +295,93 @@ where
         }
     }
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn local_summary_env(
+    module: &ModuleAst,
+    src: &[u8],
+    env: &[WordEntry],
+    subtypes: &[SubtypeInfo],
+    mmio: &MmioDb,
+    resources: &ResourceDb,
+    nominals: &NominalDb,
+    iso: &IsoDb,
+    checks: ChecksMode,
+    allow_raw_casts: bool,
+) -> Result<Vec<WordEntry>, TcError> {
+    let mut summary_env: Vec<WordEntry> = env.iter().copied().collect();
+    let mut arena = irgen::arena::ArenaAllocator::new();
+    let max_passes = module.decls.len().saturating_add(1);
+
+    for _ in 0..max_passes {
+        let mut changed = false;
+        for decl in module.decls.iter() {
+            if decl.kind != DeclKind::Word || decl.body.is_none() {
+                continue;
+            }
+            let Some(sig_span) = decl.sig else {
+                return Err(TcError::NoSig { span: decl.name });
+            };
+            let sig = parse_word_sig(src, sig_span)
+                .map_err(|_| TcError::TypeParseFailed { span: sig_span })?;
+
+            arena.reset();
+            let mut null_obs = NullObserver;
+            let out_words = build_ir_word(
+                decl,
+                src,
+                &summary_env,
+                subtypes,
+                mmio,
+                resources,
+                nominals,
+                iso,
+                checks,
+                allow_raw_casts,
+                &sig,
+                &mut arena,
+                &mut null_obs,
+            )?;
+
+            let name = slice_span(src, decl.name);
+            if merge_word_summary(&mut summary_env, name, out_words.word) {
+                changed = true;
+            }
+        }
+
+        if !changed {
+            return Ok(summary_env);
+        }
+    }
+
+    Err(TcError::InternalError {
+        code: 3908,
+        span: Span::UNKNOWN,
+    })
+}
+
+fn merge_word_summary(env: &mut [WordEntry], name: &[u8], word: &lir::Word) -> bool {
+    let Some(entry) = env.iter_mut().find(|entry| entry.name.as_bytes() == name) else {
+        return false;
+    };
+
+    let performs = entry.performs.union(word.performs);
+    let bound = lir::StackBound {
+        net: word.bound.net,
+        high: max_high(entry.bound.high, word.bound.high),
+    };
+    let changed = entry.performs != performs || entry.bound != bound;
+    if changed {
+        entry.performs = performs;
+        entry.bound = bound;
+    }
+    changed
+}
+
+fn max_high(a: lir::High, b: lir::High) -> lir::High {
+    match (a, b) {
+        (lir::High::Top, _) | (_, lir::High::Top) => lir::High::Top,
+        (lir::High::Slots(a), lir::High::Slots(b)) => lir::High::Slots(a.max(b)),
+    }
 }

@@ -187,6 +187,8 @@ pub enum OpKind {
     AndBool,
     OrBool,
     NotBool,
+    InterruptDisable,
+    InterruptEnable,
 
     LocalSet {
         slot: u16,
@@ -566,6 +568,7 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
                 let _a1 = pop(&mut stack, &mut sp, op.span)?;
                 push(&mut stack, &mut sp, TY_BOOL, op.span)?;
             }
+            OpKind::InterruptDisable | OpKind::InterruptEnable => {}
             OpKind::LocalSet { ty, .. } => {
                 let v = pop(&mut stack, &mut sp, op.span)?;
                 if v != ty {
@@ -930,6 +933,8 @@ fn write_op(out: &mut impl Output, w: &Word, op: &Op) {
         OpKind::AndBool => out.write(b"and_bool"),
         OpKind::OrBool => out.write(b"or_bool"),
         OpKind::NotBool => out.write(b"not_bool"),
+        OpKind::InterruptDisable => out.write(b"interrupt_disable"),
+        OpKind::InterruptEnable => out.write(b"interrupt_enable"),
         OpKind::Cmp { kind, .. } => match kind {
             CmpKind::Lt => out.write(b"cmp_lt"),
             CmpKind::Le => out.write(b"cmp_le"),

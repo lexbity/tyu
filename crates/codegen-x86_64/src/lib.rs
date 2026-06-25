@@ -10,7 +10,7 @@ extern crate alloc;
 
 use codegen_core::{AsmMode, CodegenBackend, CodegenError};
 use frontend::{
-    parse::{ModuleAst, Output},
+    parse::{AttrAst, DeclKind, ModuleAst, Output},
     span::Span,
 };
 use ir as lir;
@@ -89,6 +89,15 @@ pub struct X86_64HostedBackend<'a> {
 }
 
 impl<'a> X86_64HostedBackend<'a> {
+    fn module_has_interrupts(&self) -> bool {
+        self.module.decls.iter().any(|d| {
+            d.kind == DeclKind::Word
+                && d.attrs
+                    .iter()
+                    .any(|a| matches!(a, AttrAst::Interrupt { .. }))
+        })
+    }
+
     pub fn new(
         module: &'a ModuleAst,
         src: &'a [u8],
@@ -194,7 +203,11 @@ impl<'a> X86_64HostedBackend<'a> {
             &export_entries[..export_count],
             &import_entries[..import_count],
             abi_hash,
-            0,   // flags (no ISR in current modules)
+            if self.module_has_interrupts() {
+                lmod::modinfo::MODINFO_FLAG_HAS_ISR
+            } else {
+                0
+            },
             &[], // res_metas (no resources in current modules)
         ) {
             Some(s) => s,

@@ -25,9 +25,6 @@ pub const RSP_TIMEOUT: Duration = Duration::from_secs(10);
 /// Retry interval for connect_retry.
 const CONNECT_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 
-/// Maximum retry attempts for connect_retry.
-const CONNECT_RETRY_MAX: u32 = 100;
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -49,7 +46,9 @@ pub fn ephemeral_port() -> u16 {
 pub fn connect_retry(host: &str, port: u16) -> io::Result<TcpStream> {
     let addr = format!("{host}:{port}");
     let deadline = Instant::now() + CONNECT_TIMEOUT * 2;
-    for attempt in 0..CONNECT_RETRY_MAX {
+    let mut attempt = 0u32;
+    loop {
+        attempt += 1;
         match TcpStream::connect_timeout(
             &addr
                 .as_str()
@@ -73,10 +72,6 @@ pub fn connect_retry(host: &str, port: u16) -> io::Result<TcpStream> {
             }
         }
     }
-    Err(io::Error::new(
-        io::ErrorKind::TimedOut,
-        format!("connect_retry: exhausted {CONNECT_RETRY_MAX} attempts"),
-    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -187,6 +182,11 @@ impl RspClient {
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?,
             CONNECT_TIMEOUT,
         )?;
+        Self::from_stream(stream)
+    }
+
+    /// Wrap an already-connected TCP stream as an RSP client.
+    pub fn from_stream(stream: TcpStream) -> io::Result<Self> {
         stream.set_read_timeout(Some(RSP_TIMEOUT))?;
         stream.set_write_timeout(Some(RSP_TIMEOUT))?;
         Ok(Self {
@@ -195,20 +195,8 @@ impl RspClient {
         })
     }
 
-    /// Send a raw RSP packet and await the `+` acknowledgment.
-    fn send_raw(&mut self, payload: &[u8]) -> io::Result<()> {
-        let pkt = encode_packet(payload);
-        self.stream.write_all(&pkt)?;
-        self.wait_ack()
-    }
-
-    /// Send a packet and read the response (skipping the leading `+` ack
-    /// if QEMU sends one before the response).
-    fn send_and_recv(&mut self, payload: &[u8]) -> io::Result<Vec<u8>> {
-        let pkt = encode_packet(payload);
-        self.stream.write_all(&pkt)?;
-
-        // Read until we have a complete response packet.
+    /// Receive one complete RSP packet and acknowledge it.
+    fn recv_packet(&mut self) -> io::Result<Vec<u8>> {
         loop {
             // Discard any leading '+' or '-' bytes.
             while let Some(&b'+') = self.recv_buf.first() {
@@ -216,17 +204,14 @@ impl RspClient {
             }
             if self.recv_buf.first() == Some(&b'-') {
                 self.recv_buf.clear();
-                self.stream.write_all(&pkt)?;
                 continue;
             }
 
-            // Try to find a complete packet in the buffer.
             let (resp, consumed) = {
                 let buf = &self.recv_buf;
                 match parse_packet(buf) {
                     Some((r, c)) => (r.to_vec(), c),
                     None => {
-                        // Read more data.
                         let mut tmp = [0u8; 1024];
                         let n = self.stream.read(&mut tmp)?;
                         if n == 0 {
@@ -246,27 +231,12 @@ impl RspClient {
         }
     }
 
-    /// Wait for a single `+` acknowledgment byte.
-    fn wait_ack(&mut self) -> io::Result<()> {
-        loop {
-            if let Some(pos) = self.recv_buf.iter().position(|&b| b == b'+') {
-                self.recv_buf.drain(..=pos);
-                return Ok(());
-            }
-            if self.recv_buf.iter().any(|&b| b == b'-') {
-                // NAK — caller should handle via resend logic.
-                self.recv_buf.clear();
-                return Err(io::Error::new(io::ErrorKind::Other, "NAK"));
-            }
-            let mut tmp = [0u8; 1];
-            if self.stream.read(&mut tmp)? == 0 {
-                return Err(io::Error::new(
-                    io::ErrorKind::ConnectionReset,
-                    "connection closed",
-                ));
-            }
-            self.recv_buf.push(tmp[0]);
-        }
+    /// Send a packet and read the response (skipping the leading `+` ack
+    /// if QEMU sends one before the response).
+    fn send_and_recv(&mut self, payload: &[u8]) -> io::Result<Vec<u8>> {
+        let pkt = encode_packet(payload);
+        self.stream.write_all(&pkt)?;
+        self.recv_packet()
     }
 
     // -------------------------------------------------------------------
@@ -371,6 +341,29 @@ impl RspClient {
     pub fn continue_exec(&mut self) -> io::Result<()> {
         let _resp = self.send_and_recv(b"c")?;
         Ok(())
+    }
+
+    /// Interrupt the target and wait for the stop reply.
+    pub fn interrupt(&mut self) -> io::Result<()> {
+        self.stream.write_all(&[0x03])?;
+        loop {
+            let resp = self.recv_packet()?;
+            match resp.first().copied() {
+                Some(b'S') | Some(b'T') => return Ok(()),
+                Some(b'W') | Some(b'X') => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        format!(
+                            "interrupt stopped exited target: {}",
+                            String::from_utf8_lossy(&resp)
+                        ),
+                    ));
+                }
+                _ => {
+                    // Ignore non-stop packets until the target actually halts.
+                }
+            }
+        }
     }
 
     /// Single-step one instruction.  Returns when the target stops.

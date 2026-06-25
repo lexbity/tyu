@@ -1,4 +1,4 @@
-//! ARM Cortex-M3 execution tests via `tyu test` driver and direct QEMU runs.
+//! ARM Cortex-M3 execution tests via `tyu test` driver and product-runner-backed runs.
 
 mod common;
 
@@ -90,7 +90,8 @@ end;
     objs.extend(runtime_objs);
     let image = common::link_image(target, &objs, &dir);
 
-    let outcome = run_qemu_arm(&image, std::time::Duration::from_secs(10));
+    let outcome =
+        common::run_with_product_runner(target, &image, std::time::Duration::from_secs(10));
 
     // The fixture should trap; no S\n completion.
     assert!(!outcome.timed_out, "ARM trap fixture must not hang");
@@ -177,7 +178,8 @@ end;
     objs.extend(runtime_objs);
     let image = common::link_image(target, &objs, &dir);
 
-    let outcome = run_qemu_arm(&image, std::time::Duration::from_secs(10));
+    let outcome =
+        common::run_with_product_runner(target, &image, std::time::Duration::from_secs(10));
     assert!(!outcome.timed_out, "ARM stack overflow must not hang");
 
     let records: Vec<harness_core::Record<'_>> =
@@ -321,7 +323,7 @@ end;
     )
     .unwrap();
 
-    let _status = std::process::Command::new(common::langc_exe())
+    let status = std::process::Command::new(common::langc_exe())
         .current_dir(&dir)
         .arg("--emit=obj")
         .arg(format!(
@@ -338,6 +340,10 @@ end;
         .arg("Main.mod")
         .status()
         .expect("langc invocation");
+    assert!(
+        status.success(),
+        "langc failed to compile ARM MMIO load/store fixture"
+    );
 
     // The assembly may or may not assemble depending on whether
     // arm-none-eabi-as is installed.  What matters is that the .asm
@@ -441,93 +447,14 @@ end;
 }
 
 // ---------------------------------------------------------------------------
-// QEMU runner helper (ARM semihosting)
-// ---------------------------------------------------------------------------
-
-struct QemuOutcome {
-    stdout: Vec<u8>,
-    timed_out: bool,
-}
-
-fn run_qemu_arm(image: &PathBuf, timeout: std::time::Duration) -> QemuOutcome {
-    use std::io::Read;
-    use std::time::Instant;
-
-    let mut cmd = Command::new("qemu-system-arm");
-    cmd.arg("-machine")
-        .arg("lm3s6965evb")
-        // Route semihosting output to a stdio chardev so it lands on stdout
-        // (the default console sends it to QEMU's stderr, which we don't capture).
-        .arg("-display")
-        .arg("none")
-        .arg("-serial")
-        .arg("none")
-        .arg("-monitor")
-        .arg("none")
-        .arg("-chardev")
-        .arg("stdio,id=sh0")
-        .arg("-semihosting-config")
-        .arg("enable=on,target=native,chardev=sh0")
-        .arg("-kernel")
-        .arg(image);
-
-    let mut child = cmd
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .expect("qemu-system-arm spawn failed");
-
-    let mut stdout_pipe = child.stdout.take().unwrap();
-    let stdout_handle = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stdout_pipe.read_to_end(&mut buf);
-        buf
-    });
-
-    let start = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => {
-                let stdout = stdout_handle.join().unwrap_or_default();
-                return QemuOutcome {
-                    stdout,
-                    timed_out: false,
-                };
-            }
-            Ok(None) => {
-                if start.elapsed() >= timeout {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    let stdout = stdout_handle.join().unwrap_or_default();
-                    return QemuOutcome {
-                        stdout,
-                        timed_out: true,
-                    };
-                }
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-            Err(_) => {
-                let stdout = stdout_handle.join().unwrap_or_default();
-                return QemuOutcome {
-                    stdout,
-                    timed_out: false,
-                };
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Compilation helpers
 // ---------------------------------------------------------------------------
-// ISR lock atomicity fixture
+
+// ISR lock atomicity codegen fixture
 // ---------------------------------------------------------------------------
 
-/// Verify the ISR lock atomicity fixture compiles correctly for ARM.
-/// The full QEMU execution test requires SysTick ISR dispatch support
-/// in the runtime (follow-on).
 #[test]
-fn isr_lock_atomicity() {
+fn isr_lock_atomicity_codegen() {
     if !common::require_tools(&["langc", "arm-none-eabi-as", "arm-none-eabi-ld"]) {
         return;
     }
@@ -538,25 +465,28 @@ fn isr_lock_atomicity() {
         .join("fixtures")
         .join("isr_lock_atomicity.mod");
 
-    // Compile for ARM: should succeed (resource with lock).
-    let o_path = langc_compile(
+    let fixture_o = langc_compile(
         codegen_core::Target::ArmV7MUnknownNone,
         &src_path,
         &dir,
         false,
     );
-    assert!(o_path.exists(), "ARM .o file must exist");
 
-    // Check for interrupt-masking instructions in the generated asm.
-    let asm_path = dir.join("Main.asm");
-    if asm_path.exists() {
-        let asm = std::fs::read_to_string(&asm_path).unwrap();
-        // The lock on an ISR-shared resource should emit CPSID/CPSIE.
-        assert!(
-            asm.contains("cpsid") || asm.contains("cpsie"),
-            "ISR-shared resource lock must emit interrupt mask/unmask;\n{asm}"
-        );
-    }
+    let asm_path = dir.join("IsrLockAtomicity.asm");
+    let asm = std::fs::read_to_string(&asm_path).expect("ARM assembly must be generated");
+    assert!(
+        asm.contains("cpsid i"),
+        "ISR-shared resource lock must disable interrupts;\n{asm}"
+    );
+    assert!(
+        asm.contains("cpsie i"),
+        "ISR-shared resource lock must re-enable interrupts;\n{asm}"
+    );
+
+    assert!(
+        fixture_o.exists(),
+        "ARM ISR lock fixture must compile to an object file"
+    );
 }
 
 // ---------------------------------------------------------------------------

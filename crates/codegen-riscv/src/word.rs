@@ -238,6 +238,14 @@ impl<'a> RiscVBackend<'a> {
                     .write(b"\tsw a0, 0(s2)\n\tsw a1, 4(s2)\n\taddi s2, s2, 8\n");
                 Ok(())
             }
+            lir::OpKind::InterruptDisable => {
+                self.out.write(b"\tcsrci mstatus, 8\n");
+                Ok(())
+            }
+            lir::OpKind::InterruptEnable => {
+                self.out.write(b"\tcsrsi mstatus, 8\n");
+                Ok(())
+            }
             lir::OpKind::LocalSet { slot, .. } => {
                 let off = (slot as u32) * 8;
                 self.out

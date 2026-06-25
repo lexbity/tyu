@@ -16,14 +16,45 @@ use crate::args::BuildArgs;
 use crate::cache::{self, BuildCache};
 use crate::error::TyuError;
 use crate::graph::{resolve_graph, ModuleNode};
-use crate::platform;
+use crate::platform::{self, ResolvedPlatformSelection};
 use crate::toolchain;
 
 /// Build an image from the given build arguments.
 ///
 /// Returns the path to the produced final artifact.
 pub fn build(args: &BuildArgs) -> Result<PathBuf, TyuError> {
-    let (target, out_dir, platform_selection) = resolve_build_context(args)?;
+    let ctx = resolve_build_context(args)?;
+    build_resolved(args, ctx).map(|outcome| outcome.final_image)
+}
+
+/// Result of a fully resolved build.
+#[derive(Debug, Clone)]
+pub struct BuildOutcome {
+    pub final_image: PathBuf,
+    pub execution_image: PathBuf,
+    pub target: Target,
+    pub platform_selection: Option<ResolvedPlatformSelection>,
+}
+
+/// Resolved build context shared by build, run, and test flows.
+#[derive(Debug, Clone)]
+pub struct BuildContext {
+    pub target: Target,
+    pub out_dir: PathBuf,
+    pub platform_selection: Option<ResolvedPlatformSelection>,
+}
+
+impl BuildContext {
+    pub fn platform_selection(&self) -> Option<&ResolvedPlatformSelection> {
+        self.platform_selection.as_ref()
+    }
+}
+
+/// Build an image from a resolved build context.
+pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcome, TyuError> {
+    let target = ctx.target;
+    let out_dir = ctx.out_dir.clone();
+    let platform_selection = ctx.platform_selection.clone();
     let triple = std::str::from_utf8(target.triple()).map_err(|_| "non-UTF-8 target triple")?;
     let feature_set = args.feature_set;
     let workspace_root = platform::workspace_root();
@@ -97,8 +128,7 @@ pub fn build(args: &BuildArgs) -> Result<PathBuf, TyuError> {
     }
 
     // Assemble runtime units.
-    let runtime_objs =
-        assemble_runtime(target, &out_dir, feature_set, platform_selection.as_ref())?;
+    let runtime_objs = assemble_runtime_for_context(&ctx, feature_set)?;
     objs.extend(runtime_objs);
 
     if let Some(selection) = platform_selection.as_ref() {
@@ -118,10 +148,10 @@ pub fn build(args: &BuildArgs) -> Result<PathBuf, TyuError> {
     // Link the execution image. Bare-metal targets still need this ELF
     // intermediate for QEMU/device execution, but the final distributable
     // artifact is the packed `.lmod`.
-    let exec_image = link_image(target, &objs, &out_dir, platform_selection.as_ref())?;
+    let exec_image = link_image_for_context(&ctx, &objs)?;
 
     let final_image = if matches!(target, Target::X86_64UnknownLinuxGnu) {
-        exec_image
+        exec_image.clone()
     } else {
         let root_obj = objs
             .get(module_count.saturating_sub(1))
@@ -133,12 +163,15 @@ pub fn build(args: &BuildArgs) -> Result<PathBuf, TyuError> {
     // Persist cache.
     cache.save()?;
 
-    Ok(final_image)
+    Ok(BuildOutcome {
+        final_image,
+        execution_image: exec_image,
+        target,
+        platform_selection,
+    })
 }
 
-pub fn resolve_build_context(
-    args: &BuildArgs,
-) -> Result<(Target, PathBuf, Option<platform::ResolvedPlatformSelection>), TyuError> {
+pub fn resolve_build_context(args: &BuildArgs) -> Result<BuildContext, TyuError> {
     let workspace_root = platform::workspace_root();
     let platform_selection = match args.platform.as_deref() {
         Some(name) => Some(
@@ -168,7 +201,11 @@ pub fn resolve_build_context(
     } else {
         std::env::current_dir().map_err(TyuError::Io)?.join(out_dir)
     };
-    Ok((target, out_dir, platform_selection))
+    Ok(BuildContext {
+        target,
+        out_dir,
+        platform_selection,
+    })
 }
 
 fn pack_final_lmod(
@@ -358,22 +395,63 @@ pub fn compile_simple(
         ));
     }
 
-    // Find the .o that wasn't there before.
-    let obj_path = std::fs::read_dir(out_dir)
-        .map_err(|e| TyuError::Build(format!("reading out_dir: {}", e)))?
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("o") && !before.contains(p))
-        .next()
-        .ok_or_else(|| {
-            TyuError::Build(format!(
-                "langc produced no .o file for '{}' in '{}'",
-                src.display(),
-                out_dir.display(),
-            ))
-        })?;
+    let expected_obj_path = expected_object_path(src, out_dir);
+    let obj_path = if expected_obj_path.exists() {
+        expected_obj_path
+    } else {
+        // Fall back to the first newly created .o if the source stem and
+        // module name differ in a way we cannot infer here.
+        std::fs::read_dir(out_dir)
+            .map_err(|e| TyuError::Build(format!("reading out_dir: {}", e)))?
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("o") && !before.contains(p))
+            .next()
+            .ok_or_else(|| {
+                TyuError::Build(format!(
+                    "langc produced no .o file for '{}' in '{}'",
+                    src.display(),
+                    out_dir.display(),
+                ))
+            })?
+    };
 
     Ok(obj_path)
+}
+
+pub fn compile_module_for_context(
+    ctx: &BuildContext,
+    src: &Path,
+    is_lib: bool,
+    sysroot: Option<&Path>,
+    include_dirs: &[PathBuf],
+    feature_set: FeatureSet,
+) -> Result<PathBuf, TyuError> {
+    compile_simple(
+        ctx.target,
+        src,
+        &ctx.out_dir,
+        is_lib,
+        sysroot,
+        include_dirs,
+        feature_set,
+    )
+}
+
+fn expected_object_path(src: &Path, out_dir: &Path) -> PathBuf {
+    let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("module");
+    let module_name = stem
+        .split('_')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(c) => c.to_uppercase().to_string() + chars.as_str(),
+            }
+        })
+        .collect::<String>();
+    out_dir.join(format!("{module_name}.o"))
 }
 
 /// Compile a single module with `langc`.
@@ -605,6 +683,18 @@ pub fn assemble_runtime(
     Ok(objs)
 }
 
+pub fn assemble_runtime_for_context(
+    ctx: &BuildContext,
+    feature_set: FeatureSet,
+) -> Result<Vec<PathBuf>, TyuError> {
+    assemble_runtime(
+        ctx.target,
+        &ctx.out_dir,
+        feature_set,
+        ctx.platform_selection(),
+    )
+}
+
 /// Link object files into the final ELF image.
 pub fn link_image(
     target: Target,
@@ -671,6 +761,10 @@ pub fn link_image(
     }
 
     Ok(out_path)
+}
+
+pub fn link_image_for_context(ctx: &BuildContext, objs: &[PathBuf]) -> Result<PathBuf, TyuError> {
+    link_image(ctx.target, objs, &ctx.out_dir, ctx.platform_selection())
 }
 
 fn render_linker_script(memory: &platform::MemorySection) -> Result<String, TyuError> {

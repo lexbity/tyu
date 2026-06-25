@@ -34,7 +34,7 @@ __task_spawn:
     mov r6, r0                 @ r6 = entry point
     mov r7, #1                 @ start search from slot 1
 .spawn_find:
-    cmp r7, #16
+    cmp r7, #6                 @ max 6 task slots (0 = main, 1..5 workers) on 64 KB SRAM
     beq .spawn_fail
     ldr r0, =__task_state
     ldr r0, [r0, r7, lsl #2]
@@ -53,20 +53,20 @@ __task_spawn:
     @ set DS pointer: __task_ds_mem + task_id * 65536
     ldr r0, =__task_ds_mem
     mov r1, r7
-    lsl r1, r1, #16
+    lsl r1, r1, #11            @ task_id * 2 KB (per-task stack stride, 64 KB SRAM)
     add r0, r0, r1
     ldr r1, =__task_r15
     str r0, [r1, r7, lsl #2]
     @ set DS limit: base + 65536
-    add r0, r0, #65536
+    add r0, r0, #2048          @ per-task stack size = 2 KB
     ldr r1, =__task_r14
     str r0, [r1, r7, lsl #2]
     @ set up initial call stack in __task_cs_mem
     ldr r0, =__task_cs_mem
     mov r1, r7
-    lsl r1, r1, #16
+    lsl r1, r1, #11            @ task_id * 2 KB (per-task stack stride, 64 KB SRAM)
     add r0, r0, r1
-    add r0, r0, #65536
+    add r0, r0, #2048          @ per-task stack size = 2 KB
     sub r0, r0, #16           @ space for trampoline + 3 zeros
     ldr r1, =__task_entry_tramp
     str r1, [r0, #12]
@@ -121,6 +121,7 @@ __task_spawn:
 @ ===========================================================================
 @ __task_entry_tramp
 @ ===========================================================================
+.thumb_func
 __task_entry_tramp:
     push {lr}
     ldr r0, =__task_current
@@ -134,6 +135,7 @@ __task_entry_tramp:
 @ ===========================================================================
 @ __task_exit
 @ ===========================================================================
+.thumb_func
 __task_exit:
     push {lr}
     ldr r0, =__task_current
@@ -151,6 +153,7 @@ __task_exit:
 @   re-enqueues if still ACTIVE, then finds next task: local queue,
 @   global queue, or returns immediately.
 @ ===========================================================================
+.thumb_func
 __task_yield:
     push {r4, r5, r6, r7, lr}
     @ --- save current task context ---
@@ -262,10 +265,11 @@ __task_yield:
 @ __task_join ( r0 = task_id )
 @   Waits until task exits (state == 3), then frees slot.
 @ ===========================================================================
+.thumb_func
 __task_join:
     push {r4, lr}
     mov r4, r0
-    cmp r4, #16
+    cmp r4, #6                 @ max 6 task slots
     bhs .join_invalid
 .join_loop:
     ldr r0, =__task_state
@@ -315,5 +319,7 @@ __task_w_buf:   .space 128
 __task_g_head:  .space 4
 __task_g_tail:  .space 4
 __task_g_buf:   .space 64
-__task_ds_mem:  .space 1048576
-__task_cs_mem:  .space 1048576
+@ 8 task slots × 2 KB per-task stack = 16 KB each (fits 64 KB SRAM alongside
+@ the main 16 KB data stack and the downward-growing native stack).
+__task_ds_mem:  .space 12288
+__task_cs_mem:  .space 12288

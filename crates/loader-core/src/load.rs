@@ -257,16 +257,6 @@ pub fn load_module<'a>(
         }
     }
 
-    // Step 5: Static-ISR rule — reject modules that declare @interrupt bindings.
-    let modinfo_data = container.modinfo();
-    if !modinfo_data.is_empty() {
-        if let Some(mi) = lmod::modinfo::decode(modinfo_data) {
-            if mi.has_isr() {
-                return Err(LoadError::ModuleDeclaresIsr);
-            }
-        }
-    }
-
     // --- Begin transactional section (steps 4–12) ---
     let sym_guard = RollbackGuard::new(global_map);
 
@@ -1246,11 +1236,11 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
-    // M5: ModuleDeclaresIsr and ResourceSharingMismatch
+    // M5: ResourceSharingMismatch
     // -------------------------------------------------------------------
 
     #[test]
-    fn isr_module_rejected() {
+    fn isr_module_loads() {
         let code = [0xC3u8];
         let key = [0xabu8; 32];
         let abi_hash = lmod::abi_hash::compute_abi_hash(1, 8, 64, lmod::modinfo::MODINFO_VER);
@@ -1279,7 +1269,7 @@ mod tests {
         let mut map: SymMap<'_, 256> = SymMap::new();
         let mut set = LoadedSet::<64>::new();
         let result = load_module(&container, &mut plat, &mut map, &mut set);
-        assert_eq!(result.unwrap_err(), LoadError::ModuleDeclaresIsr);
+        assert!(result.is_ok(), "ISR-bearing module should load");
     }
 
     #[test]

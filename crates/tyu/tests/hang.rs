@@ -4,6 +4,7 @@
 //! - H-1: infinite net-zero poll loop → classified "poll loop (expected divergence)"
 //! - H-2: non-tail unbounded recursion → classified "runaway recursion suspected"
 
+use std::net::TcpListener;
 use std::process::Command;
 
 use tyu::test_helpers::*;
@@ -55,12 +56,19 @@ fn build_fixture(
         .expect("langc produced no .o file")
 }
 
+fn ephemeral_port() -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+    let port = listener.local_addr().expect("get ephemeral port").port();
+    drop(listener);
+    port
+}
+
 fn link_and_run(
     target: codegen_core::Target,
     objs: &[std::path::PathBuf],
     dir: &std::path::Path,
     port: u16,
-) {
+) -> tyu::debug_escalate::HangClass {
     let rt_dir = workspace_root()
         .join("runtime")
         .join(std::str::from_utf8(target.triple()).unwrap());
@@ -94,6 +102,7 @@ fn link_and_run(
     let report = hc.to_string();
     eprintln!("{}", report);
     std::fs::write(dir.join("classification.txt"), &report).unwrap();
+    hc
 }
 
 // ---------------------------------------------------------------------------
@@ -126,7 +135,13 @@ end;
 ";
 
     let fixture_o = build_fixture(&dir, target, fixture_src);
-    link_and_run(target, &[fixture_o], &dir, 1241);
+    let hc = link_and_run(target, &[fixture_o], &dir, ephemeral_port());
+    match hc {
+        tyu::debug_escalate::HangClass::PollLoop { ref word } => {
+            assert_eq!(word, "main", "poll-loop word must carry DIVERGE");
+        }
+        other => panic!("expected PollLoop, got {:?}", other),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -160,7 +175,16 @@ end;
 ";
 
     let fixture_o = build_fixture(&dir, target, fixture_src);
-    link_and_run(target, &[fixture_o], &dir, 1242);
+    let hc = link_and_run(target, &[fixture_o], &dir, ephemeral_port());
+    match hc {
+        tyu::debug_escalate::HangClass::RunawayRecursion { ref word } => {
+            assert_eq!(
+                word, "recurse",
+                "recursion classifier must name diverging word"
+            );
+        }
+        other => panic!("expected RunawayRecursion, got {:?}", other),
+    }
 }
 
 // ---------------------------------------------------------------------------

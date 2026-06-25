@@ -140,6 +140,16 @@ pub struct DebugSection {
     pub probe_config: String,
 }
 
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct DebugAgentSection {
+    #[serde(default)]
+    pub supported: bool,
+    #[serde(default)]
+    pub target: Option<String>,
+    #[serde(default)]
+    pub evidence: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TestRung {
@@ -165,6 +175,8 @@ pub struct TestSection {
     pub target: Option<String>,
     #[serde(default)]
     pub evidence: Option<String>,
+    #[serde(default)]
+    pub debug_agent: Option<DebugAgentSection>,
 }
 
 #[derive(Clone, Debug, Default, serde::Deserialize)]
@@ -208,6 +220,7 @@ const E_PACK_DEPLOY_RECIPE_INVALID: u16 = 5408;
 const E_PACK_NAME_CONFLICT: u16 = 5409;
 const E_PACK_PATH_INVALID: u16 = 5410;
 const E_PACK_FILE_TOO_LARGE: u16 = 5411;
+const E_PACK_DEBUG_AGENT_UNBACKED: u16 = 5412;
 
 #[derive(Clone, Debug)]
 pub struct PlatformPack {
@@ -313,6 +326,26 @@ impl PlatformPack {
             target,
             evidence
         )
+    }
+
+    pub fn debug_agent_summary(&self) -> String {
+        match self.manifest.test.debug_agent.as_ref() {
+            Some(debug_agent) => format!(
+                "supported={} target={} evidence={}",
+                debug_agent.supported,
+                debug_agent
+                    .target
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("(none)"),
+                debug_agent
+                    .evidence
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("(none)"),
+            ),
+            None => "supported=false target=(none) evidence=(none)".to_string(),
+        }
     }
 
     fn proven_test_rung_label(&self) -> &'static str {
@@ -508,6 +541,8 @@ pub fn info_report(root: &Path, name: &str, isa_filter: Option<&str>) -> Result<
     writeln!(&mut out, "  deploy: {}", pack.deploy_summary()).map_err(|e| e.to_string())?;
     writeln!(&mut out, "  debug: {}", pack.debug_summary()).map_err(|e| e.to_string())?;
     writeln!(&mut out, "  test: {}", pack.test_summary()).map_err(|e| e.to_string())?;
+    writeln!(&mut out, "  debug-agent: {}", pack.debug_agent_summary())
+        .map_err(|e| e.to_string())?;
     if let Some(secure_boot) = &pack.manifest.secure_boot {
         writeln!(
             &mut out,
@@ -1063,6 +1098,63 @@ fn lint_pack_manifest(root: &Path, pack: &PlatformPack, all: bool) -> Result<Lin
         }
     }
 
+    match manifest.test.debug_agent.as_ref() {
+        Some(debug_agent) if debug_agent.supported => {
+            if debug_agent
+                .target
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .is_none()
+            {
+                errors.push(LintError::new(
+                    E_PACK_DEBUG_AGENT_UNBACKED,
+                    "debug-agent supported=true missing target",
+                ));
+                if !all {
+                    return Ok(LintOutcome {
+                        pack: pack_name,
+                        errors,
+                    });
+                }
+            }
+            if debug_agent
+                .evidence
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .is_none()
+            {
+                errors.push(LintError::new(
+                    E_PACK_DEBUG_AGENT_UNBACKED,
+                    "debug-agent supported=true missing evidence",
+                ));
+                if !all {
+                    return Ok(LintOutcome {
+                        pack: pack_name,
+                        errors,
+                    });
+                }
+            } else if let Some(evidence) = debug_agent.evidence.as_deref() {
+                let evidence_path = pack_root.join(evidence);
+                if !evidence_path.exists() {
+                    errors.push(LintError::new(
+                        E_PACK_DEBUG_AGENT_UNBACKED,
+                        format!(
+                            "debug-agent evidence '{}' not found",
+                            evidence_path.display()
+                        ),
+                    ));
+                    if !all {
+                        return Ok(LintOutcome {
+                            pack: pack_name,
+                            errors,
+                        });
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+
     if let Some(deploy) = &manifest.deploy {
         if !matches!(deploy.method.as_str(), "elf-qemu" | "uf2" | "openocd") {
             errors.push(LintError::new(
@@ -1415,6 +1507,30 @@ pub fn resolve_platform_selection(
     Ok(ResolvedPlatformSelection { pack, isa, target })
 }
 
+pub fn resolve_platform_selections(root: &Path) -> Result<Vec<ResolvedPlatformSelection>, String> {
+    discover_platforms_in(root)?
+        .into_iter()
+        .map(resolve_default_selection_for_pack)
+        .collect()
+}
+
+fn resolve_default_selection_for_pack(
+    pack: PlatformPack,
+) -> Result<ResolvedPlatformSelection, String> {
+    let isa = pack
+        .manifest
+        .platform
+        .isa
+        .iter()
+        .find(|isa| isa.default)
+        .cloned()
+        .or_else(|| pack.manifest.platform.isa.first().cloned())
+        .ok_or_else(|| format!("platform pack '{}' declares no isa", pack.name()))?;
+    let target = Target::parse(isa.triple.as_bytes())
+        .ok_or_else(|| format!("unknown target triple '{}'", isa.triple))?;
+    Ok(ResolvedPlatformSelection { pack, isa, target })
+}
+
 pub fn capabilities_for_target(target: Target) -> HashSet<String> {
     let mut caps = HashSet::new();
     match target {
@@ -1426,6 +1542,25 @@ pub fn capabilities_for_target(target: Target) -> HashSet<String> {
         _ => {}
     }
     caps
+}
+
+pub fn capabilities_for_selection(selection: &ResolvedPlatformSelection) -> HashSet<String> {
+    selection
+        .pack
+        .manifest
+        .capabilities
+        .keys()
+        .cloned()
+        .collect()
+}
+
+pub fn is_qemu_capable_selection(selection: &ResolvedPlatformSelection) -> bool {
+    // QEMU-capable is a hardware fact: the resolved target has a QEMU machine.
+    // It must NOT be conflated with the manifest's proven `test.rung`, which is
+    // a separate honesty signal (ARM/RISC-V run in QEMU yet are still rung
+    // "untested"). Gating capability on rung silently dropped real QEMU packs
+    // from `--all-platforms`. See spec Vocabulary: QEMU-capable = qemu.is_some().
+    selection.target.spec().qemu.is_some()
 }
 
 pub fn load_platform_pack(root: &Path, manifest_path: &Path) -> Result<PlatformPack, String> {
@@ -1574,6 +1709,11 @@ probe_config = "demo.cfg"
 rung = "qemu"
 target = "crates/tyu/tests/run_qemu_x86.rs"
 evidence = "tests/demo.rs"
+
+[test.debug_agent]
+supported = true
+target = "crates/tyu/tests/escalate.rs"
+evidence = "tests/demo.rs"
 "#,
         );
         let pack = PlatformPack {
@@ -1590,6 +1730,13 @@ evidence = "tests/demo.rs"
             .test_summary()
             .contains("target=crates/tyu/tests/run_qemu_x86.rs"));
         assert!(pack.test_summary().contains("evidence=tests/demo.rs"));
+        assert!(pack.debug_agent_summary().contains("supported=true"));
+        assert!(pack
+            .debug_agent_summary()
+            .contains("target=crates/tyu/tests/escalate.rs"));
+        assert!(pack
+            .debug_agent_summary()
+            .contains("evidence=tests/demo.rs"));
     }
 
     #[test]

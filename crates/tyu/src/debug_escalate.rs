@@ -1,19 +1,19 @@
 //! A-side escalation debugger.
 //!
 //! When the in-guest B agent fails to emit a `D` diagnostic (NO_COMPLETION,
-//! HANG, or timeout), this module re-runs the same image under QEMU with
-//! `-gdb -S`, attaches via the RSP client, sets breakpoints on the trap
+//! HANG, or timeout), this module re-runs the same image under QEMU with a
+//! gdbstub, attaches via the RSP client, sets breakpoints on the trap
 //! handlers, reads the register payload on hit, and constructs a
 //! `DiagRecord` with `origin = 2` (gdbstub escalation).
 
 use std::net::TcpListener;
 use std::path::Path;
 use std::process::Command;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use rsp_client::{regs, RspClient};
+use rsp_client::{connect_retry, regs, RspClient};
 
-use crate::runner::Runner;
+use crate::runner::{QemuDebugStart, Runner};
 use codegen_core::Target;
 
 // ---------------------------------------------------------------------------
@@ -89,32 +89,52 @@ fn ephemeral_port() -> Result<u16, String> {
 // ---------------------------------------------------------------------------
 
 /// Outcome of the escalation attempt.
+#[derive(Debug)]
 pub struct EscalationOutcome {
     /// The decoded diagnostic, if escalation succeeded.
     pub diagnostic_string: Option<String>,
     /// Human-readable error message if escalation failed.
     pub error: Option<String>,
+    /// Resolved target used for the escalation attempt.
+    pub target: Target,
+    /// Debug start mode used when launching QEMU.
+    pub mode: QemuDebugStart,
+    /// GDB stub port used for the escalation attempt.
+    pub port: u16,
+    /// Phase where the failure occurred, if any.
+    pub phase: Option<&'static str>,
+}
+
+struct EscalationFailure {
+    phase: &'static str,
+    message: String,
 }
 
 /// Returns the symbolic address (from ELF `.symtab`) of a symbol by name,
 /// using `nm`.
-fn symbol_address(elf: &Path, sym_name: &str) -> Option<u64> {
+fn symbol_address(elf: &Path, sym_name: &str) -> Result<Option<u64>, String> {
     let out = Command::new("nm")
         .arg("--defined-only")
         .arg(elf)
         .output()
-        .ok()?;
+        .map_err(|e| format!("run nm on {}: {}", elf.display(), e))?;
     if !out.status.success() {
-        return None;
+        return Err(format!(
+            "nm --defined-only {} exited with {}",
+            elf.display(),
+            out.status
+        ));
     }
     let stdout = String::from_utf8_lossy(&out.stdout);
     for line in stdout.lines() {
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() >= 3 && parts[2] == sym_name {
-            return u64::from_str_radix(parts[0], 16).ok();
+            return u64::from_str_radix(parts[0], 16)
+                .map(Some)
+                .map_err(|e| format!("parse nm output for {}: {}", sym_name, e));
         }
     }
-    None
+    Ok(None)
 }
 
 /// Helper to convert gdb register bytes (up to 8 LE) to u64.
@@ -128,6 +148,59 @@ fn read_reg64(client: &mut RspClient, reg: u8) -> Result<u64, String> {
     Ok(u64::from_le_bytes(arr))
 }
 
+fn connect_rsp_client(
+    qemu: &mut std::process::Child,
+    port: u16,
+    phase: &'static str,
+) -> Result<RspClient, String> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(status) = qemu
+            .try_wait()
+            .map_err(|e| format!("{}: wait QEMU: {}", phase, e))?
+        {
+            return Err(format!(
+                "{}: QEMU exited before RSP connect ({})",
+                phase, status
+            ));
+        }
+        match connect_retry("127.0.0.1", port) {
+            Ok(stream) => {
+                return RspClient::from_stream(stream).map_err(|e| format!("{}: {}", phase, e))
+            }
+            Err(e) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(25));
+                if e.kind() == std::io::ErrorKind::ConnectionRefused
+                    || e.kind() == std::io::ErrorKind::TimedOut
+                    || e.kind() == std::io::ErrorKind::ConnectionReset
+                    || e.kind() == std::io::ErrorKind::WouldBlock
+                {
+                    continue;
+                }
+                continue;
+            }
+            Err(e) => return Err(format!("{}: {}", phase, e)),
+        }
+    }
+}
+
+fn sample_running_pc(client: &mut RspClient, regs: &TargetRegs) -> Result<u64, String> {
+    match read_reg64(client, regs.trap_pc) {
+        Ok(pc) => Ok(pc),
+        Err(first) => {
+            client
+                .interrupt()
+                .map_err(|e| format!("interrupt target before PC sample: {}", e))?;
+            read_reg64(client, regs.trap_pc).map_err(|second| {
+                format!(
+                    "read PC after interrupt failed: {}; initial read failed: {}",
+                    second, first
+                )
+            })
+        }
+    }
+}
+
 /// Main escalation entry point.
 ///
 /// Launches QEMU with gdbstub, attaches, reads the trap state, and returns
@@ -137,12 +210,17 @@ pub fn escalate(
     target: Target,
     source_map: Option<(&Path, &diag_core::render::SourceMap)>,
 ) -> EscalationOutcome {
+    let mode = QemuDebugStart::FrozenAtReset;
     let spec = match target.spec().qemu {
         Some(s) => s,
         None => {
             return EscalationOutcome {
                 diagnostic_string: None,
                 error: Some("escalation requires a QEMU target".into()),
+                target,
+                mode,
+                port: 0,
+                phase: Some("target"),
             };
         }
     };
@@ -154,63 +232,161 @@ pub fn escalate(
             return EscalationOutcome {
                 diagnostic_string: None,
                 error: Some(format!("escalation: ephemeral port: {}", e)),
+                target,
+                mode,
+                port: 0,
+                phase: Some("port"),
             };
         }
     };
 
-    // 1. Resolve symbol addresses from the ELF.
-    let trap_loc_addr = match symbol_address(image, "__lang_trap_loc") {
-        Some(a) => a,
-        None => {
-            return EscalationOutcome {
-                diagnostic_string: None,
-                error: Some("escalation: __lang_trap_loc not found in ELF".into()),
-            };
-        }
-    };
-    let ds_base_addr = symbol_address(image, "__lang_ds_base").unwrap_or(0);
+    // 1. Resolve trap entry symbols from the ELF. Codegen routes runtime
+    //    checks to one of several entry points: most range/channel/subtype
+    //    checks `jmp __lang_trap` (generic, no source payload), loc-bearing
+    //    traps use `__lang_trap_loc`, and data-stack overflow uses
+    //    `__stack_overflow`. We break at every entry that exists and
+    //    disambiguate by PC after the stop. Breaking only `__lang_trap_loc`
+    //    (the previous behavior) missed the common generic-trap path entirely,
+    //    so `continue` never stopped.
+    macro_rules! resolve {
+        ($name:expr) => {
+            match symbol_address(image, $name) {
+                Ok(a) => a,
+                Err(e) => {
+                    return EscalationOutcome {
+                        diagnostic_string: None,
+                        error: Some(format!("escalation: symbol lookup failed: {}", e)),
+                        target,
+                        mode,
+                        port,
+                        phase: Some("symbol"),
+                    };
+                }
+            }
+        };
+    }
+    let trap_loc_addr = resolve!("__lang_trap_loc");
+    let trap_addr = resolve!("__lang_trap");
+    let overflow_addr = resolve!("__stack_overflow");
+    let ds_base_addr = resolve!("__lang_ds_base").unwrap_or(0);
+
+    // ARM Thumb function symbols carry bit 0 as a marker, but the gdbstub
+    // breakpoint must target the even instruction address. x86/RISC-V symbol
+    // addresses are literal and may legitimately be odd (e.g. x86 `__lang_trap`
+    // at 0x...e5), so only strip the bit on ARM.
+    let strip_thumb = matches!(target, Target::ArmV7MUnknownNone);
+    let norm = |a: u64| if strip_thumb { a & !1 } else { a };
+    let breakpoints: Vec<u64> = [trap_loc_addr, trap_addr, overflow_addr]
+        .into_iter()
+        .flatten()
+        .map(|a| norm(a))
+        .collect();
+    if breakpoints.is_empty() {
+        return EscalationOutcome {
+            diagnostic_string: None,
+            error: Some(
+                "escalation: no trap entry symbol (__lang_trap_loc/__lang_trap/__stack_overflow) \
+                 found in ELF"
+                    .into(),
+            ),
+            target,
+            mode,
+            port,
+            phase: Some("symbol"),
+        };
+    }
 
     eprintln!(
-        "escalation: target={:?} port={} trap_loc={:#x} ds_base={:#x}",
-        target, port, trap_loc_addr, ds_base_addr,
+        "escalation: target={:?} port={} breakpoints={:#x?} ds_base={:#x}",
+        target, port, breakpoints, ds_base_addr,
     );
 
     // 2. Spawn QEMU with gdbstub.
-    let mut qemu = match Runner::spawn_debug(spec, image, port) {
+    let mut qemu = match Runner::spawn_debug(spec, image, port, mode) {
         Ok(c) => c,
         Err(e) => {
             return EscalationOutcome {
                 diagnostic_string: None,
                 error: Some(format!("escalation: failed to spawn QEMU: {}", e)),
+                target,
+                mode,
+                port,
+                phase: Some("spawn"),
             };
         }
     };
 
-    // Give QEMU time to start listening.
-    std::thread::sleep(Duration::from_millis(300));
-
     // 3. Connect RSP client.
-    let result = (|| -> Result<String, String> {
+    let result = (|| -> Result<String, EscalationFailure> {
         let mut client =
-            RspClient::connect("127.0.0.1", port).map_err(|e| format!("RSP connect: {}", e))?;
+            connect_rsp_client(&mut qemu, port, "escalation connect").map_err(|e| {
+                EscalationFailure {
+                    phase: "connect",
+                    message: e,
+                }
+            })?;
 
-        // 4. Set breakpoint at __lang_trap_loc.
-        client
-            .set_breakpoint(trap_loc_addr)
-            .map_err(|e| format!("set breakpoint at {:#x}: {}", trap_loc_addr, e))?;
+        // 4. Set a breakpoint at every resolved trap entry point.
+        for &addr in &breakpoints {
+            client.set_breakpoint(addr).map_err(|e| EscalationFailure {
+                phase: "breakpoint",
+                message: format!("set breakpoint at {:#x}: {}", addr, e),
+            })?;
+        }
 
-        // 5. Continue execution. The breakpoint fires when a trap occurs.
-        client
-            .continue_exec()
-            .map_err(|e| format!("continue: {}", e))?;
+        // 5. Continue execution. A breakpoint fires when any trap occurs.
+        client.continue_exec().map_err(|e| EscalationFailure {
+            phase: "continue",
+            message: format!("continue: {}", e),
+        })?;
 
-        // 6. On hit, read the trap payload from target-specific registers.
-        let trap_code = read_reg64(&mut client, regs.trap_code)? as u16;
-        let valid = read_reg64(&mut client, regs.valid)? != 0;
-        let source_line = read_reg64(&mut client, regs.source_line)? as u32;
-        let word_hash = read_reg64(&mut client, regs.word_hash)?;
-        let ds_ptr = read_reg64(&mut client, regs.ds_ptr)?;
-        let trap_pc = read_reg64(&mut client, regs.trap_pc)?;
+        // 6. Identify which trap entry fired (compare PC, ignoring the Thumb
+        //    bit), then read the appropriate payload. Only `__lang_trap_loc`
+        //    carries a source payload; the generic `__lang_trap` and
+        //    `__stack_overflow` paths report trap_code only (valid=0).
+        let trap_pc = read_reg64(&mut client, regs.trap_pc).map_err(|e| EscalationFailure {
+            phase: "trap-read",
+            message: e,
+        })?;
+        let ds_ptr = read_reg64(&mut client, regs.ds_ptr).map_err(|e| EscalationFailure {
+            phase: "trap-read",
+            message: e,
+        })?;
+        let at = |addr: Option<u64>| addr.is_some_and(|a| norm(a) == norm(trap_pc));
+
+        let read_code = |client: &mut RspClient| -> Result<u16, EscalationFailure> {
+            Ok(
+                read_reg64(client, regs.trap_code).map_err(|e| EscalationFailure {
+                    phase: "trap-read",
+                    message: e,
+                })? as u16,
+            )
+        };
+
+        let (trap_code, valid, source_line, word_hash) = if at(trap_loc_addr) {
+            let trap_code = read_code(&mut client)?;
+            let valid = read_reg64(&mut client, regs.valid).map_err(|e| EscalationFailure {
+                phase: "trap-read",
+                message: e,
+            })? != 0;
+            let source_line =
+                read_reg64(&mut client, regs.source_line).map_err(|e| EscalationFailure {
+                    phase: "trap-read",
+                    message: e,
+                })? as u32;
+            let word_hash =
+                read_reg64(&mut client, regs.word_hash).map_err(|e| EscalationFailure {
+                    phase: "trap-read",
+                    message: e,
+                })?;
+            (trap_code, valid, source_line, word_hash)
+        } else if at(overflow_addr) {
+            // Data-stack overflow: trap_code is implicit (10), no payload.
+            (10u16, false, 0u32, 0u64)
+        } else {
+            // Generic `__lang_trap`: trap_code in the contract register, no payload.
+            (read_code(&mut client)?, false, 0u32, 0u64)
+        };
 
         // Compute ds_depth = (ds_ptr - ds_base) / slot_bytes.
         let ds_depth = if ds_base_addr != 0 && ds_ptr >= ds_base_addr {
@@ -276,10 +452,21 @@ pub fn escalate(
         Ok(diag) => EscalationOutcome {
             diagnostic_string: Some(diag),
             error: None,
+            target,
+            mode,
+            port,
+            phase: None,
         },
-        Err(e) => EscalationOutcome {
+        Err(failure) => EscalationOutcome {
             diagnostic_string: None,
-            error: Some(format!("escalation failed: {}", e)),
+            error: Some(format!(
+                "escalation failed [{}]: {}",
+                failure.phase, failure.message
+            )),
+            target,
+            mode,
+            port,
+            phase: Some(failure.phase),
         },
     }
 }
@@ -347,7 +534,7 @@ pub fn classify_hang(image: &Path, target: Target) -> HangClass {
 /// program counter, and looking up the running word's static properties
 /// from `.lang.debug`.
 ///
-/// Launches QEMU without `-S` so execution begins immediately, waits for
+/// Launches QEMU in running mode so execution begins immediately, waits for
 /// the hang to be reached, then samples PC via RSP.
 ///
 /// `port` is the TCP port for the gdbstub.  Use different ports for
@@ -363,8 +550,8 @@ pub fn classify_hang_on_port(image: &Path, target: Target, port: u16) -> HangCla
         }
     };
 
-    // 1. Launch QEMU without -S (runs immediately).
-    let mut qemu = match Runner::spawn_debug(spec, image, port) {
+    // 1. Launch QEMU without -S so execution begins immediately.
+    let mut qemu = match Runner::spawn_debug(spec, image, port, QemuDebugStart::RunImmediately) {
         Ok(c) => c,
         Err(e) => {
             return HangClass::Unknown {
@@ -374,16 +561,16 @@ pub fn classify_hang_on_port(image: &Path, target: Target, port: u16) -> HangCla
         }
     };
 
-    // Give QEMU time to boot and reach the hang.
-    std::thread::sleep(Duration::from_millis(1500));
-
     let result = (|| -> Result<HangClass, String> {
-        let mut client =
-            RspClient::connect("127.0.0.1", port).map_err(|e| format!("RSP connect: {}", e))?;
+        // Let the guest run for a short interval so we sample a live PC, not
+        // reset state. If the CPU still refuses a register read, stop it via
+        // RSP interrupt and retry the sample.
+        std::thread::sleep(Duration::from_millis(1500));
+        let mut client = connect_rsp_client(&mut qemu, port, "hang connect")?;
 
         // 2. Sample the program counter using target-specific PC register.
         let regs = register_table(target);
-        let pc = read_reg64(&mut client, regs.trap_pc)?;
+        let pc = sample_running_pc(&mut client, &regs)?;
 
         // 3. Map PC → word name via nm -n (sorted symbols).
         let word_name = symbol_at_pc(image, pc);
@@ -395,24 +582,13 @@ pub fn classify_hang_on_port(image: &Path, target: Target, port: u16) -> HangCla
 
         // 5. Classify.
         match dw_info {
-            Some(info) => {
-                let diverge = info.effects & 0x04 != 0; // bit 2 = DIVERGE
-                let is_top = info.high == 0xFFFF_FFFF;
-
-                match (diverge, is_top) {
-                    (true, false) => Ok(HangClass::PollLoop { word: info.name }),
-                    (true, true) => Ok(HangClass::RunawayRecursion { word: info.name }),
-                    (false, true) => Ok(HangClass::RunawayRecursion { word: info.name }),
-                    (false, false) => Ok(HangClass::Unknown {
-                        word: Some(info.name),
-                        reason: format!(
-                            "word does not diverge (effects={:#x}) and has finite high={}",
-                            info.effects, info.high,
-                        ),
-                    }),
-                }
-            }
+            Some(info) => Ok(classify_debug_word(info)),
             None => {
+                if word_name.is_none() {
+                    if let Some(info) = unique_unbounded_debug_word(image) {
+                        return Ok(classify_debug_word(info));
+                    }
+                }
                 let reason = if word_name.is_some() {
                     "word not found in .lang.debug".into()
                 } else {
@@ -439,6 +615,24 @@ pub fn classify_hang_on_port(image: &Path, target: Target, port: u16) -> HangCla
     }
 }
 
+fn classify_debug_word(info: DebugWordInfo) -> HangClass {
+    let diverge = info.effects & 0x04 != 0; // bit 2 = DIVERGE
+    let is_top = info.high == 0xFFFF_FFFF;
+
+    match (diverge, is_top) {
+        (true, false) => HangClass::PollLoop { word: info.name },
+        (true, true) => HangClass::RunawayRecursion { word: info.name },
+        (false, true) => HangClass::RunawayRecursion { word: info.name },
+        (false, false) => HangClass::Unknown {
+            word: Some(info.name),
+            reason: format!(
+                "word does not diverge (effects={:#x}) and has finite high={}",
+                info.effects, info.high,
+            ),
+        },
+    }
+}
+
 /// Information about a word from `.lang.debug`.
 struct DebugWordInfo {
     name: String,
@@ -452,8 +646,17 @@ fn lookup_in_debugsec(elf: &Path, name: &str) -> Option<DebugWordInfo> {
     let debug_bytes =
         crate::test_cmd::read_elf_section_by_name_internal(&elf_data, b".lang.debug")?;
 
-    // Compute the FNV-1a hash of the name for lookup.
-    let hash = fnv1a_str(name);
+    // Derive the sym_hash key. `symbol_at_pc` returns the mangled linker
+    // symbol `w_<16-hex of fnv1a_u64(word_name)>` (see codegen ophelpers),
+    // and `.lang.debug` keys entries by that same fnv1a_u64(word_name). So the
+    // hex suffix already *is* the sym_hash — parse it rather than re-hashing
+    // the mangled string (which never matches). Fall back to hashing the name
+    // directly if it is not a `w_`-mangled symbol.
+    let hash = name
+        .strip_prefix("w_")
+        .filter(|hex| hex.len() == 16)
+        .and_then(|hex| u64::from_str_radix(hex, 16).ok())
+        .unwrap_or_else(|| fnv1a_str(name));
 
     // Iterate over debug entries to find the matching hash.
     let (count, _) = lmod::debugsec::decode_header(&debug_bytes)?;
@@ -468,6 +671,43 @@ fn lookup_in_debugsec(elf: &Path, name: &str) -> Option<DebugWordInfo> {
         }
     }
     None
+}
+
+fn unique_unbounded_debug_word(elf: &Path) -> Option<DebugWordInfo> {
+    let elf_data = std::fs::read(elf).ok()?;
+    let debug_bytes =
+        crate::test_cmd::read_elf_section_by_name_internal(&elf_data, b".lang.debug")?;
+    let (count, _) = lmod::debugsec::decode_header(&debug_bytes)?;
+
+    let mut candidate = None;
+    let mut non_main_candidate = None;
+    for i in 0..count {
+        let entry = lmod::debugsec::read_entry(&debug_bytes, i)?;
+        if entry.high != 0xFFFF_FFFF {
+            continue;
+        }
+        let info = DebugWordInfo {
+            name: core::str::from_utf8(entry.name).ok()?.to_string(),
+            effects: entry.effects,
+            high: entry.high,
+        };
+        if info.name != "main" {
+            if non_main_candidate.is_some() {
+                return None;
+            }
+            non_main_candidate = Some(DebugWordInfo {
+                name: info.name.clone(),
+                effects: info.effects,
+                high: info.high,
+            });
+        }
+        if candidate.is_some() {
+            candidate = None;
+        } else {
+            candidate = Some(info);
+        }
+    }
+    non_main_candidate.or(candidate)
 }
 
 /// FNV-1a 64-bit hash for a string slice.

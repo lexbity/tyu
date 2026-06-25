@@ -71,6 +71,72 @@ evidence = "{evidence}"
     }
 }
 
+fn write_manifest_with_debug_agent(
+    path: &Path,
+    name: &str,
+    triple: &str,
+    arch: &str,
+    rung: &str,
+    target: &str,
+    evidence: &str,
+    debug_target: &str,
+    debug_evidence: &str,
+) {
+    write_manifest(path, name, triple, arch, rung, target, evidence);
+    if !debug_evidence.is_empty() {
+        let debug_evidence_path = path.parent().unwrap().join(debug_evidence);
+        if let Some(parent) = debug_evidence_path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(debug_evidence_path, "debug evidence").unwrap();
+    }
+    fs::write(
+        path,
+        format!(
+            r#"
+[platform]
+name = "{name}"
+compiler-interface = 1
+description = "{name} pack"
+
+[[platform.isa]]
+triple = "{triple}"
+arch = "{arch}"
+default = true
+
+[metal]
+path = "."
+startup = "runtime.asm"
+linker = "link.ld"
+
+[features.concurrency]
+unit = "concurrency.asm"
+
+[deploy]
+method = "elf-qemu"
+boot = "raw_vectors"
+
+[debug]
+diag_transport = "semihosting"
+rsp = "probe"
+probe = "openocd"
+probe_config = "{name}.cfg"
+
+[test]
+rung = "{rung}"
+target = "{target}"
+evidence = "{evidence}"
+
+[test.debug_agent]
+supported = true
+target = "{debug_target}"
+evidence = "{debug_evidence}"
+"#
+        ),
+    )
+    .unwrap();
+}
+
 fn write_consolidated_manifest(path: &Path, name: &str, triple: &str, arch: &str) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(
@@ -204,6 +270,29 @@ fn info_output_resolves_pack_and_isa_filter() {
     assert!(rendered.contains("test: proven-rung=hardware (manual)"));
     assert!(rendered.contains("target=crates/tyu/tests/platform_hil.rs"));
     assert!(rendered.contains("evidence=docs/hil/demo.md"));
+}
+
+#[test]
+fn info_output_shows_debug_agent_summary() {
+    let root = std::env::temp_dir().join("tyu_platform_manifest_debug_agent");
+    let _ = fs::remove_dir_all(&root);
+
+    write_manifest_with_debug_agent(
+        &root.join("runtime/demo.platform.toml"),
+        "demo",
+        "x86_64-unknown-none",
+        "x86_64",
+        "qemu",
+        "crates/tyu/tests/run_qemu_x86.rs",
+        "tests/demo.md",
+        "crates/tyu/tests/escalate.rs",
+        "tests/escalate.md",
+    );
+
+    let rendered = info_report(&root, "demo", None).unwrap();
+    assert!(rendered.contains("debug-agent: supported=true"));
+    assert!(rendered.contains("target=crates/tyu/tests/escalate.rs"));
+    assert!(rendered.contains("evidence=tests/escalate.md"));
 }
 
 #[test]

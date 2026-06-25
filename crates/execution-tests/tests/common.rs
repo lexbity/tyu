@@ -8,6 +8,7 @@ use codegen_core::{AssemblerKind, Target};
 use std::{
     path::{Path, PathBuf},
     process::Command,
+    time::Duration,
 };
 
 // ---------------------------------------------------------------------------
@@ -280,6 +281,17 @@ pub fn link_image(target: Target, objs: &[PathBuf], out_dir: &Path) -> PathBuf {
         .unwrap_or_else(|_| panic!("{linker} invocation failed"));
     assert!(status.success(), "{linker} failed to link test image");
     out
+}
+
+/// Run an execution image through the product runner path.
+pub fn run_with_product_runner(
+    target: Target,
+    image: &Path,
+    timeout: Duration,
+) -> tyu::runner::RunOutcome {
+    tyu::runner::Runner::for_target(target)
+        .run(image, timeout)
+        .expect("product runner execution failed")
 }
 
 /// Return the set of symbol names that MUST be present in a linked image

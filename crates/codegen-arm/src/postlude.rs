@@ -1,7 +1,20 @@
-use crate::ophelpers::write_u32;
+use crate::ophelpers::{slice_span, write_res_label, write_u32};
 use crate::ArmThumbBackend;
 use codegen_core::strings::decode_string_bytes;
 use codegen_core::{AsmMode, CodegenError};
+use frontend::parse::DeclKind;
+
+fn resource_decl_names<'a>(
+    module: &'a frontend::parse::ModuleAst,
+    src: &'a [u8],
+) -> impl Iterator<Item = &'a [u8]> {
+    module.decls.iter().filter_map(move |d| {
+        if d.kind != DeclKind::Resource {
+            return None;
+        }
+        Some(slice_span(src, d.name))
+    })
+}
 
 impl<'a> ArmThumbBackend<'a> {
     pub fn emit_postlude(&mut self) -> Result<(), CodegenError> {
@@ -36,6 +49,12 @@ impl<'a> ArmThumbBackend<'a> {
                 Ok(())
             }
             AsmMode::Object => {
+                let module_name = slice_span(self.src, self.module.name);
+                for name in resource_decl_names(self.module, self.src) {
+                    self.out.write(b"\t.comm ");
+                    write_res_label(self.out, module_name, name);
+                    self.out.write(b",8,4\n");
+                }
                 ArmThumbBackend::emit_modinfo_section(self)?;
                 Ok(())
             }

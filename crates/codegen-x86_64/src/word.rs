@@ -274,6 +274,14 @@ impl<'a> X86_64HostedBackend<'a> {
                 self.out.write(b"  add r15, 8\n");
                 Ok(())
             }
+            lir::OpKind::InterruptDisable => {
+                self.out.write(b"  cli\n");
+                Ok(())
+            }
+            lir::OpKind::InterruptEnable => {
+                self.out.write(b"  sti\n");
+                Ok(())
+            }
 
             lir::OpKind::LocalSet { slot, .. } => {
                 emit_store_local(self.out, slot as u32);

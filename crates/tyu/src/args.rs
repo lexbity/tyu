@@ -5,6 +5,8 @@ use std::time::Duration;
 
 use codegen_core::{FeatureSet, Target};
 
+use crate::platform;
+
 /// Top-level subcommands.
 #[derive(Debug)]
 pub enum Command {
@@ -129,7 +131,10 @@ impl RunArgs {
 #[derive(Debug)]
 pub struct TestArgs {
     pub target: Target,
+    pub platform: Option<String>,
+    pub isa: Option<String>,
     pub all_targets: bool,
+    pub all_platforms: bool,
     pub filter: Option<String>,
     pub manifest_path: PathBuf,
     pub profile: Option<String>,
@@ -183,7 +188,10 @@ fn print_usage() {
     eprintln!();
     eprintln!("Test options:");
     eprintln!("  --target=<triple>   Target triple (default: x86_64-unknown-linux-gnu)");
+    eprintln!("  --platform=<name>   Platform pack name");
+    eprintln!("  --isa=<arch>        ISA filter for platform packs");
     eprintln!("  --all-targets       Run on all supported targets");
+    eprintln!("  --all-platforms     Run all discovered QEMU-capable platform packs");
     eprintln!("  --filter=<pat>      Only run suites matching pattern");
     eprintln!("  --manifest=<path>   Path to manifest.toml");
     eprintln!();
@@ -361,7 +369,11 @@ fn parse_run(args: &[String]) -> Command {
 
 fn parse_test(args: &[String]) -> Command {
     let mut target: Option<Target> = None;
+    let mut target_explicit = false;
+    let mut platform: Option<String> = None;
+    let mut isa: Option<String> = None;
     let mut all_targets = false;
+    let mut all_platforms = false;
     let mut filter: Option<String> = None;
     let mut manifest_path: Option<PathBuf> = None;
     let mut profile: Option<String> = None;
@@ -371,12 +383,17 @@ fn parse_test(args: &[String]) -> Command {
     while i < args.len() {
         let a = &args[i];
         if let Some(val) = a.strip_prefix("--target=") {
+            target_explicit = true;
             let tb = val.as_bytes();
             target = Target::parse(tb);
             if target.is_none() {
                 eprintln!("tyu: unknown target '{}'", val);
                 return Command::Help;
             }
+        } else if let Some(val) = a.strip_prefix("--platform=") {
+            platform = Some(val.to_string());
+        } else if let Some(val) = a.strip_prefix("--isa=") {
+            isa = Some(val.to_string());
         } else if let Some(val) = a.strip_prefix("--profile=") {
             profile = Some(val.to_string());
         } else if let Some(val) = a.strip_prefix("--features=") {
@@ -397,6 +414,8 @@ fn parse_test(args: &[String]) -> Command {
             manifest_path = Some(PathBuf::from(val));
         } else if a == "--all-targets" {
             all_targets = true;
+        } else if a == "--all-platforms" {
+            all_platforms = true;
         } else if a.starts_with('-') {
             eprintln!("tyu: unknown option '{}'", a);
             return Command::Help;
@@ -404,12 +423,53 @@ fn parse_test(args: &[String]) -> Command {
         i += 1;
     }
 
-    let target = target.unwrap_or(Target::X86_64UnknownLinuxGnu);
+    if all_targets && all_platforms {
+        eprintln!("tyu: --all-targets and --all-platforms are mutually exclusive");
+        return Command::Help;
+    }
+
+    if all_targets && (platform.is_some() || isa.is_some()) {
+        eprintln!("tyu: --all-targets cannot be combined with --platform/--isa");
+        return Command::Help;
+    }
+
+    if all_platforms && (platform.is_some() || isa.is_some() || target_explicit) {
+        eprintln!("tyu: --all-platforms cannot be combined with --target/--platform/--isa");
+        return Command::Help;
+    }
+
+    let mut target = target.unwrap_or(Target::X86_64UnknownLinuxGnu);
+    if let Some(ref platform_name) = platform {
+        let selection = match platform::resolve_platform_selection(
+            &platform::workspace_root(),
+            platform_name,
+            isa.as_deref(),
+        ) {
+            Ok(selection) => selection,
+            Err(e) => {
+                eprintln!("tyu: {}", e);
+                return Command::Help;
+            }
+        };
+        if target_explicit && selection.target != target {
+            eprintln!(
+                "tyu: --target {} and --platform {} resolve to different targets",
+                std::str::from_utf8(target.triple()).unwrap_or("<invalid>"),
+                platform_name,
+            );
+            return Command::Help;
+        }
+        target = selection.target;
+    }
+
     let manifest_path = manifest_path.unwrap_or_else(default_manifest);
 
     Command::Test(TestArgs {
         target,
+        platform,
+        isa,
         all_targets,
+        all_platforms,
         filter,
         manifest_path,
         profile,
@@ -600,6 +660,38 @@ mod tests {
     fn parses_deploy_commit_otp_flag() {
         match parse_deploy(&strings(&["--commit-otp", "module.mod"])) {
             Command::Deploy(args) => assert!(args.commit_otp),
+            other => panic!("unexpected command: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_test_platform_selection() {
+        match parse_test(&strings(&[
+            "--platform=rp2350",
+            "--isa=arm",
+            "--manifest=fixtures/manifest.toml",
+        ])) {
+            Command::Test(args) => {
+                assert!(args.platform.as_deref() == Some("rp2350"));
+                assert!(args.isa.as_deref() == Some("arm"));
+                assert_eq!(args.target, codegen_core::Target::ArmV7MUnknownNone);
+                assert!(!args.all_platforms);
+            }
+            other => panic!("unexpected command: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_test_all_platforms() {
+        match parse_test(&strings(&[
+            "--all-platforms",
+            "--manifest=fixtures/manifest.toml",
+        ])) {
+            Command::Test(args) => {
+                assert!(args.all_platforms);
+                assert!(args.platform.is_none());
+                assert!(args.isa.is_none());
+            }
             other => panic!("unexpected command: {:?}", other),
         }
     }

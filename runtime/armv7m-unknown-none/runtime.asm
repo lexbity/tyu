@@ -21,6 +21,18 @@ _vectors:
     .word __lang_start + 1          @ Reset_Handler (Thumb bit)
     .word __lang_hardfault + 1      @ NMI
     .word __lang_hardfault + 1      @ HardFault
+    .word __lang_hardfault + 1      @ MemManage
+    .word __lang_hardfault + 1      @ BusFault
+    .word __lang_hardfault + 1      @ UsageFault
+    .word 0                         @ reserved
+    .word 0                         @ reserved
+    .word 0                         @ reserved
+    .word 0                         @ reserved
+    .word __lang_hardfault + 1      @ SVCall
+    .word __lang_hardfault + 1      @ DebugMon
+    .word 0                         @ reserved
+    .word __lang_hardfault + 1      @ PendSV
+    .word __lang_systick_handler + 1 @ SysTick
 .size _vectors, . - _vectors
 
 @ -----------------------------------------------------------------
@@ -60,6 +72,9 @@ __lang_fail_exit:
     ldr r1, =0x20026
     b __lang_sys_exit
 
+.weak __lang_systick_handler
+.thumb_set __lang_systick_handler, __lang_hardfault
+
 @ -----------------------------------------------------------------
 @ Entry point
 @ -----------------------------------------------------------------
@@ -78,6 +93,7 @@ __lang_start:
     ldr r0, =__lang_v_emitted
     movs r1, #0
     str r1, [r0]
+    cpsie i
 
     bl w_1f5962a2ce9803c8          @ call main ( -- i64 )
 

@@ -1,6 +1,7 @@
 //! `tyu test` subcommand — suite runner that builds, executes, and verifies
 //! test images across one or many targets.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -12,6 +13,7 @@ use crate::build;
 use crate::highwater::check_stack_witness;
 use crate::manifest::{parse_manifest, FixtureEntry, PoisonExpectation};
 use crate::platform;
+use crate::platform::{ResolvedPlatformSelection, TestRung};
 use crate::runner::Runner;
 use crate::test_helpers::workspace_root;
 
@@ -43,15 +45,50 @@ fn required_tools(target: Target) -> &'static [&'static str] {
     }
 }
 
+#[derive(Clone, Debug)]
+enum TestSelection {
+    Target(Target),
+    Platform(ResolvedPlatformSelection),
+}
+
+impl TestSelection {
+    fn target(&self) -> Target {
+        match self {
+            Self::Target(target) => *target,
+            Self::Platform(selection) => selection.target,
+        }
+    }
+
+    fn platform_selection(&self) -> Option<&ResolvedPlatformSelection> {
+        match self {
+            Self::Target(_) => None,
+            Self::Platform(selection) => Some(selection),
+        }
+    }
+
+    fn label(&self) -> String {
+        match self {
+            Self::Target(target) => std::str::from_utf8(target.triple())
+                .unwrap_or("<invalid>")
+                .to_string(),
+            Self::Platform(selection) => format!(
+                "{}:{}",
+                selection.pack.name(),
+                std::str::from_utf8(selection.target.triple()).unwrap_or("<invalid>")
+            ),
+        }
+    }
+
+    fn capabilities(&self) -> HashSet<String> {
+        match self {
+            Self::Target(target) => platform::capabilities_for_target(*target),
+            Self::Platform(selection) => platform::capabilities_for_selection(selection),
+        }
+    }
+}
+
 /// Run the `test` subcommand.
 pub fn run(args: &TestArgs) -> Result<(), String> {
-    // Determine which targets to run on.
-    let targets: Vec<Target> = if args.all_targets {
-        ALL_TARGETS.to_vec()
-    } else {
-        vec![args.target]
-    };
-
     // Read manifest.
     let manifest = parse_manifest(&args.manifest_path)?;
     let fixtures_dir = args
@@ -77,10 +114,20 @@ pub fn run(args: &TestArgs) -> Result<(), String> {
         return Ok(());
     }
 
+    // --all-platforms runs each QEMU-capable pack in its OWN `tyu test
+    // --platform <name>` subprocess. Platforms are treated separately so no
+    // runner/QEMU lifecycle state is ever shared across platforms within a
+    // single process; each child is exactly the proven standalone path.
+    if args.all_platforms {
+        return run_all_platforms_isolated(args);
+    }
+
+    let selections = resolve_test_selections(args)?;
     let mut any_failure = false;
     let feature_set = args.feature_set;
 
-    for &target in &targets {
+    for selection in &selections {
+        let target = selection.target();
         let triple = std::str::from_utf8(target.triple()).unwrap();
 
         // Check tool availability.
@@ -108,7 +155,7 @@ pub fn run(args: &TestArgs) -> Result<(), String> {
         }
 
         // Filter fixtures by capability requirements.
-        let target_caps = platform::capabilities_for_target(target);
+        let target_caps = selection.capabilities();
 
         let eligible: Vec<&&FixtureEntry> = filtered
             .iter()
@@ -116,11 +163,15 @@ pub fn run(args: &TestArgs) -> Result<(), String> {
             .collect();
 
         if eligible.is_empty() {
-            eprintln!("tyu: target {} — no eligible fixtures", triple);
+            eprintln!("tyu: {} — no eligible fixtures", selection.label());
             continue;
         }
 
-        eprintln!("tyu: testing target {} ({} suites)", triple, eligible.len());
+        eprintln!(
+            "tyu: testing {} ({} suites)",
+            selection.label(),
+            eligible.len()
+        );
 
         // Build and run each suite.
         for fixture in eligible {
@@ -135,7 +186,7 @@ pub fn run(args: &TestArgs) -> Result<(), String> {
                 continue;
             }
 
-            let result = run_single_suite(fixture, target, fixtures_dir, feature_set);
+            let result = run_single_suite(fixture, &selection, fixtures_dir, feature_set);
             let result = poison_verdict(fixture, result);
             match result {
                 Ok(()) => eprintln!("  {} ... ok", fixture.name),
@@ -154,13 +205,111 @@ pub fn run(args: &TestArgs) -> Result<(), String> {
     }
 }
 
+fn resolve_test_selections(args: &TestArgs) -> Result<Vec<TestSelection>, String> {
+    if args.all_platforms {
+        return resolve_all_platform_selections(&workspace_root());
+    }
+
+    if let Some(name) = args.platform.as_deref() {
+        let selection =
+            platform::resolve_platform_selection(&workspace_root(), name, args.isa.as_deref())?;
+        return Ok(vec![TestSelection::Platform(selection)]);
+    }
+
+    if args.all_targets {
+        return Ok(ALL_TARGETS
+            .iter()
+            .copied()
+            .map(TestSelection::Target)
+            .collect());
+    }
+
+    Ok(vec![TestSelection::Target(args.target)])
+}
+
+/// Run each QEMU-capable platform pack in an isolated `tyu test --platform`
+/// subprocess. Platforms are treated separately: no in-process runner or QEMU
+/// lifecycle state crosses platform boundaries, which keeps `--all-platforms`
+/// behaviorally identical to running each `tyu test --platform <name>` by hand.
+fn run_all_platforms_isolated(args: &TestArgs) -> Result<(), String> {
+    let selections = resolve_all_platform_selections(&workspace_root())?;
+    if selections.is_empty() {
+        eprintln!("tyu: no QEMU-capable platform packs to test");
+        return Ok(());
+    }
+    let exe = std::env::current_exe()
+        .map_err(|e| format!("locating tyu executable for isolated platform run: {}", e))?;
+
+    let mut any_failure = false;
+    for selection in &selections {
+        let name = match selection.platform_selection() {
+            Some(sel) => sel.pack.name().to_string(),
+            None => continue,
+        };
+        eprintln!("tyu: === platform {} (isolated subprocess) ===", name);
+
+        let mut cmd = Command::new(&exe);
+        cmd.arg("test")
+            .arg(format!("--platform={}", name))
+            .arg(format!("--manifest={}", args.manifest_path.display()));
+        if let Some(ref filter) = args.filter {
+            cmd.arg(format!("--filter={}", filter));
+        }
+        if let Some(ref profile) = args.profile {
+            cmd.arg(format!("--profile={}", profile));
+        }
+
+        let status = cmd
+            .status()
+            .map_err(|e| format!("running isolated platform test for {}: {}", name, e))?;
+        if !status.success() {
+            any_failure = true;
+        }
+    }
+
+    if any_failure {
+        Err("some tests failed".into())
+    } else {
+        Ok(())
+    }
+}
+
+fn resolve_all_platform_selections(root: &Path) -> Result<Vec<TestSelection>, String> {
+    let packs = platform::discover_platforms_in(root)?;
+    let mut selections = Vec::new();
+    for pack in packs {
+        // A hardware-board pack (e.g. rp2350, deploy=uf2, rung="hardware") may
+        // resolve to an ISA whose generic target has a QEMU spec, but it has no
+        // viable QEMU *machine* in this project (spec §1.9). Exclude it before
+        // the capability check so it is honestly skipped rather than run.
+        if pack.manifest.test.rung == TestRung::Hardware {
+            eprintln!("tyu: SKIP platform={} reason=no-qemu-rung", pack.name());
+            continue;
+        }
+        // Otherwise selection is by QEMU capability (a hardware fact), not by
+        // the manifest's proven `test.rung`. ARM/RISC-V run in QEMU while still
+        // carrying rung="untested"; gating on rung silently dropped them.
+        let selection = platform::resolve_platform_selection(root, pack.name(), None)?;
+        if !platform::is_qemu_capable_selection(&selection) {
+            eprintln!(
+                "tyu: SKIP platform={} reason=no-qemu-rung",
+                selection.pack.name()
+            );
+            continue;
+        }
+        selections.push(TestSelection::Platform(selection));
+    }
+    Ok(selections)
+}
+
 /// Build and run a single test suite (a set of fixtures).
 fn run_single_suite(
     fixture: &FixtureEntry,
-    target: Target,
+    selection: &TestSelection,
     fixtures_dir: &Path,
     feature_set: FeatureSet,
 ) -> Result<(), String> {
+    let target = selection.target();
     let triple = std::str::from_utf8(target.triple()).unwrap();
     let out_dir = std::env::temp_dir().join("tyu_test").join(format!(
         "{}_{}_{}",
@@ -168,6 +317,11 @@ fn run_single_suite(
         fixture.name,
         std::process::id()
     ));
+    let build_ctx = build::BuildContext {
+        target,
+        out_dir: out_dir.clone(),
+        platform_selection: selection.platform_selection().cloned(),
+    };
 
     // Build langc first.
     let _ = Command::new(env!("CARGO"))
@@ -194,19 +348,19 @@ fn run_single_suite(
     let mut objs: Vec<PathBuf> = Vec::new();
 
     let fixture_path = fixtures_dir.join(&fixture.file);
-    let fixture_o = compile_mod(target, &fixture_path, &out_dir, true, feature_set)?;
+    let fixture_o = compile_mod(&build_ctx, &fixture_path, true, feature_set)?;
     objs.push(fixture_o.clone());
 
     // Compile the runner.
-    let runner_o = compile_mod(target, &runner_path, &out_dir, false, feature_set)?;
+    let runner_o = compile_mod(&build_ctx, &runner_path, false, feature_set)?;
     objs.push(runner_o);
 
     // Assemble runtime units.
-    let runtime_objs = build::assemble_runtime(target, &out_dir, feature_set, None)?;
+    let runtime_objs = build::assemble_runtime_for_context(&build_ctx, feature_set)?;
     objs.extend(runtime_objs);
 
     // Link.
-    let image = build::link_image(target, &objs, &out_dir, None)?;
+    let image = build::link_image_for_context(&build_ctx, &objs)?;
 
     // Determine runner.
     let runner = Runner::for_target(target);
@@ -240,7 +394,35 @@ fn run_single_suite(
         let escalate_text = if diag_text.is_empty() && target.spec().qemu.is_some() {
             let esc =
                 crate::debug_escalate::escalate(&image, target, Some((&fixture_path, &source_map)));
-            esc.diagnostic_string.or(esc.error)
+            let crate::debug_escalate::EscalationOutcome {
+                diagnostic_string,
+                error,
+                target: esc_target,
+                mode,
+                port,
+                phase,
+            } = esc;
+            match (diagnostic_string, error) {
+                (Some(diag), None) => Some(diag),
+                (Some(diag), Some(err)) => {
+                    return Err(format!(
+                        "escalation produced diagnostic but also reported error (target={:?} mode={:?} port={} phase={:?}): {}\n{}",
+                        esc_target, mode, port, phase, err, diag,
+                    ));
+                }
+                (None, Some(err)) => {
+                    return Err(format!(
+                        "escalation failed (target={:?} mode={:?} port={} phase={:?}): {}",
+                        esc_target, mode, port, phase, err,
+                    ));
+                }
+                (None, None) => {
+                    return Err(format!(
+                        "escalation returned no diagnostic and no error (target={:?} mode={:?} port={} phase={:?})",
+                        esc_target, mode, port, phase,
+                    ));
+                }
+            }
         } else {
             None
         };
@@ -503,9 +685,8 @@ fn fixture_module_name(fixture: &str) -> String {
 
 /// Compile a .mod file with langc.
 fn compile_mod(
-    target: Target,
+    ctx: &build::BuildContext,
     src: &Path,
-    out_dir: &Path,
     is_lib: bool,
     feature_set: FeatureSet,
 ) -> Result<PathBuf, String> {
@@ -514,17 +695,9 @@ fn compile_mod(
     // the test runner can import fixtures compiled into the same output
     // directory (their .def files are produced there).
     let mut include_dirs = vec![fixtures_dir()];
-    include_dirs.push(out_dir.to_path_buf());
-    build::compile_simple(
-        target,
-        src,
-        out_dir,
-        is_lib,
-        Some(&sysroot),
-        &include_dirs,
-        feature_set,
-    )
-    .map_err(|e| e.to_string())
+    include_dirs.push(ctx.out_dir.clone());
+    build::compile_module_for_context(ctx, src, is_lib, Some(&sysroot), &include_dirs, feature_set)
+        .map_err(|e| e.to_string())
 }
 
 fn fixtures_dir() -> PathBuf {
@@ -539,6 +712,65 @@ fn tool_available(name: &str) -> bool {
     // as `riscv64-linux-gnu-*` rather than `riscv64-unknown-elf-*`) are detected
     // by any accepted candidate — otherwise the target is falsely "skipped".
     crate::toolchain::resolve_tool(name).is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn write_pack(root: &Path, rel: &str, name: &str, triple: &str, rung: &str) {
+        let path = root.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            path,
+            format!(
+                r#"
+[platform]
+name = "{name}"
+compiler-interface = 1
+
+[[platform.isa]]
+triple = "{triple}"
+arch = "x86_64"
+default = true
+
+[metal]
+path = "."
+startup = "runtime.asm"
+linker = "link.ld"
+
+[test]
+rung = "{rung}"
+"#
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn resolve_all_platform_selections_skips_non_qemu_packs() {
+        let root = std::env::temp_dir().join("tyu_test_cmd_all_platforms");
+        let _ = fs::remove_dir_all(&root);
+        write_pack(
+            &root,
+            "platforms/qemu/platform.toml",
+            "qemu",
+            "x86_64-unknown-none",
+            "qemu",
+        );
+        write_pack(
+            &root,
+            "platforms/rp2350/platform.toml",
+            "rp2350",
+            "armv7m-unknown-none",
+            "hardware",
+        );
+
+        let selections = resolve_all_platform_selections(&root).unwrap();
+        assert_eq!(selections.len(), 1);
+        assert_eq!(selections[0].target(), Target::X86_64UnknownNone);
+    }
 }
 
 // ---------------------------------------------------------------------------

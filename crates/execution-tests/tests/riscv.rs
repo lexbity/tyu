@@ -1,4 +1,4 @@
-//! RISC-V RV32 execution tests via `tyu test` driver and direct QEMU runs.
+//! RISC-V RV32 execution tests via `tyu test` driver and product-runner-backed runs.
 
 mod common;
 
@@ -89,7 +89,8 @@ end;
     objs.extend(runtime_objs);
     let image = common::link_image(target, &objs, &dir);
 
-    let outcome = run_qemu_riscv(&image, std::time::Duration::from_secs(10));
+    let outcome =
+        common::run_with_product_runner(target, &image, std::time::Duration::from_secs(10));
     assert!(!outcome.timed_out, "RISC-V trap fixture must not hang");
 
     let records: Vec<harness_core::Record<'_>> =
@@ -163,7 +164,8 @@ end;
     objs.extend(runtime_objs);
     let image = common::link_image(target, &objs, &dir);
 
-    let outcome = run_qemu_riscv(&image, std::time::Duration::from_secs(10));
+    let outcome =
+        common::run_with_product_runner(target, &image, std::time::Duration::from_secs(10));
     assert!(!outcome.timed_out, "RISC-V stack overflow must not hang");
 
     let records: Vec<harness_core::Record<'_>> =
@@ -252,87 +254,6 @@ fn runtime_exports_required_symbols() {
         3,
         "all three trap symbols must be at distinct addresses (no aliasing)"
     );
-}
-
-// ---------------------------------------------------------------------------
-// QEMU runner helper (RISC-V semihosting)
-// ---------------------------------------------------------------------------
-
-struct QemuOutcome {
-    stdout: Vec<u8>,
-    timed_out: bool,
-}
-
-fn run_qemu_riscv(image: &PathBuf, timeout: std::time::Duration) -> QemuOutcome {
-    use std::io::Read;
-    use std::time::Instant;
-
-    let mut cmd = Command::new("qemu-system-riscv32");
-    cmd.arg("-machine")
-        .arg("virt")
-        // Suppress the default OpenSBI firmware so the CPU resets directly into
-        // our kernel at 0x80000000 (otherwise the two overlap and nothing runs).
-        .arg("-bios")
-        .arg("none")
-        // Route semihosting output to a stdio chardev so it lands on stdout
-        // (the default console sends it to QEMU's stderr, which we don't capture).
-        .arg("-display")
-        .arg("none")
-        .arg("-serial")
-        .arg("none")
-        .arg("-monitor")
-        .arg("none")
-        .arg("-chardev")
-        .arg("stdio,id=sh0")
-        .arg("-semihosting-config")
-        .arg("enable=on,target=native,chardev=sh0")
-        .arg("-kernel")
-        .arg(image);
-
-    let mut child = cmd
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .expect("qemu-system-riscv32 spawn failed");
-
-    let mut stdout_pipe = child.stdout.take().unwrap();
-    let stdout_handle = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stdout_pipe.read_to_end(&mut buf);
-        buf
-    });
-
-    let start = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => {
-                let stdout = stdout_handle.join().unwrap_or_default();
-                return QemuOutcome {
-                    stdout,
-                    timed_out: false,
-                };
-            }
-            Ok(None) => {
-                if start.elapsed() >= timeout {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    let stdout = stdout_handle.join().unwrap_or_default();
-                    return QemuOutcome {
-                        stdout,
-                        timed_out: true,
-                    };
-                }
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-            Err(_) => {
-                let stdout = stdout_handle.join().unwrap_or_default();
-                return QemuOutcome {
-                    stdout,
-                    timed_out: false,
-                };
-            }
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------

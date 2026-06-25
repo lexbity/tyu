@@ -45,6 +45,32 @@ fn build_x86_image(src: &str, dir: &PathBuf, label: &str) -> PathBuf {
     out_dir.join("Main.lmod")
 }
 
+fn run_platform_x86(src: &str, dir: &PathBuf, label: &str) -> std::process::Output {
+    let main_mod = dir.join(format!("{}.mod", label));
+    std::fs::write(&main_mod, src).unwrap();
+    let out_dir = dir.join(format!("{}_out", label));
+    let sysroot = workspace_root().join("sysroot");
+
+    let status = Command::new(env!("CARGO"))
+        .current_dir(&workspace_root())
+        .args(["build", "-q", "-p", "langc", "-p", "tyu"])
+        .status()
+        .expect("cargo build");
+    assert!(status.success(), "cargo build failed");
+
+    Command::new(tyu_exe())
+        .current_dir(&workspace_root())
+        .args([
+            "run",
+            "--platform=x86_64-unknown-none",
+            &format!("--sysroot={}", sysroot.display()),
+            &format!("--out-dir={}", out_dir.display()),
+            &main_mod.to_string_lossy(),
+        ])
+        .output()
+        .expect("tyu run")
+}
+
 const PASS_MOD: &str = "\
 module Main;\nimport platform/testio { testio.write-byte };\n\
 : main ( -- i64 ) 83 testio.write-byte 10 testio.write-byte 0 ;\nexport { main };\nend;\n";
@@ -136,6 +162,20 @@ fn run_qemu_no_completion() {
         .unwrap();
     let s = harness_core::parse_output(&outcome.stdout);
     assert!(!s.completed);
+}
+
+#[test]
+fn run_platform_x86_uses_resolved_target() {
+    if !require_tools(&["langc", "fasm", "ld", "qemu-system-x86_64"]) {
+        return;
+    }
+    let dir = temp_dir("platform_run");
+    let output = run_platform_x86(PASS_MOD, &dir, "platform_run");
+    assert!(
+        output.status.success(),
+        "platform run must succeed with resolved QEMU target:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 // ---------------------------------------------------------------------------

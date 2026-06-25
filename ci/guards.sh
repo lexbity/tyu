@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Test-delivery guard: CI invariant layer (G1-G3).
+# Test-delivery guard: CI invariant layer (G1-G4).
 #
 # Checks:
 #   G1  Every crate with #[test] runs >0 tests.
 #   G2  No test=false / harness=false hides a #[test] outside tests/.
-#   G3  (informational) Prints per-package executed-test counts.
+#   G3  Execution-tests do not construct raw product QEMU command lines.
+#   G4  (informational) Prints per-package executed-test counts.
 #
 # Escape hatch: add `# guards: allow-no-tests` as a comment in the
 # package's Cargo.toml to suppress G1/G2 for that package.  This is
@@ -149,6 +150,16 @@ for p in data['packages']:
         fi
     fi
 done < <(echo "$manifest_list")
+
+# --- G3: raw product QEMU construction gate ---
+# Execution-tests must exercise the product runner, not spawn qemu-system
+# directly.  Keep any deliberate direct smoke coverage outside this path.
+if grep -R -n -E 'Command::new\("qemu-system' crates/execution-tests/tests 2>/dev/null \
+    | grep -v 'direct_qemu_smoke' \
+    | grep -v 'runner.rs' >/dev/null; then
+    msg $RED "  FAIL: execution-tests must not construct raw qemu-system command lines"
+    failures=$((failures + 1))
+fi
 
 echo ""
 msg $GREEN "============================================"

@@ -195,6 +195,15 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             high: body_bound.high,
         };
         self.acc = pre_while_acc.compose(loop_bound);
+        // S8: every loop construct is a potential DIVERGE source.
+        self.word.performs = self
+            .word
+            .performs
+            .union(EffectSet::from_bits(EffectSet::DIVERGE));
+        // S9: loop in a bounded context.
+        if self.ctx.ambient_forbids.contains(EffectSet::DIVERGE) {
+            return Err(TcError::DivergeInBounded { span });
+        }
         self.emit_op(body_end, lir::OpKind::Br { target: header }, span)?;
 
         *stack = base_stack;
@@ -309,7 +318,16 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         self.ctx.push(ContextKind::Lock, param, span)?;
         let base_stack = *stack;
         let base_sp = *sp;
+        let emit_irq_mask = locked
+            .map(|name| resource_is_isr_reachable(self.resources, name))
+            .unwrap_or(false);
+        if emit_irq_mask {
+            self.emit_op(cur, lir::OpKind::InterruptDisable, span)?;
+        }
         let end = self.compile_quote_span(cur, stack, sp, body_span, true, observer)?;
+        if emit_irq_mask {
+            self.emit_op(end, lir::OpKind::InterruptEnable, span)?;
+        }
         if *sp != base_sp {
             return Err(TcError::LockStack { span });
         }
