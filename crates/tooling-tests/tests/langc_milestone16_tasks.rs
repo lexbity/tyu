@@ -299,7 +299,6 @@ end;\n",
     assert!(stdout.contains("ptr_add_const"), "stdout: {stdout}");
 }
 
-#[ignore = "pre-existing: typecheck error E3000 on dynamic MMIO index — fix in Slice 8/9"]
 #[test]
 fn mmio_array_dynamic_index_emits_ptr_add_index() {
     build_tools();

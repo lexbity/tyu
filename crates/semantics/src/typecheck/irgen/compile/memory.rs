@@ -75,7 +75,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         Ok(cur)
     }
 
-    #[allow(dead_code)]
     pub(super) fn compile_index(
         &mut self,
         mut cur: lir::BlockId,

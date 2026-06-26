@@ -708,7 +708,11 @@ pub fn link_image(
     let linker_name = std::str::from_utf8(spec.linker).map_err(|_| "non-UTF-8 linker name")?;
     let linker = toolchain::resolve_tool(linker_name)?;
 
-    let linker_script =
+    // `None` means "no explicit linker script" — let the linker use its
+    // default. Host-native targets (`qemu: None`, e.g. x86_64-unknown-linux-gnu)
+    // link as ordinary Linux ELF executables via ld's built-in script; only
+    // bare-metal targets need a custom `link.ld` to place sections in flash/RAM.
+    let linker_script: Option<PathBuf> =
         if let Some(selection) = platform_selection {
             let boot_is_image_def = selection
                 .pack
@@ -725,22 +729,31 @@ pub fn link_image(
                 let rendered = render_linker_script(memory)?;
                 let path = out_dir.join(format!("{}.link.ld", selection.pack.name()));
                 fs::write(&path, rendered).map_err(TyuError::Io)?;
-                path
+                Some(path)
+            } else if selection.metal().linker.is_empty() {
+                // Hosted packs (e.g. linux-x86_64-hosted) declare `linker = ""`.
+                None
             } else {
-                selection
-                    .pack_root()
-                    .join(&selection.metal().path)
-                    .join(&selection.metal().linker)
+                Some(
+                    selection
+                        .pack_root()
+                        .join(&selection.metal().path)
+                        .join(&selection.metal().linker),
+                )
             }
+        } else if spec.qemu.is_none() {
+            None
         } else {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .unwrap()
-                .parent()
-                .unwrap()
-                .join("runtime")
-                .join(triple)
-                .join("link.ld")
+            Some(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .parent()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+                    .join("runtime")
+                    .join(triple)
+                    .join("link.ld"),
+            )
         };
     let out_path = out_dir.join("image.elf");
 
@@ -748,7 +761,10 @@ pub fn link_image(
     if matches!(spec.assembler, AssemblerKind::GasRiscV) {
         cmd.arg("-m").arg("elf32lriscv");
     }
-    cmd.arg("-T").arg(&linker_script).arg("-o").arg(&out_path);
+    if let Some(script) = &linker_script {
+        cmd.arg("-T").arg(script);
+    }
+    cmd.arg("-o").arg(&out_path);
     for obj in objs {
         cmd.arg(obj);
     }

@@ -68,6 +68,9 @@ fn load_with_kek(signed_path: &PathBuf, kek: &[u8; 32]) -> Result<(), u32> {
     map.register(b"__lang_ds_high", ds_high).unwrap();
     map.register(b"__lang_trap", stub).ok();
     map.register(b"__lang_trap_loc", stub).ok();
+    // PASS_MOD imports `testio.write-byte` (fnv1a_u64 = accb676a903a06d9);
+    // stub it so symbol resolution completes for this load-only check.
+    map.register(b"w_accb676a903a06d9", stub).ok();
 
     let mut set = LoadedSet::<64>::new();
     load_module(&container, &mut plat, &mut map, &mut set)?;
@@ -95,7 +98,6 @@ fn allocate_runtime_page() -> usize {
 // D-3: Device-mode artifact has N slots matching device count
 // ---------------------------------------------------------------------------
 
-#[ignore = "pre-existing: deploy device needs --key-sign — fix in Slice 5 (crypto)"]
 #[test]
 fn deploy_device_produces_n_slots() {
     if !require_tools(&[
@@ -119,6 +121,11 @@ fn deploy_device_produces_n_slots() {
     );
     let sysroot = workspace_root().join("sysroot");
     let out_dir = dir.join("out");
+    // Signing requires an explicit --key-sign (deploy enforces this; --sign
+    // alone is an error). Device-mode signing uses a fleet-wide sign key,
+    // independent of the per-device KEKs in --device-keys.
+    let sign_key = dir.join("sign.key");
+    std::fs::write(&sign_key, hex::encode([0xcd; 32])).unwrap();
 
     let output = Command::new(tyu_exe())
         .args([
@@ -129,6 +136,7 @@ fn deploy_device_produces_n_slots() {
             "--encrypt=device",
             &format!("--device-keys={}", keys_dir.display()),
             "--sign",
+            &format!("--key-sign=file:{}", sign_key.display()),
             &main_mod.to_string_lossy(),
         ])
         .output()
@@ -160,7 +168,6 @@ fn deploy_device_produces_n_slots() {
 // Deploy device-mode for {a, b}.  Load with a's KEK → Ok (a is targeted).
 // Load with c's KEK → E_ENC_NO_KEY (c has no slot in the artifact).
 
-#[ignore = "pre-existing: deploy device needs --key-sign — fix in Slice 5 (crypto)"]
 #[test]
 fn deploy_device_isolation_via_loader() {
     if !require_tools(&[
@@ -184,6 +191,11 @@ fn deploy_device_isolation_via_loader() {
     );
     let sysroot = workspace_root().join("sysroot");
     let out_dir = dir.join("out");
+    // Signing requires an explicit --key-sign (deploy enforces this; --sign
+    // alone is an error). The sign key must match the loader's signature
+    // verification key below (with_key(&[0xab; 32], TrustLevel::One)).
+    let sign_key = dir.join("sign.key");
+    std::fs::write(&sign_key, hex::encode([0xab; 32])).unwrap();
 
     let output = Command::new(tyu_exe())
         .args([
@@ -194,6 +206,7 @@ fn deploy_device_isolation_via_loader() {
             "--encrypt=device",
             &format!("--device-keys={}", keys_dir.display()),
             "--sign",
+            &format!("--key-sign=file:{}", sign_key.display()),
             &main_mod.to_string_lossy(),
         ])
         .output()

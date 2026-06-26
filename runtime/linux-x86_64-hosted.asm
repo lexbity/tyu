@@ -347,7 +347,7 @@ w_eb1d0a3c5e7c2e92:
 w_034a1ff17acf93d3:
   sub r15, 8
   xor rax, rax
-  mov al, [__lang_gpio_state]
+  mov al, byte [__lang_gpio_state]
   mov [r15], rax
   add r15, 8
   ret

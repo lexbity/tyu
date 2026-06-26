@@ -135,6 +135,8 @@ pub fn run(args: &TestArgs) -> Result<(), String> {
 
     let selections = resolve_test_selections(args)?;
     let mut any_failure = false;
+    let mut total_passed = 0usize;
+    let mut total_failed = 0usize;
     let feature_set = args.feature_set;
     let mut selection_reports = Vec::new();
     let stdout_redirect = if args.format == ReportFormat::Json && args.report_out.is_none() {
@@ -235,6 +237,7 @@ pub fn run(args: &TestArgs) -> Result<(), String> {
                     fixture_path.display()
                 ));
                 any_failure = true;
+                total_failed += 1;
                 acc.any_fixture_failed = true;
                 continue;
             }
@@ -245,12 +248,14 @@ pub fn run(args: &TestArgs) -> Result<(), String> {
                 Ok(()) => {
                     acc.ran.push(fixture.name.clone());
                     acc.covered.extend(fixture.axes.iter().copied());
+                    total_passed += 1;
                 }
                 Err(e) => {
                     acc.ran.push(fixture.name.clone());
                     acc.reasons
                         .push(format!("fixture={} failed: {}", fixture.name, e));
                     any_failure = true;
+                    total_failed += 1;
                     acc.any_fixture_failed = true;
                 }
             }
@@ -267,6 +272,16 @@ pub fn run(args: &TestArgs) -> Result<(), String> {
         write_report(path, &report)?;
     } else {
         render_report(&report, args.format)?;
+    }
+
+    // Machine-parseable one-line summary on stdout (skipped for JSON-to-stdout,
+    // where stdout carries the report document). CI parses the fixture count
+    // from this line to guard against a vacuous pass (zero fixtures run).
+    if !(args.format == ReportFormat::Json && args.report_out.is_none()) {
+        let status = if any_failure { "FAILED" } else { "ok" };
+        println!(
+            "test result: {status}. {total_passed} passed; {total_failed} failed",
+        );
     }
 
     if any_failure || (args.qualify && report_has_failure(&report)) {

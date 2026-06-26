@@ -38,7 +38,6 @@ fn ensure_tools() {
 // D-1: Structural introspection of fleet-encrypted artifact
 // ---------------------------------------------------------------------------
 
-#[ignore = "pre-existing: deploy fleet needs --key-sign — fix in Slice 5 (crypto)"]
 #[test]
 fn deploy_fleet_produces_encrypted_signed_artifact() {
     if !require_tools(&[
@@ -105,7 +104,6 @@ fn deploy_fleet_produces_encrypted_signed_artifact() {
 // D-2: Fleet-encrypted artifact runs under QEMU
 // ---------------------------------------------------------------------------
 
-#[ignore = "pre-existing: deploy fleet needs --key-sign — fix in Slice 5 (crypto)"]
 #[test]
 fn deploy_fleet_runs_under_qemu() {
     if !require_tools(&[
@@ -227,7 +225,6 @@ fn deploy_fleet_missing_key_errors() {
 // D-8: --encrypt=none produces plaintext artifact
 // ---------------------------------------------------------------------------
 
-#[ignore = "pre-existing: deploy fleet needs --key-sign — fix in Slice 5 (crypto)"]
 #[test]
 fn deploy_none_is_plaintext() {
     if !require_tools(&[
@@ -278,7 +275,6 @@ fn deploy_none_is_plaintext() {
 // D-9: --key-encrypt=env:VAR resolves from environment
 // ---------------------------------------------------------------------------
 
-#[ignore = "pre-existing: deploy fleet needs --key-sign — fix in Slice 5 (crypto)"]
 #[test]
 fn deploy_fleet_key_from_env() {
     if !require_tools(&[
@@ -307,6 +303,9 @@ fn deploy_fleet_key_from_env() {
     std::fs::write(&main_mod, PASS_MOD).unwrap();
     let sysroot = workspace_root().join("sysroot");
     let out_dir = dir.join("out");
+    // Signing requires an explicit --key-sign; this test exercises env-based
+    // key resolution for both the KEK and the sign key.
+    std::env::set_var("TYU_SIGN", hex::encode([0xcd; 32]));
 
     let output = Command::new(tyu_exe())
         .args([
@@ -317,10 +316,12 @@ fn deploy_fleet_key_from_env() {
             "--encrypt=fleet",
             "--key-encrypt=env:TYU_KEK",
             "--sign",
+            "--key-sign=env:TYU_SIGN",
             &main_mod.to_string_lossy(),
         ])
         .output()
         .expect("tyu deploy");
+    std::env::remove_var("TYU_SIGN");
     assert!(
         output.status.success(),
         "deploy with env var failed:\n{}",

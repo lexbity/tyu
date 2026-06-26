@@ -94,10 +94,18 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                     cur
                 }
                 TokenKind::PunctApostrophe => {
-                    // S-14: `'` is type-only.  In term position it's a migration hint.
-                    return Err(TcError::Internal {
-                        span: Span::new(span.start + tok.span.start, span.start + tok.span.end),
-                    });
+                    // S-14: `'` in term position is a dynamic/static index.
+                    self.compile_index(
+                        cur,
+                        stack,
+                        sp,
+                        span,
+                        slice,
+                        tok,
+                        &mut lex,
+                        allow_locals,
+                        observer,
+                    )?
                 }
                 TokenKind::PunctAmp | TokenKind::PunctAmpBang => {
                     self.compile_addr_of(cur, stack, sp, span, slice, tok, &mut lex)?

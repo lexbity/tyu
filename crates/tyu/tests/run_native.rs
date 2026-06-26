@@ -50,7 +50,6 @@ fn build_hosted(src: &str, dir_label: &str) -> std::path::PathBuf {
 // R-1: Basic pass, exit code, build-status assertions
 // ---------------------------------------------------------------------------
 
-#[ignore = "pre-existing: tyu build needs --target — fix in Slice 3"]
 #[test]
 fn run_minimal_hosted() {
     if !require_tools(&["langc"]) {
@@ -64,7 +63,6 @@ fn run_minimal_hosted() {
     assert_eq!(outcome.exit_code, 0);
 }
 
-#[ignore = "pre-existing: tyu build needs --target — fix in Slice 3"]
 #[test]
 fn run_exit_code_captured() {
     if !require_tools(&["langc"]) {
@@ -87,16 +85,15 @@ module Main;\n: main ( -- i64 ) 42 ;\nexport { main };\nend;\n",
 // R-2: Deterministic hang detection
 // ---------------------------------------------------------------------------
 //
-// Uses a counted loop that never reaches its terminating condition
-// (no recursion, no TCO dependency).  The program genuinely does not
-// terminate, so the 500 ms timeout expires and timed_out == true.
+// Uses an empty quote-loop (`[ ] loop`) that never exits (no recursion,
+// no TCO dependency).  The program genuinely does not terminate, so the
+// 500 ms timeout expires and timed_out == true.
 
 const HANG_MOD: &str = "\
 module Main;\n\
-: main ( -- i64 ) 0 begin 1 + dup 0 < until drop 0 ;\n\
+: main ( -- i64 ) 0 [ ] loop drop 0 ;\n\
 export { main };\nend;\n";
 
-#[ignore = "pre-existing: tyu build needs --target — fix in Slice 3"]
 #[test]
 fn run_hang_is_timed_out() {
     if !require_tools(&["langc"]) {

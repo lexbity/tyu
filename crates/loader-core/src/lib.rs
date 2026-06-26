@@ -17,5 +17,8 @@ pub mod reloc_riscv;
 pub mod reloc_x86_64;
 pub mod symbols;
 
+#[cfg(feature = "device-loader")]
+pub mod boot;
+
 #[cfg(feature = "encryption")]
 pub mod crypto;

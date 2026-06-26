@@ -20,6 +20,9 @@ pub fn run(args: &DeployArgs) -> Result<(), TyuError> {
     let build_selection = ctx.platform_selection.clone();
     let build_out = build::build_resolved(&build_args, ctx)?;
     let built_image = build_out.final_image;
+    // The ELF the lmod was packed from — used as the QEMU execution form
+    // (resolve_execution_image bridges the deployed lmod back to this ELF).
+    let exec_image = build_out.execution_image;
     let workspace_root = platform::workspace_root();
     let selection = match build_selection {
         Some(selection) => selection,
@@ -111,6 +114,13 @@ pub fn run(args: &DeployArgs) -> Result<(), TyuError> {
     if deploy.method == "elf-qemu" {
         let runner = Runner::for_target(target);
         let runner_image = if signed_path.extension().and_then(|s| s.to_str()) == Some("lmod") {
+            // The deployed artifact is an lmod; QEMU executes the ELF it was
+            // packed from (ELF is only the host/QEMU execution form — the
+            // shipped artifact stays lmod). Co-locate that ELF next to the lmod
+            // so the runner's lmod→ELF resolution finds it as a companion.
+            if exec_image.extension().and_then(|s| s.to_str()) != Some("lmod") {
+                fs::copy(&exec_image, deploy_dir.join("image.elf")).map_err(TyuError::Io)?;
+            }
             signed_path.clone()
         } else {
             built_image.clone()

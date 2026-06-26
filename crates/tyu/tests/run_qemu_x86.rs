@@ -188,11 +188,10 @@ fn run_platform_x86_uses_resolved_target() {
 
 const HANG_MOD: &str = "\
 module Main;\n\
-: main ( -- i64 ) 0 begin 1 + dup 0 < until drop 0 ;\n\
+: main ( -- i64 ) 0 [ ] loop drop 0 ;\n\
 export { main };\nend;\n";
 
 #[test]
-#[ignore = "pre-existing: HANG_MOD typecheck error E3210 — fix in Slice 8/9"]
 fn run_qemu_hang_detected() {
     if !require_tools(&["langc", "fasm", "ld", "qemu-system-x86_64"]) {
         return;
