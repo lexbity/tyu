@@ -18,7 +18,7 @@ fn load_lmod_bytes(lmod_bytes: &[u8], plat: &mut HostedLoaderPlatform) -> i64 {
 
     let ds_high = allocate_runtime_page();
     let mut global_map: SymMap<'_, 256> = SymMap::new();
-    register_runtime_symbols(&mut global_map, ds_high);
+    register_test_runtime_symtab(&mut global_map, ds_high);
 
     let mut loaded_set = LoadedSet::<64>::new();
     let _loaded = load_module(&container, plat, &mut global_map, &mut loaded_set).unwrap();

@@ -99,6 +99,27 @@ impl TestSelection {
 
 /// Run the `test` subcommand.
 pub fn run(args: &TestArgs) -> Result<(), String> {
+    // `--mode=dynamic` is not yet supported by this suite runner. The harness
+    // links a *separate* generated `TestRunner` module against each fixture
+    // (fixture-as-lib + runner-with-`main`), but the dynamic load path embeds a
+    // single application module per modpack (v1 modpack carries exactly one
+    // module, with one `.lang.modinfo`). Packing two modules would require a
+    // multi-module modpack + boot-loop, or regenerating each fixture as a
+    // self-contained module. Until then, fail loudly rather than silently
+    // running static — dynamic loading is already exercised per-target by the
+    // cargo suites: execution-tests `dynamic_{signed,negative,encrypted}` (x86)
+    // and `arm`/`riscv` `dynamic_lmod_runs_under_qemu`.
+    if matches!(args.mode, Some(crate::args::BuildMode::Dynamic)) {
+        return Err(
+            "tyu test --mode=dynamic is not yet supported (the fixture+runner harness \
+             is two-module; modpack v1 loads a single module). Dynamic loading is \
+             covered by the cargo suites: `cargo test -p execution-tests --test \
+             dynamic_signed --test dynamic_negative --test dynamic_encrypted` and the \
+             `arm`/`riscv` `dynamic_lmod_runs_under_qemu` tests."
+                .to_string(),
+        );
+    }
+
     // Read manifest.
     let manifest = parse_manifest(&args.manifest_path)?;
     let fixtures_dir = args

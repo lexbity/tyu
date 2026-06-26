@@ -34,7 +34,7 @@ fn phase8_dynamic_load_matches_static() {
 
     let ds_high = allocate_runtime_page();
     let mut global_map: SymMap<'_, 256> = SymMap::new();
-    register_runtime_symbols(&mut global_map, ds_high);
+    register_test_runtime_symtab(&mut global_map, ds_high);
 
     let mut loaded_set = LoadedSet::<64>::new();
     let _loaded = load_module(&container, &mut plat, &mut global_map, &mut loaded_set).unwrap();

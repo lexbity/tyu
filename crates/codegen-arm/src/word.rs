@@ -1,4 +1,4 @@
-use codegen_core::strings::{decode_string_bytes, STR_TABLE_CAP};
+use codegen_core::strings::STR_TABLE_CAP;
 use codegen_core::{AsmMode, CodegenError};
 use frontend::{parse::DeclKind, span::Span};
 use ir as lir;

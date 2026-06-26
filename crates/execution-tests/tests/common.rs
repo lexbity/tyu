@@ -62,26 +62,16 @@ pub fn temp_dir(label: &str) -> PathBuf {
 // Tool availability
 // ---------------------------------------------------------------------------
 
-/// Acceptable RISC-V toolchain binary names, in preference order. These MUST
-/// stay in sync with `tyu`'s own resolution in `crates/tyu/src/toolchain.rs`.
-pub const RISCV_AS: &[&str] = &[
-    "riscv32-elf-as",
-    "riscv32-unknown-elf-as",
-    "riscv64-unknown-elf-as",
-    "riscv64-linux-gnu-as",
-];
-pub const RISCV_LD: &[&str] = &[
-    "riscv32-elf-ld",
-    "riscv32-unknown-elf-ld",
-    "riscv64-unknown-elf-ld",
-    "riscv64-linux-gnu-ld",
-];
-pub const RISCV_NM: &[&str] = &[
-    "riscv32-elf-nm",
-    "riscv32-unknown-elf-nm",
-    "riscv64-unknown-elf-nm",
-    "riscv64-linux-gnu-nm",
-];
+/// Acceptable RISC-V toolchain binary names, in preference order. Re-exported
+/// from `tyu`'s own canonical resolution lists so the test harness and the
+/// product driver can never drift out of sync (previously hand-duplicated here).
+// `mod common` is compiled into each test binary; not every binary references
+// all three lists, so allow the per-binary unused-import warning.
+#[allow(unused_imports)]
+pub use tyu::toolchain::{
+    RISCV_AS_CANDIDATES as RISCV_AS, RISCV_LD_CANDIDATES as RISCV_LD,
+    RISCV_NM_CANDIDATES as RISCV_NM,
+};
 
 #[derive(Clone, Copy)]
 pub struct DynamicTarget {

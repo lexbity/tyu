@@ -78,6 +78,10 @@ fn encode_riscv_jal(insn: &mut [u8], offset: i64) -> Result<(), ()> {
 }
 
 /// Decode a RISC-V JAL instruction back to its byte offset.
+///
+/// Only exercised by the encode→decode round-trip unit tests, so gate it on
+/// `test` to avoid a dead-code warning in the firmware (non-test) build.
+#[cfg(test)]
 fn decode_riscv_jal(insn: &[u8]) -> Result<i64, ()> {
     if insn.len() < 4 {
         return Err(());

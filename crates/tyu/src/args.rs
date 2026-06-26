@@ -17,7 +17,12 @@ pub enum Command {
     Platform(PlatformArgs),
     ToolchainCheck(ToolchainCheckArgs),
     Clean,
+    /// Help was explicitly requested (`--help`/`-h`); exit 0.
     Help,
+    /// Argument parsing failed (unknown flag/command, bad value); the error
+    /// has already been printed to stderr. Dispatched to a non-zero exit so
+    /// scripted invocations don't silently "pass" on a typo'd flag.
+    Usage,
 }
 
 /// Arguments for the `platform` subcommand.
@@ -174,6 +179,9 @@ pub struct TestArgs {
     pub qualify: bool,
     pub format: ReportFormat,
     pub report_out: Option<PathBuf>,
+    /// Link/load mode for built fixture images. `None`/`Static` uses the
+    /// fixture+runner static-link path; `Dynamic` is gated (see `test_cmd::run`).
+    pub mode: Option<BuildMode>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -203,7 +211,7 @@ pub fn parse() -> Command {
         }
         other => {
             eprintln!("tyu: unknown command '{}'", other);
-            Command::Help
+            Command::Usage
         }
     }
 }
@@ -235,6 +243,7 @@ fn print_usage() {
     eprintln!("  --all-platforms     Run all discovered QEMU-capable platform packs");
     eprintln!("  --filter=<pat>      Only run suites matching pattern");
     eprintln!("  --manifest=<path>   Path to manifest.toml");
+    eprintln!("  --mode=<mode>       Link/load mode: static|dynamic (default: static)");
     eprintln!("  --qualify           Fail when required coverage axes are uncovered");
     eprintln!("  --format=<mode>     Report format: human|json (default: human)");
     eprintln!("  --report-out=<path> Write structured report JSON to path");
@@ -386,7 +395,7 @@ fn parse_build(args: &[String]) -> Command {
         Some(p) => p,
         None => {
             eprintln!("tyu: build requires an input .mod file");
-            return Command::Help;
+            return Command::Usage;
         }
     };
     Command::Build(BuildArgs {
@@ -419,7 +428,7 @@ fn parse_run(args: &[String]) -> Command {
                 Ok(v) => v,
                 Err(_) => {
                     eprintln!("tyu: invalid --timeout");
-                    return Command::Help;
+                    return Command::Usage;
                 }
             };
             timeout = Duration::from_secs(secs);
@@ -433,7 +442,7 @@ fn parse_run(args: &[String]) -> Command {
         Some(p) => p,
         None => {
             eprintln!("tyu: run requires an input .mod file");
-            return Command::Help;
+            return Command::Usage;
         }
     };
 
@@ -470,6 +479,7 @@ fn parse_test(args: &[String]) -> Command {
     let mut qualify = false;
     let mut format = ReportFormat::Human;
     let mut report_out: Option<PathBuf> = None;
+    let mut mode: Option<BuildMode> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -480,12 +490,18 @@ fn parse_test(args: &[String]) -> Command {
             target = Target::parse(tb);
             if target.is_none() {
                 eprintln!("tyu: unknown target '{}'", val);
-                return Command::Help;
+                return Command::Usage;
             }
         } else if let Some(val) = a.strip_prefix("--platform=") {
             platform = Some(val.to_string());
         } else if let Some(val) = a.strip_prefix("--isa=") {
             isa = Some(val.to_string());
+        } else if let Some(val) = a.strip_prefix("--mode=") {
+            mode = BuildMode::parse(val);
+            if mode.is_none() {
+                eprintln!("tyu: invalid --mode '{}' (expected static|dynamic)", val);
+                return Command::Usage;
+            }
         } else if let Some(val) = a.strip_prefix("--profile=") {
             profile = Some(val.to_string());
         } else if let Some(val) = a.strip_prefix("--features=") {
@@ -510,7 +526,7 @@ fn parse_test(args: &[String]) -> Command {
                 "json" => ReportFormat::Json,
                 _ => {
                     eprintln!("tyu: unknown test report format '{}'", val);
-                    return Command::Help;
+                    return Command::Usage;
                 }
             };
         } else if let Some(val) = a.strip_prefix("--report-out=") {
@@ -523,24 +539,24 @@ fn parse_test(args: &[String]) -> Command {
             all_platforms = true;
         } else if a.starts_with('-') {
             eprintln!("tyu: unknown option '{}'", a);
-            return Command::Help;
+            return Command::Usage;
         }
         i += 1;
     }
 
     if all_targets && all_platforms {
         eprintln!("tyu: --all-targets and --all-platforms are mutually exclusive");
-        return Command::Help;
+        return Command::Usage;
     }
 
     if all_targets && (platform.is_some() || isa.is_some()) {
         eprintln!("tyu: --all-targets cannot be combined with --platform/--isa");
-        return Command::Help;
+        return Command::Usage;
     }
 
     if all_platforms && (platform.is_some() || isa.is_some() || target_explicit) {
         eprintln!("tyu: --all-platforms cannot be combined with --target/--platform/--isa");
-        return Command::Help;
+        return Command::Usage;
     }
 
     let mut target = target.unwrap_or(Target::X86_64UnknownLinuxGnu);
@@ -553,7 +569,7 @@ fn parse_test(args: &[String]) -> Command {
             Ok(selection) => selection,
             Err(e) => {
                 eprintln!("tyu: {}", e);
-                return Command::Help;
+                return Command::Usage;
             }
         };
         if target_explicit && selection.target != target {
@@ -562,7 +578,7 @@ fn parse_test(args: &[String]) -> Command {
                 std::str::from_utf8(target.triple()).unwrap_or("<invalid>"),
                 platform_name,
             );
-            return Command::Help;
+            return Command::Usage;
         }
         target = selection.target;
     }
@@ -582,6 +598,7 @@ fn parse_test(args: &[String]) -> Command {
         qualify,
         format,
         report_out,
+        mode,
     })
 }
 
@@ -609,7 +626,7 @@ fn parse_deploy(args: &[String]) -> Command {
                 "device" => EncryptMode::Device,
                 _ => {
                     eprintln!("tyu: unknown encrypt mode '{}'", val);
-                    return Command::Help;
+                    return Command::Usage;
                 }
             };
         } else if let Some(val) = a.strip_prefix("--key-encrypt=") {
@@ -630,7 +647,7 @@ fn parse_deploy(args: &[String]) -> Command {
         Some(p) => p,
         None => {
             eprintln!("tyu: deploy requires an input .mod file");
-            return Command::Help;
+            return Command::Usage;
         }
     };
 
@@ -657,7 +674,7 @@ fn parse_platform(args: &[String]) -> Command {
     if args.is_empty() {
         eprintln!("tyu: platform requires a subcommand");
         print_usage();
-        return Command::Help;
+        return Command::Usage;
     }
 
     match args[0].as_str() {
@@ -676,7 +693,7 @@ fn parse_platform(args: &[String]) -> Command {
                         isa = Some(args[i].clone());
                     } else {
                         eprintln!("tyu: --isa requires a value");
-                        return Command::Help;
+                        return Command::Usage;
                     }
                 } else if a.starts_with('-') {
                     // Skip unknown flags for now.
@@ -690,7 +707,7 @@ fn parse_platform(args: &[String]) -> Command {
                 Some(name) => Command::Platform(PlatformArgs::Info { name, isa }),
                 None => {
                     eprintln!("tyu: platform info requires a pack name");
-                    Command::Help
+                    Command::Usage
                 }
             }
         }
@@ -704,7 +721,7 @@ fn parse_platform(args: &[String]) -> Command {
                     all = true;
                 } else if a.starts_with('-') {
                     eprintln!("tyu: unknown option '{}'", a);
-                    return Command::Help;
+                    return Command::Usage;
                 } else if name.is_none() {
                     name = Some(a.clone());
                 }
@@ -715,21 +732,21 @@ fn parse_platform(args: &[String]) -> Command {
                 Some(name) => Command::Platform(PlatformArgs::Lint { name, all }),
                 None => {
                     eprintln!("tyu: platform lint requires a pack name");
-                    Command::Help
+                    Command::Usage
                 }
             }
         }
         "new" => {
             if args.len() != 2 {
                 eprintln!("tyu: platform new requires a pack name");
-                return Command::Help;
+                return Command::Usage;
             }
             let name = args[1].clone();
             Command::Platform(PlatformArgs::New { name })
         }
         other => {
             eprintln!("tyu: unknown platform subcommand '{}'", other);
-            Command::Help
+            Command::Usage
         }
     }
 }
@@ -737,11 +754,11 @@ fn parse_platform(args: &[String]) -> Command {
 fn parse_toolchain(args: &[String]) -> Command {
     if args.is_empty() || args[0] != "check" {
         eprintln!("tyu: usage: tyu toolchain check <target>");
-        return Command::Help;
+        return Command::Usage;
     }
     if args.len() < 2 {
         eprintln!("tyu: toolchain check requires a target triple or alias");
-        return Command::Help;
+        return Command::Usage;
     }
     Command::ToolchainCheck(ToolchainCheckArgs {
         target: args[1].clone(),
@@ -771,6 +788,42 @@ mod tests {
             Command::Deploy(args) => assert!(args.commit_otp),
             other => panic!("unexpected command: {:?}", other),
         }
+    }
+
+    #[test]
+    fn parses_test_mode_static_and_dynamic() {
+        match parse_test(&strings(&["--mode=static"])) {
+            Command::Test(args) => assert_eq!(args.mode, Some(BuildMode::Static)),
+            other => panic!("unexpected command: {:?}", other),
+        }
+        match parse_test(&strings(&["--mode=dynamic"])) {
+            Command::Test(args) => assert_eq!(args.mode, Some(BuildMode::Dynamic)),
+            other => panic!("unexpected command: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_mode_defaults_to_none() {
+        match parse_test(&strings(&["--target=x86_64-unknown-none"])) {
+            Command::Test(args) => assert_eq!(args.mode, None),
+            other => panic!("unexpected command: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn invalid_test_mode_is_usage_error() {
+        assert!(matches!(
+            parse_test(&strings(&["--mode=sideways"])),
+            Command::Usage
+        ));
+    }
+
+    #[test]
+    fn unknown_test_flag_is_usage_error() {
+        assert!(matches!(
+            parse_test(&strings(&["--definitely-not-a-flag"])),
+            Command::Usage
+        ));
     }
 
     #[test]

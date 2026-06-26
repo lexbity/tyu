@@ -5,7 +5,7 @@
 use core::fmt;
 
 use hmac::{Hmac, Mac};
-use lmod::sig::{sig_len_for_scheme, signed_region_len, SCHEME_HMAC_SHA256, TRAILER_HEADER_SIZE};
+use lmod::sig::{sig_len_for_scheme, SCHEME_HMAC_SHA256, TRAILER_HEADER_SIZE};
 use sha2::Sha256;
 
 type HmacSha256 = Hmac<Sha256>;

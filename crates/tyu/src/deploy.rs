@@ -20,8 +20,8 @@ pub fn run(args: &DeployArgs) -> Result<(), TyuError> {
     let build_selection = ctx.platform_selection.clone();
     let build_out = build::build_resolved(&build_args, ctx)?;
     let built_image = build_out.final_image;
-    // The ELF the lmod was packed from — used as the QEMU execution form
-    // (resolve_static_image bridges the deployed lmod back to this ELF).
+    // Static deploys may ship an lmod while QEMU executes the ELF it was
+    // packed from. Dynamic builds use the firmware ELF directly.
     let exec_image = build_out.execution_image;
     let workspace_root = platform::workspace_root();
     let selection = match build_selection {
@@ -127,7 +127,7 @@ pub fn run(args: &DeployArgs) -> Result<(), TyuError> {
         };
         let timeout = Duration::from_secs(10);
         let outcome = runner
-            .run(&runner_image, timeout)
+            .run_static_artifact(&runner_image, timeout)
             .map_err(|e| TyuError::Runner(e))?;
 
         if outcome.timed_out {

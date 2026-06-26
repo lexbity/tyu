@@ -113,13 +113,25 @@ pub fn allocate_runtime_page() -> usize {
     page as usize
 }
 
-/// Register the minimal set of runtime symbols needed to load a module.
-pub fn register_runtime_symbols<'a>(map: &mut SymMap<'a, 256>, ds_high_addr: usize) {
+/// Register the test runtime symbols through the generated `.lang.symtab`
+/// byte-table API used by device boot.
+pub fn register_test_runtime_symtab(map: &mut SymMap<'_, 256>, ds_high_addr: usize) {
     let stub = extern_c_fn_stub as usize;
-    map.register(b"__stack_overflow", stub).unwrap();
-    map.register(b"__lang_ds_high", ds_high_addr).unwrap();
-    map.register(b"__lang_trap", stub).ok();
-    map.register(b"__lang_trap_loc", stub).ok();
+    let entries = [
+        (lmod::hash::fnv1a_u64(b"__stack_overflow"), stub),
+        (lmod::hash::fnv1a_u64(b"__lang_ds_high"), ds_high_addr),
+        (lmod::hash::fnv1a_u64(b"__lang_trap"), stub),
+        (lmod::hash::fnv1a_u64(b"__lang_trap_loc"), stub),
+    ];
+
+    let mut bytes = Vec::with_capacity(8 + entries.len() * 16);
+    bytes.extend_from_slice(&(entries.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    for (hash, addr) in entries {
+        bytes.extend_from_slice(&hash.to_le_bytes());
+        bytes.extend_from_slice(&(addr as u64).to_le_bytes());
+    }
+    map.register_symtab_bytes(&bytes).unwrap();
 }
 
 /// Load a .lmod, call `main`, and return the result.
@@ -197,11 +209,7 @@ impl LoaderHarness {
     /// Create a fresh symbol map with runtime stubs registered.
     fn fresh_map(ds_page_addr: usize) -> SymMap<'static, 256> {
         let mut map: SymMap<'static, 256> = SymMap::new();
-        let stub = extern_c_fn_stub as *const () as usize;
-        map.register(b"__stack_overflow", stub).unwrap();
-        map.register(b"__lang_ds_high", ds_page_addr).unwrap();
-        map.register(b"__lang_trap", stub).ok();
-        map.register(b"__lang_trap_loc", stub).ok();
+        register_test_runtime_symtab(&mut map, ds_page_addr);
         map
     }
 

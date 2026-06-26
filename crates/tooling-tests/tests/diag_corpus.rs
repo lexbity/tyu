@@ -111,16 +111,22 @@ fn build_fixture_elf(dir: &Path, fixture_src: &str, target: codegen_core::Target
     let rt_dir = common::workspace_root()
         .join("runtime")
         .join("x86_64-unknown-none");
-    let runtime_o = dir.join("runtime.o");
-    let fasm_status = Command::new("fasm")
-        .args([
-            rt_dir.join("runtime.asm").to_str().unwrap(),
-            runtime_o.to_str().unwrap(),
-        ])
-        .status()
-        .unwrap();
-    assert!(fasm_status.success(), "fasm runtime");
-    objs.push(runtime_o);
+    // Assemble the core runtime and the static-mode entry unit. `runtime.asm`
+    // does `extrn __lang_entry` (defined in `static_entry.asm` for static
+    // links), so both units must be assembled and linked — mirroring the
+    // product path in `execution-tests/common.rs::assemble_runtime`.
+    for stem in ["runtime", "static_entry"] {
+        let obj = dir.join(format!("{stem}.o"));
+        let fasm_status = Command::new("fasm")
+            .args([
+                rt_dir.join(format!("{stem}.asm")).to_str().unwrap(),
+                obj.to_str().unwrap(),
+            ])
+            .status()
+            .unwrap();
+        assert!(fasm_status.success(), "fasm {stem}");
+        objs.push(obj);
+    }
 
     // Link.
     let image = dir.join("test.elf");
@@ -137,8 +143,17 @@ fn build_fixture_elf(dir: &Path, fixture_src: &str, target: codegen_core::Target
 }
 
 /// Run an ELF under QEMU, capture output, parse D records.
+///
+/// A misbehaving guest (one that never hits `isa-debug-exit`) would otherwise
+/// leave `qemu` running forever and hang the whole suite — exactly the failure
+/// mode seen when a fixture's image is malformed. Spawn with a hard wall-clock
+/// cap and kill on overrun, returning whatever was buffered.
 fn capture_b_side(image: &Path) -> Vec<u8> {
-    let output = Command::new("qemu-system-x86_64")
+    use std::io::Read;
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    let mut child = Command::new("qemu-system-x86_64")
         .arg("-machine")
         .arg("q35")
         .arg("-m")
@@ -151,9 +166,32 @@ fn capture_b_side(image: &Path) -> Vec<u8> {
         .arg("stdio")
         .arg("-kernel")
         .arg(image)
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
         .expect("qemu");
-    output.stdout
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(_) => break,
+        }
+    }
+
+    let mut buf = Vec::new();
+    if let Some(mut out) = child.stdout.take() {
+        let _ = out.read_to_end(&mut buf);
+    }
+    buf
 }
 
 /// Extract the first `Record::Diag` payload from framed output.
@@ -234,59 +272,29 @@ end;
 }
 
 // ---------------------------------------------------------------------------
-// Corpus entry: STACK_OVERFLOW (10)
+// Corpus entry: STACK_OVERFLOW (10) — NOT a runtime corpus fixture.
+//
+// Code 10 (`__stack_overflow`) is the *data-stack* guard: codegen emits
+// `cmp <next>, r14 ; ja __stack_overflow` (r14 = `__lang_ds_limit`) at every
+// data-stack push. It cannot be exercised by a `.mod` source fixture here:
+//
+//   * Word calls use the hardware `call`/`ret` stack (rsp), not the data
+//     stack, so recursion like `: recurse ( -- ) recurse ;` overflows the
+//     hardware stack (page/triple-fault → reboot, no diagnostic) and never
+//     touches the data-stack guard.
+//   * The stack-effect type system *forbids* unbounded data-stack growth: a
+//     net-positive recursive word (e.g. `: f ( i64 -- i64 ) dup f ;`) fails
+//     typecheck (E3220), because the body's net effect can't match a finite
+//     signature. With a 128 KiB / 16384-slot data stack, deep bounded
+//     recursion also overflows the hardware stack first.
+//
+// So code 10 is a defensive guard that is effectively unreachable from
+// well-typed source. Rather than a (necessarily fake or fragile) runtime
+// fixture, the guard's *emission* is verified directly by a codegen unit test:
+// see `data_stack_push_emits_overflow_guard` in
+// `crates/codegen-x86_64/src/ophelpers.rs`. That keeps the corpus honest: we
+// no longer claim a runtime-validated code-10 path that cannot exist.
 // ---------------------------------------------------------------------------
-
-#[test]
-fn corpus_stack_overflow_10() {
-    if !require_tools(&["langc", "fasm", "ld", "qemu-system-x86_64", "nm"]) {
-        return;
-    }
-    ensure_langc();
-
-    let dir = temp_dir("corpus_10");
-    let target = codegen_core::Target::X86_64UnknownNone;
-
-    let fixture = "\
-module Main;
-import platform/testio { testio.write-byte };
-: recurse ( -- ) recurse ;
-: emit-done ( -- )
-  83 testio.write-byte
-  10 testio.write-byte ;
-: main ( -- i64 )
-  recurse
-  emit-done
-  0 ;
-end;
-";
-    let image = build_fixture_elf(&dir, fixture, target);
-
-    // B-side: capture D record (from __stack_overflow).
-    let stdout = capture_b_side(&image);
-    let b_diag = extract_b_diag(&stdout).expect("B-side must emit a D record for overflow");
-    assert_eq!(
-        b_diag.trap_code, 10,
-        "B-side trap_code must be 10 (STACK_OVERFLOW)"
-    );
-    // valid=0 because __stack_overflow has no payload registers.
-    assert!(!b_diag.valid, "stack overflow must have valid=0");
-    assert_eq!(b_diag.origin, diag_core::origin::IN_GUEST);
-
-    // A-side: escalate.
-    let a_diag = capture_a_side(&image, target).expect("A-side must produce a diagnostic");
-
-    assert!(
-        a_diag.contains("STACK_OVERFLOW") || a_diag.contains("10"),
-        "A-side must mention STACK_OVERFLOW (10), got: {}",
-        a_diag,
-    );
-    eprintln!(
-        "B: code={} valid={} ds_depth={}",
-        b_diag.trap_code, b_diag.valid, b_diag.ds_depth
-    );
-    eprintln!("A: {}", a_diag);
-}
 
 // ---------------------------------------------------------------------------
 // Corpus entry: CONTRACT_FAIL (20) — pre contract violation
@@ -304,12 +312,16 @@ fn corpus_contract_fail_20() {
 
     // A word with a `pre` contract that always fails.
     // The contract is `false`, so TrapIfFalse fires on every call.
+    // `needs [ false ]` is an always-false precondition (current contract
+    // syntax, per S-11; the old `requires [...]`/`pre [...]` forms are gone).
+    // The block leaves the input `i64` untouched, so `trigger` is the identity
+    // `( i64 -- i64 )`; the contract fires `CONTRACT_FAIL` (20) on every call.
     let fixture = "\
 module Main;
 import platform/testio { testio.write-byte };
 : trigger ( i64 -- i64 )
-  pre [ drop false ]
-  dup ;
+  needs [ false ]
+  ;
 : emit-done ( -- )
   83 testio.write-byte
   10 testio.write-byte ;

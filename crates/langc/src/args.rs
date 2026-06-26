@@ -45,9 +45,15 @@ fn emit_error(code: u32, msg: &[u8]) {
     let _ = io::stderr(b"\n");
 }
 
+fn maybe_emit_error(emit_diagnostics: bool, code: u32, msg: &[u8]) {
+    if emit_diagnostics {
+        emit_error(code, msg);
+    }
+}
+
 /// Parse arguments from a slice of byte slices.
 /// Returns `(result, saw_help_flag)`.
-fn parse_args_from_iter<'a>(args: &[&'a [u8]]) -> (ParseResult<'a>, bool) {
+fn parse_args_from_iter<'a>(args: &[&'a [u8]], emit_diagnostics: bool) -> (ParseResult<'a>, bool) {
     let mut saw_help = false;
     let mut emit_ast = false;
     let mut emit_ir = false;
@@ -107,7 +113,7 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]]) -> (ParseResult<'a>, bool) {
                 b"contracts" => ChecksMode::Contracts,
                 b"all" => ChecksMode::All,
                 _ => {
-                    emit_error(1006, b"invalid --checks value");
+                    maybe_emit_error(emit_diagnostics, 1006, b"invalid --checks value");
                     return (ParseResult::Error(2), true);
                 }
             };
@@ -156,7 +162,7 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]]) -> (ParseResult<'a>, bool) {
                     match codegen_core::Feature::parse(s) {
                         Some(f) => set = set.with(f),
                         None => {
-                            emit_error(1007, b"unknown --features value");
+                            maybe_emit_error(emit_diagnostics, 1007, b"unknown --features value");
                             return (ParseResult::Error(2), true);
                         }
                     }
@@ -181,7 +187,8 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]]) -> (ParseResult<'a>, bool) {
             target = match Target::parse(triple) {
                 Some(t) => Some(t),
                 None => {
-                    emit_error(
+                    maybe_emit_error(
+                        emit_diagnostics,
                         1019,
                         b"unknown target triple (see --help for supported targets)",
                     );
@@ -200,12 +207,12 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]]) -> (ParseResult<'a>, bool) {
                 i += 2;
                 continue;
             } else {
-                emit_error(1004, b"missing argument after -I");
+                maybe_emit_error(emit_diagnostics, 1004, b"missing argument after -I");
                 return (ParseResult::Error(2), true);
             }
         }
         if a.starts_with(b"--") {
-            emit_error(1008, b"unknown flag");
+            maybe_emit_error(emit_diagnostics, 1008, b"unknown flag");
             return (ParseResult::Error(2), true);
         }
         if a.starts_with(b"-") {
@@ -220,7 +227,7 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]]) -> (ParseResult<'a>, bool) {
 
     if saw_help || args.len() <= 1 {
         if !saw_help {
-            emit_error(1002, b"missing input file");
+            maybe_emit_error(emit_diagnostics, 1002, b"missing input file");
         }
         return (
             if saw_help {
@@ -235,11 +242,12 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]]) -> (ParseResult<'a>, bool) {
     let emit_count =
         (emit_ast as u8) + (emit_ir as u8) + (emit_asm as u8) + (emit_obj as u8) + (emit_tc as u8);
     if emit_count > 1 {
-        emit_error(1005, b"choose a single --emit=...");
+        maybe_emit_error(emit_diagnostics, 1005, b"choose a single --emit=...");
         return (ParseResult::Error(2), false);
     }
     if emit_count == 0 {
-        emit_error(
+        maybe_emit_error(
+            emit_diagnostics,
             1001,
             b"use --emit=ast, --emit=ir, --emit=asm, --emit=tc, or --emit=obj",
         );
@@ -259,12 +267,16 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]]) -> (ParseResult<'a>, bool) {
     };
 
     if emit == EmitMode::Obj && target.is_none() {
-        emit_error(1020, b"--emit=obj requires --target=<triple>");
+        maybe_emit_error(
+            emit_diagnostics,
+            1020,
+            b"--emit=obj requires --target=<triple>",
+        );
         return (ParseResult::Error(2), false);
     }
 
     let Some(input_path) = input else {
-        emit_error(1002, b"missing input file");
+        maybe_emit_error(emit_diagnostics, 1002, b"missing input file");
         return (ParseResult::Error(2), false);
     };
 
@@ -303,7 +315,7 @@ pub unsafe fn parse_args<'a>(
         slices[count] = unsafe { cstr::as_bytes(a) };
         count += 1;
     }
-    let (result, saw_help) = parse_args_from_iter(&slices[..count]);
+    let (result, saw_help) = parse_args_from_iter(&slices[..count], true);
     // Print help if --help was given OR if no actionable args (just the program name).
     if saw_help || count <= 1 {
         let _ = io::stdout(HELP);
@@ -316,7 +328,7 @@ mod tests {
     use super::*;
 
     fn ok<'a>(args: &[&'a [u8]]) -> Config<'a> {
-        match parse_args_from_iter(args).0 {
+        match parse_args_from_iter(args, false).0 {
             ParseResult::Ok(c) => c,
             ParseResult::Help => panic!("expected Ok, got Help"),
             ParseResult::Error(c) => panic!("expected Ok, got Error({})", c),
@@ -324,7 +336,7 @@ mod tests {
     }
 
     fn err_code<'a>(args: &[&'a [u8]]) -> i32 {
-        match parse_args_from_iter(args).0 {
+        match parse_args_from_iter(args, false).0 {
             ParseResult::Ok(_) => panic!("expected error"),
             ParseResult::Help => panic!("expected error, got Help"),
             ParseResult::Error(c) => c,
@@ -332,7 +344,7 @@ mod tests {
     }
 
     fn is_help(args: &[&[u8]]) -> bool {
-        matches!(parse_args_from_iter(args).0, ParseResult::Help)
+        matches!(parse_args_from_iter(args, false).0, ParseResult::Help)
     }
 
     #[test]

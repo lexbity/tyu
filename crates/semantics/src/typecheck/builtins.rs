@@ -116,16 +116,18 @@ pub fn builtin_words() -> &'static [WordEntry] {
     }; 16];
     if !INIT.load(Ordering::Acquire) {
         let v = make_table();
-        // SAFETY: single-threaded init guarded by AtomicBool.
+        // SAFETY: single-threaded init guarded by AtomicBool. We write through a
+        // raw pointer and never form a reference to the mutable static (avoids
+        // the Rust-2024 `static_mut_refs` lint).
         unsafe {
-            for (i, w) in v.into_iter().enumerate() {
-                if i < TABLE.len() {
-                    TABLE[i] = w;
-                }
+            let base = (&raw mut TABLE) as *mut WordEntry;
+            for (i, w) in v.into_iter().enumerate().take(16) {
+                base.add(i).write(w);
             }
             INIT.store(true, Ordering::Release);
         }
     }
-    // SAFETY: TABLE is initialized and never modified again.
-    unsafe { &TABLE[..] }
+    // SAFETY: TABLE is initialized and never modified again; the returned slice
+    // borrows the static for `'static`.
+    unsafe { core::slice::from_raw_parts((&raw const TABLE) as *const WordEntry, 16) }
 }

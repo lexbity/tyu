@@ -93,3 +93,78 @@ end;
         code
     );
 }
+
+// ---------------------------------------------------------------------------
+// CLI argument-parsing exit codes.
+//
+// Regression for the silent-success bug: `tyu test` (and every subcommand)
+// previously returned `Command::Help` on an unrecognized flag, which `main`
+// dispatched to exit 0 — so a scripted invocation with a typo'd or unsupported
+// flag "passed". Usage errors now exit 2; explicit help still exits 0.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn unknown_test_flag_exits_2_not_0() {
+    let output = Command::new(tyu_exe())
+        .args(["test", "--definitely-not-a-flag"])
+        .output()
+        .expect("tyu test");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "an unknown `tyu test` flag must be a usage error (exit 2), not a silent success"
+    );
+}
+
+#[test]
+fn unknown_subcommand_exits_2() {
+    let output = Command::new(tyu_exe())
+        .args(["frobnicate"])
+        .output()
+        .expect("tyu");
+    assert_eq!(output.status.code(), Some(2), "unknown command must exit 2");
+}
+
+#[test]
+fn help_flag_exits_0() {
+    let output = Command::new(tyu_exe())
+        .args(["--help"])
+        .output()
+        .expect("tyu --help");
+    assert_eq!(output.status.code(), Some(0), "explicit --help must exit 0");
+}
+
+#[test]
+fn test_invalid_mode_exits_2() {
+    let output = Command::new(tyu_exe())
+        .args(["test", "--mode=sideways"])
+        .output()
+        .expect("tyu test");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "an invalid --mode value must be a usage error (exit 2)"
+    );
+}
+
+#[test]
+fn test_mode_dynamic_is_gated_with_clear_message() {
+    // Dynamic mode is intentionally rejected by the suite runner (single-module
+    // modpack vs. two-module fixture+runner harness). It must fail loudly with a
+    // pointer to the cargo dynamic suites — never silently fall back to static.
+    let output = Command::new(tyu_exe())
+        .args(["test", "--mode=dynamic", "--target=x86_64-unknown-none"])
+        .output()
+        .expect("tyu test");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "--mode=dynamic must be a clean runtime error (exit 1), not exit 0"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--mode=dynamic is not yet supported"),
+        "stderr must explain why dynamic is gated, got: {}",
+        stderr
+    );
+}

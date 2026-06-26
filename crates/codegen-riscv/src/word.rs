@@ -1,6 +1,6 @@
 use crate::ophelpers::{fnv1a_u64, slice_span, write_hex, write_sym_label, write_u32};
 use crate::RiscVBackend;
-use codegen_core::strings::{decode_string_bytes, STR_TABLE_CAP};
+use codegen_core::strings::STR_TABLE_CAP;
 use codegen_core::{AsmMode, CodegenError};
 use frontend::span::Span;
 use ir as lir;

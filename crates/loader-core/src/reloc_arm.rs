@@ -143,6 +143,10 @@ fn encode_thumb_bl(insn: &mut [u8], offset: i64) -> Result<(), ()> {
 
 /// Decode a Thumb BL (branch-and-link) instruction back to a byte offset.
 /// The reverse of `encode_thumb_bl`.
+///
+/// Only exercised by the encode→decode round-trip unit tests, so gate it on
+/// `test` to avoid a dead-code warning in the firmware (non-test) build.
+#[cfg(test)]
 fn decode_thumb_bl(insn: &[u8]) -> Result<i64, ()> {
     if insn.len() < 4 {
         return Err(());

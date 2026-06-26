@@ -247,3 +247,72 @@ pub fn emit_channel_box_array(out: &mut dyn Output, bytes: u32, src_reg: &[u8], 
     out.write(src_reg);
     out.write(b", rdi\n");
 }
+
+#[cfg(test)]
+mod tests {
+    extern crate std;
+
+    use super::*;
+    use frontend::parse::Output;
+    use std::string::String;
+    use std::vec::Vec;
+
+    struct Collect(Vec<u8>);
+    impl Output for Collect {
+        fn write(&mut self, bytes: &[u8]) {
+            self.0.extend_from_slice(bytes);
+        }
+    }
+
+    /// Every stack-*growing* data-stack push MUST emit the overflow guard
+    /// (`cmp <next>, r14 ; ja __stack_overflow`, r14 = `__lang_ds_limit`)
+    /// *before* writing the slot — fail-closed.
+    ///
+    /// Scope (important for honesty): the guard belongs only on pushes that
+    /// raise the high-water mark. Net-neutral in-place ops that pop a slot and
+    /// immediately push back to it (`sub r15` … `add r15`, e.g. the `not`/`neg`
+    /// peephole in `word.rs` and the MMIO load helpers in `mmio.rs`) reuse an
+    /// already-valid slot and correctly skip the guard — they cannot overflow.
+    /// All such bare `add r15, 8` sites were audited and are paired with a
+    /// preceding `sub r15, 8`; only the `emit_push_*` helpers below grow the
+    /// stack, and they are the ones that carry the guard.
+    ///
+    /// This is the static guarantee behind STACK_OVERFLOW (claim code 10). The
+    /// guard is a defensive net that is effectively unreachable from well-typed
+    /// source — word calls overflow the hardware stack, not the data stack, and
+    /// the stack-effect type system forbids unbounded data-stack growth (see the
+    /// STACK_OVERFLOW note in `tooling-tests/tests/diag_corpus.rs`). So we verify
+    /// the guard's *emission* here rather than via an impossible runtime fixture.
+    #[test]
+    fn data_stack_push_emits_overflow_guard() {
+        let mut o = Collect(Vec::new());
+        emit_push_i64(&mut o, 42);
+        emit_push_u64(&mut o, 7);
+        emit_push_rax(&mut o);
+        let asm = String::from_utf8(o.0).unwrap();
+
+        // One guard per push, branching to the runtime trap on overflow.
+        assert_eq!(
+            asm.matches("ja __stack_overflow").count(),
+            3,
+            "every stack-growing push helper must emit an overflow guard, got:\n{asm}"
+        );
+        // The bound is `__lang_ds_limit` (held in r14), compared before the write.
+        assert!(
+            asm.contains("cmp rax, r14"),
+            "i64/u64 push must bound-check against r14:\n{asm}"
+        );
+        assert!(
+            asm.contains("cmp rcx, r14"),
+            "rax push must bound-check against r14:\n{asm}"
+        );
+
+        // Guard MUST precede the first slot write (fail-closed, not fail-open).
+        let guard = asm.find("ja __stack_overflow").unwrap();
+        let write = asm.find("mov qword [r15]").unwrap();
+        assert!(
+            guard < write,
+            "overflow guard must precede the slot write:\n{asm}"
+        );
+    }
+}

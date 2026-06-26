@@ -104,7 +104,7 @@ fn arm_load_no_imports() {
 
     let ds_high = allocate_runtime_page();
     let mut global_map: SymMap<'_, 256> = SymMap::new();
-    register_runtime_symbols(&mut global_map, ds_high);
+    register_test_runtime_symtab(&mut global_map, ds_high);
     let mut loaded_set = LoadedSet::<64>::new();
 
     let result = load_module(&container, &mut plat, &mut global_map, &mut loaded_set);
@@ -121,7 +121,7 @@ fn arm_load_with_import() {
 
     let ds_high = allocate_runtime_page();
     let mut global_map: SymMap<'_, 256> = SymMap::new();
-    register_runtime_symbols(&mut global_map, ds_high);
+    register_test_runtime_symtab(&mut global_map, ds_high);
     let mut loaded_set = LoadedSet::<64>::new();
 
     let loaded = load_module(&container, &mut plat, &mut global_map, &mut loaded_set)
@@ -153,7 +153,7 @@ fn arm_load_abi_hash_mismatch_rejected() {
 
     let ds_high = allocate_runtime_page();
     let mut global_map: SymMap<'_, 256> = SymMap::new();
-    register_runtime_symbols(&mut global_map, ds_high);
+    register_test_runtime_symtab(&mut global_map, ds_high);
     let mut loaded_set = LoadedSet::<64>::new();
 
     let result = load_module(&container, &mut plat, &mut global_map, &mut loaded_set);

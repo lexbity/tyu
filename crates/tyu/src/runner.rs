@@ -83,15 +83,24 @@ impl Runner {
     ///
     /// For `Device`, flashes via OpenOCD and captures serial output.
     pub fn run(&self, image: &Path, timeout: Duration) -> Result<RunOutcome, String> {
-        let exec_image = resolve_static_image(image)?;
         match self {
-            Runner::Native => run_native(&exec_image, timeout),
-            Runner::Qemu(spec) => run_qemu(spec, &exec_image, timeout, None),
-            Runner::QemuDebug { spec, gdb_port } => {
-                run_qemu(spec, &exec_image, timeout, Some(*gdb_port))
-            }
-            Runner::Device(spec) => run_device(spec, &exec_image, timeout),
+            Runner::Native => run_native(image, timeout),
+            Runner::Qemu(spec) => run_qemu(spec, image, timeout, None),
+            Runner::QemuDebug { spec, gdb_port } => run_qemu(spec, image, timeout, Some(*gdb_port)),
+            Runner::Device(spec) => run_device(spec, image, timeout),
         }
+    }
+
+    /// Run a legacy static artifact. Static bare-metal builds may keep the
+    /// shipped artifact as `.lmod` while QEMU executes the companion ELF it was
+    /// packed from. Dynamic firmware paths must call `run` with the firmware ELF.
+    pub fn run_static_artifact(
+        &self,
+        image: &Path,
+        timeout: Duration,
+    ) -> Result<RunOutcome, String> {
+        let exec_image = resolve_static_image(image)?;
+        self.run(&exec_image, timeout)
     }
 
     /// Spawn a QEMU process with gdbstub enabled.

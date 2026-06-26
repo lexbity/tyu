@@ -93,6 +93,7 @@ fn main() {
             }
         }
         args::Command::Help => {}
+        args::Command::Usage => std::process::exit(2),
     }
 }
 

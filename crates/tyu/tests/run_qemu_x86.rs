@@ -129,7 +129,7 @@ fn run_qemu_pass() {
     let image = build_x86_image(PASS_MOD, &dir, "pass");
     let runner = Target::X86_64UnknownNone.spec().qemu.unwrap();
     let outcome = Runner::Qemu(runner)
-        .run(&image, Duration::from_secs(10))
+        .run_static_artifact(&image, Duration::from_secs(10))
         .unwrap();
     assert!(!outcome.timed_out);
     assert_eq!(outcome.exit_code, 1);
@@ -147,7 +147,7 @@ fn run_qemu_fail_marker() {
     let image = build_x86_image(FAIL_MOD, &dir, "fail");
     let runner = Target::X86_64UnknownNone.spec().qemu.unwrap();
     let outcome = Runner::Qemu(runner)
-        .run(&image, Duration::from_secs(10))
+        .run_static_artifact(&image, Duration::from_secs(10))
         .unwrap();
     let s = harness_core::parse_output(&outcome.stdout);
     assert!(s.failures > 0);
@@ -166,7 +166,7 @@ fn run_qemu_uart_time_words() {
     let image = build_x86_image(UART_TIME_MOD, &dir, "uart_time");
     let runner = Target::X86_64UnknownNone.spec().qemu.unwrap();
     let outcome = Runner::Qemu(runner)
-        .run(&image, Duration::from_secs(10))
+        .run_static_artifact(&image, Duration::from_secs(10))
         .unwrap();
     assert!(!outcome.timed_out);
     let s = harness_core::parse_output(&outcome.stdout);
@@ -186,7 +186,7 @@ fn run_qemu_no_completion() {
     let image = build_x86_image(NO_COMPLETION_MOD, &dir, "nocomplete");
     let runner = Target::X86_64UnknownNone.spec().qemu.unwrap();
     let outcome = Runner::Qemu(runner)
-        .run(&image, Duration::from_secs(10))
+        .run_static_artifact(&image, Duration::from_secs(10))
         .unwrap();
     let s = harness_core::parse_output(&outcome.stdout);
     assert!(!s.completed);
@@ -263,7 +263,7 @@ fn run_qemu_hang_detected() {
     let image = build_x86_image(HANG_MOD, &dir, "hang");
     let runner = Target::X86_64UnknownNone.spec().qemu.unwrap();
     let outcome = Runner::Qemu(runner)
-        .run(&image, Duration::from_millis(500))
+        .run_static_artifact(&image, Duration::from_millis(500))
         .unwrap();
     assert!(
         outcome.timed_out,

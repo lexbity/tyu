@@ -32,7 +32,7 @@ fn setup_loader<'a>(
     plat.reserve(block_size).unwrap();
     let ds_high = allocate_runtime_page();
     let mut global_map: SymMap<'_, 256> = SymMap::new();
-    register_runtime_symbols(&mut global_map, ds_high);
+    register_test_runtime_symtab(&mut global_map, ds_high);
     let loaded_set = LoadedSet::<64>::new();
     (plat, global_map, loaded_set)
 }
@@ -122,7 +122,7 @@ fn e_5202_tier1_without_signature() {
 
     let ds_high_addr = allocate_runtime_page();
     let mut global_map: SymMap<'_, 256> = SymMap::new();
-    register_runtime_symbols(&mut global_map, ds_high_addr);
+    register_test_runtime_symtab(&mut global_map, ds_high_addr);
     let mut set = LoadedSet::<64>::new();
 
     let result = load_module(&container, &mut plat_tier1, &mut global_map, &mut set);
@@ -483,7 +483,7 @@ fn e_5217_bad_enc_header() {
     plat.reserve(bsize).unwrap();
     let ds_high = allocate_runtime_page();
     let mut map: SymMap<'_, 256> = SymMap::new();
-    register_runtime_symbols(&mut map, ds_high);
+    register_test_runtime_symtab(&mut map, ds_high);
     let mut set = LoadedSet::<64>::new();
     let result = load_module(&container, &mut plat, &mut map, &mut set);
     assert!(result.is_err(), "5217: bad enc-header should fail");

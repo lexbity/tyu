@@ -4,7 +4,6 @@
 //! exhaustive `match`.  Adding a new `OpKind` variant MUST cause a
 //! compile error here, forcing the developer to classify it.
 
-use ir::CmpKind;
 use ir::OpKind;
 
 /// Whether a backend supports a given operation.
