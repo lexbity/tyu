@@ -207,16 +207,28 @@ fn register_firmware_symtab_bytes(
                 .try_into()
                 .map_err(|_| E_BAD_CONTAINER)?,
         ) as usize;
-        let registered_addr = maybe_arm_veneer(platform, hash, addr)?;
+        let registered_addr = maybe_veneer(platform, hash, addr)?;
         symmap.register_runtime_hash(hash, registered_addr)?;
     }
 
     Ok(count)
 }
 
+// A loaded module lives in `.loadheap`, megabytes away from the firmware's
+// runtime words. Its imported CALLs use range-limited instructions (Thumb `bl`
+// ±16 MiB across the FLASH/SRAM split; RISC-V `jal` ±1 MiB), which cannot reach
+// the runtime. We route each far CALL target through a small veneer allocated in
+// the arena near the module. Data symbols are referenced by absolute/PC-relative
+// relocations (not CALLs), so they MUST keep their real address.
+//
+// NOTE: distinguishing code from data here relies on a hand-maintained data-symbol
+// set because `.lang.symtab` carries no kind bit (tracked debt). The proper fix is
+// to emit a code/data flag from `lang-symtab-gen` and key the veneer on it.
+
 #[cfg(target_arch = "arm")]
-fn maybe_arm_veneer(platform: &mut DevicePlatform, hash: u64, addr: usize) -> Result<usize, u32> {
-    if !arm_needs_veneer(hash, addr) {
+fn maybe_veneer(platform: &mut DevicePlatform, hash: u64, addr: usize) -> Result<usize, u32> {
+    // Runtime words live in FLASH (< 0x1000_0000); SRAM symbols are reachable.
+    if addr >= 0x1000_0000 || is_runtime_data_symbol(hash) {
         return Ok(addr);
     }
 
@@ -230,17 +242,45 @@ fn maybe_arm_veneer(platform: &mut DevicePlatform, hash: u64, addr: usize) -> Re
     Ok((region.as_ptr() as usize) | 1)
 }
 
-#[cfg(not(target_arch = "arm"))]
-fn maybe_arm_veneer(_platform: &mut DevicePlatform, _hash: u64, addr: usize) -> Result<usize, u32> {
+#[cfg(target_arch = "riscv32")]
+fn maybe_veneer(platform: &mut DevicePlatform, hash: u64, addr: usize) -> Result<usize, u32> {
+    // Data symbols are reached via R_RISCV_32 / PCREL; keep their real address.
+    if is_runtime_data_symbol(hash) {
+        return Ok(addr);
+    }
+
+    // 8-byte veneer: `lui t1, hi20 ; jalr x0, lo12(t1)` — an absolute jump with
+    // ±2 GiB reach that leaves `ra` untouched, so the runtime word returns to the
+    // module. `t1` is a caller-saved temporary, free to clobber across a call.
+    let mut region = platform.alloc_exec(8)?;
+    let veneer = unsafe { region.as_mut_slice() };
+    let target = addr as u32;
+    let lo12 = target & 0xfff;
+    // %hi/%lo split: round hi up when lo12 is negative as a signed 12-bit value.
+    let hi20 = (if lo12 >= 0x800 {
+        target.wrapping_add(0x1000)
+    } else {
+        target
+    } >> 12)
+        & 0xf_ffff;
+    let lui = (hi20 << 12) | (6 << 7) | 0x37; // lui t1 (x6)
+    let jalr = (lo12 << 20) | (6 << 15) | 0x67; // jalr x0, lo12(t1)
+    veneer[0..4].copy_from_slice(&lui.to_le_bytes());
+    veneer[4..8].copy_from_slice(&jalr.to_le_bytes());
+    platform.make_exec(&mut region)?;
+    Ok(region.as_ptr() as usize)
+}
+
+#[cfg(not(any(target_arch = "arm", target_arch = "riscv32")))]
+fn maybe_veneer(_platform: &mut DevicePlatform, _hash: u64, addr: usize) -> Result<usize, u32> {
     Ok(addr)
 }
 
-#[cfg(target_arch = "arm")]
-fn arm_needs_veneer(hash: u64, addr: usize) -> bool {
-    if addr >= 0x1000_0000 {
-        return false;
-    }
-    !matches!(
+/// Runtime exports that are *data*, not callable code — referenced by absolute or
+/// PC-relative relocations rather than CALLs, so they are never veneered.
+#[cfg(any(target_arch = "arm", target_arch = "riscv32"))]
+fn is_runtime_data_symbol(hash: u64) -> bool {
+    matches!(
         hash,
         h if h == lmod::hash::fnv1a_u64(b"__lang_ds_base")
             || h == lmod::hash::fnv1a_u64(b"__lang_ds_limit")

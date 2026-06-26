@@ -8,8 +8,10 @@ MEMORY
     DRAM (rwx) : ORIGIN = 0x80000000, LENGTH = 128M
 }
 
-/* Native stack top = start of DRAM + 64 KB */
-__stack_top = ORIGIN(DRAM) + 64K;
+/* Native stack top is placed above the load arena (see .loadheap below), not
+   at a fixed low offset: the dynamic firmware (loader-core + embedded modpack +
+   1 MiB .loadheap) grows the image well past the old 64 KB mark, so a fixed
+   low stack would overlap loaded sections. */
 
 SECTIONS
 {
@@ -54,5 +56,12 @@ SECTIONS
         __lang_loadheap_start = .;
         . = . + 1M;
         __lang_loadheap_end = .;
+    } > DRAM
+
+    /* Native stack: carved above the arena, grows down from __stack_top. */
+    .stack (NOLOAD) : ALIGN(16)
+    {
+        . = . + 64K;
+        __stack_top = .;
     } > DRAM
 }

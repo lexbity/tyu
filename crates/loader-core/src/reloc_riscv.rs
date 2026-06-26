@@ -56,26 +56,23 @@ fn encode_riscv_jal(insn: &mut [u8], offset: i64) -> Result<(), ()> {
     if offset & 1 != 0 {
         return Err(()); // misaligned
     }
-    let imm = offset >> 1; // convert bytes to 2-byte halfwords
-    if imm > 0xFFFFF || imm < -0x100000 {
+    // JAL byte offset is a 21-bit signed value (±1 MiB); bit 0 is implicitly 0.
+    if !(-0x10_0000..=0xF_FFFE).contains(&offset) {
         return Err(()); // out of range (±1 MiB)
     }
-    let u = imm as u32;
 
-    // JAL encoding: imm[20|10:1|11|19:12] | rd(5) | opcode(0x6F)
-    // We preserve the existing rd field (bits 11:7) and opcode (bits 6:0).
-    let existing = u32::from_le_bytes(insn[..4].try_into().unwrap());
-    let rd = existing & 0x0F80; // preserve rd
-    let opcode = existing & 0x7F; // preserve opcode
+    // The immediate fields carry bits of the *byte* offset directly (NOT offset/2):
+    //   inst[31]=off[20], inst[30:21]=off[10:1], inst[20]=off[11], inst[19:12]=off[19:12].
+    let u = offset as u32;
+    // Preserve the existing rd field (bits 11:7) and opcode (bits 6:0).
+    let rd_opcode = u32::from_le_bytes(insn[..4].try_into().unwrap()) & 0xFFF;
 
-    // JAL immediate bit layout: imm[20|10:1|11|19:12]
-    let imm20 = (u >> 20) & 1; // bit 20
-    let imm10_1 = (u >> 1) & 0x3FF; // bits 10:1
-    let imm11 = (u >> 11) & 1; // bit 11
-    let imm19_12 = (u >> 12) & 0xFF; // bits 19:12
+    let imm20 = (u >> 20) & 1;
+    let imm10_1 = (u >> 1) & 0x3FF;
+    let imm11 = (u >> 11) & 1;
+    let imm19_12 = (u >> 12) & 0xFF;
 
-    let enc = (imm20 << 31) | (imm10_1 << 21) | (imm11 << 20) | (imm19_12 << 12) | rd | opcode;
-
+    let enc = (imm20 << 31) | (imm10_1 << 21) | (imm11 << 20) | (imm19_12 << 12) | rd_opcode;
     insn[..4].copy_from_slice(&enc.to_le_bytes());
     Ok(())
 }
@@ -95,14 +92,15 @@ fn decode_riscv_jal(insn: &[u8]) -> Result<i64, ()> {
     let imm11 = (u >> 20) & 1;
     let imm19_12 = (u >> 12) & 0xFF;
 
-    let imm = (imm20 << 20) | (imm19_12 << 12) | (imm11 << 11) | (imm10_1 << 1);
-    // Sign-extend from bit 20 (the 21st bit of the 21-bit offset) via i32.
-    let imm = if imm & 0x100000 != 0 {
-        imm | 0xFFE00000
+    // Reassemble the byte offset directly (bit 0 is always 0).
+    let off = (imm20 << 20) | (imm19_12 << 12) | (imm11 << 11) | (imm10_1 << 1);
+    // Sign-extend from bit 20 (the top bit of the 21-bit offset).
+    let off = if off & 0x100000 != 0 {
+        off | 0xFFE00000
     } else {
-        imm
+        off
     };
-    Ok(((imm as i32) as i64) * 2) // bytes from halfwords, via i32 to preserve sign
+    Ok((off as i32) as i64)
 }
 
 #[cfg(test)]
@@ -179,6 +177,20 @@ mod tests {
             "JAL opcode must be preserved for offset 4"
         );
         assert_ne!(val & 0xFFFFF80, 0, "offset 4 must have non-zero imm fields");
+    }
+
+    #[test]
+    fn riscv_jal_matches_hardware_encoding() {
+        // Exact machine code per the RISC-V ISA (verified against riscv32-elf-as):
+        // `jal x0, 16` == 0x0100006f, `jal x0, -28` == 0xfe5ff06f. A self-consistent
+        // but ISA-incorrect encoder (the prior `offset >> 1` bug) would fail these.
+        let mut insn = [0x6Fu8, 0, 0, 0];
+        encode_riscv_jal(&mut insn, 16).unwrap();
+        assert_eq!(u32::from_le_bytes(insn), 0x0100_006f, "jal x0, 16");
+
+        let mut insn = [0x6Fu8, 0, 0, 0];
+        encode_riscv_jal(&mut insn, -28).unwrap();
+        assert_eq!(u32::from_le_bytes(insn), 0xfe5f_f06f, "jal x0, -28");
     }
 
     #[test]

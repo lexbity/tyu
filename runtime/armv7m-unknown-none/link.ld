@@ -64,5 +64,5 @@ SECTIONS
         __lang_loadheap_start = .;
         . = . + 2K;
         __lang_loadheap_end = .;
-    } > FLASH
+    } > SRAM
 }

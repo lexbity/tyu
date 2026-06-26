@@ -556,3 +556,72 @@ fn temp_dir(label: &str) -> PathBuf {
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
+
+// ---------------------------------------------------------------------------
+// Dynamic mode: .lmod loaded under QEMU via the on-device loader
+// ---------------------------------------------------------------------------
+
+fn build_tyu() {
+    let s = Command::new(env!("CARGO"))
+        .current_dir(common::workspace_root())
+        .args(["build", "-q", "-p", "tyu"])
+        .status()
+        .expect("cargo build tyu");
+    assert!(s.success(), "cargo build tyu failed");
+}
+
+/// A module that emits the `S\n` completion marker via `testio.write-byte` and
+/// returns 0 — the same shape the x86 dynamic test uses.
+const DYNAMIC_PASS_MOD: &str = "module Main;\n\
+import platform/testio { testio.write-byte };\n\
+: main ( -- i64 ) 83 testio.write-byte 10 testio.write-byte 0 ;\n\
+export { main };\nend;\n";
+
+/// `tyu run --mode=dynamic` builds a firmware that embeds the `.lmod` in `.modpack`
+/// and loads it on-device under QEMU. A zero exit means the on-device loader placed,
+/// relocated, and ran the module's `main` (the `S\n` marker reached the harness).
+#[test]
+fn dynamic_lmod_runs_under_qemu() {
+    if !common::require_tools(&[
+        "langc",
+        "arm-none-eabi-as",
+        "arm-none-eabi-ld",
+        "qemu-system-arm",
+    ]) {
+        return;
+    }
+    build_langc();
+    build_tyu();
+
+    let dir = temp_dir("arm_dynamic_modpack");
+    let main_mod = dir.join("Main.mod");
+    std::fs::write(&main_mod, DYNAMIC_PASS_MOD).unwrap();
+    let out_dir = dir.join("dyn_out");
+    let sysroot = common::workspace_root().join("sysroot");
+
+    let output = Command::new(common::tyu_exe())
+        .current_dir(common::workspace_root())
+        .args([
+            "run",
+            "--mode=dynamic",
+            "--target=armv7m-unknown-none",
+            &format!("--sysroot={}", sysroot.display()),
+            &format!("--out-dir={}", out_dir.display()),
+            &main_mod.to_string_lossy(),
+        ])
+        .output()
+        .expect("tyu run --mode=dynamic");
+
+    assert!(
+        output.status.success(),
+        "ARM dynamic .lmod run must complete via on-device loader:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(out_dir.join("image.elf").exists(), "dynamic firmware missing");
+    assert!(out_dir.join("Main.lmod").exists(), "packed lmod missing");
+    assert!(
+        out_dir.join("modpack_generated.o").exists(),
+        "modpack object missing — firmware did not embed the .lmod"
+    );
+}

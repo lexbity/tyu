@@ -23,6 +23,10 @@ __lang_call_loaded_main:
     push {lr}
     ldr r4, =__lang_ds_base
     ldr r5, =__lang_ds_limit
+    @ The loaded module is Thumb code, but the loader registers export addresses
+    @ without the Thumb bit. Set it so `blx` stays in Thumb mode (a clear bit 0
+    @ would switch to ARM and execute the Thumb bytes as garbage).
+    orr r0, r0, #1
     blx r0
     subs r4, r4, #8
     ldr r0, [r4]
