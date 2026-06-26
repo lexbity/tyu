@@ -355,8 +355,6 @@ name = "hosted-rt"
 version = "0.1.0"
 dependencies = [
  "hosted",
- "lmod",
- "loader-core",
 ]
 
 [[package]]
@@ -497,6 +495,8 @@ dependencies = [
  "getrandom 0.2.17",
  "hmac",
  "lmod",
+ "lmod-encrypt",
+ "lmod-sign",
  "sha2",
 ]
 

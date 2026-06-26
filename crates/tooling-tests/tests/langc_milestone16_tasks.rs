@@ -220,7 +220,7 @@ register-map GPIO\n\
   0x00 DATA[2] u32 rw\n\
 end;\n\
 const gpio = GPIO @ 0x0;\n\
-: main ( -- i64 ) performs {suspend}\n\
+: main ( -- i64 ) performs {suspend, diverge}\n\
   platform.channel.make drop\n\
   0 as u32 &!gpio.DATA.0 swap !u32\n\
   0 as u32 &!gpio.DATA.1 swap !u32\n\

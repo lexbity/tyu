@@ -2,8 +2,9 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 //! Hosted runtime support used by `langc`, `tyu`, and the test harnesses.
 //!
-//! This crate layers the hosted panic/runtime setup on top of `hosted` and
-//! `loader-core` for `no_std` test execution.
+//! This crate layers the hosted panic handler, EH personality, global
+//! allocator, and `entry!` macro on top of `hosted`, so the `#![no_std]`
+//! host binaries (`langc`, `lang-assemble`) get a working runtime.
 
 use core::alloc::{GlobalAlloc, Layout};
 use hosted::c;

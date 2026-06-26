@@ -182,9 +182,13 @@ pub fn load_module<'a>(
     // Step 4b: Decryption (NEW, feature-gated).
     // Must happen after signature verification (P3: no unauthenticated decryption)
     // and before section placement (so placed bytes are plaintext).
+    #[cfg(feature = "encryption")]
     let mut decrypted_cek: Option<[u8; 32]> = None;
+    #[cfg(feature = "encryption")]
     let mut decrypted_nonce: [u8; 12] = [0u8; 12];
+    #[cfg(feature = "encryption")]
     let mut decrypted_tag: [u8; 16] = [0u8; 16];
+    #[cfg(feature = "encryption")]
     let mut aad_buf: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
 
     if hdr.flags & lmod::header::LMOD_FLAG_ENCRYPTED != 0 {
@@ -302,116 +306,113 @@ pub fn load_module<'a>(
     }
 
     // Step 4b (continued): Decrypt payload in-place after placement.
+    #[cfg(feature = "encryption")]
     if let Some(cek) = &decrypted_cek {
-        #[cfg(feature = "encryption")]
-        {
-            let payload_len = (code_len + rodata_len + data_len) as usize;
-            // Use the code_region as the temp buffer since it's writable.
-            // For sections beyond code (rodata, data), we extend into the
-            // code region's buffer by copying them after code.
-            // All three sections are already placed; decrypt in place.
-            if payload_len > 0 {
-                // Copy rodata and data after code in a temp Vec.
-                let mut tmp = alloc::vec![0u8; rodata_len + data_len];
-                if rodata_len > 0 {
-                    if let Some(ref ro) = rodata_region {
-                        let cs = unsafe { ro.as_slice() };
-                        tmp[..rodata_len].copy_from_slice(&cs[..rodata_len]);
-                    }
+        let payload_len = (code_len + rodata_len + data_len) as usize;
+        // Use the code_region as the temp buffer since it's writable.
+        // For sections beyond code (rodata, data), we extend into the
+        // code region's buffer by copying them after code.
+        // All three sections are already placed; decrypt in place.
+        if payload_len > 0 {
+            // Copy rodata and data after code in a temp Vec.
+            let mut tmp = alloc::vec![0u8; rodata_len + data_len];
+            if rodata_len > 0 {
+                if let Some(ref ro) = rodata_region {
+                    let cs = unsafe { ro.as_slice() };
+                    tmp[..rodata_len].copy_from_slice(&cs[..rodata_len]);
                 }
-                if data_len > 0 {
-                    if let Some(ref rw) = data_region {
-                        let cs = unsafe { rw.as_slice() };
-                        tmp[rodata_len..rodata_len + data_len].copy_from_slice(&cs[..data_len]);
-                    }
+            }
+            if data_len > 0 {
+                if let Some(ref rw) = data_region {
+                    let cs = unsafe { rw.as_slice() };
+                    tmp[rodata_len..rodata_len + data_len].copy_from_slice(&cs[..data_len]);
                 }
+            }
 
-                let mut cs = unsafe { code_region.as_mut_slice() };
-                // Extend cs logically to hold the full payload by extending
-                // the mutable slice.  Since code_region has code_len bytes
-                // but we need code_len + rodata_len + data_len, we use the
-                // available writable memory after code_region (if any).
-                // This is safe because alloc_exec gave us a region that may
-                // be larger than code_len (page-aligned).
-                let total_extend = rodata_len + data_len;
-                if total_extend > 0 {
-                    let extra = cs.len().saturating_sub(code_len);
-                    if extra >= total_extend {
-                        // Append rodata+data after code in the code region.
-                        cs[code_len..code_len + rodata_len].copy_from_slice(&tmp[..rodata_len]);
-                        if data_len > 0 {
-                            cs[code_len + rodata_len..payload_len]
-                                .copy_from_slice(&tmp[rodata_len..rodata_len + data_len]);
-                        }
-                        // Decrypt the full payload in place (code region).
-                        crate::crypto::chacha20poly1305::decrypt_payload(
-                            cek,
-                            &decrypted_nonce,
-                            &decrypted_tag,
-                            &aad_buf,
-                            &mut cs[..payload_len],
-                        )
-                        .map_err(|_| LoadError::EncAuthFail)?;
-
-                        // Scatter back to rodata and data regions.
-                        if rodata_len > 0 {
-                            if let Some(ref mut ro) = rodata_region {
-                                let ro_slice = unsafe { ro.as_mut_slice() };
-                                ro_slice[..rodata_len]
-                                    .copy_from_slice(&cs[code_len..code_len + rodata_len]);
-                            }
-                        }
-                        if data_len > 0 {
-                            if let Some(ref mut rw) = data_region {
-                                let rw_slice = unsafe { rw.as_mut_slice() };
-                                rw_slice[..data_len]
-                                    .copy_from_slice(&cs[code_len + rodata_len..payload_len]);
-                            }
-                        }
-                    } else {
-                        // Not enough extra space — use a temp Vec (rare).
-                        let mut payload_buf = alloc::vec![0u8; payload_len];
-                        payload_buf[..code_len].copy_from_slice(&cs[..code_len]);
-                        payload_buf[code_len..code_len + rodata_len]
-                            .copy_from_slice(&tmp[..rodata_len]);
-                        payload_buf[code_len + rodata_len..payload_len]
+            let mut cs = unsafe { code_region.as_mut_slice() };
+            // Extend cs logically to hold the full payload by extending
+            // the mutable slice.  Since code_region has code_len bytes
+            // but we need code_len + rodata_len + data_len, we use the
+            // available writable memory after code_region (if any).
+            // This is safe because alloc_exec gave us a region that may
+            // be larger than code_len (page-aligned).
+            let total_extend = rodata_len + data_len;
+            if total_extend > 0 {
+                let extra = cs.len().saturating_sub(code_len);
+                if extra >= total_extend {
+                    // Append rodata+data after code in the code region.
+                    cs[code_len..code_len + rodata_len].copy_from_slice(&tmp[..rodata_len]);
+                    if data_len > 0 {
+                        cs[code_len + rodata_len..payload_len]
                             .copy_from_slice(&tmp[rodata_len..rodata_len + data_len]);
-                        crate::crypto::chacha20poly1305::decrypt_payload(
-                            cek,
-                            &decrypted_nonce,
-                            &decrypted_tag,
-                            &aad_buf,
-                            &mut payload_buf,
-                        )
-                        .map_err(|_| LoadError::EncAuthFail)?;
-                        cs[..code_len].copy_from_slice(&payload_buf[..code_len]);
-                        if rodata_len > 0 {
-                            if let Some(ref mut ro) = rodata_region {
-                                let ro_slice = unsafe { ro.as_mut_slice() };
-                                ro_slice[..rodata_len]
-                                    .copy_from_slice(&payload_buf[code_len..code_len + rodata_len]);
-                            }
-                        }
-                        if data_len > 0 {
-                            if let Some(ref mut rw) = data_region {
-                                let rw_slice = unsafe { rw.as_mut_slice() };
-                                rw_slice[..data_len].copy_from_slice(
-                                    &payload_buf[code_len + rodata_len..payload_len],
-                                );
-                            }
-                        }
                     }
-                } else {
-                    // Only code section — decrypt directly in code region.
+                    // Decrypt the full payload in place (code region).
                     crate::crypto::chacha20poly1305::decrypt_payload(
                         cek,
                         &decrypted_nonce,
                         &decrypted_tag,
                         &aad_buf,
-                        &mut cs[..code_len],
+                        &mut cs[..payload_len],
                     )
                     .map_err(|_| LoadError::EncAuthFail)?;
+
+                    // Scatter back to rodata and data regions.
+                    if rodata_len > 0 {
+                        if let Some(ref mut ro) = rodata_region {
+                            let ro_slice = unsafe { ro.as_mut_slice() };
+                            ro_slice[..rodata_len]
+                                .copy_from_slice(&cs[code_len..code_len + rodata_len]);
+                        }
+                    }
+                    if data_len > 0 {
+                        if let Some(ref mut rw) = data_region {
+                            let rw_slice = unsafe { rw.as_mut_slice() };
+                            rw_slice[..data_len]
+                                .copy_from_slice(&cs[code_len + rodata_len..payload_len]);
+                        }
+                    }
+                } else {
+                    // Not enough extra space — use a temp Vec (rare).
+                    let mut payload_buf = alloc::vec![0u8; payload_len];
+                    payload_buf[..code_len].copy_from_slice(&cs[..code_len]);
+                    payload_buf[code_len..code_len + rodata_len]
+                        .copy_from_slice(&tmp[..rodata_len]);
+                    payload_buf[code_len + rodata_len..payload_len]
+                        .copy_from_slice(&tmp[rodata_len..rodata_len + data_len]);
+                    crate::crypto::chacha20poly1305::decrypt_payload(
+                        cek,
+                        &decrypted_nonce,
+                        &decrypted_tag,
+                        &aad_buf,
+                        &mut payload_buf,
+                    )
+                    .map_err(|_| LoadError::EncAuthFail)?;
+                    cs[..code_len].copy_from_slice(&payload_buf[..code_len]);
+                    if rodata_len > 0 {
+                        if let Some(ref mut ro) = rodata_region {
+                            let ro_slice = unsafe { ro.as_mut_slice() };
+                            ro_slice[..rodata_len]
+                                .copy_from_slice(&payload_buf[code_len..code_len + rodata_len]);
+                        }
+                    }
+                    if data_len > 0 {
+                        if let Some(ref mut rw) = data_region {
+                            let rw_slice = unsafe { rw.as_mut_slice() };
+                            rw_slice[..data_len]
+                                .copy_from_slice(&payload_buf[code_len + rodata_len..payload_len]);
+                        }
+                    }
                 }
+            } else {
+                // Only code section — decrypt directly in code region.
+                crate::crypto::chacha20poly1305::decrypt_payload(
+                    cek,
+                    &decrypted_nonce,
+                    &decrypted_tag,
+                    &aad_buf,
+                    &mut cs[..code_len],
+                )
+                .map_err(|_| LoadError::EncAuthFail)?;
             }
         }
     }
@@ -819,7 +820,6 @@ mod tests {
     // real CEK unwrapping.
     // -------------------------------------------------------------------
 
-    use crate::symbols::SymEntry;
     use alloc::vec::Vec;
     use core::cell::Cell;
     use hmac::{Hmac, Mac};
@@ -928,178 +928,6 @@ mod tests {
         buf
     }
 
-    /// Sign a .lmod container with HMAC-SHA256 using the given key.
-    fn sign_lmod(data: &[u8], key: &[u8; 32]) -> Vec<u8> {
-        let mut header = lmod::header::decode_header(data).expect("valid header for signing");
-        header.flags |= lmod::header::LMOD_FLAG_SIGNED;
-        let region_len = lmod::sig::signed_region_len(&header);
-        let sig_off = region_len as u32;
-        let sig_len = lmod::sig::TRAILER_HEADER_SIZE
-            + lmod::sig::sig_len_for_scheme(lmod::sig::SCHEME_HMAC_SHA256).unwrap();
-        let new_total = sig_off + sig_len;
-
-        let mut signed_region = data[..region_len].to_vec();
-        signed_region[6..8].copy_from_slice(&header.flags.to_le_bytes());
-        signed_region[16..20].copy_from_slice(&new_total.to_le_bytes());
-        signed_region[64..68].copy_from_slice(&sig_off.to_le_bytes());
-        signed_region[68..72].copy_from_slice(&sig_len.to_le_bytes());
-
-        let mut mac = FullHmacSha256::new_from_slice(key).expect("HMAC accepts 32-byte key");
-        mac.update(&signed_region);
-        let sig_bytes = mac.finalize().into_bytes();
-
-        let mut out = signed_region;
-        out.push(lmod::sig::SCHEME_HMAC_SHA256);
-        out.extend_from_slice(&sig_bytes);
-        out
-    }
-
-    /// Encrypt a .lmod container with ChaCha20-Poly1305 (fleet mode, single KEK).
-    /// Returns the encrypted bytes and the random CEK used.
-    #[cfg(feature = "encryption")]
-    fn encrypt_lmod(data: &[u8], kek: &[u8; 32]) -> (Vec<u8>, [u8; 32]) {
-        use chacha20poly1305::aead::{Aead, AeadInPlace, KeyInit, Payload};
-        use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
-        use lmod::enc::{
-            enc_header_len, encode_enc_header, EncHeader, EncMode, WrappedCekSlot,
-            AEAD_CHACHA20POLY1305, CEK_LEN, NONCE_LEN, TAG_LEN, WRAP_LEN,
-            WRAP_SCHEME_SYMMETRIC_CHACHA20POLY1305,
-        };
-
-        let container = lmod::validate::Container::parse(data).unwrap();
-        let hdr = container.header();
-
-        // Generate random CEK + nonce.
-        let mut cek = [0u8; CEK_LEN];
-        getrandom::getrandom(&mut cek).expect("rng");
-        let mut nonce = [0u8; NONCE_LEN];
-        getrandom::getrandom(&mut nonce).expect("rng");
-
-        // Wrap CEK under KEK using deterministic zero-nonce ChaCha20-Poly1305.
-        let wrap_cipher = ChaCha20Poly1305::new(Key::from_slice(kek));
-        let zero_nonce = Nonce::from_slice(&[0u8; NONCE_LEN]);
-        let mut cek_buf = cek;
-        let wrap_tag = wrap_cipher
-            .encrypt_in_place_detached(zero_nonce, b"", &mut cek_buf)
-            .expect("wrap");
-        let mut wrapped = [0u8; WRAP_LEN];
-        wrapped[..NONCE_LEN].copy_from_slice(&[0u8; NONCE_LEN]);
-        wrapped[NONCE_LEN..NONCE_LEN + CEK_LEN].copy_from_slice(&cek_buf);
-        wrapped[NONCE_LEN + CEK_LEN..].copy_from_slice(wrap_tag.as_slice());
-        let slot = WrappedCekSlot {
-            key_id: 0,
-            wrap_scheme: WRAP_SCHEME_SYMMETRIC_CHACHA20POLY1305,
-            wrapped,
-        };
-
-        let eh = EncHeader {
-            enc_mode: EncMode::Fleet,
-            aead_id: AEAD_CHACHA20POLY1305,
-            nonce,
-            tag: [0u8; TAG_LEN],
-            wrapped_slots: alloc::vec![slot],
-        };
-        let eh_len = enc_header_len(eh.wrapped_slots.len()) as u32;
-
-        // Build payload
-        let payload = {
-            let mut p = alloc::vec![0u8; container.code().len() + container.rodata().len() + container.data().len()];
-            let mut off = 0;
-            p[off..off + container.code().len()].copy_from_slice(container.code());
-            off += container.code().len();
-            p[off..off + container.rodata().len()].copy_from_slice(container.rodata());
-            off += container.rodata().len();
-            p[off..off + container.data().len()].copy_from_slice(container.data());
-            p
-        };
-
-        let layout = lmod::header::compute_layout(
-            hdr.abi_hash,
-            hdr.modinfo_len,
-            hdr.code_len,
-            hdr.rodata_len,
-            hdr.data_len,
-            hdr.bss_len,
-            hdr.reloc_count,
-            eh_len,
-        );
-
-        let total = layout.total_len as usize;
-        let mut out = alloc::vec![0u8; total];
-
-        // Write header
-        let mut hdr_out = layout;
-        hdr_out.format_ver = lmod::header::FORMAT_VER;
-        hdr_out.flags = hdr.flags | lmod::header::LMOD_FLAG_ENCRYPTED;
-        lmod::header::encode_header(&mut out, &hdr_out);
-
-        // Write enc-header
-        let mut eh_bytes = alloc::vec![0u8; eh_len as usize];
-        encode_enc_header(&mut eh_bytes, &eh).unwrap();
-        let hdr_size = lmod::header::HEADER_SIZE as usize;
-        out[hdr_size..hdr_size + eh_len as usize].copy_from_slice(&eh_bytes);
-
-        // Write modinfo
-        let mi = container.modinfo();
-        out[layout.modinfo_off as usize..layout.modinfo_off as usize + mi.len()]
-            .copy_from_slice(mi);
-
-        // Write reloc (if any)
-        if hdr.reloc_count > 0 {
-            let ro = hdr.reloc_off as usize;
-            let rc = hdr.reloc_count as usize;
-            let rb = rc * lmod::reloc::RELOC_ENTRY_SIZE as usize;
-            if ro + rb <= data.len() {
-                out[layout.reloc_off as usize..layout.reloc_off as usize + rb]
-                    .copy_from_slice(&data[ro..ro + rb]);
-            }
-        }
-
-        // Build AAD and encrypt
-        let mut aad = alloc::vec::Vec::new();
-        aad.extend_from_slice(&out[..lmod::header::HEADER_SIZE as usize]);
-        let tag_off_in_eh = 4 + NONCE_LEN;
-        eh_bytes[tag_off_in_eh..tag_off_in_eh + TAG_LEN].fill(0);
-        aad.extend_from_slice(&eh_bytes);
-        aad.extend_from_slice(mi);
-
-        let cipher = ChaCha20Poly1305::new(Key::from_slice(&cek));
-        let aead_nonce = Nonce::from_slice(&nonce);
-        let ciphertext = cipher
-            .encrypt(
-                aead_nonce,
-                Payload {
-                    msg: &payload,
-                    aad: &aad,
-                },
-            )
-            .expect("encrypt payload");
-
-        // Write encrypted code/rodata/data
-        let co = layout.code_off as usize;
-        out[co..co + hdr.code_len as usize].copy_from_slice(&ciphertext[..hdr.code_len as usize]);
-        if hdr.rodata_len > 0 {
-            let ro_start = co + hdr.code_len as usize;
-            let ro_len = hdr.rodata_len as usize;
-            out[ro_start..ro_start + ro_len].copy_from_slice(
-                &ciphertext[hdr.code_len as usize..hdr.code_len as usize + ro_len],
-            );
-        }
-        if hdr.data_len > 0 {
-            let data_start = layout.data_off as usize;
-            let payload_off = (hdr.code_len + hdr.rodata_len) as usize;
-            out[data_start..data_start + hdr.data_len as usize]
-                .copy_from_slice(&ciphertext[payload_off..payload_off + hdr.data_len as usize]);
-        }
-
-        // Write AEAD tag into enc-header
-        let aead_tag = &ciphertext[ciphertext.len() - TAG_LEN..];
-        let tag_in_header = lmod::header::HEADER_SIZE as usize + tag_off_in_eh;
-        out[tag_in_header..tag_in_header + TAG_LEN].copy_from_slice(aead_tag);
-
-        (out, cek)
-    }
-
     #[cfg(feature = "encryption")]
     #[test]
     fn signed_encrypted_module_loads_and_runs() {
@@ -1108,19 +936,13 @@ mod tests {
         let abi_hash = lmod::abi_hash::compute_abi_hash(1, 8, 64, lmod::modinfo::MODINFO_VER);
 
         let plain = build_lmod_with_code(&ret_insn, abi_hash, true);
-        let (enc, _cek) = encrypt_lmod(&plain, &kek);
-        let signed = sign_lmod(&enc, &kek);
+        let enc = lmod_encrypt::encrypt_fleet(&plain, &kek).expect("encrypt");
+        let signed = lmod_sign::sign(&enc, &kek).expect("sign");
 
         let container = lmod::validate::Container::parse(&signed).unwrap();
         let mut plat = FullPlatform::new(abi_hash, kek);
         let mut map: SymMap<'_, 256> = SymMap::new();
         let mut set = LoadedSet::<64>::new();
-        map.entries[0] = Some(SymEntry {
-            hash: lmod::hash::fnv1a_u64(b"main"),
-            name: &[],
-            addr: 0,
-        });
-        map.len = 1;
 
         let result = load_module(&container, &mut plat, &mut map, &mut set);
         assert!(
@@ -1138,8 +960,8 @@ mod tests {
         let abi_hash = lmod::abi_hash::compute_abi_hash(1, 8, 64, lmod::modinfo::MODINFO_VER);
 
         let plain = build_lmod_with_code(&ret_insn, abi_hash, true);
-        let (enc, _cek) = encrypt_lmod(&plain, &kek);
-        let signed = sign_lmod(&enc, &kek);
+        let enc = lmod_encrypt::encrypt_fleet(&plain, &kek).expect("encrypt");
+        let signed = lmod_sign::sign(&enc, &kek).expect("sign");
 
         let mut bad = signed.clone();
         let hdr = lmod::header::decode_header(&bad).unwrap();
@@ -1150,18 +972,12 @@ mod tests {
         let mut plat = FullPlatform::new(abi_hash, kek);
         let mut map: SymMap<'_, 256> = SymMap::new();
         let mut set = LoadedSet::<64>::new();
-        map.entries[0] = Some(SymEntry {
-            hash: 0,
-            name: &[],
-            addr: 0,
-        });
-        map.len = 1;
 
         let result = load_module(&container, &mut plat, &mut map, &mut set);
         assert_eq!(
             result.unwrap_err(),
-            LoadError::EncAuthFail,
-            "tampered ciphertext must yield EncAuthFail"
+            LoadError::SigInvalid,
+            "tampered signed ciphertext must fail signature verification before decrypt"
         );
     }
 
@@ -1176,7 +992,7 @@ mod tests {
         let abi_hash = lmod::abi_hash::compute_abi_hash(1, 8, 64, lmod::modinfo::MODINFO_VER);
 
         let plain = build_lmod_with_code(&ret_insn, abi_hash, true); // exports "main"
-        let signed = sign_lmod(&plain, &kek); // not encrypted — faster
+        let signed = lmod_sign::sign(&plain, &kek).expect("sign"); // not encrypted — faster
 
         let container = lmod::validate::Container::parse(&signed).unwrap();
         let mut plat = FullPlatform::new(abi_hash, kek);
@@ -1265,7 +1081,7 @@ mod tests {
         raw[co..co + code.len()].copy_from_slice(&code);
 
         // FullPlatform is TrustLevel One — sign the module before loading.
-        let signed = sign_lmod(&raw, &key);
+        let signed = lmod_sign::sign(&raw, &key).expect("sign");
         let container = lmod::validate::Container::parse(&signed).unwrap();
         let mut plat = FullPlatform::new(abi_hash, key);
         let mut map: SymMap<'_, 256> = SymMap::new();
@@ -1303,7 +1119,7 @@ mod tests {
 
         // FullPlatform is TrustLevel One — sign the module before loading.
         let key = [0xabu8; 32];
-        let signed = sign_lmod(&raw, &key);
+        let signed = lmod_sign::sign(&raw, &key).expect("sign");
         let container = lmod::validate::Container::parse(&signed).unwrap();
         let mut plat = FullPlatform::new(abi_hash, key);
         let mut map: SymMap<'_, 256> = SymMap::new();
@@ -1322,7 +1138,7 @@ mod tests {
         let key = [0xabu8; 32];
         let abi_hash = lmod::abi_hash::compute_abi_hash(1, 8, 64, lmod::modinfo::MODINFO_VER);
         let plain = build_lmod_with_code(&code, abi_hash, false);
-        let signed = sign_lmod(&plain, &key);
+        let signed = lmod_sign::sign(&plain, &key).expect("sign");
         let container = lmod::validate::Container::parse(&signed).unwrap();
         let mut plat = FullPlatform::new(abi_hash, key);
         let mut map: SymMap<'_, 256> = SymMap::new();

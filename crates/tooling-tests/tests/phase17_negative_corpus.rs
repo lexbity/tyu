@@ -18,6 +18,8 @@ use loader_core::load::{
 use loader_core::platform::TrustLevel;
 use loader_core::symbols::SymMap;
 
+const SIGN_KEY: [u8; 32] = [0xab; 32];
+
 /// Set up the platform and global map for loading.
 fn setup_loader<'a>(
     container: &Container,
@@ -211,11 +213,14 @@ fn e_5213_encrypted_container_unsupported() {
     let abi_hash = lmod::abi_hash::compute_abi_hash(1, 8, 64, lmod::modinfo::MODINFO_VER);
     let (mut plat, mut map, mut set) = setup_loader(&container, abi_hash);
     let result = load_module(&container, &mut plat, &mut map, &mut set);
+    assert!(result.is_err(), "encrypted container should fail");
+    let err = result.unwrap_err();
     assert!(
-        result.is_err(),
-        "5213: encrypted container should fail without encryption feature"
+        err == E_ENC_UNSUPPORTED || err == E_ENC_REQUIRES_SIGNED,
+        "encrypted container at TrustLevel Zero should fail as unsupported without \
+         loader encryption, or as requires-signed when loader-core/encryption is \
+         enabled by workspace feature unification; got {err:?}"
     );
-    assert_eq!(result.unwrap_err(), E_ENC_UNSUPPORTED);
 }
 
 // ---------------------------------------------------------------------------
@@ -311,7 +316,11 @@ fn build_encrypt_sign(source: &str, kek: &[u8; 32], label: &str) -> PathBuf {
     let signed = dir.join("signed.lmod");
     assert!(
         Command::new(exe("lmod-sign"))
-            .args([encrypted.to_str().unwrap(), signed.to_str().unwrap()])
+            .args([
+                encrypted.to_str().unwrap(),
+                signed.to_str().unwrap(),
+                &format!("--key={}", hex::encode(SIGN_KEY))
+            ])
             .status()
             .unwrap()
             .success(),
@@ -405,7 +414,11 @@ fn e_5216_payload_auth_fail() {
     std::fs::write(&tampered, &data).unwrap();
     let signed = dir.join("signed.lmod");
     assert!(Command::new(exe("lmod-sign"))
-        .args([tampered.to_str().unwrap(), signed.to_str().unwrap()])
+        .args([
+            tampered.to_str().unwrap(),
+            signed.to_str().unwrap(),
+            &format!("--key={}", hex::encode(SIGN_KEY))
+        ])
         .status()
         .unwrap()
         .success());
@@ -451,7 +464,11 @@ fn e_5217_bad_enc_header() {
     let signed = dir.join("signed.lmod");
     assert!(
         Command::new(exe("lmod-sign"))
-            .args([enc_flag_set.to_str().unwrap(), signed.to_str().unwrap()])
+            .args([
+                enc_flag_set.to_str().unwrap(),
+                signed.to_str().unwrap(),
+                &format!("--key={}", hex::encode(SIGN_KEY))
+            ])
             .status()
             .unwrap()
             .success(),
@@ -462,8 +479,7 @@ fn e_5217_bad_enc_header() {
     let container = Container::parse(&raw).unwrap();
     let abi_hash = lmod::abi_hash::compute_abi_hash(1, 8, 64, lmod::modinfo::MODINFO_VER);
     let bsize = (container.code().len() + 4095) & !4095;
-    let sign_key = [0xab; 32]; // must match lmod-sign default
-    let mut plat = HostedLoaderPlatform::new(abi_hash).with_key(&sign_key, TrustLevel::One);
+    let mut plat = HostedLoaderPlatform::new(abi_hash).with_key(&SIGN_KEY, TrustLevel::One);
     plat.reserve(bsize).unwrap();
     let ds_high = allocate_runtime_page();
     let mut map: SymMap<'_, 256> = SymMap::new();

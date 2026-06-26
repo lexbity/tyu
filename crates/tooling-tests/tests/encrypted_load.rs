@@ -16,6 +16,8 @@ use common::*;
 use lmod::validate::Container;
 use loader_core::load::{E_ENC_NO_KEY, E_SIG_INVALID};
 
+const SIGN_KEY: [u8; 32] = [0xab; 32];
+
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -87,7 +89,11 @@ fn build_encrypt_sign(source: &str, kek: &[u8; 32], label: &str) -> PathBuf {
     let signed = dir.join("signed.lmod");
     assert!(
         Command::new(exe("lmod-sign"))
-            .args([encrypted.to_str().unwrap(), signed.to_str().unwrap()])
+            .args([
+                encrypted.to_str().unwrap(),
+                signed.to_str().unwrap(),
+                &format!("--key={}", hex::encode(SIGN_KEY))
+            ])
             .status()
             .unwrap()
             .success(),

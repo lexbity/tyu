@@ -469,7 +469,7 @@ fn isr_lock_atomicity_codegen() {
         codegen_core::Target::ArmV7MUnknownNone,
         &src_path,
         &dir,
-        true,   // --lib: runner provides main; we only inspect asm shape
+        true, // --lib: runner provides main; we only inspect asm shape
     );
 
     let asm_path = dir.join("IsrLockAtomicity.asm");
