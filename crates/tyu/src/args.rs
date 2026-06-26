@@ -92,6 +92,9 @@ impl DeployArgs {
             profile: self.profile.clone(),
             feature_set: self.feature_set,
             mode: None,
+            metal_sign_key: None,
+            metal_kek: None,
+            metal_encrypt_mode: None,
         }
     }
 }
@@ -111,6 +114,9 @@ pub struct BuildArgs {
     /// Resolved feature set (set by main.rs after profile resolution).
     pub feature_set: FeatureSet,
     pub mode: Option<BuildMode>,
+    pub metal_sign_key: Option<String>,
+    pub metal_kek: Option<String>,
+    pub metal_encrypt_mode: Option<EncryptMode>,
 }
 
 /// Arguments for the `run` subcommand.
@@ -128,6 +134,9 @@ pub struct RunArgs {
     pub timeout: Duration,
     pub runner_override: Option<String>,
     pub mode: Option<BuildMode>,
+    pub metal_sign_key: Option<String>,
+    pub metal_kek: Option<String>,
+    pub metal_encrypt_mode: Option<EncryptMode>,
 }
 
 impl RunArgs {
@@ -143,6 +152,9 @@ impl RunArgs {
             profile: self.profile.clone(),
             feature_set: self.feature_set,
             mode: self.mode,
+            metal_sign_key: self.metal_sign_key.clone(),
+            metal_kek: self.metal_kek.clone(),
+            metal_encrypt_mode: self.metal_encrypt_mode,
         }
     }
 }
@@ -243,6 +255,9 @@ fn print_usage() {
     eprintln!("  --timeout=<secs>    Maximum execution time (default: 10)");
     eprintln!("  --runner=<mode>     Runner: native|qemu (default: auto)");
     eprintln!("  --mode=<mode>       Link/load mode: static|dynamic");
+    eprintln!("  --metal-sign-key=<keyref> Provision Tier-1 firmware HMAC key");
+    eprintln!("  --metal-kek=<keyref>      Encrypt dynamic .lmod with a firmware KEK");
+    eprintln!("  --metal-encrypt=<mode>    Metal encryption mode: fleet|device (default: fleet)");
 }
 
 fn parse_common(args: &[String]) -> CommonArgs {
@@ -255,6 +270,9 @@ fn parse_common(args: &[String]) -> CommonArgs {
     let mut out_dir: Option<PathBuf> = None;
     let mut profile: Option<String> = None;
     let mut mode: Option<BuildMode> = None;
+    let mut metal_sign_key: Option<String> = None;
+    let mut metal_kek: Option<String> = None;
+    let mut metal_encrypt_mode: Option<EncryptMode> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -290,6 +308,22 @@ fn parse_common(args: &[String]) -> CommonArgs {
             if mode.is_none() {
                 eprintln!("tyu: invalid --mode '{}'", val);
             }
+        } else if let Some(val) = a.strip_prefix("--metal-sign-key=") {
+            metal_sign_key = Some(val.to_string());
+        } else if let Some(val) = a.strip_prefix("--metal-kek=") {
+            metal_kek = Some(val.to_string());
+        } else if let Some(val) = a
+            .strip_prefix("--metal-encrypt=")
+            .or_else(|| a.strip_prefix("--metal-enc="))
+        {
+            metal_encrypt_mode = match val {
+                "fleet" => Some(EncryptMode::Fleet),
+                "device" => Some(EncryptMode::Device),
+                _ => {
+                    eprintln!("tyu: invalid --metal-encrypt '{}'", val);
+                    None
+                }
+            };
         } else if let Some(val) = a.strip_prefix("--sysroot=") {
             sysroot = Some(PathBuf::from(val));
         } else if let Some(val) = a.strip_prefix("--out-dir=") {
@@ -325,6 +359,9 @@ fn parse_common(args: &[String]) -> CommonArgs {
         out_dir,
         profile,
         mode,
+        metal_sign_key,
+        metal_kek,
+        metal_encrypt_mode,
     }
 }
 
@@ -338,6 +375,9 @@ struct CommonArgs {
     out_dir: PathBuf,
     profile: Option<String>,
     mode: Option<BuildMode>,
+    metal_sign_key: Option<String>,
+    metal_kek: Option<String>,
+    metal_encrypt_mode: Option<EncryptMode>,
 }
 
 fn parse_build(args: &[String]) -> Command {
@@ -360,6 +400,9 @@ fn parse_build(args: &[String]) -> Command {
         profile: common.profile,
         feature_set: FeatureSet::default(), // resolved in main.rs
         mode: common.mode,
+        metal_sign_key: common.metal_sign_key,
+        metal_kek: common.metal_kek,
+        metal_encrypt_mode: common.metal_encrypt_mode,
     })
 }
 
@@ -407,6 +450,9 @@ fn parse_run(args: &[String]) -> Command {
         timeout,
         runner_override,
         mode: common.mode,
+        metal_sign_key: common.metal_sign_key,
+        metal_kek: common.metal_kek,
+        metal_encrypt_mode: common.metal_encrypt_mode,
     })
 }
 

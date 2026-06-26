@@ -5,9 +5,27 @@ use crate::load::{load_module, LoadedSet};
 use crate::platform::{LoaderPlatform, Region};
 use crate::symbols::SymMap;
 use lmod::validate::Container;
+#[cfg(feature = "signing")]
+use {
+    crate::platform::TrustLevel,
+    hmac::{Hmac, Mac},
+    sha2::Sha256,
+};
 
 const LOADHEAP_ALIGN: usize = 16;
 const MAIN_HASH: u64 = 0x1f5962a2ce9803c8;
+#[cfg(feature = "signing")]
+const KEY_MASK_SIGN: u8 = 1 << 0;
+#[cfg(feature = "encryption")]
+const KEY_MASK_KEK: u8 = 1 << 1;
+#[cfg(feature = "encryption")]
+const KEY_MASK_DEVICE: u8 = 1 << 2;
+#[cfg(any(feature = "signing", feature = "encryption"))]
+const KEY_HEADER_LEN: usize = 8;
+#[cfg(any(feature = "signing", feature = "encryption"))]
+const KEY_LEN: usize = 32;
+#[cfg(feature = "signing")]
+type HmacSha256 = Hmac<Sha256>;
 
 /// A snapshot of the load-heap bump cursor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -20,6 +38,10 @@ pub struct DevicePlatform {
     heap_end: usize,
     cursor: usize,
     expected_abi_hash: u64,
+    #[cfg(feature = "signing")]
+    sign_key: Option<[u8; KEY_LEN]>,
+    #[cfg(feature = "encryption")]
+    kek: Option<[u8; KEY_LEN]>,
 }
 
 impl DevicePlatform {
@@ -32,7 +54,23 @@ impl DevicePlatform {
 
         let heap_start = core::ptr::addr_of!(__lang_loadheap_start) as usize;
         let heap_end = core::ptr::addr_of!(__lang_loadheap_end) as usize;
-        Self::new(heap_start, heap_end, device_expected_abi_hash())
+        #[cfg(any(feature = "signing", feature = "encryption"))]
+        {
+            let keys = read_keys_from_linker_symbols();
+            return Self::new_with_keys(
+                heap_start,
+                heap_end,
+                device_expected_abi_hash(),
+                #[cfg(feature = "signing")]
+                keys.sign_key,
+                #[cfg(feature = "encryption")]
+                keys.kek,
+            );
+        }
+        #[cfg(not(any(feature = "signing", feature = "encryption")))]
+        {
+            Self::new(heap_start, heap_end, device_expected_abi_hash())
+        }
     }
 
     /// Build a platform over an explicit arena.
@@ -40,11 +78,47 @@ impl DevicePlatform {
     /// This constructor is used by tests and remains useful for future target
     /// bring-up code that receives the arena bounds from another bootstrap layer.
     pub const fn new(heap_start: usize, heap_end: usize, expected_abi_hash: u64) -> Self {
+        #[cfg(any(feature = "signing", feature = "encryption"))]
+        {
+            return Self::new_with_keys(
+                heap_start,
+                heap_end,
+                expected_abi_hash,
+                #[cfg(feature = "signing")]
+                None,
+                #[cfg(feature = "encryption")]
+                None,
+            );
+        }
+        #[cfg(not(any(feature = "signing", feature = "encryption")))]
+        {
+            Self {
+                heap_start,
+                heap_end,
+                cursor: heap_start,
+                expected_abi_hash,
+            }
+        }
+    }
+
+    /// Build a platform over an explicit arena and optional device keys.
+    #[cfg(any(feature = "signing", feature = "encryption"))]
+    pub const fn new_with_keys(
+        heap_start: usize,
+        heap_end: usize,
+        expected_abi_hash: u64,
+        #[cfg(feature = "signing")] sign_key: Option<[u8; KEY_LEN]>,
+        #[cfg(feature = "encryption")] kek: Option<[u8; KEY_LEN]>,
+    ) -> Self {
         Self {
             heap_start,
             heap_end,
             cursor: heap_start,
             expected_abi_hash,
+            #[cfg(feature = "signing")]
+            sign_key,
+            #[cfg(feature = "encryption")]
+            kek,
         }
     }
 
@@ -124,6 +198,118 @@ impl LoaderPlatform for DevicePlatform {
     fn expected_abi_hash(&self) -> u64 {
         self.expected_abi_hash
     }
+
+    #[cfg(feature = "signing")]
+    fn verify_sig(&self, signed: &[u8], sig: &[u8]) -> bool {
+        let Some(key) = &self.sign_key else {
+            return false;
+        };
+        if sig.len() != KEY_LEN {
+            return false;
+        }
+        let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts 32-byte key");
+        mac.update(signed);
+        mac.verify_slice(sig).is_ok()
+    }
+
+    #[cfg(feature = "signing")]
+    fn trust_level(&self) -> TrustLevel {
+        if self.sign_key.is_some() {
+            TrustLevel::One
+        } else {
+            TrustLevel::Zero
+        }
+    }
+
+    #[cfg(feature = "encryption")]
+    fn unwrap_cek(&self, _key_id: u64, wrapped: &[u8], out: &mut [u8; 32]) -> Result<(), u32> {
+        let Some(kek) = &self.kek else {
+            return Err(crate::load::E_ENC_NO_KEY);
+        };
+        let wrapped: &[u8; lmod::enc::WRAP_LEN] = wrapped
+            .try_into()
+            .map_err(|_| crate::load::E_ENC_BAD_HEADER)?;
+        let cek = crate::crypto::chacha20poly1305::unwrap_cek(kek, wrapped)
+            .map_err(|_| crate::load::E_ENC_NO_KEY)?;
+        *out = cek;
+        Ok(())
+    }
+}
+
+#[cfg(any(feature = "signing", feature = "encryption"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DeviceKeys {
+    #[cfg(feature = "signing")]
+    sign_key: Option<[u8; KEY_LEN]>,
+    #[cfg(feature = "encryption")]
+    kek: Option<[u8; KEY_LEN]>,
+}
+
+#[cfg(any(feature = "signing", feature = "encryption"))]
+fn read_keys_from_linker_symbols() -> DeviceKeys {
+    extern "C" {
+        static __lang_keys_start: u8;
+        static __lang_keys_end: u8;
+    }
+
+    let start = core::ptr::addr_of!(__lang_keys_start) as usize;
+    let end = core::ptr::addr_of!(__lang_keys_end) as usize;
+    if end <= start {
+        return decode_keys(&[]);
+    }
+    let bytes = unsafe { core::slice::from_raw_parts(start as *const u8, end - start) };
+    decode_keys(bytes)
+}
+
+#[cfg(any(feature = "signing", feature = "encryption"))]
+fn decode_keys(bytes: &[u8]) -> DeviceKeys {
+    let mut keys = DeviceKeys {
+        #[cfg(feature = "signing")]
+        sign_key: None,
+        #[cfg(feature = "encryption")]
+        kek: None,
+    };
+    if bytes.len() < KEY_HEADER_LEN {
+        return keys;
+    }
+    let mut cursor = KEY_HEADER_LEN;
+    #[cfg(feature = "signing")]
+    if bytes[0] & KEY_MASK_SIGN != 0 {
+        if let Some((key, next)) = read_key_at(bytes, cursor) {
+            keys.sign_key = Some(key);
+            cursor = next;
+        }
+    }
+    #[cfg(all(feature = "encryption", not(feature = "signing")))]
+    let _ = cursor;
+    #[cfg(feature = "encryption")]
+    if bytes[0] & KEY_MASK_KEK != 0 {
+        if let Some((key, next)) = read_key_at(bytes, cursor) {
+            keys.kek = Some(key);
+            cursor = next;
+        }
+    }
+    #[cfg(feature = "encryption")]
+    if bytes[0] & KEY_MASK_DEVICE != 0 {
+        if let Some((key, next)) = read_key_at(bytes, cursor) {
+            keys.kek = Some(key);
+            cursor = next;
+        }
+    }
+    #[cfg(all(feature = "encryption", feature = "signing"))]
+    let _ = cursor;
+    keys
+}
+
+#[cfg(any(feature = "signing", feature = "encryption"))]
+fn read_key_at(bytes: &[u8], start: usize) -> Option<([u8; KEY_LEN], usize)> {
+    let end = start.checked_add(KEY_LEN)?;
+    if end > bytes.len() {
+        return None;
+    }
+    let mut key = [0u8; KEY_LEN];
+    key.copy_from_slice(&bytes[start..end]);
+    Some((key, end))
 }
 
 #[no_mangle]
@@ -395,5 +581,31 @@ mod tests {
         platform.release(&mut region);
 
         assert_eq!(platform.cursor(), cursor);
+    }
+
+    #[cfg(feature = "signing")]
+    #[test]
+    fn key_section_controls_trust_and_hmac_verification() {
+        let key = [0xabu8; KEY_LEN];
+        let mut bytes = [0u8; KEY_HEADER_LEN + KEY_LEN];
+        bytes[0] = KEY_MASK_SIGN;
+        bytes[KEY_HEADER_LEN..].copy_from_slice(&key);
+        let keys = decode_keys(&bytes);
+        let platform = DevicePlatform::new_with_keys(
+            0,
+            0,
+            0,
+            keys.sign_key,
+            #[cfg(feature = "encryption")]
+            keys.kek,
+        );
+        let signed = b"signed-region";
+        let mut mac = HmacSha256::new_from_slice(&key).unwrap();
+        mac.update(signed);
+        let sig = mac.finalize().into_bytes();
+
+        assert_eq!(platform.trust_level(), TrustLevel::One);
+        assert!(platform.verify_sig(signed, &sig));
+        assert!(!platform.verify_sig(b"tampered", &sig));
     }
 }

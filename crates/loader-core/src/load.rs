@@ -99,6 +99,113 @@ impl<const N: usize> LoadedSet<N> {
     }
 }
 
+#[cfg(feature = "encryption")]
+fn append_bytes(dst: &mut [u8], cursor: &mut usize, src: &[u8]) -> Result<(), LoadError> {
+    let end = cursor
+        .checked_add(src.len())
+        .ok_or(LoadError::BadContainer)?;
+    if end > dst.len() {
+        return Err(LoadError::BadContainer);
+    }
+    dst[*cursor..end].copy_from_slice(src);
+    *cursor = end;
+    Ok(())
+}
+
+#[cfg(feature = "encryption")]
+struct EncHeaderView<'a> {
+    nonce: [u8; lmod::enc::NONCE_LEN],
+    tag: [u8; lmod::enc::TAG_LEN],
+    wrapped_count: usize,
+    slots: &'a [u8],
+}
+
+#[cfg(feature = "encryption")]
+impl<'a> EncHeaderView<'a> {
+    fn wire_len(&self) -> usize {
+        lmod::enc::enc_header_len(self.wrapped_count)
+    }
+
+    fn wrapped_slots(&self) -> WrappedSlotIter<'a> {
+        WrappedSlotIter { bytes: self.slots }
+    }
+}
+
+#[cfg(feature = "encryption")]
+struct WrappedSlot<'a> {
+    key_id: u64,
+    wrap_scheme: u8,
+    wrapped: &'a [u8],
+}
+
+#[cfg(feature = "encryption")]
+struct WrappedSlotIter<'a> {
+    bytes: &'a [u8],
+}
+
+#[cfg(feature = "encryption")]
+impl<'a> Iterator for WrappedSlotIter<'a> {
+    type Item = WrappedSlot<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.bytes.len() < lmod::enc::WRAPPED_SLOT_SIZE {
+            return None;
+        }
+        let (slot, rest) = self.bytes.split_at(lmod::enc::WRAPPED_SLOT_SIZE);
+        self.bytes = rest;
+        let key_id = u64::from_le_bytes(slot[0..8].try_into().ok()?);
+        let wrap_scheme = slot[8];
+        let wrapped_start = 16;
+        let wrapped_end = wrapped_start + lmod::enc::WRAP_LEN;
+        Some(WrappedSlot {
+            key_id,
+            wrap_scheme,
+            wrapped: &slot[wrapped_start..wrapped_end],
+        })
+    }
+}
+
+#[cfg(feature = "encryption")]
+fn parse_enc_header_view(bytes: &[u8]) -> Result<EncHeaderView<'_>, LoadError> {
+    const FIXED_LEN: usize = 36;
+    if bytes.len() < FIXED_LEN {
+        return Err(LoadError::EncBadHeader);
+    }
+    if lmod::enc::EncMode::from_u8(bytes[0]).is_none() {
+        return Err(LoadError::EncBadHeader);
+    }
+    if bytes[1] != lmod::enc::AEAD_CHACHA20POLY1305 {
+        return Err(LoadError::EncUnsupported);
+    }
+
+    let mut nonce = [0u8; lmod::enc::NONCE_LEN];
+    nonce.copy_from_slice(&bytes[4..4 + lmod::enc::NONCE_LEN]);
+    let mut tag = [0u8; lmod::enc::TAG_LEN];
+    tag.copy_from_slice(
+        &bytes[4 + lmod::enc::NONCE_LEN..4 + lmod::enc::NONCE_LEN + lmod::enc::TAG_LEN],
+    );
+    let count_off = 4 + lmod::enc::NONCE_LEN + lmod::enc::TAG_LEN;
+    let wrapped_count = u32::from_le_bytes(
+        bytes[count_off..count_off + 4]
+            .try_into()
+            .map_err(|_| LoadError::EncBadHeader)?,
+    ) as usize;
+    if wrapped_count > 64 {
+        return Err(LoadError::EncBadHeader);
+    }
+    let expected_len = lmod::enc::enc_header_len(wrapped_count);
+    if bytes.len() < expected_len {
+        return Err(LoadError::EncBadHeader);
+    }
+    let slots = &bytes[FIXED_LEN..expected_len];
+    Ok(EncHeaderView {
+        nonce,
+        tag,
+        wrapped_count,
+        slots,
+    })
+}
+
 // ---------------------------------------------------------------------------
 // LoadedModule
 // ---------------------------------------------------------------------------
@@ -189,7 +296,7 @@ pub fn load_module<'a>(
     #[cfg(feature = "encryption")]
     let mut decrypted_tag: [u8; 16] = [0u8; 16];
     #[cfg(feature = "encryption")]
-    let mut aad_buf: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
+    let mut aad_region: Option<Region> = None;
 
     if hdr.flags & lmod::header::LMOD_FLAG_ENCRYPTED != 0 {
         #[cfg(not(feature = "encryption"))]
@@ -205,14 +312,17 @@ pub fn load_module<'a>(
             // Parse enc-header.
             let eh_start = lmod::header::HEADER_SIZE as usize;
             let eh_bytes = raw_bytes.get(eh_start..).ok_or(LoadError::EncBadHeader)?;
-            let eh = lmod::enc::decode_enc_header(eh_bytes).ok_or(LoadError::EncBadHeader)?;
+            let eh = parse_enc_header_view(eh_bytes)?;
 
             // Unwrap CEK — try each wrapped slot.
             let mut cek = [0u8; 32];
             let mut cek_found = false;
-            for slot in &eh.wrapped_slots {
+            for slot in eh.wrapped_slots() {
+                if slot.wrap_scheme != lmod::enc::WRAP_SCHEME_SYMMETRIC_CHACHA20POLY1305 {
+                    continue;
+                }
                 if platform
-                    .unwrap_cek(slot.key_id, &slot.wrapped, &mut cek)
+                    .unwrap_cek(slot.key_id, slot.wrapped, &mut cek)
                     .is_ok()
                 {
                     cek_found = true;
@@ -242,22 +352,50 @@ pub fn load_module<'a>(
             aad_header[6..8].copy_from_slice(&aad_flags.to_le_bytes());
             // sig_len was 0 before signing (no trailer).
             aad_header[68..72].copy_from_slice(&0u32.to_le_bytes());
-            aad_buf.extend_from_slice(&aad_header);
-            let mut eh_for_aad =
-                eh_bytes[..lmod::enc::enc_header_len(eh.wrapped_slots.len())].to_vec();
-            let tag_off_in_eh = 4 + lmod::enc::NONCE_LEN;
-            eh_for_aad[tag_off_in_eh..tag_off_in_eh + lmod::enc::TAG_LEN].fill(0);
-            aad_buf.extend_from_slice(&eh_for_aad);
-            aad_buf.extend_from_slice(container.modinfo());
+            let enc_header_len = eh.wire_len();
             let reloc_bytes = (hdr.reloc_count as usize)
                 .checked_mul(lmod::reloc::RELOC_ENTRY_SIZE as usize)
-                .unwrap_or(0);
-            if reloc_bytes > 0 {
+                .ok_or(LoadError::BadContainer)?;
+            let reloc_slice = if reloc_bytes > 0 {
                 let ro = hdr.reloc_off as usize;
-                if ro + reloc_bytes <= raw_bytes.len() {
-                    aad_buf.extend_from_slice(&raw_bytes[ro..ro + reloc_bytes]);
+                let end = ro.checked_add(reloc_bytes).ok_or(LoadError::BadContainer)?;
+                Some(raw_bytes.get(ro..end).ok_or(LoadError::BadContainer)?)
+            } else {
+                None
+            };
+            let aad_len = (lmod::header::HEADER_SIZE as usize)
+                .checked_add(enc_header_len)
+                .and_then(|n| n.checked_add(container.modinfo().len()))
+                .and_then(|n| n.checked_add(reloc_slice.map_or(0, |s| s.len())))
+                .ok_or(LoadError::BadContainer)?;
+            let mut region = platform.alloc_rw(aad_len)?;
+            {
+                let aad = unsafe { region.as_mut_slice() };
+                let mut cursor = 0usize;
+                append_bytes(aad, &mut cursor, &aad_header)?;
+                append_bytes(aad, &mut cursor, &eh_bytes[..enc_header_len])?;
+                let tag_off_in_eh = aad_header.len() + 4 + lmod::enc::NONCE_LEN;
+                aad[tag_off_in_eh..tag_off_in_eh + lmod::enc::TAG_LEN].fill(0);
+                append_bytes(aad, &mut cursor, container.modinfo())?;
+                if let Some(reloc) = reloc_slice {
+                    append_bytes(aad, &mut cursor, reloc)?;
+                }
+                if cursor != aad_len {
+                    return Err(LoadError::BadContainer);
                 }
             }
+            aad_region = Some(region);
+        }
+    }
+
+    // Canonical v1 forbids dynamically installed ISRs. Modules may only
+    // advertise static ISR metadata for host/tooling; the device loader rejects
+    // them before placement or relocation.
+    let modinfo_data = container.modinfo();
+    if !modinfo_data.is_empty() {
+        let mi = lmod::modinfo::decode(modinfo_data).ok_or(LoadError::BadContainer)?;
+        if mi.has_isr() {
+            return Err(LoadError::ModuleDeclaresIsr);
         }
     }
 
@@ -309,110 +447,53 @@ pub fn load_module<'a>(
     #[cfg(feature = "encryption")]
     if let Some(cek) = &decrypted_cek {
         let payload_len = (code_len + rodata_len + data_len) as usize;
-        // Use the code_region as the temp buffer since it's writable.
-        // For sections beyond code (rodata, data), we extend into the
-        // code region's buffer by copying them after code.
-        // All three sections are already placed; decrypt in place.
         if payload_len > 0 {
-            // Copy rodata and data after code in a temp Vec.
-            let mut tmp = alloc::vec![0u8; rodata_len + data_len];
-            if rodata_len > 0 {
-                if let Some(ref ro) = rodata_region {
-                    let cs = unsafe { ro.as_slice() };
-                    tmp[..rodata_len].copy_from_slice(&cs[..rodata_len]);
+            let mut payload_region = platform.alloc_rw(payload_len)?;
+            {
+                let payload = unsafe { payload_region.as_mut_slice() };
+                let mut cursor = 0usize;
+                append_bytes(payload, &mut cursor, &code_region.as_slice()[..code_len])?;
+                if rodata_len > 0 {
+                    let ro = rodata_region.as_ref().ok_or(LoadError::BadContainer)?;
+                    append_bytes(payload, &mut cursor, &ro.as_slice()[..rodata_len])?;
                 }
-            }
-            if data_len > 0 {
-                if let Some(ref rw) = data_region {
-                    let cs = unsafe { rw.as_slice() };
-                    tmp[rodata_len..rodata_len + data_len].copy_from_slice(&cs[..data_len]);
+                if data_len > 0 {
+                    let rw = data_region.as_ref().ok_or(LoadError::BadContainer)?;
+                    append_bytes(payload, &mut cursor, &rw.as_slice()[..data_len])?;
                 }
-            }
-
-            let mut cs = unsafe { code_region.as_mut_slice() };
-            // Extend cs logically to hold the full payload by extending
-            // the mutable slice.  Since code_region has code_len bytes
-            // but we need code_len + rodata_len + data_len, we use the
-            // available writable memory after code_region (if any).
-            // This is safe because alloc_exec gave us a region that may
-            // be larger than code_len (page-aligned).
-            let total_extend = rodata_len + data_len;
-            if total_extend > 0 {
-                let extra = cs.len().saturating_sub(code_len);
-                if extra >= total_extend {
-                    // Append rodata+data after code in the code region.
-                    cs[code_len..code_len + rodata_len].copy_from_slice(&tmp[..rodata_len]);
-                    if data_len > 0 {
-                        cs[code_len + rodata_len..payload_len]
-                            .copy_from_slice(&tmp[rodata_len..rodata_len + data_len]);
-                    }
-                    // Decrypt the full payload in place (code region).
-                    crate::crypto::chacha20poly1305::decrypt_payload(
-                        cek,
-                        &decrypted_nonce,
-                        &decrypted_tag,
-                        &aad_buf,
-                        &mut cs[..payload_len],
-                    )
-                    .map_err(|_| LoadError::EncAuthFail)?;
-
-                    // Scatter back to rodata and data regions.
-                    if rodata_len > 0 {
-                        if let Some(ref mut ro) = rodata_region {
-                            let ro_slice = unsafe { ro.as_mut_slice() };
-                            ro_slice[..rodata_len]
-                                .copy_from_slice(&cs[code_len..code_len + rodata_len]);
-                        }
-                    }
-                    if data_len > 0 {
-                        if let Some(ref mut rw) = data_region {
-                            let rw_slice = unsafe { rw.as_mut_slice() };
-                            rw_slice[..data_len]
-                                .copy_from_slice(&cs[code_len + rodata_len..payload_len]);
-                        }
-                    }
-                } else {
-                    // Not enough extra space — use a temp Vec (rare).
-                    let mut payload_buf = alloc::vec![0u8; payload_len];
-                    payload_buf[..code_len].copy_from_slice(&cs[..code_len]);
-                    payload_buf[code_len..code_len + rodata_len]
-                        .copy_from_slice(&tmp[..rodata_len]);
-                    payload_buf[code_len + rodata_len..payload_len]
-                        .copy_from_slice(&tmp[rodata_len..rodata_len + data_len]);
-                    crate::crypto::chacha20poly1305::decrypt_payload(
-                        cek,
-                        &decrypted_nonce,
-                        &decrypted_tag,
-                        &aad_buf,
-                        &mut payload_buf,
-                    )
-                    .map_err(|_| LoadError::EncAuthFail)?;
-                    cs[..code_len].copy_from_slice(&payload_buf[..code_len]);
-                    if rodata_len > 0 {
-                        if let Some(ref mut ro) = rodata_region {
-                            let ro_slice = unsafe { ro.as_mut_slice() };
-                            ro_slice[..rodata_len]
-                                .copy_from_slice(&payload_buf[code_len..code_len + rodata_len]);
-                        }
-                    }
-                    if data_len > 0 {
-                        if let Some(ref mut rw) = data_region {
-                            let rw_slice = unsafe { rw.as_mut_slice() };
-                            rw_slice[..data_len]
-                                .copy_from_slice(&payload_buf[code_len + rodata_len..payload_len]);
-                        }
-                    }
+                if cursor != payload_len {
+                    return Err(LoadError::BadContainer);
                 }
-            } else {
-                // Only code section — decrypt directly in code region.
+                let aad = aad_region
+                    .as_ref()
+                    .ok_or(LoadError::EncBadHeader)?
+                    .as_slice();
                 crate::crypto::chacha20poly1305::decrypt_payload(
                     cek,
                     &decrypted_nonce,
                     &decrypted_tag,
-                    &aad_buf,
-                    &mut cs[..code_len],
+                    aad,
+                    payload,
                 )
                 .map_err(|_| LoadError::EncAuthFail)?;
+            }
+
+            let payload = payload_region.as_slice();
+            let code_slice = unsafe { code_region.as_mut_slice() };
+            code_slice[..code_len].copy_from_slice(&payload[..code_len]);
+            if rodata_len > 0 {
+                if let Some(ref mut ro) = rodata_region {
+                    let ro_slice = unsafe { ro.as_mut_slice() };
+                    ro_slice[..rodata_len]
+                        .copy_from_slice(&payload[code_len..code_len + rodata_len]);
+                }
+            }
+            if data_len > 0 {
+                if let Some(ref mut rw) = data_region {
+                    let rw_slice = unsafe { rw.as_mut_slice() };
+                    rw_slice[..data_len]
+                        .copy_from_slice(&payload[code_len + rodata_len..payload_len]);
+                }
             }
         }
     }
@@ -1058,7 +1139,7 @@ mod tests {
     // -------------------------------------------------------------------
 
     #[test]
-    fn isr_module_loads() {
+    fn isr_module_rejected() {
         let code = [0xC3u8];
         let key = [0xabu8; 32];
         let abi_hash = lmod::abi_hash::compute_abi_hash(1, 8, 64, lmod::modinfo::MODINFO_VER);
@@ -1087,7 +1168,7 @@ mod tests {
         let mut map: SymMap<'_, 256> = SymMap::new();
         let mut set = LoadedSet::<64>::new();
         let result = load_module(&container, &mut plat, &mut map, &mut set);
-        assert!(result.is_ok(), "ISR-bearing module should load");
+        assert_eq!(result.unwrap_err(), LoadError::ModuleDeclaresIsr);
     }
 
     #[test]

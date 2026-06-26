@@ -618,7 +618,10 @@ fn dynamic_lmod_runs_under_qemu() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
-    assert!(out_dir.join("image.elf").exists(), "dynamic firmware missing");
+    assert!(
+        out_dir.join("image.elf").exists(),
+        "dynamic firmware missing"
+    );
     assert!(out_dir.join("Main.lmod").exists(), "packed lmod missing");
     assert!(
         out_dir.join("modpack_generated.o").exists(),

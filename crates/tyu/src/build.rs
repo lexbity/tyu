@@ -13,10 +13,11 @@ use std::process::Command;
 use codegen_core::{AssemblerKind, Feature, FeatureSet, Target};
 use lang_symtab_gen::{extract_runtime_symbols, render_asm, render_names, AsmFlavor};
 
-use crate::args::{BuildArgs, BuildMode};
+use crate::args::{BuildArgs, BuildMode, EncryptMode};
 use crate::cache::{self, BuildCache};
 use crate::error::TyuError;
 use crate::graph::{resolve_graph, ModuleNode};
+use crate::keys::{KeyMaterial, KeyRef};
 use crate::platform::{self, ResolvedPlatformSelection};
 use crate::toolchain;
 
@@ -130,7 +131,15 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
 
     let mode = effective_build_mode(args, target);
     let (final_image, exec_image) = if mode == BuildMode::Dynamic {
-        build_dynamic_image(&ctx, feature_set, &module_objs, modules.last())?
+        build_dynamic_image(
+            &ctx,
+            feature_set,
+            &module_objs,
+            modules.last(),
+            args.metal_sign_key.as_deref(),
+            args.metal_kek.as_deref(),
+            args.metal_encrypt_mode,
+        )?
     } else {
         let mut objs = module_objs.clone();
         let runtime_objs = assemble_runtime_for_context_mode(&ctx, feature_set, BuildMode::Static)?;
@@ -189,23 +198,226 @@ fn build_dynamic_image(
     feature_set: FeatureSet,
     module_objs: &[PathBuf],
     root_module: Option<&ModuleNode>,
+    metal_sign_key: Option<&str>,
+    metal_kek: Option<&str>,
+    metal_encrypt_mode: Option<EncryptMode>,
 ) -> Result<(PathBuf, PathBuf), TyuError> {
     let root_obj = module_objs
         .last()
         .ok_or_else(|| TyuError::Build("no root module object to pack".into()))?;
     let app_lmod = pack_final_lmod(root_obj, &ctx.out_dir, root_module.map(|m| m.name.as_str()))
         .map_err(TyuError::Build)?;
+    let sign_key = resolve_metal_sign_key(metal_sign_key)?;
+    let kek = resolve_metal_kek(metal_kek)?;
+    if kek.is_some() && sign_key.is_none() {
+        return Err(TyuError::Build(
+            "--metal-kek requires --metal-sign-key so encrypted modules are authenticated before decrypt".into(),
+        ));
+    }
+    if metal_encrypt_mode.is_some() && kek.is_none() {
+        return Err(TyuError::Build(
+            "--metal-encrypt requires --metal-kek".into(),
+        ));
+    }
+    if let Some(kek) = kek.as_ref() {
+        let encrypt_kek = test_encrypt_kek_override()?.unwrap_or(*kek);
+        encrypt_lmod_in_place(
+            &app_lmod,
+            &encrypt_kek,
+            metal_encrypt_mode.unwrap_or(EncryptMode::Fleet),
+        )?;
+    }
+    if let Some(key) = sign_key.as_ref() {
+        sign_lmod_in_place(&app_lmod, key)?;
+    }
+    maybe_apply_test_lmod_mutation(&app_lmod)?;
 
     let mut firmware_objs =
         assemble_runtime_for_context_mode(ctx, feature_set, BuildMode::Dynamic)?;
+    if sign_key.is_some() || kek.is_some() {
+        firmware_objs.push(assemble_keys_object(
+            ctx.target,
+            &ctx.out_dir,
+            sign_key.as_ref(),
+            kek.as_ref(),
+            metal_encrypt_mode.unwrap_or(EncryptMode::Fleet),
+        )?);
+    }
     firmware_objs.push(assemble_modpack_object(
         ctx.target,
         &ctx.out_dir,
         &app_lmod,
     )?);
-    firmware_objs.push(build_device_loader_staticlib(ctx.target)?);
+    firmware_objs.push(build_device_loader_staticlib(
+        ctx.target,
+        sign_key.is_some(),
+        kek.is_some(),
+    )?);
     let firmware = link_image_for_context(ctx, &firmware_objs)?;
     Ok((firmware.clone(), firmware))
+}
+
+fn resolve_metal_sign_key(keyref: Option<&str>) -> Result<Option<[u8; 32]>, TyuError> {
+    let Some(keyref) = keyref else {
+        return Ok(None);
+    };
+    let parsed = KeyRef::parse(keyref).map_err(TyuError::Key)?;
+    let material = KeyMaterial::resolve(&parsed).map_err(TyuError::Key)?;
+    let key = material.try_as_32bytes().map_err(TyuError::Key)?.to_owned();
+    Ok(Some(key))
+}
+
+fn resolve_metal_kek(keyref: Option<&str>) -> Result<Option<[u8; 32]>, TyuError> {
+    let Some(keyref) = keyref else {
+        return Ok(None);
+    };
+    let parsed = KeyRef::parse(keyref).map_err(TyuError::Key)?;
+    let material = KeyMaterial::resolve(&parsed).map_err(TyuError::Key)?;
+    let key = material.try_as_32bytes().map_err(TyuError::Key)?.to_owned();
+    Ok(Some(key))
+}
+
+fn test_encrypt_kek_override() -> Result<Option<[u8; 32]>, TyuError> {
+    let Ok(hex_key) = std::env::var("TYU_TEST_ENCRYPT_WITH_KEK") else {
+        return Ok(None);
+    };
+    let bytes = hex::decode(hex_key.trim()).map_err(|e| {
+        TyuError::Key(format!(
+            "TYU_TEST_ENCRYPT_WITH_KEK must be a 32-byte hex key: {}",
+            e
+        ))
+    })?;
+    let arr: [u8; 32] = bytes.try_into().map_err(|bytes: Vec<u8>| {
+        TyuError::Key(format!(
+            "TYU_TEST_ENCRYPT_WITH_KEK must be 32 bytes, got {} bytes",
+            bytes.len()
+        ))
+    })?;
+    Ok(Some(arr))
+}
+
+fn encrypt_lmod_in_place(
+    lmod_path: &Path,
+    kek: &[u8; 32],
+    mode: EncryptMode,
+) -> Result<(), TyuError> {
+    let bytes = fs::read(lmod_path).map_err(TyuError::Io)?;
+    let encrypted = match mode {
+        EncryptMode::Fleet => lmod_encrypt::encrypt_fleet(&bytes, kek),
+        EncryptMode::Device => {
+            let keys = [(String::from("qemu-device"), *kek)];
+            lmod_encrypt::encrypt_device(&bytes, &keys)
+        }
+        EncryptMode::None => {
+            return Err(TyuError::Build(
+                "--metal-encrypt=none is invalid with --metal-kek".into(),
+            ));
+        }
+    }
+    .map_err(|e| TyuError::Build(format!("lmod-encrypt: {}", e)))?;
+    fs::write(lmod_path, encrypted).map_err(TyuError::Io)
+}
+
+fn sign_lmod_in_place(lmod_path: &Path, key: &[u8; 32]) -> Result<(), TyuError> {
+    let bytes = fs::read(lmod_path).map_err(TyuError::Io)?;
+    let signed =
+        lmod_sign::sign(&bytes, key).map_err(|e| TyuError::Build(format!("lmod-sign: {}", e)))?;
+    fs::write(lmod_path, signed).map_err(TyuError::Io)
+}
+
+fn maybe_apply_test_lmod_mutation(lmod_path: &Path) -> Result<(), TyuError> {
+    let Ok(mutation) = std::env::var("TYU_TEST_MUTATE_LMOD") else {
+        return Ok(());
+    };
+    let mut bytes = fs::read(lmod_path).map_err(TyuError::Io)?;
+    match mutation.as_str() {
+        "truncate" => {
+            let new_len = bytes.len().saturating_sub(1).max(1);
+            bytes.truncate(new_len);
+        }
+        "abi-zero" => {
+            if bytes.len() < 16 {
+                return Err(TyuError::Build(
+                    "TYU_TEST_MUTATE_LMOD=abi-zero needs a full lmod header".into(),
+                ));
+            }
+            bytes[8..16].fill(0);
+        }
+        "has-isr" => {
+            let modinfo_flags = lmod_modinfo_flags_offset(&bytes)?;
+            bytes[modinfo_flags..modinfo_flags + 2].copy_from_slice(&1u16.to_le_bytes());
+        }
+        "reloc-unsupported" => {
+            let reloc_kind = lmod_first_reloc_kind_offset(&bytes)?;
+            bytes[reloc_kind] = 0xff;
+        }
+        "symbol-unresolved" => {
+            let reloc_sym_hash = lmod_first_reloc_sym_hash_offset(&bytes)?;
+            bytes[reloc_sym_hash..reloc_sym_hash + 8]
+                .copy_from_slice(&0xfeed_dead_beef_cafeu64.to_le_bytes());
+        }
+        other => {
+            return Err(TyuError::Build(format!(
+                "unknown TYU_TEST_MUTATE_LMOD value '{}'",
+                other
+            )));
+        }
+    }
+    fs::write(lmod_path, bytes).map_err(TyuError::Io)
+}
+
+fn lmod_modinfo_flags_offset(bytes: &[u8]) -> Result<usize, TyuError> {
+    if bytes.len() < lmod::header::HEADER_SIZE as usize {
+        return Err(TyuError::Build(
+            "test lmod mutation: header too short".into(),
+        ));
+    }
+    let modinfo_off = u32::from_le_bytes(bytes[20..24].try_into().unwrap()) as usize;
+    let modinfo_len = u32::from_le_bytes(bytes[24..28].try_into().unwrap()) as usize;
+    if modinfo_len < 8
+        || modinfo_off
+            .checked_add(8)
+            .is_none_or(|end| end > bytes.len())
+    {
+        return Err(TyuError::Build(
+            "test lmod mutation: modinfo flags out of range".into(),
+        ));
+    }
+    Ok(modinfo_off + 6)
+}
+
+fn lmod_first_reloc_kind_offset(bytes: &[u8]) -> Result<usize, TyuError> {
+    let reloc_off = lmod_first_reloc_offset(bytes)?;
+    Ok(reloc_off + 12)
+}
+
+fn lmod_first_reloc_sym_hash_offset(bytes: &[u8]) -> Result<usize, TyuError> {
+    let reloc_off = lmod_first_reloc_offset(bytes)?;
+    Ok(reloc_off + 4)
+}
+
+fn lmod_first_reloc_offset(bytes: &[u8]) -> Result<usize, TyuError> {
+    if bytes.len() < lmod::header::HEADER_SIZE as usize {
+        return Err(TyuError::Build(
+            "test lmod mutation: header too short".into(),
+        ));
+    }
+    let reloc_off = u32::from_le_bytes(bytes[56..60].try_into().unwrap()) as usize;
+    let reloc_count = u32::from_le_bytes(bytes[60..64].try_into().unwrap());
+    if reloc_count == 0 {
+        return Err(TyuError::Build(
+            "test lmod mutation needs at least one relocation".into(),
+        ));
+    }
+    if reloc_off
+        .checked_add(lmod::reloc::RELOC_ENTRY_SIZE as usize)
+        .is_none_or(|end| end > bytes.len())
+    {
+        return Err(TyuError::Build(
+            "test lmod mutation: first relocation out of range".into(),
+        ));
+    }
+    Ok(reloc_off)
 }
 
 pub fn resolve_build_context(args: &BuildArgs) -> Result<BuildContext, TyuError> {
@@ -864,6 +1076,68 @@ fn render_modpack_asm(
     }
 }
 
+fn assemble_keys_object(
+    target: Target,
+    out_dir: &Path,
+    sign_key: Option<&[u8; 32]>,
+    kek: Option<&[u8; 32]>,
+    metal_encrypt_mode: EncryptMode,
+) -> Result<PathBuf, TyuError> {
+    let asm_path = out_dir.join("keys_generated.asm");
+    let obj_path = out_dir.join("keys_generated.o");
+    let asm = render_keys_asm(target, sign_key, kek, metal_encrypt_mode);
+    fs::write(&asm_path, asm).map_err(TyuError::Io)?;
+    assemble_asm_file(target, &asm_path, &obj_path, Some(out_dir), "keys")?;
+    Ok(obj_path)
+}
+
+fn render_keys_asm(
+    target: Target,
+    sign_key: Option<&[u8; 32]>,
+    kek: Option<&[u8; 32]>,
+    metal_encrypt_mode: EncryptMode,
+) -> String {
+    let mut mask = 0u8;
+    let mut key_data = Vec::new();
+    if let Some(sign_key) = sign_key {
+        mask |= 1;
+        key_data.extend_from_slice(sign_key);
+    }
+    if let Some(kek) = kek {
+        mask |= match metal_encrypt_mode {
+            EncryptMode::Fleet | EncryptMode::None => 2,
+            EncryptMode::Device => 4,
+        };
+        key_data.extend_from_slice(kek);
+    }
+    let key_bytes = key_data
+        .iter()
+        .map(|byte| format!("0x{byte:02x}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let key_line_fasm = if key_bytes.is_empty() {
+        String::new()
+    } else {
+        format!("    db {key_bytes}\n")
+    };
+    let key_line_gas = if key_bytes.is_empty() {
+        String::new()
+    } else {
+        format!(".byte {key_bytes}\n")
+    };
+    match target.spec().assembler {
+        AssemblerKind::Fasm => format!(
+            "format ELF64\n\nsection '.lang.keys' writeable\n    db {mask}\n    db 0, 0, 0, 0, 0, 0, 0\n{key_line_fasm}"
+        ),
+        AssemblerKind::GasArm => format!(
+            ".syntax unified\n.thumb\n\n.section .lang.keys, \"a\", %progbits\n.balign 8\n.byte {mask}\n.byte 0, 0, 0, 0, 0, 0, 0\n{key_line_gas}.balign 8\n.section .note.GNU-stack, \"\", %progbits\n"
+        ),
+        AssemblerKind::GasRiscV => format!(
+            ".section .lang.keys, \"a\", @progbits\n.balign 8\n.byte {mask}\n.byte 0, 0, 0, 0, 0, 0, 0\n{key_line_gas}.balign 8\n.section .note.GNU-stack, \"\", @progbits\n"
+        ),
+    }
+}
+
 fn gas_string_literal(path: &str, display_path: &Path) -> Result<String, TyuError> {
     if path.contains('"') || path.contains('\\') || path.bytes().any(|b| b < 0x20) {
         return Err(TyuError::Build(format!(
@@ -874,7 +1148,11 @@ fn gas_string_literal(path: &str, display_path: &Path) -> Result<String, TyuErro
     Ok(path.to_string())
 }
 
-fn build_device_loader_staticlib(target: Target) -> Result<PathBuf, TyuError> {
+fn build_device_loader_staticlib(
+    target: Target,
+    signing: bool,
+    encryption: bool,
+) -> Result<PathBuf, TyuError> {
     let triple = device_loader_rust_target(target)?;
     let profile = device_loader_profile(target)?;
     let target_dir = std::env::var_os("CARGO_TARGET_DIR")
@@ -887,6 +1165,8 @@ fn build_device_loader_staticlib(target: Target) -> Result<PathBuf, TyuError> {
     let mut cmd = Command::new("cargo");
     cmd.env("CARGO_TARGET_DIR", &target_dir).args([
         "build",
+        "--locked",
+        "--offline",
         "--manifest-path",
         manifest.to_string_lossy().as_ref(),
         "--target",
@@ -894,6 +1174,12 @@ fn build_device_loader_staticlib(target: Target) -> Result<PathBuf, TyuError> {
     ]);
     if target == Target::RiscV32UnknownNone {
         cmd.args(["-Z", "build-std=core,alloc"]);
+    }
+    if signing {
+        cmd.args(["--features", "signing"]);
+    }
+    if encryption {
+        cmd.args(["--features", "encryption"]);
     }
     if profile == "release" {
         cmd.arg("--release");
@@ -927,8 +1213,9 @@ fn device_loader_rust_target(target: Target) -> Result<&'static str, TyuError> {
 
 fn device_loader_profile(target: Target) -> Result<&'static str, TyuError> {
     match target {
-        Target::X86_64UnknownNone => Ok("debug"),
-        Target::ArmV7MUnknownNone | Target::RiscV32UnknownNone => Ok("release"),
+        Target::X86_64UnknownNone | Target::ArmV7MUnknownNone | Target::RiscV32UnknownNone => {
+            Ok("release")
+        }
         Target::X86_64UnknownLinuxGnu => Err(TyuError::Build(
             "--mode=dynamic is only supported for bare-metal QEMU targets".into(),
         )),

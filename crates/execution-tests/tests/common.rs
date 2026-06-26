@@ -83,6 +83,44 @@ pub const RISCV_NM: &[&str] = &[
     "riscv64-linux-gnu-nm",
 ];
 
+#[derive(Clone, Copy)]
+pub struct DynamicTarget {
+    pub target: Target,
+    pub triple: &'static str,
+    pub tools: &'static [&'static [&'static str]],
+}
+
+pub const X86_DYNAMIC_TOOLS: &[&[&str]] =
+    &[&["langc"], &["fasm"], &["ld"], &["qemu-system-x86_64"]];
+
+pub const ARM_DYNAMIC_TOOLS: &[&[&str]] = &[
+    &["langc"],
+    &["arm-none-eabi-as"],
+    &["arm-none-eabi-ld"],
+    &["qemu-system-arm"],
+];
+
+pub const RISCV_DYNAMIC_TOOLS: &[&[&str]] =
+    &[&["langc"], RISCV_AS, RISCV_LD, &["qemu-system-riscv32"]];
+
+pub const DYNAMIC_TARGETS: &[DynamicTarget] = &[
+    DynamicTarget {
+        target: Target::X86_64UnknownNone,
+        triple: "x86_64-unknown-none",
+        tools: X86_DYNAMIC_TOOLS,
+    },
+    DynamicTarget {
+        target: Target::ArmV7MUnknownNone,
+        triple: "armv7m-unknown-none",
+        tools: ARM_DYNAMIC_TOOLS,
+    },
+    DynamicTarget {
+        target: Target::RiscV32UnknownNone,
+        triple: "riscv32-unknown-none",
+        tools: RISCV_DYNAMIC_TOOLS,
+    },
+];
+
 /// Returns true if a named binary exists — either on `PATH`, in
 /// `target/debug/`, or in `target/release/` (for workspace-built
 /// binaries like `langc`, `tyu`).

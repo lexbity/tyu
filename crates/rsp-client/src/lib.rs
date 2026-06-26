@@ -799,6 +799,12 @@ mod tests {
         let qemu_args = [
             "-machine",
             "virt",
+            // The test ELF links at 0x80000000; without `-bios none` QEMU loads
+            // OpenSBI at the same address and aborts ("ROM regions overlapping")
+            // before the gdb stub comes up. The product runner passes the same
+            // flag (see `debug_args_riscv_preserve_bios_none`).
+            "-bios",
+            "none",
             "-semihosting-config",
             "enable=on,target=native",
             "-nographic",

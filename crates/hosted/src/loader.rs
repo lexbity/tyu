@@ -9,6 +9,7 @@ use loader_core::platform::{LoaderPlatform, Region, TrustLevel};
 /// Load error codes.
 const E_MMAP_FAILED: u32 = 1;
 const E_MPROTECT_FAILED: u32 = 2;
+const PAGE_ALIGN: usize = 4096;
 
 pub struct HostedLoaderPlatform {
     expected_abi_hash: u64,
@@ -98,11 +99,12 @@ impl HostedLoaderPlatform {
 impl LoaderPlatform for HostedLoaderPlatform {
     fn alloc_exec(&mut self, len: usize) -> Result<Region, u32> {
         if let Some(ref mut b) = self.block {
-            if b.used + len > b.capacity {
+            let used = align_up(b.used, PAGE_ALIGN).ok_or(E_MMAP_FAILED)?;
+            if used + len > b.capacity {
                 return Err(E_MMAP_FAILED);
             }
-            let ptr = unsafe { b.base.add(b.used) };
-            b.used += len;
+            let ptr = unsafe { b.base.add(used) };
+            b.used = used + len;
             return unsafe { Ok(Region::from_raw_parts(ptr, len)) };
         }
         let slice = mem::mmap_anon_rw(len).map_err(|_| E_MMAP_FAILED)?;
@@ -181,6 +183,11 @@ impl LoaderPlatform for HostedLoaderPlatform {
     fn release(&mut self, region: &mut Region) {
         self.release_region(region);
     }
+}
+
+fn align_up(value: usize, align: usize) -> Option<usize> {
+    debug_assert!(align.is_power_of_two());
+    value.checked_add(align - 1).map(|v| v & !(align - 1))
 }
 
 #[cfg(test)]

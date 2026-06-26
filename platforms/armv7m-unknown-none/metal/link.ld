@@ -31,6 +31,10 @@ SECTIONS
         __lang_symtab_start = .;
         *(.lang.symtab)
         __lang_symtab_end = .;
+        . = ALIGN(8);
+        __lang_keys_start = .;
+        *(.lang.keys)
+        __lang_keys_end = .;
         . = ALIGN(4);
         *(.ARM.exidx*)
         *(.gnu.linkonce.armexidx.*)
@@ -64,5 +68,5 @@ SECTIONS
         __lang_loadheap_start = .;
         . = . + 2K;
         __lang_loadheap_end = .;
-    } > FLASH
+    } > SRAM
 }

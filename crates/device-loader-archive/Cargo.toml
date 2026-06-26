@@ -9,3 +9,7 @@ crate-type = ["staticlib"]
 
 [dependencies]
 loader-core = { path = "../loader-core", features = ["device-loader"] }
+
+[features]
+signing = ["loader-core/signing"]
+encryption = ["loader-core/encryption"]

@@ -10,18 +10,17 @@ description = "Core loader implementation for Tyu `.lmod` modules."
 # variant in ci.yml).  Both states are meaningful.
 [dependencies]
 lmod = { path = "../lmod" }
-chacha20poly1305 = { version = "0.10", default-features = false, optional = true }
-aead = { version = "0.5", default-features = false, features = ["alloc", "getrandom"], optional = true }
-getrandom = { version = "0.2", default-features = false, optional = true }
-# On Linux, getrandom uses the getrandom syscall by default with
-# /dev/urandom fallback. No extra features needed.
+hmac = { version = "0.12", default-features = false, optional = true }
+sha2 = { version = "0.10", default-features = false, optional = true }
 
 [dev-dependencies]
 hmac = { version = "0.12", default-features = false }
 sha2 = { version = "0.10", default-features = false }
+chacha20poly1305 = { version = "0.10", default-features = false }
 lmod-sign = { path = "../lmod-sign" }
 lmod-encrypt = { path = "../lmod-encrypt" }
 
 [features]
 device-loader = []
-encryption = ["chacha20poly1305", "aead", "getrandom"]
+signing = ["hmac", "sha2"]
+encryption = []

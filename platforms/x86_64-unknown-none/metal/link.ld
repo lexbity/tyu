@@ -25,6 +25,11 @@ SECTIONS {
         *(.lang.symtab)
         PROVIDE(__lang_symtab_end = .);
     } :rodata
+    .lang.keys : {
+        PROVIDE(__lang_keys_start = .);
+        *(.lang.keys)
+        PROVIDE(__lang_keys_end = .);
+    } :rodata
     .data       : { *(.data) }       :rwdata
     .modpack    : {
         PROVIDE(__lang_modpack_start = .);

@@ -54,7 +54,10 @@ fn load_with_kek(signed_path: &PathBuf, kek: &[u8; 32]) -> Result<(), u32> {
     let raw = std::fs::read(signed_path).unwrap();
     let container = lmod::validate::Container::parse(&raw).unwrap();
     let abi_hash = container.header().abi_hash;
-    let bsize = (container.code().len() + 4095) & !4095;
+    let payload_len = container.code().len() + container.rodata().len() + container.data().len();
+    let bsize = ((raw.len() + payload_len.saturating_mul(2) + container.bss_len() as usize + 4095)
+        & !4095)
+        .max(1024 * 1024);
 
     let mut plat = HostedLoaderPlatform::new(abi_hash)
         .with_key(&[0xab; 32], TrustLevel::One)
@@ -239,9 +242,11 @@ fn deploy_device_isolation_via_loader() {
     let signed = out_dir.join("deploy").join("signed.lmod");
 
     // Loading with a's key must succeed.
+    let result = load_with_kek(&signed, &[0xaa; 32]);
     assert!(
-        load_with_kek(&signed, &[0xaa; 32]).is_ok(),
-        "D-4: device-a's KEK must decrypt the artifact"
+        result.is_ok(),
+        "D-4: device-a's KEK must decrypt the artifact, got {:?}",
+        result
     );
 
     // Loading with c's key (not in the device set) must fail.
