@@ -279,9 +279,7 @@ pub fn run(args: &TestArgs) -> Result<(), String> {
     // from this line to guard against a vacuous pass (zero fixtures run).
     if !(args.format == ReportFormat::Json && args.report_out.is_none()) {
         let status = if any_failure { "FAILED" } else { "ok" };
-        println!(
-            "test result: {status}. {total_passed} passed; {total_failed} failed",
-        );
+        println!("test result: {status}. {total_passed} passed; {total_failed} failed",);
     }
 
     if any_failure || (args.qualify && report_has_failure(&report)) {
@@ -437,7 +435,11 @@ fn fixture_qemu_eligible(fixture: &FixtureEntry, target: Target) -> Option<Strin
         Some(q) => q,
         None => {
             // No QEMU at all → any Qemu-gated axis is ineligible.
-            if fixture.axes.iter().any(|a| matches!(a.gate(), AxisGate::Qemu(_))) {
+            if fixture
+                .axes
+                .iter()
+                .any(|a| matches!(a.gate(), AxisGate::Qemu(_)))
+            {
                 return Some("target has no QEMU support".into());
             }
             return None;
@@ -574,9 +576,7 @@ fn run_all_platforms_isolated(args: &TestArgs) -> Result<(), String> {
     let mut qemu_selections: Vec<TestSelection> = Vec::new();
     for pack in &all_packs {
         if pack.manifest.test.rung == platform::TestRung::Hardware {
-            aggregate
-                .selections
-                .push(hardware_report_entry(pack));
+            aggregate.selections.push(hardware_report_entry(pack));
             continue;
         }
         let selection = match platform::resolve_platform_selection(&root, pack.name(), None) {
@@ -734,8 +734,6 @@ fn synthetic_fail_selection(selection: &TestSelection, reason: String) -> Select
     acc.reasons.push(reason);
     acc.finish()
 }
-
-
 
 /// Build and run a single test suite (a set of fixtures).
 fn run_single_suite(
@@ -1262,7 +1260,9 @@ rung = "{rung}"
 
         let report = hardware_report_entry(&pack);
         assert_eq!(report.verdict, Verdict::NotApplicable);
-        assert!(report.reasons.contains(&"hardware-only: not emulator-tested".to_string()));
+        assert!(report
+            .reasons
+            .contains(&"hardware-only: not emulator-tested".to_string()));
         assert!(report.label.contains("rp2350"));
         assert!(report.target.contains("armv7m-unknown-none"));
     }
@@ -1550,8 +1550,7 @@ rung = "{rung}"
             for axis in &core_axes {
                 let has_fixture = manifest.fixtures.iter().any(|f| {
                     f.axes.contains(axis)
-                        && (f.targets.is_empty()
-                            || f.targets.iter().any(|t| t == triple))
+                        && (f.targets.is_empty() || f.targets.iter().any(|t| t == triple))
                 });
                 assert!(
                     has_fixture,
@@ -1571,8 +1570,8 @@ rung = "{rung}"
     #[test]
     fn rung_gate_validation() {
         let root = workspace_root();
-        let packs = platform::discover_platforms_in(&root)
-            .expect("rung gate: discover platform packs");
+        let packs =
+            platform::discover_platforms_in(&root).expect("rung gate: discover platform packs");
 
         for pack in &packs {
             if pack.manifest.test.rung != platform::TestRung::Qemu {
@@ -1596,5 +1595,3 @@ rung = "{rung}"
         }
     }
 }
-
-

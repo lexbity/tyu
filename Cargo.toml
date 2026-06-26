@@ -10,6 +10,7 @@ members = [
   "crates/codegen-arm",
   "crates/codegen-riscv",
   "crates/lang-assemble",
+  "crates/lang-symtab-gen",
   "crates/langc",
   "crates/semantics",
   "crates/tooling-tests",

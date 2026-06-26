@@ -1,0 +1,13 @@
+[package]
+name = "lang-symtab-gen"
+version = "0.1.0"
+edition = "2021"
+description = "Generate Tyu firmware runtime symbol tables from runtime objects."
+
+[[bin]]
+name = "lang-symtab-gen"
+path = "src/main.rs"
+
+[dependencies]
+lmod = { path = "../lmod" }
+object = "0.36"

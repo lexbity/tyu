@@ -1515,7 +1515,10 @@ pub fn resolve_platform_selection(
 /// by checking `sysroot/<triple>/platform/<svc>.mod` file presence.
 pub fn capabilities_for_target(target: Target) -> HashSet<String> {
     let triple = std::str::from_utf8(target.triple()).unwrap_or("");
-    let plat_dir = workspace_root().join("sysroot").join(triple).join("platform");
+    let plat_dir = workspace_root()
+        .join("sysroot")
+        .join(triple)
+        .join("platform");
 
     let mut caps = HashSet::new();
 

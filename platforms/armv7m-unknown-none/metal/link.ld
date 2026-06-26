@@ -27,6 +27,7 @@ SECTIONS
         *(.text.*)
         *(.rodata)
         *(.rodata.*)
+        *(.lang.symtab)
     } > FLASH
 
     .data : ALIGN(4)

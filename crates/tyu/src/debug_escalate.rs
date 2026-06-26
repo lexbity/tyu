@@ -411,10 +411,8 @@ pub fn escalate(
 
         // 8. Resolve and render.
         let elf_data = std::fs::read(image).unwrap_or_default();
-        let modinfo_bytes =
-            crate::elf_reader::read_elf_section(&elf_data, b".lang.modinfo");
-        let debug_bytes =
-            crate::elf_reader::read_elf_section(&elf_data, b".lang.debug");
+        let modinfo_bytes = crate::elf_reader::read_elf_section(&elf_data, b".lang.modinfo");
+        let debug_bytes = crate::elf_reader::read_elf_section(&elf_data, b".lang.debug");
 
         let index = if let Some(ref dbg) = debug_bytes {
             diag_core::decode::ModinfoIndex::from_debug_bytes(dbg)
@@ -643,8 +641,7 @@ struct DebugWordInfo {
 /// Look up a word by name in the `.lang.debug` section of an ELF.
 fn lookup_in_debugsec(elf: &Path, name: &str) -> Option<DebugWordInfo> {
     let elf_data = std::fs::read(elf).ok()?;
-    let debug_bytes =
-        crate::elf_reader::read_elf_section(&elf_data, b".lang.debug")?;
+    let debug_bytes = crate::elf_reader::read_elf_section(&elf_data, b".lang.debug")?;
 
     // Derive the sym_hash key. `symbol_at_pc` returns the mangled linker
     // symbol `w_<16-hex of fnv1a_u64(word_name)>` (see codegen ophelpers),
@@ -675,8 +672,7 @@ fn lookup_in_debugsec(elf: &Path, name: &str) -> Option<DebugWordInfo> {
 
 fn unique_unbounded_debug_word(elf: &Path) -> Option<DebugWordInfo> {
     let elf_data = std::fs::read(elf).ok()?;
-    let debug_bytes =
-        crate::elf_reader::read_elf_section(&elf_data, b".lang.debug")?;
+    let debug_bytes = crate::elf_reader::read_elf_section(&elf_data, b".lang.debug")?;
     let (count, _) = lmod::debugsec::decode_header(&debug_bytes)?;
 
     let mut candidate = None;

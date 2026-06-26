@@ -459,7 +459,9 @@ pub fn load_module<'a>(
             if exp.name == MOD_INIT_NAME {
                 continue;
             }
-            sym_guard.map.register(exp.name, code_base as usize)?;
+            sym_guard
+                .map
+                .register_with_hash(exp.sym_hash, exp.name, code_base as usize)?;
         }
     }
 

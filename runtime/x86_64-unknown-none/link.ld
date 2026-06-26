@@ -20,6 +20,7 @@ SECTIONS {
     .text.boot  : { *(.text.boot) }  :text
     .text       : { *(.text) }       :text
     .rodata     : { *(.rodata) }     :rodata
+    .lang.symtab : { *(.lang.symtab) } :rodata
     .data       : { *(.data) }       :rwdata
     .modpack    : { *(.modpack) }    :rwdata
     .bss        : {

@@ -64,16 +64,35 @@ fn load_with_kek(signed_path: &PathBuf, kek: &[u8; 32]) -> Result<(), u32> {
     let stub = stub_fn as *const () as usize;
     let ds_high = allocate_runtime_page();
     let mut map: SymMap<'_, 256> = SymMap::new();
-    map.register(b"__stack_overflow", stub).unwrap();
-    map.register(b"__lang_ds_high", ds_high).unwrap();
-    map.register(b"__lang_trap", stub).ok();
-    map.register(b"__lang_trap_loc", stub).ok();
-    // PASS_MOD imports `testio.write-byte` (fnv1a_u64 = accb676a903a06d9);
-    // stub it so symbol resolution completes for this load-only check.
-    map.register(b"w_accb676a903a06d9", stub).ok();
+    register_generated_runtime_symbols(signed_path, &mut map, stub, ds_high)?;
 
     let mut set = LoadedSet::<64>::new();
     load_module(&container, &mut plat, &mut map, &mut set)?;
+    Ok(())
+}
+
+fn register_generated_runtime_symbols(
+    signed_path: &PathBuf,
+    map: &mut SymMap<'_, 256>,
+    stub: usize,
+    ds_high: usize,
+) -> Result<(), u32> {
+    let out_dir = signed_path.parent().and_then(|p| p.parent()).ok_or(1u32)?;
+    let names = std::fs::read_to_string(out_dir.join("lang_symtab.names")).map_err(|_| 1u32)?;
+    for line in names.lines() {
+        let mut parts = line.split_whitespace();
+        let hash = parts
+            .next()
+            .and_then(|hex| u64::from_str_radix(hex, 16).ok())
+            .ok_or(1u32)?;
+        let name = parts.next().ok_or(1u32)?;
+        let addr = if name == "__lang_ds_high" {
+            ds_high
+        } else {
+            stub
+        };
+        map.register_runtime_hash(hash, addr)?;
+    }
     Ok(())
 }
 

@@ -507,7 +507,7 @@ pub fn pack(input: &[u8]) -> Result<Vec<u8>, PackError> {
             let sym = &symbols[sym_idx];
 
             if sym.shndx == SHN_UNDEF || (sym.name.is_empty() && sym_idx != 0) {
-                let sym_hash = lmod::hash::fnv1a_u64(sym.name.as_bytes());
+                let sym_hash = lmod::hash::linked_symbol_hash(sym.name.as_bytes());
                 let site_base = elf.lmod_section_base(target_idx, &lmod::header::LmodHeader::new());
                 import_relocs.push((site_base + r_offset, sym_hash, r_type as u8));
             } else if sym.shndx != SHN_ABS {

@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use codegen_core::{AssemblerKind, FeatureSet, Target};
+use lang_symtab_gen::{extract_runtime_symbols, render_asm, render_names, AsmFlavor};
 
 use crate::args::BuildArgs;
 use crate::cache::{self, BuildCache};
@@ -563,7 +564,19 @@ fn assemble_unit(
     }
     let out_path = out_dir.join(format!("{}.o", stem));
 
-    match spec.assembler {
+    assemble_asm_file(target, &asm_path, &out_path, Some(rt_dir), stem)?;
+
+    Ok(out_path)
+}
+
+fn assemble_asm_file(
+    target: Target,
+    asm_path: &Path,
+    out_path: &Path,
+    current_dir: Option<&Path>,
+    label: &str,
+) -> Result<(), TyuError> {
+    match target.spec().assembler {
         AssemblerKind::Fasm => {
             let status = Command::new("fasm")
                 .args([
@@ -573,7 +586,7 @@ fn assemble_unit(
                 .status()
                 .map_err(|e| TyuError::Build(format!("running fasm: {}", e)))?;
             if !status.success() {
-                return Err(TyuError::Build(format!("fasm failed to assemble '{}'", stem)).into());
+                return Err(TyuError::Build(format!("fasm failed to assemble '{}'", label)).into());
             }
         }
         AssemblerKind::GasArm => {
@@ -583,8 +596,11 @@ fn assemble_unit(
                     TyuError::Build(format!("invalid asm path '{}'", asm_path.display()))
                 })?
                 .to_owned();
-            let status = Command::new("arm-none-eabi-as")
-                .current_dir(rt_dir)
+            let mut cmd = Command::new("arm-none-eabi-as");
+            if let Some(dir) = current_dir {
+                cmd.current_dir(dir);
+            }
+            let status = cmd
                 .args([
                     "-mcpu=cortex-m3",
                     "-mthumb",
@@ -597,7 +613,7 @@ fn assemble_unit(
             if !status.success() {
                 return Err(TyuError::Build(format!(
                     "arm-none-eabi-as failed to assemble '{}'",
-                    stem
+                    label
                 ))
                 .into());
             }
@@ -614,8 +630,11 @@ fn assemble_unit(
                 "riscv64-linux-gnu-as",
             ])
             .map_err(|e| TyuError::Build(format!("resolving riscv assembler: {}", e)))?;
-            let status = Command::new(&asm)
-                .current_dir(rt_dir)
+            let mut cmd = Command::new(&asm);
+            if let Some(dir) = current_dir {
+                cmd.current_dir(dir);
+            }
+            let status = cmd
                 .args([
                     "-march=rv32im",
                     "-mabi=ilp32",
@@ -629,14 +648,14 @@ fn assemble_unit(
                 return Err(TyuError::Build(format!(
                     "{} failed to assemble '{}'",
                     asm.display(),
-                    stem
+                    label
                 ))
                 .into());
             }
         }
     }
 
-    Ok(out_path)
+    Ok(())
 }
 
 /// Assemble the mandatory core runtime and any optional feature-specific
@@ -666,7 +685,10 @@ pub fn assemble_runtime(
 
     // Core runtime is always assembled.
     let mut objs = Vec::new();
-    objs.push(assemble_unit(target, &rt_dir, "runtime", out_dir)?);
+    let runtime_obj = assemble_unit(target, &rt_dir, "runtime", out_dir)?;
+    let symtab_obj = generate_runtime_symtab(target, &runtime_obj, out_dir)?;
+    objs.push(runtime_obj);
+    objs.push(symtab_obj);
 
     // Feature-specific runtime units: assemble each stem that maps to
     // an enabled feature.  `assemble_unit` returns an error for missing
@@ -681,6 +703,28 @@ pub fn assemble_runtime(
     }
 
     Ok(objs)
+}
+
+fn generate_runtime_symtab(
+    target: Target,
+    runtime_obj: &Path,
+    out_dir: &Path,
+) -> Result<PathBuf, TyuError> {
+    let bytes = fs::read(runtime_obj).map_err(TyuError::Io)?;
+    let symbols = extract_runtime_symbols(&bytes)
+        .map_err(|e| TyuError::Build(format!("generating runtime symbol table: {}", e)))?;
+    let flavor = match target.spec().assembler {
+        AssemblerKind::Fasm => AsmFlavor::FasmX86_64,
+        AssemblerKind::GasArm | AssemblerKind::GasRiscV => AsmFlavor::Gas32,
+    };
+
+    let asm_path = out_dir.join("lang_symtab.asm");
+    let names_path = out_dir.join("lang_symtab.names");
+    let obj_path = out_dir.join("lang_symtab.o");
+    fs::write(&asm_path, render_asm(&symbols, flavor)).map_err(TyuError::Io)?;
+    fs::write(&names_path, render_names(&symbols)).map_err(TyuError::Io)?;
+    assemble_asm_file(target, &asm_path, &obj_path, Some(out_dir), "lang_symtab")?;
+    Ok(obj_path)
 }
 
 pub fn assemble_runtime_for_context(
@@ -836,6 +880,7 @@ fn render_linker_script(memory: &platform::MemorySection) -> Result<String, TyuE
     writeln!(&mut out, "    {{").unwrap();
     writeln!(&mut out, "        *(.text*)").unwrap();
     writeln!(&mut out, "        *(.rodata*)").unwrap();
+    writeln!(&mut out, "        *(.lang.symtab)").unwrap();
     writeln!(&mut out, "    }} > {}", flash.name).unwrap();
     writeln!(&mut out).unwrap();
     writeln!(&mut out, "    .data : ALIGN(4)").unwrap();

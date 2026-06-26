@@ -22,6 +22,7 @@ SECTIONS
         *(.text.*)
         *(.rodata)
         *(.rodata.*)
+        *(.lang.symtab)
     } > DRAM
 
     .data : ALIGN(4)

@@ -49,6 +49,11 @@ fn build_image(src: &str, dir_label: &str) -> std::path::PathBuf {
     out_dir.join("Main.lmod")
 }
 
+fn build_out_dir(src: &str, dir_label: &str) -> std::path::PathBuf {
+    let image = build_image(src, dir_label);
+    image.parent().unwrap().to_path_buf()
+}
+
 // ---------------------------------------------------------------------------
 // B-1: Basic .lmod structure
 // ---------------------------------------------------------------------------
@@ -65,6 +70,28 @@ fn build_minimal_x86_64_none_lmod() {
     let container = Container::parse(&data).unwrap();
     assert_eq!(container.header().format_ver, lmod::header::FORMAT_VER);
     assert!(!container.code().is_empty(), ".lmod must carry code");
+}
+
+#[test]
+fn build_generates_runtime_symtab_sidecar() {
+    if !require_tools(&["langc", "fasm", "ld"]) {
+        return;
+    }
+
+    let out_dir = build_out_dir(MINIMAL_MAIN, "runtime_symtab_x86_64");
+    let names = std::fs::read_to_string(out_dir.join("lang_symtab.names")).unwrap();
+    assert!(
+        names.contains("accb676a903a06d9 w_accb676a903a06d9"),
+        "runtime symtab must use the canonical platform-word hash"
+    );
+    assert!(
+        names.contains("__lang_ds_high"),
+        "runtime symtab must include __lang_* runtime symbols"
+    );
+    assert!(
+        names.contains("__stack_overflow"),
+        "runtime symtab must include stack overflow trap"
+    );
 }
 
 // ---------------------------------------------------------------------------
