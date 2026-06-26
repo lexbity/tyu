@@ -65,7 +65,8 @@ pub fn apply_import_reloc(
             if site_off + 4 > buf.len() {
                 return Err(LoadError::RelocUnsupported);
             }
-            let offset = (sym_addr as i64)
+            let branch_addr = sym_addr & !1;
+            let offset = (branch_addr as i64)
                 .wrapping_add(addend)
                 .wrapping_sub(site_addr as i64);
             // For Thumb BL, PC is ahead by 4 bytes (instruction is 4 bytes).
@@ -79,7 +80,8 @@ pub fn apply_import_reloc(
             if site_off + 4 > buf.len() {
                 return Err(LoadError::RelocUnsupported);
             }
-            let offset = (sym_addr as i64)
+            let branch_addr = sym_addr & !1;
+            let offset = (branch_addr as i64)
                 .wrapping_add(addend)
                 .wrapping_sub(site_addr as i64);
             // For Thumb B/BL, PC is ahead by 4 bytes.
@@ -100,15 +102,17 @@ pub fn apply_import_reloc(
 ///
 /// Instruction format for BL (ARMv7-M):
 ///   First halfword (at site_off):
-///     1111 0 S 11 1 J2 J1 0 imm10[9:0]
+///     1111 0 S imm10[9:0]
 ///   Second halfword (at site_off+2):
-///     1111 1 1 1 1 1 1 imm11[10:0]
+///     1111 1 J1 1 J2 imm11[10:0]
 ///
 /// Where:
 ///   S = (offset_half >> 23) & 1          (bit 10 of first hw)
-///   J1 = ((offset_half >> 22) & 1) ^ !S  (bit 13 of second hw)
-///   J2 = ((offset_half >> 21) & 1) ^ !S  (bit 11 of first hw)
-///   imm10 = (offset_half >> 12) & 0x3FF  (bits 9:0 of first hw)
+///   I1 = (offset_half >> 22) & 1
+///   I2 = (offset_half >> 21) & 1
+///   J1 = !(I1 ^ S)                       (bit 13 of second hw)
+///   J2 = !(I2 ^ S)                       (bit 11 of second hw)
+///   imm10 = (offset_half >> 11) & 0x3FF  (bits 9:0 of first hw)
 ///   imm11 = offset_half & 0x7FF          (bits 10:0 of second hw)
 fn encode_thumb_bl(insn: &mut [u8], offset: i64) -> Result<(), ()> {
     if offset & 1 != 0 {
@@ -122,27 +126,15 @@ fn encode_thumb_bl(insn: &mut [u8], offset: i64) -> Result<(), ()> {
 
     let h = half as u32;
     let s: u16 = ((h >> 23) & 1) as u16;
-    let not_s: u16 = 1 - s;
-    let j1: u16 = (((h >> 22) & 1) as u16) ^ not_s;
-    let j2: u16 = (((h >> 21) & 1) as u16) ^ not_s;
-    let imm10: u16 = ((h >> 12) & 0x3FF) as u16;
+    let i1: u16 = ((h >> 22) & 1) as u16;
+    let i2: u16 = ((h >> 21) & 1) as u16;
+    let j1: u16 = 1 ^ i1 ^ s;
+    let j2: u16 = 1 ^ i2 ^ s;
+    let imm10: u16 = ((h >> 11) & 0x3FF) as u16;
     let imm11: u16 = (h & 0x7FF) as u16;
 
-    // Build first halfword
-    let hw0 = 0xF000u16
-        | (0b10u16 << 12)
-        | (s << 10)
-        | (0b11u16 << 8)    // opcode = BL
-        | (j2 << 7)
-        | (j1 << 6)
-        | (1 << 5)          // always 1 for BL
-        | imm10;
-
-    // Build second halfword
-    let hw1 = 0b1111_1000_0000_0000u16  // 0xF800
-        | (1 << 14)      // opcode high bit
-        | (1 << 12)      // always 1 for BL
-        | imm11;
+    let hw0 = 0xF000u16 | (s << 10) | imm10;
+    let hw1 = 0xF800u16 | (j1 << 13) | (j2 << 11) | imm11;
 
     insn[0..2].copy_from_slice(&hw0.to_le_bytes());
     insn[2..4].copy_from_slice(&hw1.to_le_bytes());
@@ -158,41 +150,26 @@ fn decode_thumb_bl(insn: &[u8]) -> Result<i64, ()> {
     let hw0 = u16::from_le_bytes([insn[0], insn[1]]);
     let hw1 = u16::from_le_bytes([insn[2], insn[3]]);
 
-    // Check fixed bits: hw0[15:11] = 11110, hw0[7:6] = 11?, hw0[5] = 1
+    // Check fixed bits: hw0[15:11] = 11110.
     if (hw0 & 0xF800) != 0xF000 {
         return Err(());
     }
-    if (hw0 & 0x00C0) != 0x00C0 {
-        return Err(());
-    }
-    if (hw0 & 0x0020) != 0x0020 {
-        return Err(());
-    }
-    // hw1[15:11] = 11111, hw1[14] = 1, hw1[12] = 1
+    // hw1[15:11] = 11111.
     if (hw1 & 0xF800) != 0xF800 {
-        return Err(());
-    }
-    if (hw1 & 0x5000) != 0x5000 {
         return Err(());
     }
 
     let s: u32 = ((hw0 >> 10) & 1) as u32;
-    let j1: u32 = ((hw0 >> 6) & 1) as u32;
-    let j2: u32 = ((hw0 >> 7) & 1) as u32;
-    let imm10_low: u32 = (hw0 & 0x1F) as u32; // bits 4:0 = offset[16:12]
+    let j1: u32 = ((hw1 >> 13) & 1) as u32;
+    let j2: u32 = ((hw1 >> 11) & 1) as u32;
+    let imm10: u32 = (hw0 & 0x03FF) as u32;
     let imm11: u32 = (hw1 & 0x7FF) as u32;
 
     // I1 = J1 ^ (S ^ 1), I2 = J2 ^ (S ^ 1)
     let i1 = j1 ^ (s ^ 1);
     let i2 = j2 ^ (s ^ 1);
 
-    // Reconstruct offset up to bit 22 using S, I1, I2, imm10_low, imm11.
-    // hw0[9:5] are control bits (opcode, J2, J1, fixed-1), not offset bits,
-    // so only bits 4:0 carry the imm10 field.  The 5-bit range limits the
-    // offset to ±16KiB (±0x4000 halfwords = ±0x8000 bytes).
-    let half: u32 = (s << 23) | (i1 << 22) | (i2 << 21) | (imm10_low << 12) | imm11;
-    // Sign extend: propagate I2 (bit 22) through unused bits 20:17.
-    let half = if i2 != 0 { half | 0x01E0000 } else { half };
+    let half: u32 = (s << 23) | (i1 << 22) | (i2 << 21) | (imm10 << 11) | imm11;
     // Sign-extend from 24 bits.
     let half_signed = if half & 0x800000 != 0 {
         half | 0xFF00_0000u32
@@ -280,14 +257,12 @@ mod tests {
         let hw0 = u16::from_le_bytes(buf[0..2].try_into().unwrap());
         let hw1 = u16::from_le_bytes(buf[2..4].try_into().unwrap());
 
-        // Verify it's a valid BL instruction (first hw bits 15-11 = 11110, bits 9-8 = 11)
+        // Verify it's a valid BL instruction (first hw bits 15-11 = 11110).
         assert_eq!(
             (hw0 >> 11) & 0x1F,
             0b11110,
             "not a BL instruction (hw0 top)"
         );
-        // Check opcode bits 9-8 = 11 (BL)
-        assert_eq!((hw0 >> 8) & 0x3, 0b11, "not a BL instruction (opcode)");
 
         // Verify it's a BL (not B) by checking bit 14 of hw1 = 1
         assert_eq!((hw1 >> 14) & 1, 1, "not a BL instruction (hw1 bit14)");
@@ -365,13 +340,10 @@ mod tests {
     }
 
     #[test]
-    fn thm_call_misaligned_offset_rejected() {
-        // Offsets must be halfword-aligned (even)
+    fn thm_call_accepts_thumb_bit_function_pointer() {
         let mut buf = vec![0u8; 8];
         let p = buf.as_ptr() as u64;
-        // offset = 1 (odd) → should fail encoding
-        let err = apply_import_reloc(&mut buf, 0, 5, p + 1, 0).unwrap_err();
-        assert_eq!(err, E_RELOC_UNSUPPORTED);
+        apply_import_reloc(&mut buf, 0, 5, p + 1, 0).unwrap();
     }
 
     #[test]

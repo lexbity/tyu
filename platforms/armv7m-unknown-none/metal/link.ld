@@ -27,8 +27,16 @@ SECTIONS
         *(.text.*)
         *(.rodata)
         *(.rodata.*)
+        . = ALIGN(8);
+        __lang_symtab_start = .;
         *(.lang.symtab)
+        __lang_symtab_end = .;
+        . = ALIGN(4);
+        *(.ARM.exidx*)
+        *(.gnu.linkonce.armexidx.*)
     } > FLASH
+
+    PROVIDE(__aeabi_unwind_cpp_pr0 = 0);
 
     .data : ALIGN(4)
     {
@@ -38,8 +46,10 @@ SECTIONS
 
     .modpack : ALIGN(4)
     {
+        __lang_modpack_start = .;
         *(.modpack)
-    } > SRAM
+        __lang_modpack_end = .;
+    } > FLASH
 
     .bss : ALIGN(4)
     {
@@ -48,4 +58,11 @@ SECTIONS
         *(COMMON)
         __bss_end = .;
     } > SRAM
+
+    .loadheap (NOLOAD) : ALIGN(16)
+    {
+        __lang_loadheap_start = .;
+        . = . + 2K;
+        __lang_loadheap_end = .;
+    } > FLASH
 }

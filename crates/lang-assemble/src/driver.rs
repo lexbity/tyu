@@ -8,7 +8,7 @@ fn default_assembler_path(kind: AssemblerKind) -> &'static [u8] {
     match kind {
         AssemblerKind::Fasm => b"fasm",
         AssemblerKind::GasArm => b"arm-none-eabi-as",
-        AssemblerKind::GasRiscV => b"riscv32-unknown-elf-as",
+        AssemblerKind::GasRiscV => b"riscv32-elf-as",
     }
 }
 

@@ -96,8 +96,8 @@ gdt64_ptr:
 section '.text' executable
 use64
 
-; External symbols provided by the compiled user modules.
-extrn w_1f5962a2ce9803c8    ; main ( -- i64 )
+; Entry hook supplied by static_entry.asm or dynamic_entry.asm.
+extrn __lang_entry
 
 _start64_trampoline:
     ; We arrive here in 64-bit mode but with 32-bit address space constraints
@@ -117,7 +117,10 @@ __lang_start:
     mov qword [__lang_v_emitted], 0
     xor rbp, rbp
 
-    call w_1f5962a2ce9803c8          ; call main
+    call __lang_entry
+
+public __lang_after_main
+__lang_after_main:
 
     ; Emit high-water mark: 'H' (0x48) + u32-le (peak DS depth in slots)
     mov rax, [__lang_ds_high]
@@ -551,11 +554,13 @@ __mmio_mem:
     rb 4096
 
     ; Call stack — 64KB
+    align 16
     rb 65536
 __lang_stack_top:
 
     ; Data stack — 128KB. R15 starts at __lang_ds_base (low address)
     ; and grows upward. R14 = __lang_ds_limit (upper bound, exclusive).
+    align 16
 public __lang_ds_base
 __lang_ds_base:
     rb 131072
@@ -564,10 +569,11 @@ __lang_ds_limit:
 public __lang_ds_high
 __lang_ds_high:
     dq 0
+    align 8
 public __lang_expected_abi_hash
 __lang_expected_abi_hash:
-    ; compute_abi_hash(ARCH_TAG_X86_64=1, slot=8, word=64, MODINFO_VER=2), recipe v2
-    dq 0xf2f245c307c5986a
+    ; compute_abi_hash(ARCH_TAG_X86_64=1, slot=8, word=64, MODINFO_VER=3), recipe v2
+    dq 0x41f05b8b1adab0ab
 
     ; V-once flag — 0 before V is emitted, 1 after.
 public __lang_v_emitted

@@ -48,8 +48,8 @@ fn required_tools(target: Target) -> &'static [&'static str] {
         ],
         Target::RiscV32UnknownNone => &[
             "langc",
-            "riscv64-unknown-elf-as",
-            "riscv64-unknown-elf-ld",
+            "riscv32-elf-as",
+            "riscv32-elf-ld",
             "qemu-system-riscv32",
         ],
     }

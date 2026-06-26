@@ -7,13 +7,13 @@ description = "Raspberry Pi Pico 2 / RP2350 custom platform"
 triple = "armv7m-unknown-none"
 arch = "arm"
 default = true
-expected_abi_hash = "0xac34c6b7f7c80145"
+expected_abi_hash = "0x5d36b0efe4b2e904"
 metal = { path = "metal/armv7m", startup = "runtime.asm", linker = "link.ld" }
 
 [[platform.isa]]
 triple = "riscv32-unknown-none"
 arch = "riscv"
-expected_abi_hash = "0xa7df1edbd11ba544"
+expected_abi_hash = "0xf6dd34a3e430bd85"
 metal = { path = "metal/riscv32", startup = "runtime.asm", linker = "link.ld" }
 
 [metal]

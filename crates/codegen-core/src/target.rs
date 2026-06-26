@@ -510,7 +510,7 @@ static RISCV32_UNKNOWN_NONE: TargetSpec = TargetSpec {
     native_int_ty: b"i64",
     slot_bytes: 4,
     qemu: Some(&RISCV32_NONE_QEMU),
-    linker: b"riscv64-unknown-elf-ld",
+    linker: b"riscv32-elf-ld",
 };
 
 // ---------------------------------------------------------------------------

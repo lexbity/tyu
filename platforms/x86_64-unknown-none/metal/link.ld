@@ -20,10 +20,25 @@ SECTIONS {
     .text.boot  : { *(.text.boot) }  :text
     .text       : { *(.text) }       :text
     .rodata     : { *(.rodata) }     :rodata
+    .lang.symtab : {
+        PROVIDE(__lang_symtab_start = .);
+        *(.lang.symtab)
+        PROVIDE(__lang_symtab_end = .);
+    } :rodata
     .data       : { *(.data) }       :rwdata
-    .modpack    : { *(.modpack) }    :rwdata
+    .modpack    : {
+        PROVIDE(__lang_modpack_start = .);
+        *(.modpack)
+        PROVIDE(__lang_modpack_end = .);
+    } :rwdata
     .bss        : {
         *(.bss)
         *(COMMON)
+    }                                :rwdata
+    . = ALIGN(16);
+    .loadheap (NOLOAD) : {
+        PROVIDE(__lang_loadheap_start = .);
+        . = . + 0x100000;
+        PROVIDE(__lang_loadheap_end = .);
     }                                :rwdata
 }

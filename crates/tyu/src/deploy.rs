@@ -21,7 +21,7 @@ pub fn run(args: &DeployArgs) -> Result<(), TyuError> {
     let build_out = build::build_resolved(&build_args, ctx)?;
     let built_image = build_out.final_image;
     // The ELF the lmod was packed from — used as the QEMU execution form
-    // (resolve_execution_image bridges the deployed lmod back to this ELF).
+    // (resolve_static_image bridges the deployed lmod back to this ELF).
     let exec_image = build_out.execution_image;
     let workspace_root = platform::workspace_root();
     let selection = match build_selection {

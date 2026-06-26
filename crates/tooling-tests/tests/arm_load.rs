@@ -32,7 +32,7 @@ const ARM_ABS32_IMPORT_CODE: &[u8] = &[
     0x70, 0x47, // bx lr
 ];
 
-const ARM_ABI_HASH: u64 = 0xac34c6b7f7c80145; // compute_abi_hash(ARCH_TAG_ARM, 4, 32, 2)
+const ARM_ABI_HASH: u64 = 0x5d36b0efe4b2e904; // compute_abi_hash(ARCH_TAG_ARM, 4, 32, 3)
 
 fn make_arm_lmod(code: &[u8], imports: &[(&str, u8)]) -> Vec<u8> {
     let modinfo_bytes = make_arm_modinfo(imports);

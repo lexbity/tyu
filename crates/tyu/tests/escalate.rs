@@ -44,8 +44,8 @@ fn escalate_trap_no_d_record() {
         codegen_core::Target::RiscV32UnknownNone,
         &[
             "langc",
-            "riscv64-linux-gnu-as",
-            "riscv64-linux-gnu-ld",
+            "riscv32-elf-as",
+            "riscv32-elf-ld",
             "qemu-system-riscv32",
             "nm",
         ],

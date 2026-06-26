@@ -22,7 +22,10 @@ SECTIONS
         *(.text.*)
         *(.rodata)
         *(.rodata.*)
+        . = ALIGN(8);
+        __lang_symtab_start = .;
         *(.lang.symtab)
+        __lang_symtab_end = .;
     } > DRAM
 
     .data : ALIGN(4)
@@ -33,7 +36,9 @@ SECTIONS
 
     .modpack : ALIGN(4)
     {
+        __lang_modpack_start = .;
         *(.modpack)
+        __lang_modpack_end = .;
     } > DRAM
 
     .bss : ALIGN(4)
@@ -42,5 +47,12 @@ SECTIONS
         *(.bss)
         *(COMMON)
         __bss_end = .;
+    } > DRAM
+
+    .loadheap (NOLOAD) : ALIGN(16)
+    {
+        __lang_loadheap_start = .;
+        . = . + 1M;
+        __lang_loadheap_end = .;
     } > DRAM
 }

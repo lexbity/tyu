@@ -71,6 +71,9 @@ const ELFCLASS32: u8 = 1;
 const ELFCLASS64: u8 = 2;
 const ELFDATA2LSB: u8 = 1;
 const ET_REL: u16 = 1;
+const EM_ARM: u16 = 40;
+const EM_X86_64: u16 = 62;
+const EM_RISCV: u16 = 243;
 
 const SHT_RELA: u32 = 4;
 const SHT_REL: u32 = 9;
@@ -118,6 +121,7 @@ struct Symbol {
 struct Elf<'a> {
     data: &'a [u8],
     elf_class: u8,
+    machine: u16,
     sections: Vec<Section>,
     strtab: &'a [u8],
 }
@@ -141,6 +145,7 @@ impl<'a> Elf<'a> {
         if e_type != ET_REL {
             return Err(PackError::NotRelocatable);
         }
+        let machine = le_u16(data, 18);
 
         let (e_shoff, e_shentsize, e_shnum, e_shstrndx, shent_size) = if elf_class == 2 {
             let shoff = le_u64(data, 40) as usize;
@@ -169,23 +174,31 @@ impl<'a> Elf<'a> {
         let mut sections = Vec::with_capacity(e_shnum);
         for i in 0..e_shnum {
             let b = e_shoff + i * shent_size;
-            let (sec_offset, sec_size) = if elf_class == 2 {
-                (le_u64(data, b + 24), le_u64(data, b + 32))
+            let (sec_offset, sec_size, link, info, entsize) = if elf_class == 2 {
+                (
+                    le_u64(data, b + 24),
+                    le_u64(data, b + 32),
+                    le_u32(data, b + 40),
+                    le_u32(data, b + 44),
+                    le_u64(data, b + 56),
+                )
             } else {
-                (le_u32(data, b + 20) as u64, le_u32(data, b + 24) as u64)
+                (
+                    le_u32(data, b + 16) as u64,
+                    le_u32(data, b + 20) as u64,
+                    le_u32(data, b + 24),
+                    le_u32(data, b + 28),
+                    le_u32(data, b + 36) as u64,
+                )
             };
             sections.push(Section {
                 name: String::new(),
                 ty: le_u32(data, b + 4),
                 offset: sec_offset,
                 size: sec_size,
-                link: le_u32(data, b + 40 - if elf_class == 2 { 0 } else { 8 }),
-                info: le_u32(data, b + 44 - if elf_class == 2 { 0 } else { 8 }),
-                entsize: if elf_class == 2 {
-                    le_u64(data, b + 56)
-                } else {
-                    le_u32(data, b + 36) as u64
-                },
+                link,
+                info,
+                entsize,
             });
         }
 
@@ -234,6 +247,7 @@ impl<'a> Elf<'a> {
         Ok(Self {
             data,
             elf_class,
+            machine,
             sections,
             strtab,
         })
@@ -319,6 +333,7 @@ impl<'a> Elf<'a> {
 /// Apply an internal relocation (pre-resolution).
 fn apply_internal_reloc(
     out: &mut [u8],
+    machine: u16,
     r_type: u32,
     r_offset: u64,
     sym_value: u64,
@@ -326,8 +341,9 @@ fn apply_internal_reloc(
     addend: i64,
 ) -> Result<(), PackError> {
     let site_addr = site_base + r_offset;
-    match r_type {
-        1 => {
+    match (machine, r_type) {
+        (EM_RISCV, 51) => {}
+        (EM_X86_64, 1) => {
             let val = sym_value.wrapping_add(addend as u64);
             let off = site_addr as usize;
             if off + 8 > out.len() {
@@ -338,34 +354,19 @@ fn apply_internal_reloc(
             }
             out[off..off + 8].copy_from_slice(&val.to_le_bytes());
         }
-        2 => {
-            if site_addr > 0xFFFFFFFF {
-                // R_X86_64_PC32: S + A - P (4 bytes)
-                let p = site_addr as i64;
-                let val = (sym_value as i64).wrapping_add(addend).wrapping_sub(p);
-                let off = site_addr as usize;
-                if off + 4 > out.len() {
-                    return Err(PackError::RelocSiteOutOfRange {
-                        site: off,
-                        kind: "R_X86_64_PC32",
-                    });
-                }
-                out[off..off + 4].copy_from_slice(&(val as u32).to_le_bytes());
-            } else {
-                // R_ARM_ABS32: S + A (4 bytes)
-                let val = sym_value.wrapping_add(addend as u64);
-                let off = site_addr as usize;
-                if off + 4 > out.len() {
-                    return Err(PackError::RelocSiteOutOfRange {
-                        site: off,
-                        kind: "R_ARM_ABS32",
-                    });
-                }
-                out[off..off + 4].copy_from_slice(&(val as u32).to_le_bytes());
+        (EM_X86_64, 2) => {
+            let p = site_addr as i64;
+            let val = (sym_value as i64).wrapping_add(addend).wrapping_sub(p);
+            let off = site_addr as usize;
+            if off + 4 > out.len() {
+                return Err(PackError::RelocSiteOutOfRange {
+                    site: off,
+                    kind: "R_X86_64_PC32",
+                });
             }
+            out[off..off + 4].copy_from_slice(&(val as u32).to_le_bytes());
         }
-        3 => {
-            // R_X86_64_PLT32: S + A - P (4 bytes)
+        (EM_X86_64, 3) => {
             let p = site_addr as i64;
             let val = (sym_value as i64).wrapping_add(addend).wrapping_sub(p);
             let off = site_addr as usize;
@@ -377,11 +378,154 @@ fn apply_internal_reloc(
             }
             out[off..off + 4].copy_from_slice(&(val as u32).to_le_bytes());
         }
+        (EM_ARM, 2) | (EM_RISCV, 1) => {
+            let val = sym_value.wrapping_add(addend as u64);
+            let off = site_addr as usize;
+            if off + 4 > out.len() {
+                return Err(PackError::RelocSiteOutOfRange {
+                    site: off,
+                    kind: "ABS32",
+                });
+            }
+            out[off..off + 4].copy_from_slice(&(val as u32).to_le_bytes());
+        }
+        (EM_ARM, 3) => {
+            let p = site_addr as i64;
+            let val = (sym_value as i64).wrapping_add(addend).wrapping_sub(p);
+            let off = site_addr as usize;
+            if off + 4 > out.len() {
+                return Err(PackError::RelocSiteOutOfRange {
+                    site: off,
+                    kind: "R_ARM_REL32",
+                });
+            }
+            out[off..off + 4].copy_from_slice(&(val as u32).to_le_bytes());
+        }
+        (EM_RISCV, 16) => {
+            let p = site_addr as i64;
+            let val = (sym_value as i64).wrapping_add(addend).wrapping_sub(p);
+            let off = site_addr as usize;
+            if off + 4 > out.len() {
+                return Err(PackError::RelocSiteOutOfRange {
+                    site: off,
+                    kind: "R_RISCV_BRANCH",
+                });
+            }
+            encode_riscv_branch(&mut out[off..off + 4], val)
+                .map_err(|_| PackError::UnsupportedInternalReloc(r_type))?;
+        }
+        (EM_RISCV, 17) => {
+            let p = site_addr as i64;
+            let val = (sym_value as i64).wrapping_add(addend).wrapping_sub(p);
+            let off = site_addr as usize;
+            if off + 4 > out.len() {
+                return Err(PackError::RelocSiteOutOfRange {
+                    site: off,
+                    kind: "R_RISCV_JAL",
+                });
+            }
+            encode_riscv_jal(&mut out[off..off + 4], val)
+                .map_err(|_| PackError::UnsupportedInternalReloc(r_type))?;
+        }
+        (EM_RISCV, 23) => {
+            let p = site_addr as i64;
+            let val = (sym_value as i64).wrapping_add(addend).wrapping_sub(p);
+            let off = site_addr as usize;
+            if off + 4 > out.len() {
+                return Err(PackError::RelocSiteOutOfRange {
+                    site: off,
+                    kind: "R_RISCV_PCREL_HI20",
+                });
+            }
+            encode_riscv_hi20(&mut out[off..off + 4], val);
+        }
         _ => {
             return Err(PackError::UnsupportedInternalReloc(r_type));
         }
     }
     Ok(())
+}
+
+fn apply_riscv_pcrel_lo12_i(
+    out: &mut [u8],
+    site_addr: u64,
+    hi_site: u64,
+    hi_target: u64,
+    addend: i64,
+) -> Result<(), PackError> {
+    let val = (hi_target as i64)
+        .wrapping_add(addend)
+        .wrapping_sub(hi_site as i64);
+    let off = site_addr as usize;
+    if off + 4 > out.len() {
+        return Err(PackError::RelocSiteOutOfRange {
+            site: off,
+            kind: "R_RISCV_PCREL_LO12_I",
+        });
+    }
+    encode_riscv_lo12_i(&mut out[off..off + 4], val);
+    Ok(())
+}
+
+fn encode_riscv_hi20(insn: &mut [u8], value: i64) {
+    let existing = u32::from_le_bytes(insn[..4].try_into().unwrap());
+    let hi20 = (((value + 0x800) >> 12) as u32) & 0x000f_ffff;
+    let enc = (existing & 0x0000_0fff) | (hi20 << 12);
+    insn[..4].copy_from_slice(&enc.to_le_bytes());
+}
+
+fn encode_riscv_lo12_i(insn: &mut [u8], value: i64) {
+    let existing = u32::from_le_bytes(insn[..4].try_into().unwrap());
+    let lo12 = (value as u32) & 0x0fff;
+    let enc = (existing & 0x000f_ffff) | (lo12 << 20);
+    insn[..4].copy_from_slice(&enc.to_le_bytes());
+}
+
+fn encode_riscv_jal(insn: &mut [u8], offset: i64) -> Result<(), ()> {
+    if offset & 1 != 0 || !(-0x10_0000..=0x0f_ffff).contains(&offset) {
+        return Err(());
+    }
+    let existing = u32::from_le_bytes(insn[..4].try_into().unwrap());
+    let imm = offset as u32;
+    let enc = (existing & 0x0000_0fff)
+        | ((imm & 0x0010_0000) << 11)
+        | ((imm & 0x0000_07fe) << 20)
+        | ((imm & 0x0000_0800) << 9)
+        | (imm & 0x000f_f000);
+    insn[..4].copy_from_slice(&enc.to_le_bytes());
+    Ok(())
+}
+
+fn encode_riscv_branch(insn: &mut [u8], offset: i64) -> Result<(), ()> {
+    if offset & 1 != 0 || !(-0x1000..=0x0ffe).contains(&offset) {
+        return Err(());
+    }
+    let existing = u32::from_le_bytes(insn[..4].try_into().unwrap());
+    let imm = offset as u32;
+    let enc = (existing & 0x01fff07f)
+        | ((imm & 0x1000) << 19)
+        | ((imm & 0x07e0) << 20)
+        | ((imm & 0x001e) << 7)
+        | ((imm & 0x0800) >> 4);
+    insn[..4].copy_from_slice(&enc.to_le_bytes());
+    Ok(())
+}
+
+fn import_reloc_kind(machine: u16, r_type: u32) -> Option<u8> {
+    use lmod::reloc::RelocKind;
+
+    match (machine, r_type) {
+        (EM_X86_64, 1) => Some(RelocKind::X86_64_64 as u8),
+        (EM_X86_64, 2) => Some(RelocKind::X86_64_PC32 as u8),
+        (EM_X86_64, 3) => Some(RelocKind::X86_64_PLT32 as u8),
+        (EM_ARM, 2) => Some(RelocKind::ArmAbs32 as u8),
+        (EM_ARM, 3) => Some(RelocKind::ArmRel32 as u8),
+        (EM_ARM, 10) => Some(RelocKind::ArmThmCall as u8),
+        (EM_ARM, 30) => Some(RelocKind::ArmThmJump24 as u8),
+        (EM_RISCV, 1) => Some(RelocKind::RiscV32 as u8),
+        (EM_RISCV, 17 | 18 | 19) => Some(RelocKind::RiscVCall as u8),
+        _ => None,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -499,6 +643,11 @@ pub fn pack(input: &[u8]) -> Result<Vec<u8>, PackError> {
                 ((r_info_wide >> 8) as usize, (r_info_wide & 0xFF) as u32)
             };
 
+            if elf.machine == EM_RISCV && r_type == 51 {
+                pos += entsize;
+                continue;
+            }
+
             if sym_idx >= symbols.len() {
                 pos += entsize;
                 continue;
@@ -507,9 +656,11 @@ pub fn pack(input: &[u8]) -> Result<Vec<u8>, PackError> {
             let sym = &symbols[sym_idx];
 
             if sym.shndx == SHN_UNDEF || (sym.name.is_empty() && sym_idx != 0) {
+                let kind = import_reloc_kind(elf.machine, r_type)
+                    .ok_or(PackError::UnsupportedInternalReloc(r_type))?;
                 let sym_hash = lmod::hash::linked_symbol_hash(sym.name.as_bytes());
                 let site_base = elf.lmod_section_base(target_idx, &lmod::header::LmodHeader::new());
-                import_relocs.push((site_base + r_offset, sym_hash, r_type as u8));
+                import_relocs.push((site_base + r_offset, sym_hash, kind));
             } else if sym.shndx != SHN_ABS {
                 let actual_addend = if is_rela {
                     r_addend
@@ -580,6 +731,24 @@ pub fn pack(input: &[u8]) -> Result<Vec<u8>, PackError> {
     }
 
     // 7. Pre-resolve internal relocations.
+    let mut riscv_pcrel_hi_targets: Vec<(u64, u64)> = Vec::new();
+    if elf.machine == EM_RISCV {
+        for &(target_sec_idx, r_type, r_offset, sym_sec_idx, st_value, addend) in &internal_fixups {
+            if r_type != 23 {
+                continue;
+            }
+            let site_base = elf.lmod_section_base(target_sec_idx, &layout);
+            let sym_base = if sym_sec_idx < elf.sections.len() {
+                elf.lmod_section_base(sym_sec_idx, &layout)
+            } else {
+                0
+            };
+            riscv_pcrel_hi_targets.push((
+                site_base + r_offset,
+                sym_base.wrapping_add(st_value).wrapping_add(addend as u64),
+            ));
+        }
+    }
     for &(target_sec_idx, r_type, r_offset, sym_sec_idx, st_value, addend) in &internal_fixups {
         let site_base = elf.lmod_section_base(target_sec_idx, &layout);
         let sym_base = if sym_sec_idx < elf.sections.len() {
@@ -588,7 +757,23 @@ pub fn pack(input: &[u8]) -> Result<Vec<u8>, PackError> {
             0
         };
         let sym_value = sym_base + st_value;
-        apply_internal_reloc(&mut out, r_type, r_offset, sym_value, site_base, addend)?;
+        if elf.machine == EM_RISCV && r_type == 24 {
+            let hi_target = riscv_pcrel_hi_targets
+                .iter()
+                .find_map(|(hi_site, hi_target)| (*hi_site == sym_value).then_some(*hi_target))
+                .ok_or(PackError::UnsupportedInternalReloc(r_type))?;
+            apply_riscv_pcrel_lo12_i(&mut out, site_base + r_offset, sym_value, hi_target, addend)?;
+            continue;
+        }
+        apply_internal_reloc(
+            &mut out,
+            elf.machine,
+            r_type,
+            r_offset,
+            sym_value,
+            site_base,
+            addend,
+        )?;
     }
 
     // 8. Re-compute import site_off using the actual .lmod section bases.
@@ -780,9 +965,8 @@ mod tests {
         buf[60..62].copy_from_slice(&1u16.to_le_bytes()); // e_shnum = 1
         buf[62..64].copy_from_slice(&1u16.to_le_bytes()); // e_shstrndx = 1
                                                           // Add one section header after the header (at offset 64) with wrong entsize
-        let mut sh = vec![0u8; 64];
-        // sh_name name_off for ".text" would be in shstrtab, but we set shentsize wrong first
-        // Actually, we trick the parser: give it e_shentsize != 64 for ELF64
+                                                          // sh_name name_off for ".text" would be in shstrtab, but we set shentsize wrong first
+                                                          // Actually, we trick the parser: give it e_shentsize != 64 for ELF64
         buf[58] = 48;
         buf[59] = 0; // shentsize = 48 (should be 64 for ELF64)
                      // Add section header data so it doesn't overflow
@@ -817,7 +1001,7 @@ mod tests {
         // The packer reaches apply_internal_reloc only with valid ELF that
         // has internal relocations.  Test apply_internal_reloc directly.
         let mut out = [0u8; 8];
-        let result = apply_internal_reloc(&mut out, 99, 0, 0, 0, 0);
+        let result = apply_internal_reloc(&mut out, EM_X86_64, 99, 0, 0, 0, 0);
         assert_eq!(result, Err(PackError::UnsupportedInternalReloc(99)));
     }
 
@@ -825,13 +1009,13 @@ mod tests {
     fn rejects_reloc_site_out_of_range() {
         let mut out = [0u8; 4];
         // R_X86_64_64 writes 8 bytes starting at site_addr = site_base + r_offset.
-        let result = apply_internal_reloc(&mut out, 1, 8, 0x100, 0, 0);
+        let result = apply_internal_reloc(&mut out, EM_X86_64, 1, 8, 0x100, 0, 0);
         assert!(result.is_err());
         assert!(matches!(result, Err(PackError::RelocSiteOutOfRange { .. })));
 
         // R_X86_64_PC32 writes 4 bytes at a 64-bit address.
         let mut out2 = [0u8; 4];
-        let result2 = apply_internal_reloc(&mut out2, 2, 8, 0x100, 0, 0);
+        let result2 = apply_internal_reloc(&mut out2, EM_X86_64, 2, 8, 0x100, 0, 0);
         assert!(result2.is_err());
         assert!(matches!(
             result2,
@@ -860,7 +1044,7 @@ mod tests {
     fn reloc_arm_abs32() {
         // R_ARM_ABS32 (kind=2, site_addr < 2^32): S + A, 4 bytes
         let mut out = vec![0u8; 16];
-        apply_internal_reloc(&mut out, 2, 0, 0x2000, 8, 0x100).unwrap();
+        apply_internal_reloc(&mut out, EM_ARM, 2, 0, 0x2000, 8, 0x100).unwrap();
         let written = u32::from_le_bytes(out[8..12].try_into().unwrap());
         assert_eq!(written, 0x2100, "R_ARM_ABS32 must write S+A");
     }
@@ -868,7 +1052,7 @@ mod tests {
     #[test]
     fn reloc_arm_abs32_negative_addend() {
         let mut out = vec![0u8; 16];
-        apply_internal_reloc(&mut out, 2, 0, 0x1000, 8, -0x100).unwrap();
+        apply_internal_reloc(&mut out, EM_ARM, 2, 0, 0x1000, 8, -0x100).unwrap();
         let written = i32::from_le_bytes(out[8..12].try_into().unwrap());
         assert_eq!(
             written, 0xf00,
@@ -880,7 +1064,7 @@ mod tests {
     fn reloc_x86_64_64_additive() {
         // R_X86_64_64 (kind=1): S + A, 8 bytes
         let mut out = vec![0u8; 16];
-        apply_internal_reloc(&mut out, 1, 0, 0x1234, 0, 0x100).unwrap();
+        apply_internal_reloc(&mut out, EM_X86_64, 1, 0, 0x1234, 0, 0x100).unwrap();
         let written = u64::from_le_bytes(out[0..8].try_into().unwrap());
         assert_eq!(written, 0x1334, "R_X86_64_64 must write S+A at site");
     }
@@ -888,7 +1072,7 @@ mod tests {
     #[test]
     fn reloc_x86_64_64_wrapping() {
         let mut out = vec![0u8; 16];
-        apply_internal_reloc(&mut out, 1, 0, u64::MAX, 0, 1).unwrap();
+        apply_internal_reloc(&mut out, EM_X86_64, 1, 0, u64::MAX, 0, 1).unwrap();
         let written = u64::from_le_bytes(out[0..8].try_into().unwrap());
         assert_eq!(written, 0, "R_X86_64_64 must wrap on overflow");
     }
@@ -897,7 +1081,7 @@ mod tests {
     fn reloc_x86_64_64_offset_nonzero() {
         let mut out = vec![0u8; 16];
         // r_offset = 4 → write at site_base + 4 = 8
-        apply_internal_reloc(&mut out, 1, 4, 0xABCD, 4, 0).unwrap();
+        apply_internal_reloc(&mut out, EM_X86_64, 1, 4, 0xABCD, 4, 0).unwrap();
         let written = u64::from_le_bytes(out[8..16].try_into().unwrap());
         assert_eq!(
             written, 0xABCD,
@@ -906,18 +1090,11 @@ mod tests {
     }
 
     #[test]
-    fn apply_r_x86_64_pc32_at_arm_abs32_is_S_plus_A() {
-        // kind=2 with site_addr < 2^32 takes the ARM ABS32 path: S + A.
-        // The x86_64 PC32 branch (S+A-P) is unreachable from the packer's
-        // file-offset address space (all site_addr values are << 2^32).
+    fn apply_r_x86_64_pc32_is_S_plus_A_minus_P() {
         let mut out = vec![0u8; 16];
-        apply_internal_reloc(&mut out, 2, 0, 0x1000, 8, -4).unwrap();
+        apply_internal_reloc(&mut out, EM_X86_64, 2, 0, 0x1000, 8, -4).unwrap();
         let got = u32::from_le_bytes(out[8..12].try_into().unwrap());
-        assert_eq!(
-            got,
-            (0x1000u64.wrapping_add((-4i64) as u64)) as u32,
-            "ARM path: S + A = 0x1000 - 4 = 0xFFC"
-        );
+        assert_eq!(got, 0x0ff4, "x86_64 PC32 path: S + A - P = 0x1000 - 4 - 8");
     }
 
     #[test]
@@ -925,7 +1102,7 @@ mod tests {
         // kind=3 (PLT32) uses S+A-P unconditionally — no address check.
         let mut out = vec![0u8; 16];
         // S=0x2000, A=-4, P=site_base(8)+r_offset(0) → 0x2000 - 4 - 8 = 0x1FF4
-        apply_internal_reloc(&mut out, 3, 0, 0x2000, 8, -4).unwrap();
+        apply_internal_reloc(&mut out, EM_X86_64, 3, 0, 0x2000, 8, -4).unwrap();
         let got = i32::from_le_bytes(out[8..12].try_into().unwrap());
         assert_eq!(got, 0x1FF4);
     }

@@ -96,7 +96,7 @@ impl<'a> RiscVBackend<'a> {
         // the reserved limit (deep recursion), trap.  __stack_overflow runs in
         // the guard zone below the limit and reports trap_code 10.
         if self.mode == AsmMode::Object {
-            self.out.write(b"\tla t0, __lang_stack_limit\n");
+            self.emit_load_symbol_addr(b"t0", b"__lang_stack_limit");
             self.out.write(b"\tbgeu sp, t0, .Lsk");
             write_u32(self.out, base);
             self.out.write(b"\n\tj __stack_overflow\n.Lsk");
@@ -748,12 +748,37 @@ impl<'a> RiscVBackend<'a> {
     /// Preserves all registers (uses t0/t1 which are caller-save).
     fn emit_ds_high_update(&mut self) {
         let id = self.fresh_label();
-        self.out.write(b"\tla t0, __lang_ds_high\n");
+        self.emit_load_symbol_addr(b"t0", b"__lang_ds_high");
         self.out.write(b"\tlw t1, 0(t0)\n");
         self.out.write(b"\tbltu s2, t1, .ds_high_");
         write_u32(self.out, id);
         self.out.write(b"\n\tsw s2, 0(t0)\n");
         self.out.write(b".ds_high_");
+        write_u32(self.out, id);
+        self.out.write(b":\n");
+    }
+
+    fn emit_load_symbol_addr(&mut self, reg: &[u8], sym: &[u8]) {
+        let id = self.fresh_label();
+        self.out.write(b".Laddr_load_");
+        write_u32(self.out, id);
+        self.out.write(b":\n\tauipc ");
+        self.out.write(reg);
+        self.out.write(b", %pcrel_hi(.Laddr_word_");
+        write_u32(self.out, id);
+        self.out.write(b")\n\tlw ");
+        self.out.write(reg);
+        self.out.write(b", %pcrel_lo(.Laddr_load_");
+        write_u32(self.out, id);
+        self.out.write(b")(");
+        self.out.write(reg);
+        self.out.write(b")\n\tj .Laddr_after_");
+        write_u32(self.out, id);
+        self.out.write(b"\n\t.balign 4\n.Laddr_word_");
+        write_u32(self.out, id);
+        self.out.write(b":\n\t.word ");
+        self.out.write(sym);
+        self.out.write(b"\n.Laddr_after_");
         write_u32(self.out, id);
         self.out.write(b":\n");
     }

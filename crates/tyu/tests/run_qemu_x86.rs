@@ -71,6 +71,34 @@ fn run_platform_x86(src: &str, dir: &PathBuf, label: &str) -> std::process::Outp
         .expect("tyu run")
 }
 
+fn run_dynamic_x86(src: &str, dir: &PathBuf, label: &str) -> (std::process::Output, PathBuf) {
+    let main_mod = dir.join(format!("{}.mod", label));
+    std::fs::write(&main_mod, src).unwrap();
+    let out_dir = dir.join(format!("{}_dynamic_out", label));
+    let sysroot = workspace_root().join("sysroot");
+
+    let status = Command::new(env!("CARGO"))
+        .current_dir(&workspace_root())
+        .args(["build", "-q", "-p", "langc", "-p", "tyu"])
+        .status()
+        .expect("cargo build");
+    assert!(status.success(), "cargo build failed");
+
+    let output = Command::new(tyu_exe())
+        .current_dir(&workspace_root())
+        .args([
+            "run",
+            "--mode=dynamic",
+            "--target=x86_64-unknown-none",
+            &format!("--sysroot={}", sysroot.display()),
+            &format!("--out-dir={}", out_dir.display()),
+            &main_mod.to_string_lossy(),
+        ])
+        .output()
+        .expect("tyu run --mode=dynamic");
+    (output, out_dir)
+}
+
 const PASS_MOD: &str = "\
 module Main;\nimport platform/testio { testio.write-byte };\n\
 : main ( -- i64 ) 83 testio.write-byte 10 testio.write-byte 0 ;\nexport { main };\nend;\n";
@@ -175,6 +203,41 @@ fn run_platform_x86_uses_resolved_target() {
         output.status.success(),
         "platform run must succeed with resolved QEMU target:\n{}",
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn run_qemu_dynamic_loads_lmod_from_modpack() {
+    if !require_tools(&["langc", "fasm", "ld", "qemu-system-x86_64", "nm"]) {
+        return;
+    }
+    let dir = temp_dir("dynamic_modpack");
+    let (output, out_dir) = run_dynamic_x86(PASS_MOD, &dir, "dynamic_modpack");
+    assert!(
+        output.status.success(),
+        "dynamic run must succeed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        out_dir.join("image.elf").exists(),
+        "dynamic firmware missing"
+    );
+    assert!(out_dir.join("Main.lmod").exists(), "packed lmod missing");
+    assert!(
+        out_dir.join("modpack_generated.o").exists(),
+        "modpack object missing"
+    );
+
+    let nm = Command::new("nm")
+        .arg(out_dir.join("image.elf"))
+        .output()
+        .expect("nm image.elf");
+    assert!(nm.status.success(), "nm failed");
+    let symbols = String::from_utf8_lossy(&nm.stdout);
+    assert!(
+        !symbols.contains("w_1f5962a2ce9803c8"),
+        "dynamic firmware must not statically link app main"
     );
 }
 

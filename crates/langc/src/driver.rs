@@ -416,7 +416,7 @@ pub fn emit_obj_driver(
     let assembler_bin: &[u8] = match target.spec().assembler {
         codegen_core::AssemblerKind::Fasm => b"fasm",
         codegen_core::AssemblerKind::GasArm => b"arm-none-eabi-as",
-        codegen_core::AssemblerKind::GasRiscV => b"riscv64-linux-gnu-as",
+        codegen_core::AssemblerKind::GasRiscV => b"riscv32-elf-as",
     };
     let mut asm_args: Vec<&[u8]> = Vec::new();
     match target.spec().assembler {

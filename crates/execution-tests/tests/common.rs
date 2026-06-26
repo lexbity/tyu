@@ -62,14 +62,26 @@ pub fn temp_dir(label: &str) -> PathBuf {
 // Tool availability
 // ---------------------------------------------------------------------------
 
-/// Acceptable RISC-V toolchain binary names, in preference order.  The
-/// `riscv64-unknown-elf-*` (newlib) names are preferred; the
-/// `riscv64-linux-gnu-*` (Debian/Arch) names are the common fallback.  These
-/// MUST stay in sync with `tyu`'s own resolution in
-/// `crates/tyu/src/toolchain.rs`.
-pub const RISCV_AS: &[&str] = &["riscv64-unknown-elf-as", "riscv64-linux-gnu-as"];
-pub const RISCV_LD: &[&str] = &["riscv64-unknown-elf-ld", "riscv64-linux-gnu-ld"];
-pub const RISCV_NM: &[&str] = &["riscv64-unknown-elf-nm", "riscv64-linux-gnu-nm"];
+/// Acceptable RISC-V toolchain binary names, in preference order. These MUST
+/// stay in sync with `tyu`'s own resolution in `crates/tyu/src/toolchain.rs`.
+pub const RISCV_AS: &[&str] = &[
+    "riscv32-elf-as",
+    "riscv32-unknown-elf-as",
+    "riscv64-unknown-elf-as",
+    "riscv64-linux-gnu-as",
+];
+pub const RISCV_LD: &[&str] = &[
+    "riscv32-elf-ld",
+    "riscv32-unknown-elf-ld",
+    "riscv64-unknown-elf-ld",
+    "riscv64-linux-gnu-ld",
+];
+pub const RISCV_NM: &[&str] = &[
+    "riscv32-elf-nm",
+    "riscv32-unknown-elf-nm",
+    "riscv64-unknown-elf-nm",
+    "riscv64-linux-gnu-nm",
+];
 
 /// Returns true if a named binary exists — either on `PATH`, in
 /// `target/debug/`, or in `target/release/` (for workspace-built
@@ -182,17 +194,17 @@ pub fn langc_compile(target: Target, src: &Path, out_dir: &Path, is_lib: bool) -
         .expect("langc produced no .o file")
 }
 
-/// Assemble `runtime.asm` and any feature-specific optional runtime units
+/// Assemble `runtime.asm`, the static entry hook, and any feature-specific optional runtime units
 /// for the given target.  Returns a `Vec` of object paths.
 ///
-/// Optional units (e.g. `modload.asm`) are assembled only when the
+/// Optional units (e.g. `static_entry.asm`, `modload.asm`) are assembled only when the
 /// corresponding `.asm` file exists in the runtime directory.
 pub fn assemble_runtime(target: Target, out_dir: &Path) -> Vec<PathBuf> {
     let spec = target.spec();
     let rt_dir = runtime_dir(target);
 
     let mut objs = Vec::new();
-    let stems = &["runtime", "concurrency", "modload"];
+    let stems = &["runtime", "static_entry", "concurrency", "modload"];
     for stem in stems {
         let asm = rt_dir.join(format!("{}.asm", stem));
         if !asm.exists() {
@@ -261,7 +273,10 @@ pub fn link_image(target: Target, objs: &[PathBuf], out_dir: &Path) -> PathBuf {
     // Resolve toolchains exposed under multiple names (e.g. RISC-V newlib vs.
     // linux-gnu), matching `tyu`'s own linker resolution.
     let linker = match linker_name {
-        "riscv64-unknown-elf-ld" => {
+        "riscv32-elf-ld"
+        | "riscv32-unknown-elf-ld"
+        | "riscv64-unknown-elf-ld"
+        | "riscv64-linux-gnu-ld" => {
             first_available(RISCV_LD).expect("no RISC-V linker available (checked RISCV_LD)")
         }
         other => other.to_string(),

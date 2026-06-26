@@ -51,7 +51,7 @@ fn riscv_target_spec_fields() {
     assert_eq!(spec.pointer_bits, 32);
     assert_eq!(spec.native_int_ty, b"i64"); // i64 is the universal native int type
     assert_eq!(spec.assembler, AssemblerKind::GasRiscV);
-    assert_eq!(spec.linker, b"riscv64-unknown-elf-ld");
+    assert_eq!(spec.linker, b"riscv32-elf-ld");
 }
 
 #[test]

@@ -43,6 +43,22 @@ pub enum EncryptMode {
     Device,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum BuildMode {
+    Static,
+    Dynamic,
+}
+
+impl BuildMode {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "static" => Some(Self::Static),
+            "dynamic" => Some(Self::Dynamic),
+            _ => None,
+        }
+    }
+}
+
 /// Arguments for the `deploy` subcommand.
 #[derive(Debug)]
 pub struct DeployArgs {
@@ -75,6 +91,7 @@ impl DeployArgs {
             out_dir: self.out_dir.clone(),
             profile: self.profile.clone(),
             feature_set: self.feature_set,
+            mode: None,
         }
     }
 }
@@ -93,6 +110,7 @@ pub struct BuildArgs {
     pub profile: Option<String>,
     /// Resolved feature set (set by main.rs after profile resolution).
     pub feature_set: FeatureSet,
+    pub mode: Option<BuildMode>,
 }
 
 /// Arguments for the `run` subcommand.
@@ -109,6 +127,7 @@ pub struct RunArgs {
     pub feature_set: FeatureSet,
     pub timeout: Duration,
     pub runner_override: Option<String>,
+    pub mode: Option<BuildMode>,
 }
 
 impl RunArgs {
@@ -123,6 +142,7 @@ impl RunArgs {
             out_dir: self.out_dir.clone(),
             profile: self.profile.clone(),
             feature_set: self.feature_set,
+            mode: self.mode,
         }
     }
 }
@@ -222,6 +242,7 @@ fn print_usage() {
     eprintln!("Run-specific options:");
     eprintln!("  --timeout=<secs>    Maximum execution time (default: 10)");
     eprintln!("  --runner=<mode>     Runner: native|qemu (default: auto)");
+    eprintln!("  --mode=<mode>       Link/load mode: static|dynamic");
 }
 
 fn parse_common(args: &[String]) -> CommonArgs {
@@ -233,6 +254,7 @@ fn parse_common(args: &[String]) -> CommonArgs {
     let mut sysroot: Option<PathBuf> = None;
     let mut out_dir: Option<PathBuf> = None;
     let mut profile: Option<String> = None;
+    let mut mode: Option<BuildMode> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -263,6 +285,11 @@ fn parse_common(args: &[String]) -> CommonArgs {
             isa = Some(val.to_string());
         } else if let Some(val) = a.strip_prefix("--profile=") {
             profile = Some(val.to_string());
+        } else if let Some(val) = a.strip_prefix("--mode=") {
+            mode = BuildMode::parse(val);
+            if mode.is_none() {
+                eprintln!("tyu: invalid --mode '{}'", val);
+            }
         } else if let Some(val) = a.strip_prefix("--sysroot=") {
             sysroot = Some(PathBuf::from(val));
         } else if let Some(val) = a.strip_prefix("--out-dir=") {
@@ -297,6 +324,7 @@ fn parse_common(args: &[String]) -> CommonArgs {
         sysroot,
         out_dir,
         profile,
+        mode,
     }
 }
 
@@ -309,6 +337,7 @@ struct CommonArgs {
     sysroot: Option<PathBuf>,
     out_dir: PathBuf,
     profile: Option<String>,
+    mode: Option<BuildMode>,
 }
 
 fn parse_build(args: &[String]) -> Command {
@@ -330,6 +359,7 @@ fn parse_build(args: &[String]) -> Command {
         out_dir: common.out_dir,
         profile: common.profile,
         feature_set: FeatureSet::default(), // resolved in main.rs
+        mode: common.mode,
     })
 }
 
@@ -376,6 +406,7 @@ fn parse_run(args: &[String]) -> Command {
         feature_set: FeatureSet::default(),
         timeout,
         runner_override,
+        mode: common.mode,
     })
 }
 

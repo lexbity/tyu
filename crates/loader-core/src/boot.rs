@@ -1,17 +1,13 @@
-//! Device-loader scaffolding for firmware-resident `.lmod` loading.
-//!
-//! This module is intentionally small in Phase 0: it provides the device
-//! [`LoaderPlatform`] implementation and arena rollback primitives that later
-//! boot glue will use around `load_module`.
+//! Device-loader boot glue for firmware-resident `.lmod` loading.
 
-use crate::error::E_BAD_CONTAINER;
+use crate::error::{LoadError, E_BAD_CONTAINER};
+use crate::load::{load_module, LoadedSet};
 use crate::platform::{LoaderPlatform, Region};
+use crate::symbols::SymMap;
+use lmod::validate::Container;
 
 const LOADHEAP_ALIGN: usize = 16;
-
-/// Stub runtime ABI hash used until the dynamic firmware build wires the
-/// target-specific value into the device-loader image.
-pub const DEVICE_EXPECTED_ABI_HASH: u64 = 0;
+const MAIN_HASH: u64 = 0x1f5962a2ce9803c8;
 
 /// A snapshot of the load-heap bump cursor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -36,7 +32,7 @@ impl DevicePlatform {
 
         let heap_start = core::ptr::addr_of!(__lang_loadheap_start) as usize;
         let heap_end = core::ptr::addr_of!(__lang_loadheap_end) as usize;
-        Self::new(heap_start, heap_end, DEVICE_EXPECTED_ABI_HASH)
+        Self::new(heap_start, heap_end, device_expected_abi_hash())
     }
 
     /// Build a platform over an explicit arena.
@@ -86,6 +82,26 @@ impl DevicePlatform {
     }
 }
 
+fn device_expected_abi_hash() -> u64 {
+    let (arch_tag, slot_bytes, word_bits) = device_abi_geometry();
+    lmod::abi_hash::compute_abi_hash(arch_tag, slot_bytes, word_bits, lmod::modinfo::MODINFO_VER)
+}
+
+#[cfg(target_arch = "x86_64")]
+fn device_abi_geometry() -> (u8, u8, u8) {
+    (lmod::abi_hash::ARCH_TAG_X86_64, 8, 64)
+}
+
+#[cfg(target_arch = "arm")]
+fn device_abi_geometry() -> (u8, u8, u8) {
+    (lmod::abi_hash::ARCH_TAG_ARM, 4, 32)
+}
+
+#[cfg(target_arch = "riscv32")]
+fn device_abi_geometry() -> (u8, u8, u8) {
+    (lmod::abi_hash::ARCH_TAG_RISCV, 4, 32)
+}
+
 impl LoaderPlatform for DevicePlatform {
     fn alloc_exec(&mut self, len: usize) -> Result<Region, u32> {
         self.alloc_bump(len)
@@ -108,6 +124,165 @@ impl LoaderPlatform for DevicePlatform {
     fn expected_abi_hash(&self) -> u64 {
         self.expected_abi_hash
     }
+}
+
+#[no_mangle]
+pub extern "C" fn __lang_load_and_run() -> ! {
+    let mut platform = DevicePlatform::from_linker_symbols();
+    let mark = platform.mark();
+    let mut symmap: SymMap<'_, 256> = SymMap::new();
+    let mut loaded_set = LoadedSet::<64>::new();
+
+    if register_firmware_symtab(&mut symmap, &mut platform).is_err() {
+        trap(E_BAD_CONTAINER);
+    }
+
+    let lmod = match acquire_modpack_module() {
+        Some(bytes) => bytes,
+        None => trap(E_BAD_CONTAINER),
+    };
+    let container = match Container::parse(lmod) {
+        Ok(container) => container,
+        Err(_) => trap(E_BAD_CONTAINER),
+    };
+
+    match load_module(&container, &mut platform, &mut symmap, &mut loaded_set) {
+        Ok(_) => {
+            let Some(main) = symmap.lookup_by_hash(MAIN_HASH) else {
+                trap(LoadError::SymbolUnresolved.code());
+            };
+            let code = unsafe { __lang_call_loaded_main(main.addr) };
+            unsafe { __lang_exit_code(code) }
+        }
+        Err(err) => {
+            platform.reset(mark);
+            trap(err.code());
+        }
+    }
+}
+
+fn register_firmware_symtab(
+    symmap: &mut SymMap<'_, 256>,
+    platform: &mut DevicePlatform,
+) -> Result<usize, u32> {
+    extern "C" {
+        static __lang_symtab_start: u8;
+        static __lang_symtab_end: u8;
+    }
+
+    let start = core::ptr::addr_of!(__lang_symtab_start) as usize;
+    let end = core::ptr::addr_of!(__lang_symtab_end) as usize;
+    if end < start {
+        return Err(E_BAD_CONTAINER);
+    }
+    let bytes = unsafe { core::slice::from_raw_parts(start as *const u8, end - start) };
+    register_firmware_symtab_bytes(symmap, platform, bytes)
+}
+
+fn register_firmware_symtab_bytes(
+    symmap: &mut SymMap<'_, 256>,
+    platform: &mut DevicePlatform,
+    bytes: &[u8],
+) -> Result<usize, u32> {
+    if bytes.len() < 8 {
+        return Err(E_BAD_CONTAINER);
+    }
+    let count = u32::from_le_bytes(bytes[0..4].try_into().map_err(|_| E_BAD_CONTAINER)?) as usize;
+    let expected_len = 8usize
+        .checked_add(count.checked_mul(16).ok_or(E_BAD_CONTAINER)?)
+        .ok_or(E_BAD_CONTAINER)?;
+    if bytes.len() < expected_len {
+        return Err(E_BAD_CONTAINER);
+    }
+
+    for i in 0..count {
+        let off = 8 + i * 16;
+        let hash = u64::from_le_bytes(
+            bytes[off..off + 8]
+                .try_into()
+                .map_err(|_| E_BAD_CONTAINER)?,
+        );
+        let addr = u64::from_le_bytes(
+            bytes[off + 8..off + 16]
+                .try_into()
+                .map_err(|_| E_BAD_CONTAINER)?,
+        ) as usize;
+        let registered_addr = maybe_arm_veneer(platform, hash, addr)?;
+        symmap.register_runtime_hash(hash, registered_addr)?;
+    }
+
+    Ok(count)
+}
+
+#[cfg(target_arch = "arm")]
+fn maybe_arm_veneer(platform: &mut DevicePlatform, hash: u64, addr: usize) -> Result<usize, u32> {
+    if !arm_needs_veneer(hash, addr) {
+        return Ok(addr);
+    }
+
+    let mut region = platform.alloc_exec(8)?;
+    let veneer = unsafe { region.as_mut_slice() };
+    let target = (addr | 1) as u32;
+    veneer[0..2].copy_from_slice(&0x4b00u16.to_le_bytes()); // ldr r3, [pc, #0]
+    veneer[2..4].copy_from_slice(&0x4718u16.to_le_bytes()); // bx r3
+    veneer[4..8].copy_from_slice(&target.to_le_bytes());
+    platform.make_exec(&mut region)?;
+    Ok((region.as_ptr() as usize) | 1)
+}
+
+#[cfg(not(target_arch = "arm"))]
+fn maybe_arm_veneer(_platform: &mut DevicePlatform, _hash: u64, addr: usize) -> Result<usize, u32> {
+    Ok(addr)
+}
+
+#[cfg(target_arch = "arm")]
+fn arm_needs_veneer(hash: u64, addr: usize) -> bool {
+    if addr >= 0x1000_0000 {
+        return false;
+    }
+    !matches!(
+        hash,
+        h if h == lmod::hash::fnv1a_u64(b"__lang_ds_base")
+            || h == lmod::hash::fnv1a_u64(b"__lang_ds_limit")
+            || h == lmod::hash::fnv1a_u64(b"__lang_ds_high")
+            || h == lmod::hash::fnv1a_u64(b"__lang_stack_limit")
+            || h == lmod::hash::fnv1a_u64(b"__lang_expected_abi_hash")
+            || h == lmod::hash::fnv1a_u64(b"__lang_v_emitted")
+            || h == lmod::hash::fnv1a_u64(b"__lang_gpio_state")
+            || h == lmod::hash::fnv1a_u64(b"__lang_time_counter")
+    )
+}
+
+fn acquire_modpack_module() -> Option<&'static [u8]> {
+    extern "C" {
+        static __lang_modpack_start: u8;
+        static __lang_modpack_end: u8;
+    }
+
+    let start = core::ptr::addr_of!(__lang_modpack_start) as usize;
+    let end = core::ptr::addr_of!(__lang_modpack_end) as usize;
+    if end < start || end - start < 4 {
+        return None;
+    }
+
+    let bytes = unsafe { core::slice::from_raw_parts(start as *const u8, end - start) };
+    let len = u32::from_le_bytes(bytes[0..4].try_into().ok()?) as usize;
+    let payload_start = 4usize;
+    let payload_end = payload_start.checked_add(len)?;
+    if payload_end > bytes.len() {
+        return None;
+    }
+    Some(&bytes[payload_start..payload_end])
+}
+
+fn trap(code: u32) -> ! {
+    unsafe { __lang_loader_trap(code as u64) }
+}
+
+extern "C" {
+    fn __lang_call_loaded_main(addr: usize) -> i64;
+    fn __lang_exit_code(code: i64) -> !;
+    fn __lang_loader_trap(code: u64) -> !;
 }
 
 fn align_up(value: usize, align: usize) -> Option<usize> {

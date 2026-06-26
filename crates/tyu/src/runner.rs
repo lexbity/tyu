@@ -83,7 +83,7 @@ impl Runner {
     ///
     /// For `Device`, flashes via OpenOCD and captures serial output.
     pub fn run(&self, image: &Path, timeout: Duration) -> Result<RunOutcome, String> {
-        let exec_image = resolve_execution_image(image)?;
+        let exec_image = resolve_static_image(image)?;
         match self {
             Runner::Native => run_native(&exec_image, timeout),
             Runner::Qemu(spec) => run_qemu(spec, &exec_image, timeout, None),
@@ -117,7 +117,7 @@ impl Runner {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn resolve_execution_image(image: &Path) -> Result<PathBuf, String> {
+fn resolve_static_image(image: &Path) -> Result<PathBuf, String> {
     if image.extension().and_then(|s| s.to_str()) != Some("lmod") {
         return Ok(image.to_path_buf());
     }

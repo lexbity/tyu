@@ -1166,8 +1166,8 @@ fn dispatch_import_reloc(
         1 => 0,      // R_X86_64_64
         2 | 3 => -4, // R_X86_64_PC32 / R_X86_64_PLT32
         4 => 0,      // R_ARM_ABS32
-        5 => -4,     // R_ARM_THM_CALL (PC = site + 4)
-        6 => -4,     // R_ARM_THM_JUMP24
+        5 => 0,      // R_ARM_THM_CALL (ARM backend applies PC = site + 4)
+        6 => 0,      // R_ARM_THM_JUMP24
         7 => 0,      // R_ARM_REL32
         _ => 0,
     };

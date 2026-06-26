@@ -195,7 +195,7 @@ poison = \"fail-marker\"
 #[test]
 fn ci_missing_tools_hard_error() {
     // Use RISC-V target (least likely to have tools installed).
-    let riscv_tools = ["riscv64-unknown-elf-as", "qemu-system-riscv32"];
+    let riscv_tools = ["riscv32-elf-as", "qemu-system-riscv32"];
     let all_available = riscv_tools.iter().all(|t| tool_available(t));
     if all_available {
         eprintln!("SKIP: CI=1 test skipped because all riscv32 tools are present");

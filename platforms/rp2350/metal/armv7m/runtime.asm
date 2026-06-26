@@ -439,5 +439,5 @@ __stack_top:
 .section .data, "aw"
 .global __lang_expected_abi_hash
 __lang_expected_abi_hash:
-    .word 0xf7c80145
-    .word 0xac34c6b7
+    .word 0xe4b2e904
+    .word 0x5d36b0ef

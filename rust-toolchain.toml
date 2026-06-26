@@ -1,2 +1,14 @@
+# no RISCV
+#[toolchain]
+#channel = "stable"
+
+# Assuming RISCV target: is a TIER2 target
 [toolchain]
-channel = "stable"
+channel = "nightly"
+components = ["rust-src"]
+targets = [
+  "riscv32im-unknown-none-elf",  #default: riscv32-unknown-none
+  "riscv32imac-unknown-none-elf",
+]
+
+#"riscv32e-unknown-none-elf", #different platform

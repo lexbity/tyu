@@ -290,7 +290,7 @@ fn hardware_rp2350_manual_hil() {
 #[ignore]
 #[test]
 fn hardware_rp2350_cross_arch_abi_mismatch_demo() {
-    let tools = &["langc", "riscv64-linux-gnu-as", "riscv64-linux-gnu-ld"];
+    let tools = &["langc", "riscv32-elf-as", "riscv32-elf-ld"];
     if !require_tools(tools) {
         return;
     }

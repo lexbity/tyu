@@ -10,10 +10,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use codegen_core::{AssemblerKind, FeatureSet, Target};
+use codegen_core::{AssemblerKind, Feature, FeatureSet, Target};
 use lang_symtab_gen::{extract_runtime_symbols, render_asm, render_names, AsmFlavor};
 
-use crate::args::BuildArgs;
+use crate::args::{BuildArgs, BuildMode};
 use crate::cache::{self, BuildCache};
 use crate::error::TyuError;
 use crate::graph::{resolve_graph, ModuleNode};
@@ -102,7 +102,7 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
     let mut transitive_cache: BTreeMap<PathBuf, Vec<u64>> = BTreeMap::new();
 
     // Compile each module in dependency order.
-    let mut objs: Vec<PathBuf> = Vec::new();
+    let mut module_objs: Vec<PathBuf> = Vec::new();
     for module in &modules {
         let inputs_fp = {
             let own_hash = path_to_hash.get(&module.path).copied().unwrap_or(0);
@@ -125,40 +125,42 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
             triple,
             feature_set,
         )?;
-        objs.push(obj_path);
+        module_objs.push(obj_path);
     }
 
-    // Assemble runtime units.
-    let runtime_objs = assemble_runtime_for_context(&ctx, feature_set)?;
-    objs.extend(runtime_objs);
-
-    if let Some(selection) = platform_selection.as_ref() {
-        if selection
-            .pack
-            .manifest
-            .deploy
-            .as_ref()
-            .map(|deploy| deploy.boot.as_str())
-            == Some("image_def")
-        {
-            let image_def_obj = assemble_image_def(target, &out_dir, selection)?;
-            objs.push(image_def_obj);
-        }
-    }
-
-    // Link the execution image. Bare-metal targets still need this ELF
-    // intermediate for QEMU/device execution, but the final distributable
-    // artifact is the packed `.lmod`.
-    let exec_image = link_image_for_context(&ctx, &objs)?;
-
-    let final_image = if matches!(target, Target::X86_64UnknownLinuxGnu) {
-        exec_image.clone()
+    let mode = effective_build_mode(args, target);
+    let (final_image, exec_image) = if mode == BuildMode::Dynamic {
+        build_dynamic_image(&ctx, feature_set, &module_objs, modules.last())?
     } else {
-        let root_obj = objs
-            .get(module_count.saturating_sub(1))
-            .ok_or_else(|| TyuError::Build("no root module object to pack".into()))?;
-        pack_final_lmod(root_obj, &out_dir, modules.last().map(|m| m.name.as_str()))
-            .map_err(TyuError::Build)?
+        let mut objs = module_objs.clone();
+        let runtime_objs = assemble_runtime_for_context_mode(&ctx, feature_set, BuildMode::Static)?;
+        objs.extend(runtime_objs);
+
+        if let Some(selection) = platform_selection.as_ref() {
+            if selection
+                .pack
+                .manifest
+                .deploy
+                .as_ref()
+                .map(|deploy| deploy.boot.as_str())
+                == Some("image_def")
+            {
+                let image_def_obj = assemble_image_def(target, &out_dir, selection)?;
+                objs.push(image_def_obj);
+            }
+        }
+
+        let exec_image = link_image_for_context(&ctx, &objs)?;
+        let final_image = if matches!(target, Target::X86_64UnknownLinuxGnu) {
+            exec_image.clone()
+        } else {
+            let root_obj = module_objs
+                .get(module_count.saturating_sub(1))
+                .ok_or_else(|| TyuError::Build("no root module object to pack".into()))?;
+            pack_final_lmod(root_obj, &out_dir, modules.last().map(|m| m.name.as_str()))
+                .map_err(TyuError::Build)?
+        };
+        (final_image, exec_image)
     };
 
     // Persist cache.
@@ -170,6 +172,40 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
         target,
         platform_selection,
     })
+}
+
+fn effective_build_mode(args: &BuildArgs, target: Target) -> BuildMode {
+    match args.mode {
+        Some(mode) => mode,
+        None => {
+            let _ = target;
+            BuildMode::Static
+        }
+    }
+}
+
+fn build_dynamic_image(
+    ctx: &BuildContext,
+    feature_set: FeatureSet,
+    module_objs: &[PathBuf],
+    root_module: Option<&ModuleNode>,
+) -> Result<(PathBuf, PathBuf), TyuError> {
+    let root_obj = module_objs
+        .last()
+        .ok_or_else(|| TyuError::Build("no root module object to pack".into()))?;
+    let app_lmod = pack_final_lmod(root_obj, &ctx.out_dir, root_module.map(|m| m.name.as_str()))
+        .map_err(TyuError::Build)?;
+
+    let mut firmware_objs =
+        assemble_runtime_for_context_mode(ctx, feature_set, BuildMode::Dynamic)?;
+    firmware_objs.push(assemble_modpack_object(
+        ctx.target,
+        &ctx.out_dir,
+        &app_lmod,
+    )?);
+    firmware_objs.push(build_device_loader_staticlib(ctx.target)?);
+    let firmware = link_image_for_context(ctx, &firmware_objs)?;
+    Ok((firmware.clone(), firmware))
 }
 
 pub fn resolve_build_context(args: &BuildArgs) -> Result<BuildContext, TyuError> {
@@ -277,13 +313,9 @@ fn assemble_image_def(
             }
         }
         AssemblerKind::GasRiscV => {
-            let asm = toolchain::resolve_tool_candidates(&[
-                "riscv64-unknown-elf-as",
-                "riscv64-linux-gnu-as",
-            ])
-            .map_err(|e| {
-                TyuError::Build(format!("resolving riscv assembler for image_def: {}", e))
-            })?;
+            let asm = toolchain::resolve_tool_candidates(toolchain::RISCV_AS_CANDIDATES).map_err(
+                |e| TyuError::Build(format!("resolving riscv assembler for image_def: {}", e)),
+            )?;
             let status = Command::new(&asm)
                 .current_dir(out_dir)
                 .args([
@@ -553,7 +585,6 @@ fn assemble_unit(
     stem: &str,
     out_dir: &Path,
 ) -> Result<PathBuf, TyuError> {
-    let spec = target.spec();
     let asm_path = rt_dir.join(format!("{}.asm", stem));
     if !asm_path.exists() {
         // Optional unit that does not exist on this target — skip silently.
@@ -625,11 +656,8 @@ fn assemble_asm_file(
                     TyuError::Build(format!("invalid asm path '{}'", asm_path.display()))
                 })?
                 .to_owned();
-            let asm = toolchain::resolve_tool_candidates(&[
-                "riscv64-unknown-elf-as",
-                "riscv64-linux-gnu-as",
-            ])
-            .map_err(|e| TyuError::Build(format!("resolving riscv assembler: {}", e)))?;
+            let asm = toolchain::resolve_tool_candidates(toolchain::RISCV_AS_CANDIDATES)
+                .map_err(|e| TyuError::Build(format!("resolving riscv assembler: {}", e)))?;
             let mut cmd = Command::new(&asm);
             if let Some(dir) = current_dir {
                 cmd.current_dir(dir);
@@ -670,6 +698,22 @@ pub fn assemble_runtime(
     feature_set: FeatureSet,
     platform_selection: Option<&platform::ResolvedPlatformSelection>,
 ) -> Result<Vec<PathBuf>, TyuError> {
+    assemble_runtime_with_mode(
+        target,
+        out_dir,
+        feature_set,
+        platform_selection,
+        BuildMode::Static,
+    )
+}
+
+fn assemble_runtime_with_mode(
+    target: Target,
+    out_dir: &Path,
+    feature_set: FeatureSet,
+    platform_selection: Option<&platform::ResolvedPlatformSelection>,
+    mode: BuildMode,
+) -> Result<Vec<PathBuf>, TyuError> {
     let triple = std::str::from_utf8(target.triple()).map_err(|_| "non-UTF-8 triple")?;
     let rt_dir = if let Some(selection) = platform_selection {
         selection.pack_root().join(&selection.metal().path)
@@ -689,12 +733,18 @@ pub fn assemble_runtime(
     let symtab_obj = generate_runtime_symtab(target, &runtime_obj, out_dir)?;
     objs.push(runtime_obj);
     objs.push(symtab_obj);
+    if let Some(entry_obj) = assemble_entry_unit(target, &rt_dir, out_dir, mode)? {
+        objs.push(entry_obj);
+    }
 
     // Feature-specific runtime units: assemble each stem that maps to
     // an enabled feature.  `assemble_unit` returns an error for missing
     // files (the unit must exist for at least the targets that enable it).
     for f in feature_set.iter() {
         if let Some(stem) = f.runtime_unit() {
+            if mode == BuildMode::Dynamic && f == Feature::ModuleLoading {
+                continue;
+            }
             let unit_path = rt_dir.join(format!("{}.asm", stem));
             if unit_path.exists() {
                 objs.push(assemble_unit(target, &rt_dir, stem, out_dir)?);
@@ -703,6 +753,29 @@ pub fn assemble_runtime(
     }
 
     Ok(objs)
+}
+
+fn assemble_entry_unit(
+    target: Target,
+    rt_dir: &Path,
+    out_dir: &Path,
+    mode: BuildMode,
+) -> Result<Option<PathBuf>, TyuError> {
+    let stem = match mode {
+        BuildMode::Static => "static_entry",
+        BuildMode::Dynamic => "dynamic_entry",
+    };
+    let path = rt_dir.join(format!("{}.asm", stem));
+    if path.exists() {
+        assemble_unit(target, rt_dir, stem, out_dir).map(Some)
+    } else if mode == BuildMode::Static {
+        Ok(None)
+    } else {
+        Err(TyuError::Build(format!(
+            "dynamic runtime entry unit '{}' is missing",
+            path.display()
+        )))
+    }
 }
 
 fn generate_runtime_symtab(
@@ -727,15 +800,165 @@ fn generate_runtime_symtab(
     Ok(obj_path)
 }
 
+fn assemble_modpack_object(
+    target: Target,
+    out_dir: &Path,
+    lmod_path: &Path,
+) -> Result<PathBuf, TyuError> {
+    let len = fs::metadata(lmod_path).map_err(TyuError::Io)?.len();
+    if len > u32::MAX as u64 {
+        return Err(TyuError::Build(format!(
+            "module '{}' is too large for v1 modpack",
+            lmod_path.display()
+        )));
+    }
+    let lmod_abs = if lmod_path.is_absolute() {
+        lmod_path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(TyuError::Io)?
+            .join(lmod_path)
+    };
+    let lmod_str = lmod_abs
+        .to_str()
+        .ok_or_else(|| TyuError::Build(format!("non-UTF-8 path '{}'", lmod_abs.display())))?;
+
+    let asm_path = out_dir.join("modpack_generated.asm");
+    let obj_path = out_dir.join("modpack_generated.o");
+    let asm = render_modpack_asm(target, len as u32, lmod_str, &lmod_abs)?;
+    fs::write(&asm_path, asm).map_err(TyuError::Io)?;
+    assemble_asm_file(target, &asm_path, &obj_path, Some(out_dir), "modpack")?;
+    Ok(obj_path)
+}
+
+fn render_modpack_asm(
+    target: Target,
+    len: u32,
+    lmod_str: &str,
+    lmod_abs: &Path,
+) -> Result<String, TyuError> {
+    match target.spec().assembler {
+        AssemblerKind::Fasm => {
+            if lmod_str.contains('\'') {
+                return Err(TyuError::Build(format!(
+                    "FASM modpack path contains an unsupported quote: '{}'",
+                    lmod_abs.display()
+                )));
+            }
+            Ok(format!(
+                "format ELF64\n\nsection '.modpack' writeable\n    dd {len}\n    file '{lmod_str}'\n"
+            ))
+        }
+        AssemblerKind::GasArm => {
+            let path = gas_string_literal(lmod_str, lmod_abs)?;
+            Ok(format!(
+                ".syntax unified\n.thumb\n\n.section .modpack, \"a\", %progbits\n.balign 4\n.word {len}\n.incbin \"{path}\"\n.balign 4\n.section .note.GNU-stack, \"\", %progbits\n"
+            ))
+        }
+        AssemblerKind::GasRiscV => {
+            let path = gas_string_literal(lmod_str, lmod_abs)?;
+            Ok(format!(
+                ".section .modpack, \"a\", @progbits\n.balign 4\n.word {len}\n.incbin \"{path}\"\n.balign 4\n.section .note.GNU-stack, \"\", @progbits\n"
+            ))
+        }
+    }
+}
+
+fn gas_string_literal(path: &str, display_path: &Path) -> Result<String, TyuError> {
+    if path.contains('"') || path.contains('\\') || path.bytes().any(|b| b < 0x20) {
+        return Err(TyuError::Build(format!(
+            "GAS modpack path contains an unsupported character: '{}'",
+            display_path.display()
+        )));
+    }
+    Ok(path.to_string())
+}
+
+fn build_device_loader_staticlib(target: Target) -> Result<PathBuf, TyuError> {
+    let triple = device_loader_rust_target(target)?;
+    let profile = device_loader_profile(target)?;
+    let target_dir = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| platform::workspace_root().join("target"));
+    let manifest = platform::workspace_root()
+        .join("crates")
+        .join("device-loader-archive")
+        .join("Cargo.toml");
+    let mut cmd = Command::new("cargo");
+    cmd.env("CARGO_TARGET_DIR", &target_dir).args([
+        "build",
+        "--manifest-path",
+        manifest.to_string_lossy().as_ref(),
+        "--target",
+        triple,
+    ]);
+    if target == Target::RiscV32UnknownNone {
+        cmd.args(["-Z", "build-std=core,alloc"]);
+    }
+    if profile == "release" {
+        cmd.arg("--release");
+    }
+    let status = cmd
+        .status()
+        .map_err(|e| TyuError::Build(format!("spawning cargo for device loader: {}", e)))?;
+    if !status.success() {
+        return Err(TyuError::Build(format!(
+            "building loader-core staticlib for {} failed",
+            triple
+        )));
+    }
+
+    Ok(target_dir
+        .join(triple)
+        .join(profile)
+        .join("libdevice_loader_archive.a"))
+}
+
+fn device_loader_rust_target(target: Target) -> Result<&'static str, TyuError> {
+    match target {
+        Target::X86_64UnknownNone => Ok("x86_64-unknown-none"),
+        Target::ArmV7MUnknownNone => Ok("thumbv7m-none-eabi"),
+        Target::RiscV32UnknownNone => Ok("riscv32im-unknown-none-elf"),
+        Target::X86_64UnknownLinuxGnu => Err(TyuError::Build(
+            "--mode=dynamic is only supported for bare-metal QEMU targets".into(),
+        )),
+    }
+}
+
+fn device_loader_profile(target: Target) -> Result<&'static str, TyuError> {
+    match target {
+        Target::X86_64UnknownNone => Ok("debug"),
+        Target::ArmV7MUnknownNone | Target::RiscV32UnknownNone => Ok("release"),
+        Target::X86_64UnknownLinuxGnu => Err(TyuError::Build(
+            "--mode=dynamic is only supported for bare-metal QEMU targets".into(),
+        )),
+    }
+}
+
 pub fn assemble_runtime_for_context(
     ctx: &BuildContext,
     feature_set: FeatureSet,
 ) -> Result<Vec<PathBuf>, TyuError> {
-    assemble_runtime(
+    assemble_runtime_with_mode(
         ctx.target,
         &ctx.out_dir,
         feature_set,
         ctx.platform_selection(),
+        BuildMode::Static,
+    )
+}
+
+fn assemble_runtime_for_context_mode(
+    ctx: &BuildContext,
+    feature_set: FeatureSet,
+    mode: BuildMode,
+) -> Result<Vec<PathBuf>, TyuError> {
+    assemble_runtime_with_mode(
+        ctx.target,
+        &ctx.out_dir,
+        feature_set,
+        ctx.platform_selection(),
+        mode,
     )
 }
 

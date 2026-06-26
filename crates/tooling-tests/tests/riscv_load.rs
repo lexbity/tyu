@@ -29,7 +29,7 @@ const RV32_ABS32_IMPORT_CODE: &[u8] = &[
     0x67, 0x80, 0x00, 0x00, // ret
 ];
 
-const RV32_ABI_HASH: u64 = 0xa7df1edbd11ba544; // compute_abi_hash(ARCH_TAG_RISCV, 4, 32, 2)
+const RV32_ABI_HASH: u64 = 0xf6dd34a3e430bd85; // compute_abi_hash(ARCH_TAG_RISCV, 4, 32, 3)
 
 fn make_rv32_lmod(code: &[u8], imports: &[(&str, u8)]) -> Vec<u8> {
     let import_entries: Vec<ImportEntry> = imports

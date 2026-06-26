@@ -10,6 +10,7 @@
 
 .syntax unified
 .thumb
+.extern __lang_entry
 
 @ -----------------------------------------------------------------
 @ Vector table — placed at FLASH origin by link.ld
@@ -95,7 +96,11 @@ __lang_start:
     str r1, [r0]
     cpsie i
 
-    bl w_1f5962a2ce9803c8          @ call main ( -- i64 )
+    bl __lang_entry                @ static: call main; dynamic: load lmod then run main
+
+.global __lang_after_main
+.type __lang_after_main, %function
+__lang_after_main:
 
     @ Pop exit code from DS — main returns ( -- i64 ), i64 = two 4-byte slots
     subs r4, r4, #8
@@ -508,9 +513,9 @@ __mmio_mem:
 .section .data, "aw"
 .global __lang_expected_abi_hash
 __lang_expected_abi_hash:
-    @ compute_abi_hash(ARCH_TAG_ARM=2, slot=4, word=32, MODINFO_VER=2) = 0xac34c6b7f7c80145, recipe v2
-    .word 0xf7c80145
-    .word 0xac34c6b7
+    @ compute_abi_hash(ARCH_TAG_ARM=2, slot=4, word=32, MODINFO_VER=3) = 0x5d36b0efe4b2e904, recipe v2
+    .word 0xe4b2e904
+    .word 0x5d36b0ef
 
     @ return to BSS for the native stack
     .section .bss, "aw", %nobits

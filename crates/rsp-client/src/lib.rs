@@ -684,11 +684,13 @@ mod tests {
 
     /// Build a minimal RISC-V infinite-loop ELF (qemu-system-riscv32 virt machine).
     fn try_build_riscv_loop_elf(out_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+        let as_bin = first_available(RISCV_AS)?;
+        let ld_bin = first_available(RISCV_LD)?;
         let asm = out_dir.join("loop.s");
         let obj = out_dir.join("loop.o");
         let elf = out_dir.join("loop.elf");
         std::fs::write(&asm, b".globl _start\n_start:\n  j _start\n").ok()?;
-        let status = std::process::Command::new("riscv64-unknown-elf-as")
+        let status = std::process::Command::new(as_bin)
             .args([
                 "-march=rv32im",
                 "-mabi=ilp32",
@@ -699,10 +701,10 @@ mod tests {
             .status()
             .ok()?;
         if !status.success() {
-            eprintln!("note: riscv64-unknown-elf-as failed to build infinite-loop ELF");
+            eprintln!("note: RISC-V assembler failed to build infinite-loop ELF");
             return None;
         }
-        let status = std::process::Command::new("riscv64-unknown-elf-ld")
+        let status = std::process::Command::new(ld_bin)
             .args([
                 "-Ttext=0x80000000",
                 obj.to_str().unwrap(),
@@ -712,7 +714,7 @@ mod tests {
             .status()
             .ok()?;
         if !status.success() {
-            eprintln!("note: riscv64-unknown-elf-ld failed");
+            eprintln!("note: RISC-V linker failed");
             return None;
         }
         Some(elf)
@@ -761,16 +763,16 @@ mod tests {
 
     #[test]
     fn riscv_qemu_read_register_and_memory() {
-        let tools = [
-            "qemu-system-riscv32",
-            "riscv64-unknown-elf-as",
-            "riscv64-unknown-elf-ld",
-        ];
-        let missing: Vec<&str> = tools
-            .iter()
-            .filter(|t| !tool_available(t))
-            .copied()
-            .collect();
+        let mut missing = Vec::new();
+        if !tool_available("qemu-system-riscv32") {
+            missing.push("qemu-system-riscv32");
+        }
+        if first_available(RISCV_AS).is_none() {
+            missing.push("RISC-V assembler");
+        }
+        if first_available(RISCV_LD).is_none() {
+            missing.push("RISC-V linker");
+        }
         if !missing.is_empty() {
             if std::env::var("CI").is_ok() {
                 panic!(
@@ -817,6 +819,23 @@ mod tests {
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)
+    }
+
+    const RISCV_AS: &[&str] = &[
+        "riscv32-elf-as",
+        "riscv32-unknown-elf-as",
+        "riscv64-unknown-elf-as",
+        "riscv64-linux-gnu-as",
+    ];
+    const RISCV_LD: &[&str] = &[
+        "riscv32-elf-ld",
+        "riscv32-unknown-elf-ld",
+        "riscv64-unknown-elf-ld",
+        "riscv64-linux-gnu-ld",
+    ];
+
+    fn first_available<'a>(names: &'a [&'a str]) -> Option<&'a str> {
+        names.iter().copied().find(|name| tool_available(name))
     }
 
     fn temp_dir(label: &str) -> std::path::PathBuf {

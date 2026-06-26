@@ -15,6 +15,7 @@
 .endm
 
 .section .text
+.extern __lang_entry
 
 # -----------------------------------------------------------------
 # Shared semihosting helpers (local, not exported)
@@ -81,7 +82,11 @@ __lang_start:
     la a0, __lang_v_emitted
     sw zero, 0(a0)
 
-    jal w_1f5962a2ce9803c8          # call main ( -- i64 )
+    jal __lang_entry                # static: call main; dynamic: load lmod then run main
+
+.globl __lang_after_main
+.type __lang_after_main, @function
+__lang_after_main:
 
     # Pop exit code from DS (i64 = two 4-byte slots)
     addi s2, s2, -8
@@ -425,9 +430,9 @@ __mmio_mem:
 .section .data
 .globl __lang_expected_abi_hash
 __lang_expected_abi_hash:
-    # compute_abi_hash(ARCH_TAG_RISCV=3, slot=4, word=32, MODINFO_VER=2) = 0xa7df1edbd11ba544, recipe v2
-    .word 0xd11ba544
-    .word 0xa7df1edb
+    # compute_abi_hash(ARCH_TAG_RISCV=3, slot=4, word=32, MODINFO_VER=3) = 0xf6dd34a3e430bd85, recipe v2
+    .word 0xe430bd85
+    .word 0xf6dd34a3
 
     # return to BSS for the native stack
     .section .bss

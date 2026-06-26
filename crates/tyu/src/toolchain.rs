@@ -10,6 +10,25 @@ use codegen_core::Target;
 
 use crate::project::ProjectManifest;
 
+pub const RISCV_AS_CANDIDATES: &[&str] = &[
+    "riscv32-elf-as",
+    "riscv32-unknown-elf-as",
+    "riscv64-unknown-elf-as",
+    "riscv64-linux-gnu-as",
+];
+pub const RISCV_LD_CANDIDATES: &[&str] = &[
+    "riscv32-elf-ld",
+    "riscv32-unknown-elf-ld",
+    "riscv64-unknown-elf-ld",
+    "riscv64-linux-gnu-ld",
+];
+pub const RISCV_NM_CANDIDATES: &[&str] = &[
+    "riscv32-elf-nm",
+    "riscv32-unknown-elf-nm",
+    "riscv64-unknown-elf-nm",
+    "riscv64-linux-gnu-nm",
+];
+
 /// A resolved tool with its source and optional version.
 #[derive(Debug)]
 pub struct ResolvedTool {
@@ -50,7 +69,7 @@ impl ToolRole {
             ToolRole::Assembler => match target.spec().assembler {
                 codegen_core::AssemblerKind::Fasm => b"fasm",
                 codegen_core::AssemblerKind::GasArm => b"arm-none-eabi-as",
-                codegen_core::AssemblerKind::GasRiscV => b"riscv64-unknown-elf-as",
+                codegen_core::AssemblerKind::GasRiscV => b"riscv32-elf-as",
             },
             ToolRole::Linker => target.spec().linker,
             ToolRole::Qemu => target.spec().qemu.map(|q| q.system_bin).unwrap_or(b""),
@@ -187,8 +206,18 @@ fn resolve_one(
 /// Returns a clean `Err` if not found.
 pub fn resolve_tool(name: &str) -> Result<PathBuf, String> {
     let candidates: &[&str] = match name {
-        "riscv64-unknown-elf-as" => &["riscv64-unknown-elf-as", "riscv64-linux-gnu-as"],
-        "riscv64-unknown-elf-ld" => &["riscv64-unknown-elf-ld", "riscv64-linux-gnu-ld"],
+        "riscv32-elf-as"
+        | "riscv32-unknown-elf-as"
+        | "riscv64-unknown-elf-as"
+        | "riscv64-linux-gnu-as" => RISCV_AS_CANDIDATES,
+        "riscv32-elf-ld"
+        | "riscv32-unknown-elf-ld"
+        | "riscv64-unknown-elf-ld"
+        | "riscv64-linux-gnu-ld" => RISCV_LD_CANDIDATES,
+        "riscv32-elf-nm"
+        | "riscv32-unknown-elf-nm"
+        | "riscv64-unknown-elf-nm"
+        | "riscv64-linux-gnu-nm" => RISCV_NM_CANDIDATES,
         _ => &[name],
     };
     resolve_tool_candidates(candidates)

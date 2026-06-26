@@ -25,6 +25,9 @@ members = [
   "crates/lmod-encrypt",
   "crates/lmod-sign",
 ]
+exclude = [
+  "crates/device-loader-archive",
+]
 
 # Panic=abort is intentional: the hosted-rt crate provides a custom panic handler
 # and the compiler pipeline uses manual Drop (assume_init_drop) in several places.

@@ -247,7 +247,7 @@ fn phase1_modinfo_section_present_and_decodable() {
     assert_eq!(magic, 0x4c4d4f44, "bad magic: 0x{magic:08x}");
 
     let version = u16::from_le_bytes(blob[4..6].try_into().unwrap());
-    assert_eq!(version, 2, "bad version: {version}");
+    assert_eq!(version, 3, "bad version: {version}");
 
     // abi_hash lives at bytes [8..16]; skip byte-checking it.
     let name_off = u32::from_le_bytes(blob[16..20].try_into().unwrap()) as usize;

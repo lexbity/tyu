@@ -403,5 +403,5 @@ __stack_top:
 .section .data
 .globl __lang_expected_abi_hash
 __lang_expected_abi_hash:
-    .word 0xd11ba544
-    .word 0xa7df1edb
+    .word 0xe430bd85
+    .word 0xf6dd34a3

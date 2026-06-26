@@ -7,7 +7,7 @@ description = "ARMv7-M bare-metal runtime"
 triple = "armv7m-unknown-none"
 arch = "arm"
 default = true
-expected_abi_hash = "0xac34c6b7f7c80145"
+expected_abi_hash = "0x5d36b0efe4b2e904"
 
 [metal]
 path = "metal"

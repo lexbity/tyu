@@ -99,7 +99,18 @@ end;
         .unwrap();
     assert!(fasm_status.success());
 
+    let static_entry_o = dir.join("static_entry.o");
+    let fasm_status = Command::new("fasm")
+        .args([
+            rt_dir.join("static_entry.asm").to_str().unwrap(),
+            static_entry_o.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(fasm_status.success());
+
     objs.push(runtime_o);
+    objs.push(static_entry_o);
     let image = dir.join("test.elf");
     let ld_status = Command::new("ld")
         .arg("-T")

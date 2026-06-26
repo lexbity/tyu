@@ -56,11 +56,18 @@ fn build_fixture(
         .expect("langc produced no .o file")
 }
 
-fn ephemeral_port() -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+fn ephemeral_port() -> Option<u16> {
+    let listener = match TcpListener::bind("127.0.0.1:0") {
+        Ok(listener) => listener,
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            eprintln!("skipping hang classifier test: localhost bind denied by sandbox");
+            return None;
+        }
+        Err(e) => panic!("bind ephemeral port: {e}"),
+    };
     let port = listener.local_addr().expect("get ephemeral port").port();
     drop(listener);
-    port
+    Some(port)
 }
 
 fn link_and_run(
@@ -84,9 +91,20 @@ fn link_and_run(
         .unwrap();
     assert!(fasm_status.success(), "fasm runtime failed");
 
+    let static_entry_o = dir.join("static_entry.o");
+    let fasm_status = Command::new("fasm")
+        .args([
+            rt_dir.join("static_entry.asm").to_str().unwrap(),
+            static_entry_o.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(fasm_status.success(), "fasm static_entry failed");
+
     // Single link with all objects.
     let mut all_objs = objs.to_vec();
     all_objs.push(runtime_o);
+    all_objs.push(static_entry_o);
     let ld_script = rt_dir.join("link.ld");
     let image = dir.join("test.elf");
     let linker = std::str::from_utf8(target.spec().linker).unwrap();
@@ -135,7 +153,10 @@ end;
 ";
 
     let fixture_o = build_fixture(&dir, target, fixture_src);
-    let hc = link_and_run(target, &[fixture_o], &dir, ephemeral_port());
+    let Some(port) = ephemeral_port() else {
+        return;
+    };
+    let hc = link_and_run(target, &[fixture_o], &dir, port);
     match hc {
         tyu::debug_escalate::HangClass::PollLoop { ref word } => {
             assert_eq!(word, "main", "poll-loop word must carry DIVERGE");
@@ -175,7 +196,10 @@ end;
 ";
 
     let fixture_o = build_fixture(&dir, target, fixture_src);
-    let hc = link_and_run(target, &[fixture_o], &dir, ephemeral_port());
+    let Some(port) = ephemeral_port() else {
+        return;
+    };
+    let hc = link_and_run(target, &[fixture_o], &dir, port);
     match hc {
         tyu::debug_escalate::HangClass::RunawayRecursion { ref word } => {
             assert_eq!(

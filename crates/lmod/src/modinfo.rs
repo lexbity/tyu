@@ -8,7 +8,7 @@
 // ---------------------------------------------------------------------------
 
 pub const LMOD_MAGIC: u32 = 0x4c4d4f44; // "LMOD"
-pub const MODINFO_VER: u16 = 2;
+pub const MODINFO_VER: u16 = 3;
 
 pub const MODINFO_HEADER_SIZE: u32 = 32;
 
@@ -470,7 +470,7 @@ mod tests {
         let n = encode_into(&mut buf, b"Abc", &[], &[], ah, 0, &[]).unwrap();
         let data = &buf[..n];
         assert_eq!(data[0..4], [0x44, 0x4f, 0x4d, 0x4c]); // "LMOD" LE
-        assert_eq!(data[4..6], [2, 0]); // version
+        assert_eq!(data[4..6], [3, 0]); // version
         assert_eq!(data[6..8], [0, 0]); // flags
                                         // abi_hash lives at [8..16]; skip byte-checking it (varies).
         assert_eq!(data[16..20], [32, 0, 0, 0]); // name_off = 32 (header size)
