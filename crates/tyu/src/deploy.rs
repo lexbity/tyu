@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use crate::args::DeployArgs;
+use crate::args::{BuildMode, DeployArgs};
 use crate::build;
 use crate::error::TyuError;
 use crate::keys::{KeyMaterial, KeyRef};
@@ -19,6 +19,7 @@ pub fn run(args: &DeployArgs) -> Result<(), TyuError> {
     let resolved_out_dir = ctx.out_dir.clone();
     let build_selection = ctx.platform_selection.clone();
     let build_out = build::build_resolved(&build_args, ctx)?;
+    let build_mode = build_out.mode;
     let built_image = build_out.final_image;
     // Static deploys may ship an lmod while QEMU executes the ELF it was
     // packed from. Dynamic builds use the firmware ELF directly.
@@ -52,12 +53,7 @@ pub fn run(args: &DeployArgs) -> Result<(), TyuError> {
     let encrypted_path = deploy_dir.join("encrypted.lmod");
     let signed_path = deploy_dir.join("signed.lmod");
 
-    let packed_bytes = if built_image.extension().and_then(|s| s.to_str()) == Some("lmod") {
-        fs::read(&built_image).map_err(TyuError::Io)?
-    } else {
-        let elf_bytes = fs::read(&built_image).map_err(TyuError::Io)?;
-        lmod_pack::pack(&elf_bytes).map_err(|e| TyuError::Deploy(format!("lmod-pack: {}", e)))?
-    };
+    let packed_bytes = read_deploy_lmod(&built_image, &resolved_out_dir, &args.input, build_mode)?;
     write_atomic(&packed_path, &packed_bytes).map_err(TyuError::Io)?;
 
     let lmod_bytes = fs::read(&packed_path).map_err(TyuError::Io)?;
@@ -111,24 +107,34 @@ pub fn run(args: &DeployArgs) -> Result<(), TyuError> {
     };
     run_deploy_steps(recipe)?;
 
+    let deploy_method = normalized_deploy_method(&deploy.method);
     if deploy.method == "elf-qemu" {
+        eprintln!("tyu: warning: deploy method 'elf-qemu' is deprecated; use 'qemu'");
+    }
+
+    if deploy_method == "qemu" {
         let runner = Runner::for_target(target);
-        let runner_image = if signed_path.extension().and_then(|s| s.to_str()) == Some("lmod") {
-            // The deployed artifact is an lmod; QEMU executes the ELF it was
-            // packed from (ELF is only the host/QEMU execution form — the
-            // shipped artifact stays lmod). Co-locate that ELF next to the lmod
-            // so the runner's lmod→ELF resolution finds it as a companion.
-            if exec_image.extension().and_then(|s| s.to_str()) != Some("lmod") {
-                fs::copy(&exec_image, deploy_dir.join("image.elf")).map_err(TyuError::Io)?;
-            }
-            signed_path.clone()
-        } else {
-            built_image.clone()
-        };
         let timeout = Duration::from_secs(10);
-        let outcome = runner
-            .run_static_artifact(&runner_image, timeout)
-            .map_err(|e| TyuError::Runner(e))?;
+        let outcome = if build_mode == BuildMode::Dynamic {
+            runner
+                .run(&exec_image, timeout)
+                .map_err(|e| TyuError::Runner(e))?
+        } else {
+            let runner_image = if signed_path.extension().and_then(|s| s.to_str()) == Some("lmod") {
+                // The deployed artifact is an lmod; static QEMU execution uses
+                // the ELF it was packed from. Co-locate that ELF next to the lmod
+                // so the runner's static lmod->ELF resolution finds it.
+                if exec_image.extension().and_then(|s| s.to_str()) != Some("lmod") {
+                    fs::copy(&exec_image, deploy_dir.join("image.elf")).map_err(TyuError::Io)?;
+                }
+                signed_path.clone()
+            } else {
+                built_image.clone()
+            };
+            runner
+                .run_static_artifact(&runner_image, timeout)
+                .map_err(|e| TyuError::Runner(e))?
+        };
 
         if outcome.timed_out {
             return Err(TyuError::Deploy(format!("HANG — timed out after {:?}", timeout)).into());
@@ -163,6 +169,54 @@ pub fn run(args: &DeployArgs) -> Result<(), TyuError> {
     }
 
     Ok(())
+}
+
+fn read_deploy_lmod(
+    built_image: &Path,
+    out_dir: &Path,
+    input: &Path,
+    build_mode: BuildMode,
+) -> Result<Vec<u8>, TyuError> {
+    if built_image.extension().and_then(|s| s.to_str()) == Some("lmod") {
+        return fs::read(built_image).map_err(TyuError::Io);
+    }
+
+    if build_mode == BuildMode::Static {
+        let elf_bytes = fs::read(built_image).map_err(TyuError::Io)?;
+        return lmod_pack::pack(&elf_bytes)
+            .map_err(|e| TyuError::Deploy(format!("lmod-pack: {}", e)));
+    }
+
+    let input_stem = input
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("module");
+    let preferred = out_dir.join(format!("{}.lmod", input_stem));
+    if preferred.is_file() {
+        return fs::read(preferred).map_err(TyuError::Io);
+    }
+
+    let mut candidates = Vec::new();
+    for entry in fs::read_dir(out_dir).map_err(TyuError::Io)? {
+        let entry = entry.map_err(TyuError::Io)?;
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) == Some("lmod") {
+            candidates.push(path);
+        }
+    }
+    candidates.sort();
+    match candidates.as_slice() {
+        [path] => fs::read(path).map_err(TyuError::Io),
+        [] => Err(TyuError::Deploy(format!(
+            "dynamic deploy expected an application .lmod in {}",
+            out_dir.display()
+        ))),
+        _ => Err(TyuError::Deploy(format!(
+            "dynamic deploy found multiple application .lmod candidates in {}; expected {}.lmod",
+            out_dir.display(),
+            input_stem
+        ))),
+    }
 }
 
 fn enforce_otp_guardrails(args: &DeployArgs) -> Result<(), TyuError> {
@@ -256,7 +310,10 @@ fn run_deploy_steps(ctx: DeployRecipeContext<'_>) -> Result<(), TyuError> {
             "TYU_DEPLOY_ELF",
             exec_image_path(ctx.built_image, ctx.out_dir),
         );
-        cmd.env("TYU_DEPLOY_METHOD", ctx.deploy.method.as_str());
+        cmd.env(
+            "TYU_DEPLOY_METHOD",
+            normalized_deploy_method(&ctx.deploy.method),
+        );
         cmd.env("TYU_DEPLOY_PLATFORM", ctx.pack.name());
         cmd.env(
             "TYU_DEPLOY_TARGET",
@@ -300,7 +357,10 @@ fn substitute_step_text(text: &str, ctx: &DeployRecipeContext<'_>) -> String {
         ("{deploy_dir}", ctx.deploy_dir.display().to_string()),
         ("{pack_root}", ctx.pack.pack_root().display().to_string()),
         ("{platform}", ctx.pack.name().to_string()),
-        ("{method}", ctx.deploy.method.clone()),
+        (
+            "{method}",
+            normalized_deploy_method(&ctx.deploy.method).to_string(),
+        ),
         (
             "{probe_config}",
             ctx.pack
@@ -337,6 +397,13 @@ fn exec_image_path(built_image: &Path, out_dir: &Path) -> PathBuf {
         out_dir.join("image.elf")
     } else {
         built_image.to_path_buf()
+    }
+}
+
+fn normalized_deploy_method(method: &str) -> &str {
+    match method {
+        "elf-qemu" => "qemu",
+        other => other,
     }
 }
 

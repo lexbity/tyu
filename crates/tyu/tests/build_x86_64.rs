@@ -32,6 +32,7 @@ fn build_image(src: &str, dir_label: &str) -> std::path::PathBuf {
     let output = Command::new(tyu_exe())
         .args([
             "build",
+            "--mode=static",
             "--target=x86_64-unknown-none",
             &format!("--sysroot={}", sysroot.display()),
             &format!("--out-dir={}", out_dir.display()),
@@ -121,6 +122,7 @@ fn build_cache_skips_rebuild() {
     let first = Command::new(tyu_exe())
         .args([
             "build",
+            "--mode=static",
             "--target=x86_64-unknown-none",
             &format!("--sysroot={}", sysroot.display()),
             &format!("--out-dir={}", out_dir.display()),
@@ -134,6 +136,7 @@ fn build_cache_skips_rebuild() {
     let second = Command::new(tyu_exe())
         .args([
             "build",
+            "--mode=static",
             "--target=x86_64-unknown-none",
             &format!("--sysroot={}", sysroot.display()),
             &format!("--out-dir={}", out_dir.display()),

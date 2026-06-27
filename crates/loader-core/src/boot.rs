@@ -38,6 +38,11 @@ pub struct DevicePlatform {
     heap_end: usize,
     cursor: usize,
     expected_abi_hash: u64,
+    /// Remaining data-stack slots reported to the loader for `stack_bound`
+    /// enforcement (FR-15). Populated from the static DS geometry by
+    /// `from_linker_symbols`; the test/bring-up constructors leave it
+    /// unbounded (`u32::MAX`) since they do not link the runtime DS region.
+    ds_remaining_slots: u32,
     #[cfg(feature = "signing")]
     sign_key: Option<[u8; KEY_LEN]>,
     #[cfg(feature = "encryption")]
@@ -50,14 +55,31 @@ impl DevicePlatform {
         extern "C" {
             static __lang_loadheap_start: u8;
             static __lang_loadheap_end: u8;
+            static __lang_ds_base: u8;
+            static __lang_ds_limit: u8;
         }
 
         let heap_start = core::ptr::addr_of!(__lang_loadheap_start) as usize;
         let heap_end = core::ptr::addr_of!(__lang_loadheap_end) as usize;
+
+        // FR-15 / Q15: report the real remaining data-stack slots so the loader
+        // rejects a module whose `stack_bound` exceeds the device's data stack.
+        //
+        // The loader runs at boot *before* the dynamic entry initializes r15/r14
+        // and `[__lang_ds_high]` (those are set inside `__lang_call_loaded_main`,
+        // which only runs after a successful load). `__lang_ds_high` is therefore
+        // still zeroed BSS here — reading it would be wrong. Since nothing has been
+        // pushed yet, full capacity == remaining, so we use the static geometry
+        // `(__lang_ds_limit − __lang_ds_base) / slot_bytes`.
+        let ds_base = core::ptr::addr_of!(__lang_ds_base) as usize;
+        let ds_limit = core::ptr::addr_of!(__lang_ds_limit) as usize;
+        let (_, slot_bytes, _) = device_abi_geometry();
+        let ds_remaining_slots = ds_capacity_slots(ds_base, ds_limit, slot_bytes as u32);
+
         #[cfg(any(feature = "signing", feature = "encryption"))]
-        {
+        let mut platform = {
             let keys = read_keys_from_linker_symbols();
-            return Self::new_with_keys(
+            Self::new_with_keys(
                 heap_start,
                 heap_end,
                 device_expected_abi_hash(),
@@ -65,12 +87,13 @@ impl DevicePlatform {
                 keys.sign_key,
                 #[cfg(feature = "encryption")]
                 keys.kek,
-            );
-        }
+            )
+        };
         #[cfg(not(any(feature = "signing", feature = "encryption")))]
-        {
-            Self::new(heap_start, heap_end, device_expected_abi_hash())
-        }
+        let mut platform = Self::new(heap_start, heap_end, device_expected_abi_hash());
+
+        platform.ds_remaining_slots = ds_remaining_slots;
+        platform
     }
 
     /// Build a platform over an explicit arena.
@@ -97,6 +120,7 @@ impl DevicePlatform {
                 heap_end,
                 cursor: heap_start,
                 expected_abi_hash,
+                ds_remaining_slots: u32::MAX,
             }
         }
     }
@@ -115,6 +139,7 @@ impl DevicePlatform {
             heap_end,
             cursor: heap_start,
             expected_abi_hash,
+            ds_remaining_slots: u32::MAX,
             #[cfg(feature = "signing")]
             sign_key,
             #[cfg(feature = "encryption")]
@@ -154,6 +179,20 @@ impl DevicePlatform {
         self.cursor = next;
         Ok(unsafe { Region::from_raw_parts(start as *mut u8, len) })
     }
+}
+
+/// Remaining data-stack slots from the static DS geometry (FR-15).
+///
+/// `base`/`limit` are the addresses of `__lang_ds_base`/`__lang_ds_limit`
+/// (the data-stack region bounds); `slot_bytes` is the per-target slot width
+/// (8 on x86_64, 4 on armv7m/riscv32). Saturating so a malformed/zero-length
+/// region yields 0 rather than wrapping.
+fn ds_capacity_slots(base: usize, limit: usize, slot_bytes: u32) -> u32 {
+    if slot_bytes == 0 {
+        return 0;
+    }
+    let bytes = limit.saturating_sub(base);
+    (bytes / slot_bytes as usize).min(u32::MAX as usize) as u32
 }
 
 fn device_expected_abi_hash() -> u64 {
@@ -197,6 +236,10 @@ impl LoaderPlatform for DevicePlatform {
 
     fn expected_abi_hash(&self) -> u64 {
         self.expected_abi_hash
+    }
+
+    fn ds_remaining_slots(&self) -> u32 {
+        self.ds_remaining_slots
     }
 
     #[cfg(feature = "signing")]
@@ -519,6 +562,18 @@ fn align_up(value: usize, align: usize) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ds_capacity_slots_matches_target_geometry() {
+        // x86_64: 128 KiB region / 8-byte slots = 16384 slots.
+        assert_eq!(ds_capacity_slots(0x1000, 0x1000 + 131072, 8), 16384);
+        // armv7m / riscv32: 16 KiB region / 4-byte slots = 4096 slots.
+        assert_eq!(ds_capacity_slots(0x2000, 0x2000 + 16384, 4), 4096);
+        // Degenerate / inverted regions saturate to 0, never wrap.
+        assert_eq!(ds_capacity_slots(0x5000, 0x5000, 8), 0);
+        assert_eq!(ds_capacity_slots(0x5000, 0x4000, 8), 0);
+        assert_eq!(ds_capacity_slots(0x1000, 0x2000, 0), 0);
+    }
 
     #[test]
     fn bump_allocates_aligned_regions() {

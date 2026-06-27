@@ -6,6 +6,9 @@
 #   G2  No test=false / harness=false hides a #[test] outside tests/.
 #   G3  Execution-tests do not construct raw product QEMU command lines.
 #   G4  (informational) Prints per-package executed-test counts.
+#   G5  Generated runtime symtabs include every runtime export.
+#   G6  Loader 52xx diagnostics do not collide with language/runtime trap codes.
+#   G7  ARM device-loader text size stays within the 16 KiB budget when built.
 #
 # Escape hatch: add `# guards: allow-no-tests` as a comment in the
 # package's Cargo.toml to suppress G1/G2 for that package.  This is
@@ -159,6 +162,112 @@ if grep -R -n -E 'Command::new\("qemu-system' crates/execution-tests/tests 2>/de
     | grep -v 'runner.rs' >/dev/null; then
     msg $RED "  FAIL: execution-tests must not construct raw qemu-system command lines"
     failures=$((failures + 1))
+fi
+
+# --- G5: generated runtime symtab completeness ---
+have_x86_dynamic_tools=true
+for tool in cargo fasm ld nm; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        have_x86_dynamic_tools=false
+    fi
+done
+
+if [ "$have_x86_dynamic_tools" = true ]; then
+    guard_dir=$(mktemp -d "${TMPDIR:-/tmp}/tyu-guards-symtab.XXXXXX")
+    cat > "$guard_dir/Main.mod" <<'EOF'
+module Main;
+: main ( -- i64 ) 0 ;
+export { main };
+end;
+EOF
+    if cargo build -q -p langc -p tyu >/dev/null 2>&1; then
+        if target/debug/tyu build --mode=dynamic --target=x86_64-unknown-none \
+            --sysroot="$(pwd)/sysroot" \
+            --out-dir="$guard_dir/out" \
+            "$guard_dir/Main.mod" >/dev/null 2>"$guard_dir/build.stderr"; then
+            names_file="$guard_dir/out/lang_symtab.names"
+            runtime_obj="$guard_dir/out/runtime.o"
+            if [ ! -f "$names_file" ] || [ ! -f "$runtime_obj" ]; then
+                msg $RED "  FAIL: symtab gate did not produce runtime.o + lang_symtab.names"
+                failures=$((failures + 1))
+            else
+                nm "$runtime_obj" 2>/dev/null \
+                    | awk '{print $NF}' \
+                    | grep -E '^(w_[0-9a-f]{16}|__lang_|__stack_overflow)$' \
+                    | sort -u > "$guard_dir/runtime.exports" || true
+                awk '{print $2}' "$names_file" | sort -u > "$guard_dir/symtab.names"
+                missing=$(comm -23 "$guard_dir/runtime.exports" "$guard_dir/symtab.names" || true)
+                if [ -n "$missing" ]; then
+                    msg $RED "  FAIL: generated .lang.symtab is missing runtime exports:"
+                    echo "$missing" | while IFS= read -r sym; do msg $RED "    $sym"; done
+                    failures=$((failures + 1))
+                fi
+            fi
+        else
+            msg $RED "  FAIL: symtab completeness build failed"
+            sed 's/^/    /' "$guard_dir/build.stderr" >&2
+            failures=$((failures + 1))
+        fi
+    else
+        msg $RED "  FAIL: cargo build -p langc -p tyu failed for symtab gate"
+        failures=$((failures + 1))
+    fi
+    rm -rf "$guard_dir"
+else
+    if [ "${CI:-}" ]; then
+        msg $RED "  FAIL: symtab completeness gate requires cargo, fasm, ld, and nm under CI"
+        failures=$((failures + 1))
+    else
+        msg $YELLOW "  WARN: skipping symtab completeness gate (missing cargo/fasm/ld/nm)"
+    fi
+fi
+
+# --- G6: diagnostic band collision gate ---
+collision_report=$("$PYTHON" - <<'PY'
+import pathlib, re, sys
+loader = pathlib.Path("crates/loader-core/src/error.rs").read_text()
+claims = pathlib.Path("crates/diag-core/src/claims.rs").read_text()
+loader_codes = {int(x) for x in re.findall(r'=>\s*(52\d\d)\b', loader)}
+loader_codes |= {int(x) for x in re.findall(r'\b(52\d\d)\b', loader)}
+trap_codes = {int(x) for x in re.findall(r'^\s*(\d+)\s*=>', claims, re.M)}
+collisions = sorted(loader_codes & trap_codes)
+if collisions:
+    print(" ".join(map(str, collisions)))
+    sys.exit(1)
+PY
+) || {
+    msg $RED "  FAIL: loader 52xx codes collide with language/runtime trap codes: $collision_report"
+    failures=$((failures + 1))
+}
+
+# --- G7: ARM loader size budget ---
+arm_archive="target/thumbv7m-none-eabi/release/libdevice_loader_archive.a"
+if [ -f "$arm_archive" ]; then
+    size_tool=$(command -v arm-none-eabi-size || command -v size || true)
+    if [ -z "$size_tool" ]; then
+        msg $RED "  FAIL: ARM loader size gate has an archive but no size tool"
+        failures=$((failures + 1))
+    else
+        text_bytes=$("$size_tool" -A "$arm_archive" 2>/dev/null | awk '
+            /^loader_core-/ {in_loader=1; next}
+            /^[^[:space:]].*\(ex .*libdevice_loader_archive\.a\):/ {in_loader=0; next}
+            in_loader && $1 ~ /^\.text/ {sum += $2}
+            END {print sum+0}
+        ')
+        if [ "$text_bytes" -gt 16384 ]; then
+            msg $RED "  FAIL: ARM device-loader .text is ${text_bytes} bytes (> 16384)"
+            failures=$((failures + 1))
+        else
+            msg $GREEN "  ARM device-loader .text size: ${text_bytes} bytes"
+        fi
+    fi
+else
+    if [ "${CI:-}" ]; then
+        msg $RED "  FAIL: ARM loader size gate requires $arm_archive under CI"
+        failures=$((failures + 1))
+    else
+        msg $YELLOW "  WARN: skipping ARM loader size gate ($arm_archive not built)"
+    fi
 fi
 
 echo ""

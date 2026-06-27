@@ -34,6 +34,7 @@ pub fn build(args: &BuildArgs) -> Result<PathBuf, TyuError> {
 pub struct BuildOutcome {
     pub final_image: PathBuf,
     pub execution_image: PathBuf,
+    pub mode: BuildMode,
     pub target: Target,
     pub platform_selection: Option<ResolvedPlatformSelection>,
 }
@@ -178,6 +179,7 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
     Ok(BuildOutcome {
         final_image,
         execution_image: exec_image,
+        mode,
         target,
         platform_selection,
     })
@@ -186,10 +188,8 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
 fn effective_build_mode(args: &BuildArgs, target: Target) -> BuildMode {
     match args.mode {
         Some(mode) => mode,
-        None => {
-            let _ = target;
-            BuildMode::Static
-        }
+        None if target.spec().qemu.is_some() => BuildMode::Dynamic,
+        None => BuildMode::Static,
     }
 }
 

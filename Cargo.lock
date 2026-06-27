@@ -213,6 +213,10 @@ dependencies = [
  "codegen-core",
  "diag-core",
  "harness-core",
+ "hosted",
+ "lmod",
+ "lmod-pack",
+ "loader-core",
  "tyu",
 ]
 

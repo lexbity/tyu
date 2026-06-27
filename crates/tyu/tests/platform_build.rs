@@ -126,6 +126,7 @@ fn build_rp2350_emits_image_def_and_lmod() {
     let output = Command::new(tyu_exe())
         .args([
             "build",
+            "--mode=static",
             "--platform=rp2350",
             "--isa=arm",
             &format!("--sysroot={}", sysroot.display()),

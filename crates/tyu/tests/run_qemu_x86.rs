@@ -27,6 +27,7 @@ fn build_x86_image(src: &str, dir: &PathBuf, label: &str) -> PathBuf {
     let output = Command::new(tyu_exe())
         .args([
             "build",
+            "--mode=static",
             "--target=x86_64-unknown-none",
             &format!("--sysroot={}", sysroot.display()),
             &format!("--out-dir={}", out_dir.display()),

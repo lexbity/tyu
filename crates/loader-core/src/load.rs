@@ -397,6 +397,7 @@ pub fn load_module<'a>(
         if mi.has_isr() {
             return Err(LoadError::ModuleDeclaresIsr);
         }
+        enforce_stack_bound_budget(modinfo_data, platform.ds_remaining_slots())?;
     }
 
     // --- Begin transactional section (steps 4–12) ---
@@ -630,6 +631,24 @@ fn read_word_meta_stack_bound(modinfo_data: &[u8], value_off: u32) -> Result<u32
             .try_into()
             .map_err(|_| LoadError::BadContainer)?,
     ))
+}
+
+fn enforce_stack_bound_budget(modinfo_data: &[u8], remaining_slots: u32) -> Result<(), LoadError> {
+    if modinfo_data.is_empty() {
+        return Ok(());
+    }
+    let mi = lmod::modinfo::decode(modinfo_data).ok_or(LoadError::BadContainer)?;
+    for ei in 0..mi.export_count {
+        let exp = lmod::modinfo::read_export(modinfo_data, ei).ok_or(LoadError::BadContainer)?;
+        if exp.name == MOD_INIT_NAME {
+            continue;
+        }
+        let stack_bound = read_word_meta_stack_bound(modinfo_data, exp.value_off)?;
+        if stack_bound > remaining_slots {
+            return Err(LoadError::StackBoundUnverifiable);
+        }
+    }
+    Ok(())
 }
 
 /// Look for `__lang_mod_init` in the module's export table.
@@ -913,6 +932,7 @@ mod tests {
         hash: u64,
         kek: [u8; 32],
         fail_make_exec: bool,
+        ds_remaining_slots: u32,
     }
 
     impl FullPlatform {
@@ -923,7 +943,12 @@ mod tests {
                 hash,
                 kek,
                 fail_make_exec: false,
+                ds_remaining_slots: u32::MAX,
             }
+        }
+        fn with_ds_remaining_slots(mut self, slots: u32) -> Self {
+            self.ds_remaining_slots = slots;
+            self
         }
         fn alloc(&self, len: usize) -> Result<Region, u32> {
             let used = self.used.get();
@@ -960,6 +985,9 @@ mod tests {
         fn trust_level(&self) -> crate::platform::TrustLevel {
             crate::platform::TrustLevel::One
         }
+        fn ds_remaining_slots(&self) -> u32 {
+            self.ds_remaining_slots
+        }
 
         fn verify_sig(&self, signed: &[u8], sig: &[u8]) -> bool {
             let mut mac =
@@ -981,6 +1009,15 @@ mod tests {
     /// Build a minimal .lmod whose code section carries `code_bytes` and which
     /// exports a word named "main" with a given stack bound (TrustLevel-Two test).
     fn build_lmod_with_code(code_bytes: &[u8], abi_hash: u64, export_main: bool) -> Vec<u8> {
+        build_lmod_with_stack_bound(code_bytes, abi_hash, export_main, 0)
+    }
+
+    fn build_lmod_with_stack_bound(
+        code_bytes: &[u8],
+        abi_hash: u64,
+        export_main: bool,
+        stack_bound: u32,
+    ) -> Vec<u8> {
         let code_len = code_bytes.len() as u32;
         let exports = if export_main {
             alloc::vec![lmod::modinfo::ExportEntry {
@@ -988,7 +1025,7 @@ mod tests {
                 name: b"main",
                 effects: 0,
                 requires_caps: 0,
-                stack_bound: 0,
+                stack_bound,
             }]
         } else {
             alloc::vec![]
@@ -1007,6 +1044,22 @@ mod tests {
         let co = layout.code_off as usize;
         buf[co..co + code_bytes.len()].copy_from_slice(code_bytes);
         buf
+    }
+
+    #[test]
+    fn stack_bound_exceeding_remaining_ds_slots_rejected() {
+        let code = [0xC3u8];
+        let key = [0xabu8; 32];
+        let abi_hash = lmod::abi_hash::compute_abi_hash(1, 8, 64, lmod::modinfo::MODINFO_VER);
+        let plain = build_lmod_with_stack_bound(&code, abi_hash, true, 9);
+        let signed = lmod_sign::sign(&plain, &key).expect("sign");
+        let container = lmod::validate::Container::parse(&signed).unwrap();
+        let mut plat = FullPlatform::new(abi_hash, key).with_ds_remaining_slots(8);
+        let mut map: SymMap<'_, 256> = SymMap::new();
+        let mut set = LoadedSet::<64>::new();
+
+        let result = load_module(&container, &mut plat, &mut map, &mut set);
+        assert_eq!(result.unwrap_err(), LoadError::StackBoundUnverifiable);
     }
 
     #[cfg(feature = "encryption")]

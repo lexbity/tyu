@@ -18,7 +18,7 @@ linker = ""
 glue = "platform/gpio"
 
 [deploy]
-method = "elf-qemu"
+method = "qemu"
 boot = "raw_vectors"
 
 [debug]

@@ -243,7 +243,9 @@ fn print_usage() {
     eprintln!("  --all-platforms     Run all discovered QEMU-capable platform packs");
     eprintln!("  --filter=<pat>      Only run suites matching pattern");
     eprintln!("  --manifest=<path>   Path to manifest.toml");
-    eprintln!("  --mode=<mode>       Link/load mode: static|dynamic (default: static)");
+    eprintln!(
+        "  --mode=<mode>       Link/load mode: static|dynamic (default: dynamic for QEMU targets)"
+    );
     eprintln!("  --qualify           Fail when required coverage axes are uncovered");
     eprintln!("  --format=<mode>     Report format: human|json (default: human)");
     eprintln!("  --report-out=<path> Write structured report JSON to path");

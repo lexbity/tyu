@@ -8,6 +8,10 @@ description = "QEMU-backed end-to-end execution tests for Tyu."
 codegen-core = { path = "../codegen-core" }
 harness-core = { path = "../harness-core" }
 diag-core = { path = "../diag-core", features = ["std"] }
+hosted = { path = "../hosted" }
+loader-core = { path = "../loader-core" }
+lmod = { path = "../lmod" }
+lmod-pack = { path = "../lmod-pack" }
 tyu = { path = "../tyu" }
 
 [[test]]

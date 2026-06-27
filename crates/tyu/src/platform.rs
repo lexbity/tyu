@@ -661,7 +661,7 @@ ds_region = "SRAM"
 ds_size = 0x4000
 
 [deploy]
-method = "elf-qemu"
+method = "qemu"
 boot = "raw_vectors"
 
 [secure_boot]
@@ -1156,7 +1156,10 @@ fn lint_pack_manifest(root: &Path, pack: &PlatformPack, all: bool) -> Result<Lin
     }
 
     if let Some(deploy) = &manifest.deploy {
-        if !matches!(deploy.method.as_str(), "elf-qemu" | "uf2" | "openocd") {
+        if !matches!(
+            deploy.method.as_str(),
+            "qemu" | "elf-qemu" | "uf2" | "openocd"
+        ) {
             errors.push(LintError::new(
                 E_PACK_DEPLOY_RECIPE_INVALID,
                 format!("unknown deploy method '{}'", deploy.method),
@@ -1686,7 +1689,7 @@ unit = "concurrency.asm"
 glue = "glue/uart"
 
 [deploy]
-method = "elf-qemu"
+method = "qemu"
 boot = "raw_vectors"
 
 [[deploy.step]]
@@ -1717,7 +1720,7 @@ evidence = "tests/demo.rs"
         };
         assert!(pack.isa_summary().contains("armv7m-unknown-none"));
         assert_eq!(pack.capabilities_summary(), "uart");
-        assert!(pack.deploy_summary().contains("method=elf-qemu"));
+        assert!(pack.deploy_summary().contains("method=qemu"));
         assert!(pack.debug_summary().contains("diag_transport=semihosting"));
         assert!(pack.test_summary().contains("proven-rung=qemu (automated)"));
         assert!(pack
