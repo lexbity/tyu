@@ -9,12 +9,12 @@
 #   G5  Generated runtime symtabs include every runtime export.
 #   G6  Loader 52xx diagnostics do not collide with language/runtime trap codes.
 #   G7  ARM device-loader text size stays within the 16 KiB budget when built.
-#   G8  No Result<_, String> in crates/tyu/src (pending until Slice 8).
-#   G9  Pure host crates forbid unsafe_code (pending until Slice 4).
-#   G10 Loader decrypt path has no panic/unwrap/expect (pending until Slice 3).
-#   G11 Codegen backends do not byte-match primitive names (pending until Slice 6).
-#   G12 Codegen functions stay <=250 lines (pending until Slice 7).
-#   G13 Host input-derived panic/unreachable sites are retired (pending until Slice 9).
+#   G8  No Result<_, String> in crates/tyu/src.
+#   G9  Pure host crates forbid unsafe_code.
+#   G10 Loader decrypt path has no panic/unwrap/expect.
+#   G11 Codegen backends do not byte-match primitive names.
+#   G12 Codegen functions stay <=250 lines.
+#   G13 Host input-derived panic/unreachable sites are retired.
 #
 # Escape hatch: add `# guards: allow-no-tests` as a comment in the
 # package's Cargo.toml to suppress G1/G2 for that package.  This is
@@ -29,12 +29,14 @@
 #   1. Add `test = false` to crates/ir/Cargo.toml -> guard MUST fail.
 #   2. Gate all lmod tests behind a bogus feature -> guard MUST fail.
 #   3. Add `fn regression() -> Result<(), String> { Ok(()) }` under crates/tyu/src;
-#      G8's future blocking form MUST report it.
+#      G8 MUST report it.
 #   4. Remove `#![forbid(unsafe_code)]` from a Slice-4 crate after that slice;
 #      G9 MUST report it.
 #   5. Add `b"u8"` primitive dispatch to a codegen backend after Slice 6;
 #      G11 MUST report it.
-#   6. Revert all mutations after check.
+#   6. Add a >250-line function under crates/codegen-* after Slice 7;
+#      G12 MUST report it.
+#   7. Revert all mutations after check.
 
 set -euo pipefail
 
@@ -290,7 +292,9 @@ tyu_string_count=$(printf '%s\n' "$tyu_string_results" | sed '/^$/d' | wc -l | t
 if [ "$tyu_string_count" -eq 0 ]; then
     msg $GREEN "  G8: no Result<_, String> signatures in crates/tyu/src"
 else
-    msg $YELLOW "  INFO: G8 pending (Slice 8): $tyu_string_count Result<_, String> signature(s) remain"
+    msg $RED "  G8 FAIL: $tyu_string_count Result<_, String> signature(s) remain"
+    printf '%s\n' "$tyu_string_results" >&2
+    failures=$((failures + 1))
 fi
 
 missing_forbid=""
@@ -302,10 +306,24 @@ done
 if [ -z "$missing_forbid" ]; then
     msg $GREEN "  G9: pure host crates carry #![forbid(unsafe_code)]"
 else
-    msg $YELLOW "  INFO: G9 pending (Slice 4): missing forbid attrs:$missing_forbid"
+    msg $RED "  G9 FAIL: missing forbid attrs:$missing_forbid"
+    failures=$((failures + 1))
+fi
+pure_unsafe_hits=$(grep -R -n -E '\bunsafe[[:space:]]*(\{|fn|impl|trait)' \
+    crates/ir/src crates/codegen-core/src crates/codegen-arm/src crates/codegen-riscv/src crates/codegen-x86_64/src \
+    --include='*.rs' 2>/dev/null || true)
+pure_unsafe_count=$(printf '%s\n' "$pure_unsafe_hits" | sed '/^$/d' | wc -l | tr -d ' ')
+if [ "$pure_unsafe_count" -eq 0 ]; then
+    msg $GREEN "  G9: pure host crates contain no unsafe constructs"
+else
+    msg $RED "  G9 FAIL: $pure_unsafe_count unsafe construct(s) in pure host crates"
+    printf '%s\n' "$pure_unsafe_hits" >&2
+    failures=$((failures + 1))
 fi
 
 decrypt_hits=$(awk '
+    /^#\[cfg\(test\)\]/ {in_tests=1; in_region=0}
+    in_tests {next}
     /parse_enc_header_view|decrypt|EncAuthFail|aad_region|payload_region/ {in_region=1}
     in_region && /unwrap\(\)|expect\(|panic!/ {print FILENAME ":" FNR ":" $0}
     /register_exports|make_exec|LoadedModule/ {in_region=0}
@@ -314,7 +332,9 @@ decrypt_count=$(printf '%s\n' "$decrypt_hits" | sed '/^$/d' | wc -l | tr -d ' ')
 if [ "$decrypt_count" -eq 0 ]; then
     msg $GREEN "  G10: loader decrypt region has no panic/unwrap/expect hits"
 else
-    msg $YELLOW "  INFO: G10 pending (Slice 3): $decrypt_count panic/unwrap/expect hit(s) in decrypt-adjacent code"
+    msg $RED "  G10 FAIL: $decrypt_count panic/unwrap/expect hit(s) in decrypt-adjacent code"
+    printf '%s\n' "$decrypt_hits" >&2
+    failures=$((failures + 1))
 fi
 
 primitive_dispatch=$(grep -R -n -E 'b"(u8|u16|u32|u64|i8|i16|i32|i64|usize|isize|bool)"' \
@@ -324,7 +344,9 @@ primitive_count=$(printf '%s\n' "$primitive_dispatch" | sed '/^$/d' | wc -l | tr
 if [ "$primitive_count" -eq 0 ]; then
     msg $GREEN "  G11: no backend primitive byte-string dispatch"
 else
-    msg $YELLOW "  INFO: G11 pending (Slice 6): $primitive_count primitive byte-string match(es) remain"
+    msg $RED "  G11 FAIL: $primitive_count backend primitive byte-string match(es) remain"
+    printf '%s\n' "$primitive_dispatch" >&2
+    failures=$((failures + 1))
 fi
 
 long_codegen_functions=$("$PYTHON" - <<'PY'
@@ -356,7 +378,9 @@ long_fn_count=$(printf '%s\n' "$long_codegen_functions" | sed '/^$/d' | wc -l | 
 if [ "$long_fn_count" -eq 0 ]; then
     msg $GREEN "  G12: codegen functions are <=250 lines"
 else
-    msg $YELLOW "  INFO: G12 pending (Slice 7): $long_fn_count codegen function(s) exceed 250 lines"
+    msg $RED "  G12 FAIL: $long_fn_count codegen function(s) exceed 250 lines"
+    printf '%s\n' "$long_codegen_functions" >&2
+    failures=$((failures + 1))
 fi
 
 host_panic_hits=$(grep -R -n -E 'panic!|unreachable!' \
@@ -366,7 +390,9 @@ host_panic_count=$(printf '%s\n' "$host_panic_hits" | sed '/^$/d' | wc -l | tr -
 if [ "$host_panic_count" -eq 0 ]; then
     msg $GREEN "  G13: host parse/type/core paths have no panic/unreachable hits"
 else
-    msg $YELLOW "  INFO: G13 pending (Slice 9): $host_panic_count panic/unreachable hit(s) remain for audit"
+    msg $RED "  G13 FAIL: $host_panic_count panic/unreachable hit(s) remain"
+    printf '%s\n' "$host_panic_hits" >&2
+    failures=$((failures + 1))
 fi
 
 echo ""

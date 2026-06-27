@@ -24,11 +24,18 @@ fn fresh_dir(label: &str) -> PathBuf {
 }
 
 fn build_langc() {
-    let status = Command::new("cargo")
+    // Capture stdio so the nested cargo never flips the shared test terminal
+    // to O_NONBLOCK; that flag leaks back to the outer `cargo test` harness,
+    // whose writes then panic with EAGAIN.
+    let out = Command::new("cargo")
         .args(["build", "-p", "langc"])
-        .status()
+        .output()
         .expect("cargo build failed");
-    assert!(status.success());
+    assert!(
+        out.status.success(),
+        "cargo build failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 /// Compile a module source, return (exit_code, stderr).

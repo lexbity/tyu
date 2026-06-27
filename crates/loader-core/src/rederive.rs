@@ -34,6 +34,10 @@ pub enum Arch {
     RiscV,
 }
 
+fn read_u32_le(bytes: &[u8]) -> u32 {
+    u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+}
+
 impl Arch {
     /// Detect architecture from relocation-table contents.
     /// If any ARM-family relocation kind is present, returns `ArmThumb`.
@@ -59,7 +63,7 @@ impl Arch {
         // Check for RISC-V: `addi s2, s2, N` (opcode 0x13, funct3=0, rd=18, rs1=18).
         if code.len() >= 4 {
             for i in 0..code.len().saturating_sub(3) {
-                let insn = u32::from_le_bytes(code[i..i + 4].try_into().unwrap());
+                let insn = read_u32_le(&code[i..i + 4]);
                 let opcode = insn & 0x7f;
                 let rd = ((insn >> 7) & 0x1f) as u8;
                 let funct3 = ((insn >> 12) & 0x7) as u8;
@@ -229,9 +233,8 @@ fn rederive_arm_thumb(code: &[u8], slot_bytes: u32) -> u32 {
 fn rederive_riscv(code: &[u8], slot_bytes: u32) -> u32 {
     let mut off: i64 = 0;
     let mut peak: u32 = 0;
-    let mut i = 0;
-    while i + 3 < code.len() {
-        let insn = u32::from_le_bytes(code[i..i + 4].try_into().unwrap());
+    for chunk in code.chunks_exact(4) {
+        let insn = read_u32_le(chunk);
         let opcode = insn & 0x7f;
         let rd = ((insn >> 7) & 0x1f) as u8;
         let funct3 = ((insn >> 12) & 0x7) as u8;
@@ -252,10 +255,7 @@ fn rederive_riscv(code: &[u8], slot_bytes: u32) -> u32 {
                 }
             }
             // imm == 0 is a no-op (addi s2, s2, 0)
-            i += 4;
-            continue;
         }
-        i += 1;
     }
     peak
 }

@@ -5,28 +5,13 @@ use codegen_core::{AsmMode, CodegenError};
 use frontend::span::Span;
 use ir as lir;
 
-fn prim_bits_signed_ty(ty_name: &[u8]) -> Option<(u16, bool)> {
-    let (bits, signed) = match ty_name {
-        b"u8" => (8, false),
-        b"u16" => (16, false),
-        b"u32" => (32, false),
-        b"u64" => (64, false),
-        b"usize" => (32, false),
-        b"i8" => (8, true),
-        b"i16" => (16, true),
-        b"i32" => (32, true),
-        b"i64" => (64, true),
-        b"isize" => (32, true),
-        b"bool" => (8, false),
-        b"ptr" | b"ptr_mut" | b"str" | b"mmio" | b"Chan" | b"Task" => (32, false),
-        _ => return None,
-    };
-    Some((bits, signed))
+fn prim_ty(w: &lir::Word, ty: lir::TypeId) -> Option<lir::Prim> {
+    let ty_name = w.types.get(ty.0 as usize).map(|a| a.as_bytes())?;
+    lir::Prim::from_type_name(ty_name)
 }
 
 fn prim_bits_signed(w: &lir::Word, ty: lir::TypeId) -> Option<(u16, bool)> {
-    let ty_name = w.types.get(ty.0 as usize).map(|a| a.as_bytes())?;
-    prim_bits_signed_ty(ty_name)
+    prim_ty(w, ty).map(|prim| prim.bits_signed(32))
 }
 
 fn line_col(src: &[u8], offset: usize) -> (u32, u32) {
@@ -131,7 +116,12 @@ impl<'a> RiscVBackend<'a> {
         Ok(())
     }
 
-    fn emit_op(&mut self, _w: &lir::Word, op: &lir::Op, base: u32) -> Result<(), CodegenError> {
+    fn emit_stack_control_ops(
+        &mut self,
+        _w: &lir::Word,
+        op: &lir::Op,
+        base: u32,
+    ) -> Result<bool, CodegenError> {
         match op.kind {
             lir::OpKind::ConstI64(v) => {
                 let low = v as u32;
@@ -141,7 +131,7 @@ impl<'a> RiscVBackend<'a> {
                 self.emit_const32(high);
                 self.out.write(b"\tsw a0, 0(s2)\n\taddi s2, s2, 4\n");
                 self.emit_ds_high_update();
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::ConstBool(v) => {
                 let val: u32 = if v { 1 } else { 0 };
@@ -150,7 +140,7 @@ impl<'a> RiscVBackend<'a> {
                 self.emit_const32(0);
                 self.out.write(b"\tsw a0, 0(s2)\n\taddi s2, s2, 4\n");
                 self.emit_ds_high_update();
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::ConstStr(span) => {
                 let id = self.intern_str(span)?;
@@ -160,7 +150,7 @@ impl<'a> RiscVBackend<'a> {
                 self.out
                     .write(b"\tsw a0, 0(s2)\n\tsw a1, 4(s2)\n\taddi s2, s2, 8\n");
                 self.emit_ds_high_update();
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::Dup { .. } => {
                 self.out
@@ -170,11 +160,11 @@ impl<'a> RiscVBackend<'a> {
                 self.out
                     .write(b"\tsw a0, 0(s2)\n\tsw a1, 4(s2)\n\taddi s2, s2, 8\n");
                 self.emit_ds_high_update();
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::Drop { .. } => {
                 self.out.write(b"\taddi s2, s2, -8\n");
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::Swap { .. } => {
                 self.out
@@ -185,15 +175,15 @@ impl<'a> RiscVBackend<'a> {
                     .write(b"\tsw a2, 0(s2)\n\tsw a3, 4(s2)\n\taddi s2, s2, 8\n");
                 self.out
                     .write(b"\tsw a0, 0(s2)\n\tsw a1, 4(s2)\n\taddi s2, s2, 8\n");
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::AddI64 => {
                 self.emit_binop_int(b"add", b"sltu", b"add");
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::SubI64 => {
                 self.emit_sub64();
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::MulI64 => {
                 self.out
@@ -203,7 +193,7 @@ impl<'a> RiscVBackend<'a> {
                 self.out.write(b"\tmul a0, a0, a2\n\tli a1, 0\n");
                 self.out
                     .write(b"\tsw a0, 0(s2)\n\tsw a1, 4(s2)\n\taddi s2, s2, 8\n");
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::Cmp { kind, .. } => {
                 self.out
@@ -220,15 +210,15 @@ impl<'a> RiscVBackend<'a> {
                 }
                 self.out
                     .write(b"\tli a1, 0\n\tsw a0, 0(s2)\n\tsw a1, 4(s2)\n\taddi s2, s2, 8\n");
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::AndBool => {
                 self.emit_binop_bool(b"and");
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::OrBool => {
                 self.emit_binop_bool(b"or");
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::NotBool => {
                 self.out
@@ -236,15 +226,15 @@ impl<'a> RiscVBackend<'a> {
                 self.out.write(b"\tseqz a0, a0\n\tli a1, 0\n");
                 self.out
                     .write(b"\tsw a0, 0(s2)\n\tsw a1, 4(s2)\n\taddi s2, s2, 8\n");
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::InterruptDisable => {
                 self.out.write(b"\tcsrci mstatus, 8\n");
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::InterruptEnable => {
                 self.out.write(b"\tcsrsi mstatus, 8\n");
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::LocalSet { slot, .. } => {
                 let off = (slot as u32) * 8;
@@ -255,7 +245,7 @@ impl<'a> RiscVBackend<'a> {
                 self.out.write(b"(sp)\n\tsw a1, ");
                 write_u32(self.out, off + 4);
                 self.out.write(b"(sp)\n");
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::LocalGet { slot, .. } => {
                 let off = (slot as u32) * 8;
@@ -267,13 +257,13 @@ impl<'a> RiscVBackend<'a> {
                 self.out
                     .write(b"\tsw a0, 0(s2)\n\tsw a1, 4(s2)\n\taddi s2, s2, 8\n");
                 self.emit_ds_high_update();
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::Call { name, .. } => {
                 self.out.write(b"\tjal ");
                 write_sym_label(self.out, name.as_bytes());
                 self.out.write(b"\n");
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::Br { target } => {
                 self.out.write(b"\tj .b");
@@ -281,7 +271,7 @@ impl<'a> RiscVBackend<'a> {
                 self.out.write(b"_");
                 write_u32(self.out, target.0 as u32);
                 self.out.write(b"\n");
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::BrIf { then_tgt, else_tgt } => {
                 self.out.write(b"\taddi s2, s2, -8\n\tlw a0, 0(s2)\n");
@@ -295,13 +285,13 @@ impl<'a> RiscVBackend<'a> {
                 self.out.write(b"_");
                 write_u32(self.out, else_tgt.0 as u32);
                 self.out.write(b"\n");
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::Ret => {
                 self.out.write(b"\tj .endword_");
                 write_u32(self.out, base);
                 self.out.write(b"\n");
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::TrapIfFalse { code } => {
                 let ok = self.fresh_label();
@@ -313,8 +303,19 @@ impl<'a> RiscVBackend<'a> {
                 self.out.write(b".trap_ok_");
                 write_u32(self.out, ok);
                 self.out.write(b":\n");
-                Ok(())
+                Ok(true)
             }
+            _ => Ok(false),
+        }
+    }
+
+    fn emit_memory_ops(
+        &mut self,
+        _w: &lir::Word,
+        op: &lir::Op,
+        _base: u32,
+    ) -> Result<bool, CodegenError> {
+        match op.kind {
             lir::OpKind::Load { ty } => {
                 let (bits, signed) = prim_bits_signed(_w, ty)
                     .ok_or(CodegenError::UnsupportedOp { op_name: b"Load" })?;
@@ -343,7 +344,7 @@ impl<'a> RiscVBackend<'a> {
                 self.out
                     .write(b"\tsw a0, 0(s2)\n\tsw a1, 4(s2)\n\taddi s2, s2, 8\n");
                 self.emit_ds_high_update();
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::Store { ty } => {
                 let (bits, _signed) = prim_bits_signed(_w, ty)
@@ -361,7 +362,7 @@ impl<'a> RiscVBackend<'a> {
                     }
                     _ => return Err(CodegenError::UnsupportedOp { op_name: b"Store" }),
                 }
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::AddrOf {
                 const_addr: Some(addr),
@@ -374,7 +375,7 @@ impl<'a> RiscVBackend<'a> {
                 self.emit_const32(high);
                 self.out.write(b"\tsw a0, 0(s2)\n\taddi s2, s2, 4\n");
                 self.emit_ds_high_update();
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::AddrOf {
                 const_addr: None, ..
@@ -394,7 +395,7 @@ impl<'a> RiscVBackend<'a> {
                 self.out
                     .write(b"\tsw a0, 0(s2)\n\tsw a1, 4(s2)\n\taddi s2, s2, 8\n");
                 self.emit_ds_high_update();
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::PtrAddIndex { scale, .. } => {
                 // Pop index (low word), then base (low word)
@@ -417,26 +418,22 @@ impl<'a> RiscVBackend<'a> {
                 self.out
                     .write(b"\tsw a0, 0(s2)\n\tsw a1, 4(s2)\n\taddi s2, s2, 8\n");
                 self.emit_ds_high_update();
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::Cast { from, to } => {
-                let from_name = match _w.types.get(from.0 as usize).map(|a| a.as_bytes()) {
-                    Some(n) => n,
-                    None => return Ok(()),
+                let from_prim = match prim_ty(_w, from) {
+                    Some(prim) => prim,
+                    None => return Ok(true),
                 };
-                let to_name = match _w.types.get(to.0 as usize).map(|a| a.as_bytes()) {
-                    Some(n) => n,
-                    None => return Ok(()),
+                let to_prim = match prim_ty(_w, to) {
+                    Some(prim) => prim,
+                    None => return Ok(true),
                 };
-                if from_name == to_name {
-                    return Ok(());
+                if from_prim == to_prim {
+                    return Ok(true);
                 }
-                let Some((from_bits, from_signed)) = prim_bits_signed_ty(from_name) else {
-                    return Ok(());
-                };
-                let Some((to_bits, to_signed)) = prim_bits_signed_ty(to_name) else {
-                    return Ok(());
-                };
+                let (from_bits, from_signed) = from_prim.bits_signed(32);
+                let (to_bits, to_signed) = to_prim.bits_signed(32);
                 // Pop value
                 self.out
                     .write(b"\taddi s2, s2, -8\n\tlw a0, 0(s2)\n\tlw a1, 4(s2)\n");
@@ -469,11 +466,11 @@ impl<'a> RiscVBackend<'a> {
                     }
                 }
                 // Normalize to bool if target is bool
-                if to_name == b"bool" && from_name != b"bool" {
+                if to_prim == lir::Prim::Bool && from_prim != lir::Prim::Bool {
                     self.out.write(b"\tsnez a0, a0\n\tli a1, 0\n");
                 }
                 // Mask/sign-extend to target width
-                if to_bits < 64 && to_name != b"bool" {
+                if to_bits < 64 && to_prim != lir::Prim::Bool {
                     let mask = ((1u64 << to_bits) - 1) as u32;
                     if mask <= 0xFFFF {
                         self.out.write(b"\tli a2, ");
@@ -503,12 +500,23 @@ impl<'a> RiscVBackend<'a> {
                 self.out
                     .write(b"\tsw a0, 0(s2)\n\tsw a1, 4(s2)\n\taddi s2, s2, 8\n");
                 self.emit_ds_high_update();
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::Bitcast { .. } => {
                 // No-op: bit pattern unchanged
-                Ok(())
+                Ok(true)
             }
+            _ => Ok(false),
+        }
+    }
+
+    fn emit_platform_ops(
+        &mut self,
+        _w: &lir::Word,
+        op: &lir::Op,
+        _base: u32,
+    ) -> Result<(), CodegenError> {
+        match op.kind {
             lir::OpKind::TaskSpawn { name, .. } => {
                 self.uses_tasks = true;
                 self.out.write(b"\tla a0, ");
@@ -731,7 +739,20 @@ impl<'a> RiscVBackend<'a> {
                 Ok(())
             }
             lir::OpKind::CheckSubtype { .. } => Err(CodegenError::UnsupportedCheckSubtype),
-        } // exhaustive: adding an OpKind MUST be handled here
+            _ => Err(CodegenError::UnsupportedOp {
+                op_name: b"emit_op",
+            }),
+        }
+    }
+
+    fn emit_op(&mut self, _w: &lir::Word, op: &lir::Op, base: u32) -> Result<(), CodegenError> {
+        if self.emit_stack_control_ops(_w, op, base)? {
+            return Ok(());
+        }
+        if self.emit_memory_ops(_w, op, base)? {
+            return Ok(());
+        }
+        self.emit_platform_ops(_w, op, base)
     }
 
     fn emit_const32(&mut self, val: u32) {

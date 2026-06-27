@@ -4,7 +4,7 @@
 
 use crate::{c, mem};
 use core::ffi::c_void;
-use loader_core::platform::{LoaderPlatform, Region, TrustLevel};
+use loader_core::platform::{LoaderPlatform, Region, Rw, Rx, TrustLevel};
 
 /// Load error codes.
 const E_MMAP_FAILED: u32 = 1;
@@ -87,7 +87,7 @@ impl HostedLoaderPlatform {
 
 impl HostedLoaderPlatform {
     /// Release a previously allocated region (munmap).
-    fn release_region(&mut self, region: &mut Region) {
+    fn release_region<S>(&mut self, region: Region<S>) {
         if region.len() > 0 && !region.as_ptr().is_null() {
             unsafe {
                 c::munmap(region.as_mut_ptr() as *mut core::ffi::c_void, region.len());
@@ -97,7 +97,7 @@ impl HostedLoaderPlatform {
 }
 
 impl LoaderPlatform for HostedLoaderPlatform {
-    fn alloc_exec(&mut self, len: usize) -> Result<Region, u32> {
+    fn alloc_exec(&mut self, len: usize) -> Result<Region<Rw>, u32> {
         if let Some(ref mut b) = self.block {
             let used = align_up(b.used, PAGE_ALIGN).ok_or(E_MMAP_FAILED)?;
             if used + len > b.capacity {
@@ -105,43 +105,45 @@ impl LoaderPlatform for HostedLoaderPlatform {
             }
             let ptr = unsafe { b.base.add(used) };
             b.used = used + len;
-            return unsafe { Ok(Region::from_raw_parts(ptr, len)) };
+            return unsafe { Ok(Region::<Rw>::from_raw_parts(ptr, len)) };
         }
         let slice = mem::mmap_anon_rw(len).map_err(|_| E_MMAP_FAILED)?;
         let ptr = slice.as_mut_ptr();
         let _ = slice;
-        unsafe { Ok(Region::from_raw_parts(ptr, len)) }
+        unsafe { Ok(Region::<Rw>::from_raw_parts(ptr, len)) }
     }
 
-    fn alloc_ro(&mut self, len: usize) -> Result<Region, u32> {
+    fn alloc_ro(&mut self, len: usize) -> Result<Region<Rw>, u32> {
         if let Some(ref mut b) = self.block {
             if b.used + len > b.capacity {
                 return Err(E_MMAP_FAILED);
             }
             let ptr = unsafe { b.base.add(b.used) };
             b.used += len;
-            return unsafe { Ok(Region::from_raw_parts(ptr, len)) };
+            return unsafe { Ok(Region::<Rw>::from_raw_parts(ptr, len)) };
         }
-        let ptr = mem::mmap_anon(len, mem::prot::READ).map_err(|_| E_MMAP_FAILED)?;
-        unsafe { Ok(Region::from_raw_parts(ptr as *mut u8, len)) }
+        let slice = mem::mmap_anon_rw(len).map_err(|_| E_MMAP_FAILED)?;
+        let ptr = slice.as_mut_ptr();
+        let _ = slice;
+        unsafe { Ok(Region::<Rw>::from_raw_parts(ptr, len)) }
     }
 
-    fn alloc_rw(&mut self, len: usize) -> Result<Region, u32> {
+    fn alloc_rw(&mut self, len: usize) -> Result<Region<Rw>, u32> {
         if let Some(ref mut b) = self.block {
             if b.used + len > b.capacity {
                 return Err(E_MMAP_FAILED);
             }
             let ptr = unsafe { b.base.add(b.used) };
             b.used += len;
-            return unsafe { Ok(Region::from_raw_parts(ptr, len)) };
+            return unsafe { Ok(Region::<Rw>::from_raw_parts(ptr, len)) };
         }
         let slice = mem::mmap_anon_rw(len).map_err(|_| E_MMAP_FAILED)?;
         let ptr = slice.as_mut_ptr();
         let _ = slice;
-        unsafe { Ok(Region::from_raw_parts(ptr, len)) }
+        unsafe { Ok(Region::<Rw>::from_raw_parts(ptr, len)) }
     }
 
-    fn make_exec(&mut self, region: &mut Region) -> Result<(), u32> {
+    fn make_exec(&mut self, region: Region<Rw>) -> Result<Region<Rx>, u32> {
         unsafe {
             mem::mprotect(
                 region.as_mut_ptr() as *mut c_void,
@@ -149,10 +151,12 @@ impl LoaderPlatform for HostedLoaderPlatform {
                 mem::prot::READ | mem::prot::EXEC,
             )
             .map_err(|_| E_MPROTECT_FAILED)
-        }
+        }?;
+        Ok(unsafe { Region::<Rx>::from_raw_parts(region.as_mut_ptr(), region.len()) })
     }
 
     fn verify_sig(&self, signed: &[u8], sig: &[u8]) -> bool {
+        // Hosted TrustLevel One verifies modules with its configured HMAC key.
         if self.key_len == 0 {
             return false;
         }
@@ -162,6 +166,7 @@ impl LoaderPlatform for HostedLoaderPlatform {
 
     #[cfg(feature = "encryption")]
     fn unwrap_cek(&self, _key_id: u64, wrapped: &[u8], out_cek: &mut [u8; 32]) -> Result<(), u32> {
+        // Hosted encrypted loads unwrap CEKs with the configured test/runtime KEK.
         use loader_core::crypto::chacha20poly1305::unwrap_cek as do_unwrap;
         const WRAP_LEN: usize = 12 + 32 + 16; // nonce + cek_ciphertext + tag
         let wrapped_arr: &[u8; WRAP_LEN] = wrapped
@@ -177,10 +182,15 @@ impl LoaderPlatform for HostedLoaderPlatform {
     }
 
     fn trust_level(&self) -> TrustLevel {
+        // The embedding runtime chooses the hosted trust tier at construction.
         self.trust_level
     }
 
-    fn release(&mut self, region: &mut Region) {
+    fn release_rw(&mut self, region: Region<Rw>) {
+        self.release_region(region);
+    }
+
+    fn release_rx(&mut self, region: Region<Rx>) {
         self.release_region(region);
     }
 }
@@ -207,10 +217,8 @@ mod tests {
         let mut region = plat.alloc_exec(len).unwrap();
         assert!(region.len() >= len);
         assert!(!region.is_empty());
-        unsafe {
-            region.as_mut_slice()[..len].copy_from_slice(MOV_RAX_42_RET);
-        }
-        plat.make_exec(&mut region).unwrap();
+        region.as_mut_slice()[..len].copy_from_slice(MOV_RAX_42_RET);
+        let region = plat.make_exec(region).unwrap();
         let func: FnReturningI64 = unsafe { core::mem::transmute(region.as_ptr()) };
         assert_eq!(unsafe { func() }, 42);
     }
@@ -228,9 +236,7 @@ mod tests {
         let mut plat = HostedLoaderPlatform::new(0);
         let mut region = plat.alloc_rw(16).unwrap();
         assert!(region.len() >= 4);
-        unsafe {
-            region.as_mut_slice()[0..4].copy_from_slice(&[0xaa, 0xbb, 0xcc, 0xdd]);
-        }
+        region.as_mut_slice()[0..4].copy_from_slice(&[0xaa, 0xbb, 0xcc, 0xdd]);
         assert_eq!(&region.as_slice()[0..4], &[0xaa, 0xbb, 0xcc, 0xdd]);
     }
 
@@ -248,11 +254,9 @@ mod tests {
         assert!(b_start >= a_start + 64);
         assert!(c_start >= b_start + 32);
         // All are within the same block.
-        unsafe {
-            a.as_mut_slice()[0..4].copy_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
-        }
+        a.as_mut_slice()[0..4].copy_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
         // Flip exec to RX after writing.
-        plat.make_exec(&mut a).unwrap();
+        let _a = plat.make_exec(a).unwrap();
     }
 
     #[test]
@@ -315,9 +319,7 @@ mod tests {
         let mut region = plat.alloc_exec(4096).unwrap();
 
         // Write known data while page is RW.
-        unsafe {
-            region.as_mut_slice()[0] = 0x01;
-        }
+        region.as_mut_slice()[0] = 0x01;
 
         // Before make_exec: page should be rw- (writable).
         let before = prot_of(region.as_ptr());
@@ -327,7 +329,7 @@ mod tests {
         );
 
         // Flip to RX.
-        plat.make_exec(&mut region).unwrap();
+        let region = plat.make_exec(region).unwrap();
 
         // After make_exec: page must be r-x (no 'w').
         let after = prot_of(region.as_ptr());

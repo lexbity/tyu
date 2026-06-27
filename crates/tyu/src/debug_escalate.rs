@@ -6,6 +6,7 @@
 //! handlers, reads the register payload on hit, and constructs a
 //! `DiagRecord` with `origin = 2` (gdbstub escalation).
 
+use crate::error::TyuError;
 use std::net::TcpListener;
 use std::path::Path;
 use std::process::Command;
@@ -72,12 +73,12 @@ fn register_table(target: Target) -> TargetRegs {
 // ---------------------------------------------------------------------------
 
 /// Allocate an ephemeral loopback port by binding a listener to `:0`.
-fn ephemeral_port() -> Result<u16, String> {
-    let listener =
-        TcpListener::bind("127.0.0.1:0").map_err(|e| format!("bind ephemeral port: {}", e))?;
+fn ephemeral_port() -> Result<u16, TyuError> {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .map_err(|e| TyuError::Debug(format!("bind ephemeral port: {}", e)))?;
     let port = listener
         .local_addr()
-        .map_err(|e| format!("get ephemeral port: {}", e))?
+        .map_err(|e| TyuError::Debug(format!("get ephemeral port: {}", e)))?
         .port();
     // Drop listener so QEMU can bind the port.
     drop(listener);
@@ -112,18 +113,18 @@ struct EscalationFailure {
 
 /// Returns the symbolic address (from ELF `.symtab`) of a symbol by name,
 /// using `nm`.
-fn symbol_address(elf: &Path, sym_name: &str) -> Result<Option<u64>, String> {
+fn symbol_address(elf: &Path, sym_name: &str) -> Result<Option<u64>, TyuError> {
     let out = Command::new("nm")
         .arg("--defined-only")
         .arg(elf)
         .output()
-        .map_err(|e| format!("run nm on {}: {}", elf.display(), e))?;
+        .map_err(|e| TyuError::Debug(format!("run nm on {}: {}", elf.display(), e)))?;
     if !out.status.success() {
-        return Err(format!(
+        return Err(TyuError::Debug(format!(
             "nm --defined-only {} exited with {}",
             elf.display(),
             out.status
-        ));
+        )));
     }
     let stdout = String::from_utf8_lossy(&out.stdout);
     for line in stdout.lines() {
@@ -131,17 +132,17 @@ fn symbol_address(elf: &Path, sym_name: &str) -> Result<Option<u64>, String> {
         if parts.len() >= 3 && parts[2] == sym_name {
             return u64::from_str_radix(parts[0], 16)
                 .map(Some)
-                .map_err(|e| format!("parse nm output for {}: {}", sym_name, e));
+                .map_err(|e| TyuError::Debug(format!("parse nm output for {}: {}", sym_name, e)));
         }
     }
     Ok(None)
 }
 
 /// Helper to convert gdb register bytes (up to 8 LE) to u64.
-fn read_reg64(client: &mut RspClient, reg: u8) -> Result<u64, String> {
+fn read_reg64(client: &mut RspClient, reg: u8) -> Result<u64, TyuError> {
     let raw = client
         .read_register(reg)
-        .map_err(|e| format!("read reg {}: {}", reg, e))?;
+        .map_err(|e| TyuError::Debug(format!("read reg {}: {}", reg, e)))?;
     let mut arr = [0u8; 8];
     let len = raw.len().min(8);
     arr[..len].copy_from_slice(&raw[..len]);
@@ -152,21 +153,22 @@ fn connect_rsp_client(
     qemu: &mut std::process::Child,
     port: u16,
     phase: &'static str,
-) -> Result<RspClient, String> {
+) -> Result<RspClient, TyuError> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         if let Some(status) = qemu
             .try_wait()
-            .map_err(|e| format!("{}: wait QEMU: {}", phase, e))?
+            .map_err(|e| TyuError::Debug(format!("{}: wait QEMU: {}", phase, e)))?
         {
-            return Err(format!(
+            return Err(TyuError::Debug(format!(
                 "{}: QEMU exited before RSP connect ({})",
                 phase, status
-            ));
+            )));
         }
         match connect_retry("127.0.0.1", port) {
             Ok(stream) => {
-                return RspClient::from_stream(stream).map_err(|e| format!("{}: {}", phase, e))
+                return RspClient::from_stream(stream)
+                    .map_err(|e| TyuError::Debug(format!("{}: {}", phase, e)))
             }
             Err(e) if Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(25));
@@ -179,23 +181,23 @@ fn connect_rsp_client(
                 }
                 continue;
             }
-            Err(e) => return Err(format!("{}: {}", phase, e)),
+            Err(e) => return Err(TyuError::Debug(format!("{}: {}", phase, e))),
         }
     }
 }
 
-fn sample_running_pc(client: &mut RspClient, regs: &TargetRegs) -> Result<u64, String> {
+fn sample_running_pc(client: &mut RspClient, regs: &TargetRegs) -> Result<u64, TyuError> {
     match read_reg64(client, regs.trap_pc) {
         Ok(pc) => Ok(pc),
         Err(first) => {
-            client
-                .interrupt()
-                .map_err(|e| format!("interrupt target before PC sample: {}", e))?;
+            client.interrupt().map_err(|e| {
+                TyuError::Debug(format!("interrupt target before PC sample: {}", e))
+            })?;
             read_reg64(client, regs.trap_pc).map_err(|second| {
-                format!(
+                TyuError::Debug(format!(
                     "read PC after interrupt failed: {}; initial read failed: {}",
                     second, first
-                )
+                ))
             })
         }
     }
@@ -322,7 +324,7 @@ pub fn escalate(
             connect_rsp_client(&mut qemu, port, "escalation connect").map_err(|e| {
                 EscalationFailure {
                     phase: "connect",
-                    message: e,
+                    message: e.to_string(),
                 }
             })?;
 
@@ -346,11 +348,11 @@ pub fn escalate(
         //    `__stack_overflow` paths report trap_code only (valid=0).
         let trap_pc = read_reg64(&mut client, regs.trap_pc).map_err(|e| EscalationFailure {
             phase: "trap-read",
-            message: e,
+            message: e.to_string(),
         })?;
         let ds_ptr = read_reg64(&mut client, regs.ds_ptr).map_err(|e| EscalationFailure {
             phase: "trap-read",
-            message: e,
+            message: e.to_string(),
         })?;
         let at = |addr: Option<u64>| addr.is_some_and(|a| norm(a) == norm(trap_pc));
 
@@ -358,7 +360,7 @@ pub fn escalate(
             Ok(
                 read_reg64(client, regs.trap_code).map_err(|e| EscalationFailure {
                     phase: "trap-read",
-                    message: e,
+                    message: e.to_string(),
                 })? as u16,
             )
         };
@@ -367,17 +369,17 @@ pub fn escalate(
             let trap_code = read_code(&mut client)?;
             let valid = read_reg64(&mut client, regs.valid).map_err(|e| EscalationFailure {
                 phase: "trap-read",
-                message: e,
+                message: e.to_string(),
             })? != 0;
             let source_line =
                 read_reg64(&mut client, regs.source_line).map_err(|e| EscalationFailure {
                     phase: "trap-read",
-                    message: e,
+                    message: e.to_string(),
                 })? as u32;
             let word_hash =
                 read_reg64(&mut client, regs.word_hash).map_err(|e| EscalationFailure {
                     phase: "trap-read",
-                    message: e,
+                    message: e.to_string(),
                 })?;
             (trap_code, valid, source_line, word_hash)
         } else if at(overflow_addr) {
@@ -559,7 +561,7 @@ pub fn classify_hang_on_port(image: &Path, target: Target, port: u16) -> HangCla
         }
     };
 
-    let result = (|| -> Result<HangClass, String> {
+    let result = (|| -> Result<HangClass, TyuError> {
         // Let the guest run for a short interval so we sample a live PC, not
         // reset state. If the CPU still refuses a register read, stop it via
         // RSP interrupt and retry the sample.
@@ -608,7 +610,7 @@ pub fn classify_hang_on_port(image: &Path, target: Target, port: u16) -> HangCla
         Ok(hc) => hc,
         Err(e) => HangClass::Unknown {
             word: None,
-            reason: e,
+            reason: e.to_string(),
         },
     }
 }

@@ -152,7 +152,7 @@ fn cycle_detected_errors() {
         assert!(result.is_err(), "G-1: A→B→A cycle must be detected");
         let err = result.unwrap_err();
         assert!(
-            err.contains("circular"),
+            err.to_string().contains("circular"),
             "G-1: error must mention 'circular', got: {}",
             err
         );
@@ -168,7 +168,7 @@ fn missing_user_module_errors() {
         assert!(result.is_err(), "G-2: missing user module must error");
         let err = result.unwrap_err();
         assert!(
-            err.contains("NonExistent"),
+            err.to_string().contains("NonExistent"),
             "G-2: error must mention module name, got: {}",
             err
         );

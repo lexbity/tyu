@@ -149,9 +149,11 @@ impl High {
     }
 
     pub fn unwrap_slots(self) -> u32 {
-        match self {
-            High::Slots(n) => n,
-            High::Top => panic!("unwrap_slots on Top"),
+        assert!(!self.is_top(), "unwrap_slots on Top");
+        if let High::Slots(n) = self {
+            n
+        } else {
+            0
         }
     }
 

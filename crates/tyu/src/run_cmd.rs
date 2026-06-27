@@ -2,6 +2,7 @@
 
 use crate::args::RunArgs;
 use crate::build;
+use crate::error::TyuError;
 use crate::runner::Runner;
 
 /// Exit codes for failure classes (matches common convention):
@@ -11,25 +12,24 @@ const EXIT_FAIL_MARKER: i32 = 2; // F byte seen
 const EXIT_MISMATCH: i32 = 3; // wrong QEMU exit code
 
 /// Execute the `run` subcommand.
-pub fn run(args: &RunArgs) -> Result<(), String> {
+pub fn run(args: &RunArgs) -> Result<(), TyuError> {
     // Build the image first.
     let build_args = args.to_build_args();
     let ctx = build::resolve_build_context(&build_args)?;
-    let build_out = build::build_resolved(&build_args, ctx).map_err(|e| e.to_string())?;
+    let build_out =
+        build::build_resolved(&build_args, ctx).map_err(|e| TyuError::Runner(e.to_string()))?;
 
     // Determine the runner.
     let runner = if let Some(r) = &args.runner_override {
         match r.as_str() {
             "native" => Runner::Native,
             "qemu" => {
-                let spec = build_out
-                    .target
-                    .spec()
-                    .qemu
-                    .ok_or("target has no QEMU spec — cannot use --runner=qemu")?;
+                let spec = build_out.target.spec().qemu.ok_or_else(|| {
+                    TyuError::Runner("target has no QEMU spec - cannot use --runner=qemu".into())
+                })?;
                 Runner::Qemu(spec)
             }
-            other => return Err(format!("unknown runner '{}'", other)),
+            other => return Err(TyuError::Runner(format!("unknown runner '{}'", other))),
         }
     } else {
         Runner::for_target(build_out.target)

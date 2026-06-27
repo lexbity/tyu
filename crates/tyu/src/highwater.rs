@@ -1,3 +1,4 @@
+use crate::error::TyuError;
 use std::path::Path;
 
 use crate::elf_reader::read_elf_section;
@@ -94,7 +95,7 @@ pub fn check_stack_witness(
     measured_h: u32,
     has_d_records: bool,
     elf_path: &Path,
-) -> Result<(), String> {
+) -> Result<(), TyuError> {
     let declared = match read_declared_high(elf_path) {
         Some(h) => h,
         None => return Ok(()), // ⊤ or unknown → nothing to check
@@ -110,21 +111,21 @@ pub fn check_stack_witness(
         // A full check would parse the D records for max ds_depth.
         declared
     } else {
-        return Err(format!(
+        return Err(TyuError::Highwater(format!(
             "NO_STACK_WITNESS: fixture declares high(main) = {} slots, \
              but no H marker or D record was emitted. \
              The runtime must emit a stack-bound witness (H or D) \
              for every fixture with a finite bound.",
             declared,
-        ));
+        )));
     };
 
     if measured > declared {
-        return Err(format!(
+        return Err(TyuError::Highwater(format!(
             "UNSOUND_BOUND: measured {} slots exceeds declared high(main) = {} slots \
              (static analysis is unsound)",
             measured, declared,
-        ));
+        )));
     }
 
     let slack = declared - measured;

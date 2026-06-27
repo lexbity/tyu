@@ -2,6 +2,10 @@
 //!
 //! Consolidates duplicated helper functions across phase test files.
 
+// This module is included by multiple test binaries; each uses only a subset
+// of the helpers, so unused-item warnings here are false positives.
+#![allow(dead_code)]
+
 pub mod bin;
 
 use hosted::loader::HostedLoaderPlatform;
@@ -108,15 +112,14 @@ pub extern "C" fn extern_c_fn_stub() {}
 /// (__lang_ds_high).  These must stay writable even after code pages
 /// are flipped to RX.
 pub fn allocate_runtime_page() -> usize {
-    let page =
-        unsafe { mem::mmap_anon(4096, mem::prot::READ | mem::prot::WRITE).unwrap() as *mut u8 };
+    let page = mem::mmap_anon(4096, mem::prot::READ | mem::prot::WRITE).unwrap() as *mut u8;
     page as usize
 }
 
 /// Register the test runtime symbols through the generated `.lang.symtab`
 /// byte-table API used by device boot.
 pub fn register_test_runtime_symtab(map: &mut SymMap<'_, 256>, ds_high_addr: usize) {
-    let stub = extern_c_fn_stub as usize;
+    let stub = extern_c_fn_stub as *const () as usize;
     let entries = [
         (lmod::hash::fnv1a_u64(b"__stack_overflow"), stub),
         (lmod::hash::fnv1a_u64(b"__lang_ds_high"), ds_high_addr),
@@ -247,7 +250,7 @@ impl LoaderHarness {
         let code_base = main_sym.addr;
 
         const DS_SIZE: usize = 65536;
-        let mut ds_buf = vec![0u8; DS_SIZE];
+        let ds_buf = vec![0u8; DS_SIZE];
         let ds_base = ds_buf.as_ptr() as u64;
         let ds_limit = ds_base + DS_SIZE as u64;
         let result: i64;

@@ -1,4 +1,5 @@
 #![no_std]
+#![forbid(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
 //! Intermediate representation, ABI contract, and verifier support for Tyu.
 //!
@@ -39,45 +40,32 @@ impl Atom {
     }
 }
 
+const fn builtin_atom(bytes: &[u8]) -> Atom {
+    assert!(bytes.len() <= 32, "built-in Atom exceeds 32 bytes");
+    let mut out = [0u8; 32];
+    let mut i = 0usize;
+    while i < bytes.len() {
+        out[i] = bytes[i];
+        i += 1;
+    }
+    Atom {
+        len: bytes.len() as u8,
+        bytes: out,
+    }
+}
+
 // Static Atom constants for built-in types.
 // These are used throughout the compiler pipeline to avoid repeated
 // Atom::new(b"...").expect() calls. All fit in the 32-byte limit.
-pub const AT_EMPTY: Atom = match Atom::new(b"") {
-    Some(a) => a,
-    None => unreachable!(),
-};
-pub const AT_I64: Atom = match Atom::new(b"i64") {
-    Some(a) => a,
-    None => unreachable!(),
-};
-pub const AT_BOOL: Atom = match Atom::new(b"bool") {
-    Some(a) => a,
-    None => unreachable!(),
-};
-pub const AT_STR: Atom = match Atom::new(b"str") {
-    Some(a) => a,
-    None => unreachable!(),
-};
-pub const AT_PTR: Atom = match Atom::new(b"ptr") {
-    Some(a) => a,
-    None => unreachable!(),
-};
-pub const AT_PTR_MUT: Atom = match Atom::new(b"ptr_mut") {
-    Some(a) => a,
-    None => unreachable!(),
-};
-pub const AT_MMIO: Atom = match Atom::new(b"mmio") {
-    Some(a) => a,
-    None => unreachable!(),
-};
-pub const AT_QUOT: Atom = match Atom::new(b"quot") {
-    Some(a) => a,
-    None => unreachable!(),
-};
-pub const AT_RESOURCE: Atom = match Atom::new(b"resource") {
-    Some(a) => a,
-    None => unreachable!(),
-};
+pub const AT_EMPTY: Atom = builtin_atom(b"");
+pub const AT_I64: Atom = builtin_atom(b"i64");
+pub const AT_BOOL: Atom = builtin_atom(b"bool");
+pub const AT_STR: Atom = builtin_atom(b"str");
+pub const AT_PTR: Atom = builtin_atom(b"ptr");
+pub const AT_PTR_MUT: Atom = builtin_atom(b"ptr_mut");
+pub const AT_MMIO: Atom = builtin_atom(b"mmio");
+pub const AT_QUOT: Atom = builtin_atom(b"quot");
+pub const AT_RESOURCE: Atom = builtin_atom(b"resource");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TypeId(pub u8);
@@ -89,6 +77,168 @@ pub const TY_STR: TypeId = TypeId(3);
 pub const TY_PTR: TypeId = TypeId(4);
 pub const TY_PTR_MUT: TypeId = TypeId(5);
 pub const TY_MMIO: TypeId = TypeId(6);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Prim {
+    U8,
+    U16,
+    U32,
+    U64,
+    Usize,
+    I8,
+    I16,
+    I32,
+    I64,
+    Isize,
+    Bool,
+    Ptr,
+    PtrMut,
+    Str,
+    Mmio,
+    Chan,
+    Task,
+}
+
+impl Prim {
+    pub fn from_type_name(name: &[u8]) -> Option<Self> {
+        Some(match name {
+            b"u8" => Self::U8,
+            b"u16" => Self::U16,
+            b"u32" => Self::U32,
+            b"u64" => Self::U64,
+            b"usize" => Self::Usize,
+            b"i8" => Self::I8,
+            b"i16" => Self::I16,
+            b"i32" => Self::I32,
+            b"i64" => Self::I64,
+            b"isize" => Self::Isize,
+            b"bool" => Self::Bool,
+            b"ptr" => Self::Ptr,
+            b"ptr_mut" => Self::PtrMut,
+            b"str" => Self::Str,
+            b"mmio" => Self::Mmio,
+            b"Chan" => Self::Chan,
+            b"Task" => Self::Task,
+            _ if name.starts_with(b"Chan(") => Self::Chan,
+            _ => return None,
+        })
+    }
+
+    pub fn bits(self, ptr_bits: u16) -> u16 {
+        match self {
+            Self::U8 => 8,
+            Self::U16 => 16,
+            Self::U32 => 32,
+            Self::U64 => 64,
+            Self::Usize => ptr_bits,
+            Self::I8 => 8,
+            Self::I16 => 16,
+            Self::I32 => 32,
+            Self::I64 => 64,
+            Self::Isize => ptr_bits,
+            Self::Bool => 8,
+            Self::Ptr => ptr_bits,
+            Self::PtrMut => ptr_bits,
+            Self::Str => ptr_bits,
+            Self::Mmio => ptr_bits,
+            Self::Chan => ptr_bits,
+            Self::Task => ptr_bits,
+        }
+    }
+
+    pub fn is_signed(self) -> bool {
+        match self {
+            Self::U8 => false,
+            Self::U16 => false,
+            Self::U32 => false,
+            Self::U64 => false,
+            Self::Usize => false,
+            Self::I8 => true,
+            Self::I16 => true,
+            Self::I32 => true,
+            Self::I64 => true,
+            Self::Isize => true,
+            Self::Bool => false,
+            Self::Ptr => false,
+            Self::PtrMut => false,
+            Self::Str => false,
+            Self::Mmio => false,
+            Self::Chan => false,
+            Self::Task => false,
+        }
+    }
+
+    pub fn bits_signed(self, ptr_bits: u16) -> (u16, bool) {
+        (self.bits(ptr_bits), self.is_signed())
+    }
+}
+
+#[cfg(test)]
+mod prim_tests {
+    use super::Prim;
+
+    #[test]
+    fn prim_resolver_matches_legacy_32_bit_backend_table() {
+        let cases: &[(&[u8], Prim, u16, bool)] = &[
+            (b"u8", Prim::U8, 8, false),
+            (b"u16", Prim::U16, 16, false),
+            (b"u32", Prim::U32, 32, false),
+            (b"u64", Prim::U64, 64, false),
+            (b"usize", Prim::Usize, 32, false),
+            (b"i8", Prim::I8, 8, true),
+            (b"i16", Prim::I16, 16, true),
+            (b"i32", Prim::I32, 32, true),
+            (b"i64", Prim::I64, 64, true),
+            (b"isize", Prim::Isize, 32, true),
+            (b"bool", Prim::Bool, 8, false),
+            (b"ptr", Prim::Ptr, 32, false),
+            (b"ptr_mut", Prim::PtrMut, 32, false),
+            (b"str", Prim::Str, 32, false),
+            (b"mmio", Prim::Mmio, 32, false),
+            (b"Chan", Prim::Chan, 32, false),
+            (b"Task", Prim::Task, 32, false),
+        ];
+        for &(name, prim, bits, signed) in cases {
+            let resolved = Prim::from_type_name(name);
+            assert_eq!(resolved, Some(prim), "name {:?}", name);
+            assert_eq!(prim.bits_signed(32), (bits, signed), "name {:?}", name);
+        }
+    }
+
+    #[test]
+    fn prim_resolver_matches_legacy_x86_64_backend_table() {
+        let cases: &[(&[u8], Prim, u16, bool)] = &[
+            (b"u8", Prim::U8, 8, false),
+            (b"u16", Prim::U16, 16, false),
+            (b"u32", Prim::U32, 32, false),
+            (b"u64", Prim::U64, 64, false),
+            (b"usize", Prim::Usize, 64, false),
+            (b"i8", Prim::I8, 8, true),
+            (b"i16", Prim::I16, 16, true),
+            (b"i32", Prim::I32, 32, true),
+            (b"i64", Prim::I64, 64, true),
+            (b"isize", Prim::Isize, 64, true),
+            (b"bool", Prim::Bool, 8, false),
+            (b"ptr", Prim::Ptr, 64, false),
+            (b"ptr_mut", Prim::PtrMut, 64, false),
+            (b"str", Prim::Str, 64, false),
+            (b"mmio", Prim::Mmio, 64, false),
+            (b"Chan(i64)", Prim::Chan, 64, false),
+        ];
+        for &(name, prim, bits, signed) in cases {
+            let resolved = Prim::from_type_name(name);
+            assert_eq!(resolved, Some(prim), "name {:?}", name);
+            assert_eq!(prim.bits_signed(64), (bits, signed), "name {:?}", name);
+        }
+    }
+
+    #[test]
+    fn prim_resolver_rejects_non_primitives() {
+        assert_eq!(Prim::from_type_name(b"Percent"), None);
+        assert_eq!(Prim::from_type_name(b"Slice(i64)"), None);
+        assert_eq!(Prim::from_type_name(b"RegionRef"), None);
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Sig {

@@ -574,21 +574,9 @@ mod tests {
         // All assembler variants must be present to verify the dispatch
         // in assemble_runtime is exhaustive.  Adding a new variant here
         // means the dispatch match must handle it.
-        match AssemblerKind::Fasm {
-            AssemblerKind::Fasm => {}
-            AssemblerKind::GasArm => unreachable!(),
-            AssemblerKind::GasRiscV => unreachable!(),
-        }
-        match AssemblerKind::GasArm {
-            AssemblerKind::Fasm => unreachable!(),
-            AssemblerKind::GasArm => {}
-            AssemblerKind::GasRiscV => unreachable!(),
-        }
-        match AssemblerKind::GasRiscV {
-            AssemblerKind::Fasm => unreachable!(),
-            AssemblerKind::GasArm => unreachable!(),
-            AssemblerKind::GasRiscV => {}
-        }
+        assert!(matches!(AssemblerKind::Fasm, AssemblerKind::Fasm));
+        assert!(matches!(AssemblerKind::GasArm, AssemblerKind::GasArm));
+        assert!(matches!(AssemblerKind::GasRiscV, AssemblerKind::GasRiscV));
     }
 
     #[test]

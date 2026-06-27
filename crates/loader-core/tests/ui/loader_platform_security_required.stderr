@@ -1,0 +1,8 @@
+error[E0046]: not all trait items implemented, missing: `verify_sig`, `trust_level`
+ --> tests/ui/loader_platform_security_required.rs:5:1
+  |
+5 | impl LoaderPlatform for IncompletePlatform {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ missing `verify_sig`, `trust_level` in implementation
+  |
+  = help: implement the missing item: `fn verify_sig(&self, _: &[u8], _: &[u8]) -> bool { todo!() }`
+  = help: implement the missing item: `fn trust_level(&self) -> TrustLevel { todo!() }`

@@ -1,3 +1,4 @@
+use crate::error::TyuError;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
@@ -22,7 +23,7 @@ pub enum PoisonExpectation {
 }
 
 impl FromStr for PoisonExpectation {
-    type Err = String;
+    type Err = TyuError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
@@ -31,13 +32,13 @@ impl FromStr for PoisonExpectation {
             _ if s.starts_with("trap:") => {
                 let code: u16 = s[5..]
                     .parse()
-                    .map_err(|_| format!("invalid trap code in '{}': must be a number", s))?;
+                    .map_err(|_| TyuError::Manifest(format!("invalid trap code in '{}': must be a number", s)))?;
                 Ok(PoisonExpectation::Trap(code))
             }
-            _ => Err(format!(
+            _ => Err(TyuError::Manifest(format!(
                 "unknown poison expectation '{}': expected 'fail-marker', 'no-completion', or 'trap:N'",
                 s
-            )),
+            ))),
         }
     }
 }
@@ -100,23 +101,26 @@ pub struct Manifest {
 }
 
 /// Parse a manifest.toml file.
-pub fn parse_manifest(path: &Path) -> Result<Manifest, String> {
+pub fn parse_manifest(path: &Path) -> Result<Manifest, TyuError> {
     let text = fs::read_to_string(path)
-        .map_err(|e| format!("reading manifest '{}': {}", path.display(), e))?;
+        .map_err(|e| TyuError::Manifest(format!("reading manifest '{}': {}", path.display(), e)))?;
     let mf = toml::from_str::<ManifestFile>(&text)
-        .map_err(|e| format!("parsing manifest '{}': {}", path.display(), e))?;
+        .map_err(|e| TyuError::Manifest(format!("parsing manifest '{}': {}", path.display(), e)))?;
     validate_fixture_axes(&mf.fixtures)
-        .map_err(|e| format!("parsing manifest '{}': {}", path.display(), e))?;
+        .map_err(|e| TyuError::Manifest(format!("parsing manifest '{}': {}", path.display(), e)))?;
     Ok(Manifest {
         fixtures: mf.fixtures,
         fixtures_cfg: mf.fixtures_cfg,
     })
 }
 
-fn validate_fixture_axes(fixtures: &[FixtureEntry]) -> Result<(), String> {
+fn validate_fixture_axes(fixtures: &[FixtureEntry]) -> Result<(), TyuError> {
     for fixture in fixtures {
         if fixture.axes.is_empty() {
-            return Err(format!("fixture '{}' declares no axes", fixture.name));
+            return Err(TyuError::Manifest(format!(
+                "fixture '{}' declares no axes",
+                fixture.name
+            )));
         }
     }
     Ok(())
@@ -126,17 +130,26 @@ fn validate_fixture_axes(fixtures: &[FixtureEntry]) -> Result<(), String> {
 ///
 /// This runs before target/capability filtering so gated fixtures cannot hide
 /// missing files, and unreferenced `.mod` files cannot silently rot.
-pub fn validate_manifest_integrity(manifest: &Manifest, fixtures_dir: &Path) -> Result<(), String> {
+pub fn validate_manifest_integrity(
+    manifest: &Manifest,
+    fixtures_dir: &Path,
+) -> Result<(), TyuError> {
     let mut referenced_counts: BTreeMap<String, usize> = BTreeMap::new();
     for fixture in &manifest.fixtures {
         *referenced_counts.entry(fixture.file.clone()).or_insert(0) += 1;
     }
 
     let mut present = BTreeSet::new();
-    let entries = fs::read_dir(fixtures_dir)
-        .map_err(|e| format!("reading fixtures dir '{}': {}", fixtures_dir.display(), e))?;
+    let entries = fs::read_dir(fixtures_dir).map_err(|e| {
+        TyuError::Manifest(format!(
+            "reading fixtures dir '{}': {}",
+            fixtures_dir.display(),
+            e
+        ))
+    })?;
     for entry in entries {
-        let entry = entry.map_err(|e| format!("reading fixtures dir entry: {}", e))?;
+        let entry =
+            entry.map_err(|e| TyuError::Manifest(format!("reading fixtures dir entry: {}", e)))?;
         let path = entry.path();
         if path.extension().and_then(|ext| ext.to_str()) == Some("mod") {
             if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
@@ -188,7 +201,7 @@ pub fn validate_manifest_integrity(manifest: &Manifest, fixtures_dir: &Path) -> 
             duplicate.join(", ")
         ));
     }
-    Err(lines.join("\n"))
+    Err(TyuError::Manifest(lines.join("\n")))
 }
 
 #[cfg(test)]
@@ -293,7 +306,10 @@ requires = []
         )
         .unwrap();
         let err = parse_manifest(&path).unwrap_err();
-        assert!(err.contains("fixture 'test' declares no axes"), "{err}");
+        assert!(
+            err.to_string().contains("fixture 'test' declares no axes"),
+            "{err}"
+        );
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -312,7 +328,7 @@ requires = []
         )
         .unwrap();
         let err = parse_manifest(&path).unwrap_err();
-        assert!(err.contains("missing field `axes`"), "{err}");
+        assert!(err.to_string().contains("missing field `axes`"), "{err}");
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -506,8 +522,8 @@ requires = ["TaskScheduler"]
         let err =
             validate_manifest_integrity(&manifest(&["present.mod", "missing.mod"], &[]), &dir)
                 .unwrap_err();
-        assert!(err.contains("missing files"));
-        assert!(err.contains("missing.mod"));
+        assert!(err.to_string().contains("missing files"));
+        assert!(err.to_string().contains("missing.mod"));
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -517,8 +533,8 @@ requires = ["TaskScheduler"]
         fs::write(dir.join("present.mod"), "module Present; end;\n").unwrap();
         fs::write(dir.join("orphan.mod"), "module Orphan; end;\n").unwrap();
         let err = validate_manifest_integrity(&manifest(&["present.mod"], &[]), &dir).unwrap_err();
-        assert!(err.contains("orphan files"));
-        assert!(err.contains("orphan.mod"));
+        assert!(err.to_string().contains("orphan files"));
+        assert!(err.to_string().contains("orphan.mod"));
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -546,8 +562,8 @@ requires = ["TaskScheduler"]
         fs::write(dir.join("a.mod"), "module A; end;\n").unwrap();
         let err =
             validate_manifest_integrity(&manifest(&["a.mod", "a.mod"], &[]), &dir).unwrap_err();
-        assert!(err.contains("duplicate file references"));
-        assert!(err.contains("a.mod"));
+        assert!(err.to_string().contains("duplicate file references"));
+        assert!(err.to_string().contains("a.mod"));
         let _ = fs::remove_dir_all(dir);
     }
 

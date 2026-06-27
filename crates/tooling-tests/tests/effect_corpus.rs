@@ -55,8 +55,15 @@ fn build_langc() {
         if !cfg!(debug_assertions) {
             cmd.arg("--release");
         }
-        let status = cmd.status().expect("cargo build failed");
-        assert!(status.success());
+        // Capture stdio so the nested cargo never flips the shared test
+        // terminal to O_NONBLOCK; that flag leaks back to the outer
+        // `cargo test` harness, whose writes then panic with EAGAIN.
+        let out = cmd.output().expect("cargo build failed");
+        assert!(
+            out.status.success(),
+            "cargo build failed:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     });
 }
 

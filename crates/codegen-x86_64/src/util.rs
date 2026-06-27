@@ -21,31 +21,13 @@ pub fn mask_for_bits(bits: u16) -> u64 {
     }
 }
 
-pub fn prim_bits_signed(ty: &[u8]) -> Option<(u16, bool)> {
-    if ty.starts_with(b"Chan(") {
-        return Some((64, false));
-    }
-    let (bits, signed) = match ty {
-        b"u8" => (8, false),
-        b"u16" => (16, false),
-        b"u32" => (32, false),
-        b"u64" => (64, false),
-        b"usize" => (64, false),
-        b"i8" => (8, true),
-        b"i16" => (16, true),
-        b"i32" => (32, true),
-        b"i64" => (64, true),
-        b"isize" => (64, true),
-        b"bool" => (8, false),
-        b"ptr" | b"ptr_mut" | b"str" | b"mmio" => (64, false),
-        _ => return None,
-    };
-    Some((bits, signed))
+pub fn prim_ty(w: &lir::Word, ty: lir::TypeId) -> Option<lir::Prim> {
+    let b = w.types.get(ty.0 as usize).map(|a| a.as_bytes())?;
+    lir::Prim::from_type_name(b)
 }
 
 pub fn prim_ty_bits_signed(w: &lir::Word, ty: lir::TypeId) -> Option<(u16, bool)> {
-    let b = w.types.get(ty.0 as usize).map(|a| a.as_bytes())?;
-    prim_bits_signed(b)
+    prim_ty(w, ty).map(|prim| prim.bits_signed(64))
 }
 
 pub fn slice_span(src: &[u8], span: Span) -> &[u8] {

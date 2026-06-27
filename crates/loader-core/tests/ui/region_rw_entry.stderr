@@ -1,0 +1,7 @@
+error[E0599]: no method named `entry` found for struct `Region<Rw>` in the current scope
+ --> tests/ui/region_rw_entry.rs:5:20
+  |
+5 |     let _ = region.entry(0);
+  |                    ^^^^^ method not found in `Region<Rw>`
+  |
+  = note: the method was found for `Region<Rx>`

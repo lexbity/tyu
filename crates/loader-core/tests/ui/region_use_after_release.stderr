@@ -1,0 +1,17 @@
+error[E0382]: borrow of moved value: `region`
+ --> tests/ui/region_use_after_release.rs:8:13
+  |
+6 |     let region = unsafe { Region::<Rw>::from_raw_parts(core::ptr::null_mut(), 0) };
+  |         ------ move occurs because `region` has type `Region<Rw>`, which does not implement the `Copy` trait
+7 |     release_region(region);
+  |                    ------ value moved here
+8 |     let _ = region.as_slice();
+  |             ^^^^^^ value borrowed here after move
+  |
+note: consider changing this parameter type in function `release_region` to borrow instead if owning the value isn't necessary
+ --> tests/ui/region_use_after_release.rs:3:28
+  |
+3 | fn release_region(_region: Region<Rw>) {}
+  |    --------------          ^^^^^^^^^^ this parameter takes ownership of the value
+  |    |
+  |    in this function

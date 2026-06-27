@@ -34,7 +34,7 @@ pub fn emit_task_sleep_us(gen: &mut X86_64HostedBackend<'_>) {
     gen.out.write(b"  call __task_sleep_us\n");
 }
 
-pub fn emit_task_runtime(out: &mut dyn frontend::parse::Output) {
+fn emit_task_spawn_runtime(out: &mut dyn frontend::parse::Output) {
     out.write(b"\n__task_spawn:\n");
     out.write(b"  push rbx\n");
     out.write(b"  push r12\n");
@@ -116,7 +116,9 @@ pub fn emit_task_runtime(out: &mut dyn frontend::parse::Output) {
     write_u32(out, lir::trap_code_u32(lir::TrapCode::Unreachable));
     out.write(b"\n");
     out.write(b"  jmp __lang_trap\n");
+}
 
+fn emit_task_entry_exit_runtime(out: &mut dyn frontend::parse::Output) {
     out.write(b"\n__task_entry_tramp:\n");
     out.write(b"  mov rcx, [__task_current]\n");
     out.write(b"  mov rax, [__task_entry + rcx*8]\n");
@@ -130,7 +132,9 @@ pub fn emit_task_runtime(out: &mut dyn frontend::parse::Output) {
     out.write(b"  mov rdi, 0\n");
     out.write(b"  mov rax, 60\n");
     out.write(b"  syscall\n");
+}
 
+fn emit_task_yield_runtime(out: &mut dyn frontend::parse::Output) {
     out.write(b"\n__task_yield:\n");
     out.write(b"  push rbx\n");
     out.write(b"  push r12\n");
@@ -258,7 +262,9 @@ pub fn emit_task_runtime(out: &mut dyn frontend::parse::Output) {
     out.write(b"  pop r12\n");
     out.write(b"  pop rbx\n");
     out.write(b"  ret\n");
+}
 
+fn emit_task_join_runtime(out: &mut dyn frontend::parse::Output) {
     out.write(b"\n__task_join:\n");
     out.write(b"  push rbx\n");
     out.write(b"  mov rbx, rdi\n");
@@ -278,7 +284,9 @@ pub fn emit_task_runtime(out: &mut dyn frontend::parse::Output) {
     out.write(b"  mov qword [__task_state + rbx*8], 0\n");
     out.write(b"  pop rbx\n");
     out.write(b"  ret\n");
+}
 
+fn emit_task_sleep_runtime(out: &mut dyn frontend::parse::Output) {
     out.write(b"\n__task_sleep_ms:\n");
     out.write(b"  sub rsp, 16\n");
     out.write(b"  mov rax, rdi\n");
@@ -316,4 +324,12 @@ pub fn emit_task_runtime(out: &mut dyn frontend::parse::Output) {
     out.write(b"  add rsp, 16\n");
     out.write(b"  call __task_yield\n");
     out.write(b"  ret\n");
+}
+
+pub fn emit_task_runtime(out: &mut dyn frontend::parse::Output) {
+    emit_task_spawn_runtime(out);
+    emit_task_entry_exit_runtime(out);
+    emit_task_yield_runtime(out);
+    emit_task_join_runtime(out);
+    emit_task_sleep_runtime(out);
 }

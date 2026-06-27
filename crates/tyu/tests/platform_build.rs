@@ -71,7 +71,7 @@ fn build_rejects_mismatched_platform_interface() {
 
     let err = ensure_build_platform_interface(&root, Target::X86_64UnknownNone)
         .expect_err("mismatched pack must fail");
-    assert!(err.contains("E5401"), "unexpected error: {err}");
+    assert!(err.to_string().contains("E5401"), "unexpected error: {err}");
 }
 
 #[test]

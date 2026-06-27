@@ -10,46 +10,16 @@ pub struct TypeAtom {
 impl TypeAtom {
     // Static constants for built-in type atoms.
     // These avoid repeated `TypeAtom::new(b"...").expect(...)` calls.
-    pub const EMPTY: TypeAtom = match TypeAtom::new(b"") {
-        Some(a) => a,
-        None => unreachable!(),
-    };
-    pub const I64: TypeAtom = match TypeAtom::new(b"i64") {
-        Some(a) => a,
-        None => unreachable!(),
-    };
-    pub const BOOL: TypeAtom = match TypeAtom::new(b"bool") {
-        Some(a) => a,
-        None => unreachable!(),
-    };
-    pub const STR: TypeAtom = match TypeAtom::new(b"str") {
-        Some(a) => a,
-        None => unreachable!(),
-    };
-    pub const PTR: TypeAtom = match TypeAtom::new(b"ptr") {
-        Some(a) => a,
-        None => unreachable!(),
-    };
-    pub const PTR_MUT: TypeAtom = match TypeAtom::new(b"ptr_mut") {
-        Some(a) => a,
-        None => unreachable!(),
-    };
-    pub const MMIO: TypeAtom = match TypeAtom::new(b"mmio") {
-        Some(a) => a,
-        None => unreachable!(),
-    };
-    pub const QUOT: TypeAtom = match TypeAtom::new(b"quot") {
-        Some(a) => a,
-        None => unreachable!(),
-    };
-    pub const RESOURCE: TypeAtom = match TypeAtom::new(b"resource") {
-        Some(a) => a,
-        None => unreachable!(),
-    };
-    pub const SCOPED: TypeAtom = match TypeAtom::new(b"scoped") {
-        Some(a) => a,
-        None => unreachable!(),
-    };
+    pub const EMPTY: TypeAtom = builtin_type_atom(b"");
+    pub const I64: TypeAtom = builtin_type_atom(b"i64");
+    pub const BOOL: TypeAtom = builtin_type_atom(b"bool");
+    pub const STR: TypeAtom = builtin_type_atom(b"str");
+    pub const PTR: TypeAtom = builtin_type_atom(b"ptr");
+    pub const PTR_MUT: TypeAtom = builtin_type_atom(b"ptr_mut");
+    pub const MMIO: TypeAtom = builtin_type_atom(b"mmio");
+    pub const QUOT: TypeAtom = builtin_type_atom(b"quot");
+    pub const RESOURCE: TypeAtom = builtin_type_atom(b"resource");
+    pub const SCOPED: TypeAtom = builtin_type_atom(b"scoped");
 
     pub const fn new(bytes: &[u8]) -> Option<Self> {
         if bytes.len() > 32 {
@@ -69,6 +39,20 @@ impl TypeAtom {
 
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes[..self.len as usize]
+    }
+}
+
+const fn builtin_type_atom(bytes: &[u8]) -> TypeAtom {
+    assert!(bytes.len() <= 32, "built-in TypeAtom exceeds 32 bytes");
+    let mut out = [0u8; 32];
+    let mut i = 0usize;
+    while i < bytes.len() {
+        out[i] = bytes[i];
+        i += 1;
+    }
+    TypeAtom {
+        len: bytes.len() as u8,
+        bytes: out,
     }
 }
 

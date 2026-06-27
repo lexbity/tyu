@@ -13,12 +13,19 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn ensure_langc() {
-    let status = Command::new(env!("CARGO"))
+    // Capture stdio so the nested cargo never flips the shared test terminal
+    // to O_NONBLOCK; that flag leaks back to the outer `cargo test` harness,
+    // whose writes then panic with EAGAIN.
+    let out = Command::new(env!("CARGO"))
         .current_dir(&common::workspace_root())
         .args(["build", "-q", "-p", "langc"])
-        .status()
+        .output()
         .expect("cargo build");
-    assert!(status.success(), "cargo build failed");
+    assert!(
+        out.status.success(),
+        "cargo build failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 fn tool_available(name: &str) -> bool {

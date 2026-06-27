@@ -5,51 +5,56 @@
 //! loader algorithm (§9 of module-format-and-loading.md) calls these methods
 //! through this trait.
 
+use core::marker::PhantomData;
+
 // ---------------------------------------------------------------------------
 // Region — a slab of mapped memory
 // ---------------------------------------------------------------------------
 
-/// A contiguous mapped memory region.
-///
-/// Created by [`LoaderPlatform::alloc_exec`], `alloc_ro`, or `alloc_rw`.
-/// The `as_mut_ptr`/`as_ptr` accessors provide access to the underlying bytes.
+/// Writable, non-executable region state.
 #[derive(Debug)]
-pub struct Region {
+pub enum Rw {}
+
+/// Executable, non-writable region state.
+#[derive(Debug)]
+pub enum Rx {}
+
+/// A contiguous mapped memory region carrying its protection state in the type.
+///
+/// Created by [`LoaderPlatform::alloc_exec`], `alloc_ro`, or `alloc_rw` as
+/// [`Region<Rw>`].  [`LoaderPlatform::make_exec`] consumes a writable code
+/// region and returns [`Region<Rx>`].
+#[derive(Debug)]
+pub struct Region<S> {
     ptr: *mut u8,
     len: usize,
+    _state: PhantomData<S>,
 }
 
-impl Region {
+impl<S> Region<S> {
     /// Create a region from a raw pointer and length.
     ///
     /// # Safety
     ///
     /// `ptr` must point to a valid, uniquely-owned allocation of `len` bytes.
     pub unsafe fn from_raw_parts(ptr: *mut u8, len: usize) -> Self {
-        Self { ptr, len }
+        Self {
+            ptr,
+            len,
+            _state: PhantomData,
+        }
     }
 
-    /// Return the region as a mutable byte slice.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure the memory is writable at this point.
-    pub unsafe fn as_mut_slice(&mut self) -> &mut [u8] {
-        unsafe { core::slice::from_raw_parts_mut(self.ptr, self.len) }
-    }
-
-    /// Return the region as an immutable byte slice.
-    pub fn as_slice(&self) -> &[u8] {
-        unsafe { core::slice::from_raw_parts(self.ptr, self.len) }
-    }
-
-    /// The raw mutable pointer.
-    pub fn as_mut_ptr(&mut self) -> *mut u8 {
+    /// The raw pointer.
+    pub fn as_ptr(&self) -> *const u8 {
         self.ptr
     }
 
-    /// The raw const pointer.
-    pub fn as_ptr(&self) -> *const u8 {
+    /// The raw mutable pointer for platform protection/release operations.
+    ///
+    /// This does not imply the memory is writable.  Loader code should use
+    /// [`Region<Rw>::as_mut_slice`] for writes.
+    pub fn as_mut_ptr(&self) -> *mut u8 {
         self.ptr
     }
 
@@ -61,6 +66,32 @@ impl Region {
     /// Returns `true` if the region is empty.
     pub fn is_empty(&self) -> bool {
         self.len == 0
+    }
+
+    /// Return the region as an immutable byte slice.
+    pub fn as_slice(&self) -> &[u8] {
+        unsafe { core::slice::from_raw_parts(self.ptr, self.len) }
+    }
+}
+
+impl Region<Rw> {
+    /// Return the writable region as a mutable byte slice.
+    pub fn as_mut_slice(&mut self) -> &mut [u8] {
+        unsafe { core::slice::from_raw_parts_mut(self.ptr, self.len) }
+    }
+}
+
+impl Region<Rx> {
+    /// Return a callable code pointer at `off` bytes into an executable region.
+    ///
+    /// Writable regions do not expose this method, so calling module code before
+    /// the W^X transition is a type error.
+    pub fn entry(&self, off: usize) -> Option<*const u8> {
+        if off >= self.len {
+            None
+        } else {
+            Some(unsafe { self.ptr.add(off) as *const u8 })
+        }
     }
 }
 
@@ -117,32 +148,31 @@ pub trait LoaderPlatform {
     ///
     /// The memory must be mapped RW initially so the loader can apply
     /// relocations.  The caller will call `make_exec` to flip it to RX.
-    fn alloc_exec(&mut self, len: usize) -> Result<Region, u32>;
+    fn alloc_exec(&mut self, len: usize) -> Result<Region<Rw>, u32>;
 
     /// Allocate a read-only data region.
-    fn alloc_ro(&mut self, len: usize) -> Result<Region, u32>;
+    fn alloc_ro(&mut self, len: usize) -> Result<Region<Rw>, u32>;
 
     /// Allocate a read-write data region.
-    fn alloc_rw(&mut self, len: usize) -> Result<Region, u32>;
+    fn alloc_rw(&mut self, len: usize) -> Result<Region<Rw>, u32>;
 
     /// Flip an exec region from RW to RX (W^X discipline).
     ///
     /// After this call the region is no longer writable but is executable.
-    fn make_exec(&mut self, region: &mut Region) -> Result<(), u32>;
+    fn make_exec(&mut self, region: Region<Rw>) -> Result<Region<Rx>, u32>;
 
-    /// Release an allocated region (undo `alloc_*`).
+    /// Release an allocated writable region (undo `alloc_*`).
     ///
     /// Called during rollback to free memory.  Default is a no-op
     /// (memory leak is acceptable for some embedded use cases, but
     /// hosted platforms should implement this with `munmap`).
-    fn release(&mut self, _region: &mut Region) {}
+    fn release_rw(&mut self, _region: Region<Rw>) {}
+
+    /// Release an executable region.
+    fn release_rx(&mut self, _region: Region<Rx>) {}
 
     /// Verify a signature/MAC over the signed region.
-    ///
-    /// Default: reject unless overridden by the platform.
-    fn verify_sig(&self, _signed: &[u8], _sig: &[u8]) -> bool {
-        false
-    }
+    fn verify_sig(&self, signed: &[u8], sig: &[u8]) -> bool;
 
     /// The `abi_hash` that the runtime expects.
     fn expected_abi_hash(&self) -> u64;
@@ -153,9 +183,7 @@ pub trait LoaderPlatform {
     }
 
     /// The trust level this platform operates at.
-    fn trust_level(&self) -> TrustLevel {
-        TrustLevel::Zero
-    }
+    fn trust_level(&self) -> TrustLevel;
 
     /// The placement policy for this target.
     ///
@@ -172,15 +200,6 @@ pub trait LoaderPlatform {
     /// have unique IDs).  `wrapped` is the 60-byte wrapped CEK.
     /// On success writes the 32-byte CEK into `out_cek`.
     ///
-    /// The default implementation returns `Err` — platforms without
-    /// encryption support leave this unimplemented.
     #[cfg(feature = "encryption")]
-    fn unwrap_cek(
-        &self,
-        _key_id: u64,
-        _wrapped: &[u8],
-        _out_cek: &mut [u8; 32],
-    ) -> Result<(), u32> {
-        Err(crate::load::E_ENC_NO_KEY)
-    }
+    fn unwrap_cek(&self, key_id: u64, wrapped: &[u8], out_cek: &mut [u8; 32]) -> Result<(), u32>;
 }

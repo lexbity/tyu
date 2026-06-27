@@ -2,12 +2,11 @@
 
 use crate::error::{LoadError, E_BAD_CONTAINER};
 use crate::load::{load_module, LoadedSet};
-use crate::platform::{LoaderPlatform, Region};
+use crate::platform::{LoaderPlatform, Region, Rw, Rx, TrustLevel};
 use crate::symbols::SymMap;
 use lmod::validate::Container;
 #[cfg(feature = "signing")]
 use {
-    crate::platform::TrustLevel,
     hmac::{Hmac, Mac},
     sha2::Sha256,
 };
@@ -167,7 +166,7 @@ impl DevicePlatform {
         self.cursor
     }
 
-    fn alloc_bump(&mut self, len: usize) -> Result<Region, u32> {
+    fn alloc_bump(&mut self, len: usize) -> Result<Region<Rw>, u32> {
         let start = align_up(self.cursor, LOADHEAP_ALIGN).ok_or(E_BAD_CONTAINER)?;
         let end = start.checked_add(len).ok_or(E_BAD_CONTAINER)?;
         let next = align_up(end, LOADHEAP_ALIGN).ok_or(E_BAD_CONTAINER)?;
@@ -177,7 +176,7 @@ impl DevicePlatform {
         }
 
         self.cursor = next;
-        Ok(unsafe { Region::from_raw_parts(start as *mut u8, len) })
+        Ok(unsafe { Region::<Rw>::from_raw_parts(start as *mut u8, len) })
     }
 }
 
@@ -216,23 +215,25 @@ fn device_abi_geometry() -> (u8, u8, u8) {
 }
 
 impl LoaderPlatform for DevicePlatform {
-    fn alloc_exec(&mut self, len: usize) -> Result<Region, u32> {
+    fn alloc_exec(&mut self, len: usize) -> Result<Region<Rw>, u32> {
         self.alloc_bump(len)
     }
 
-    fn alloc_ro(&mut self, len: usize) -> Result<Region, u32> {
+    fn alloc_ro(&mut self, len: usize) -> Result<Region<Rw>, u32> {
         self.alloc_bump(len)
     }
 
-    fn alloc_rw(&mut self, len: usize) -> Result<Region, u32> {
+    fn alloc_rw(&mut self, len: usize) -> Result<Region<Rw>, u32> {
         self.alloc_bump(len)
     }
 
-    fn make_exec(&mut self, _region: &mut Region) -> Result<(), u32> {
-        Ok(())
+    fn make_exec(&mut self, region: Region<Rw>) -> Result<Region<Rx>, u32> {
+        Ok(unsafe { Region::<Rx>::from_raw_parts(region.as_mut_ptr(), region.len()) })
     }
 
-    fn release(&mut self, _region: &mut Region) {}
+    fn release_rw(&mut self, _region: Region<Rw>) {}
+
+    fn release_rx(&mut self, _region: Region<Rx>) {}
 
     fn expected_abi_hash(&self) -> u64 {
         self.expected_abi_hash
@@ -242,8 +243,15 @@ impl LoaderPlatform for DevicePlatform {
         self.ds_remaining_slots
     }
 
+    #[cfg(not(feature = "signing"))]
+    fn verify_sig(&self, _signed: &[u8], _sig: &[u8]) -> bool {
+        // No signing key is compiled into this device build; reject signatures.
+        false
+    }
+
     #[cfg(feature = "signing")]
     fn verify_sig(&self, signed: &[u8], sig: &[u8]) -> bool {
+        // Signed device builds authenticate modules with the configured HMAC key.
         let Some(key) = &self.sign_key else {
             return false;
         };
@@ -255,8 +263,15 @@ impl LoaderPlatform for DevicePlatform {
         mac.verify_slice(sig).is_ok()
     }
 
+    #[cfg(not(feature = "signing"))]
+    fn trust_level(&self) -> TrustLevel {
+        // Without signing support, modules are treated as baked-in TrustLevel Zero.
+        TrustLevel::Zero
+    }
+
     #[cfg(feature = "signing")]
     fn trust_level(&self) -> TrustLevel {
+        // Presence of a signing key opts this runtime into per-module auth.
         if self.sign_key.is_some() {
             TrustLevel::One
         } else {
@@ -266,6 +281,7 @@ impl LoaderPlatform for DevicePlatform {
 
     #[cfg(feature = "encryption")]
     fn unwrap_cek(&self, _key_id: u64, wrapped: &[u8], out: &mut [u8; 32]) -> Result<(), u32> {
+        // Encrypted device builds unwrap CEKs only when a KEK is provisioned.
         let Some(kek) = &self.kek else {
             return Err(crate::load::E_ENC_NO_KEY);
         };
@@ -323,8 +339,6 @@ fn decode_keys(bytes: &[u8]) -> DeviceKeys {
             cursor = next;
         }
     }
-    #[cfg(all(feature = "encryption", not(feature = "signing")))]
-    let _ = cursor;
     #[cfg(feature = "encryption")]
     if bytes[0] & KEY_MASK_KEK != 0 {
         if let Some((key, next)) = read_key_at(bytes, cursor) {
@@ -339,7 +353,6 @@ fn decode_keys(bytes: &[u8]) -> DeviceKeys {
             cursor = next;
         }
     }
-    #[cfg(all(feature = "encryption", feature = "signing"))]
     let _ = cursor;
     keys
 }
@@ -462,12 +475,12 @@ fn maybe_veneer(platform: &mut DevicePlatform, hash: u64, addr: usize) -> Result
     }
 
     let mut region = platform.alloc_exec(8)?;
-    let veneer = unsafe { region.as_mut_slice() };
+    let veneer = region.as_mut_slice();
     let target = (addr | 1) as u32;
     veneer[0..2].copy_from_slice(&0x4b00u16.to_le_bytes()); // ldr r3, [pc, #0]
     veneer[2..4].copy_from_slice(&0x4718u16.to_le_bytes()); // bx r3
     veneer[4..8].copy_from_slice(&target.to_le_bytes());
-    platform.make_exec(&mut region)?;
+    let region = platform.make_exec(region)?;
     Ok((region.as_ptr() as usize) | 1)
 }
 
@@ -482,7 +495,7 @@ fn maybe_veneer(platform: &mut DevicePlatform, hash: u64, addr: usize) -> Result
     // ±2 GiB reach that leaves `ra` untouched, so the runtime word returns to the
     // module. `t1` is a caller-saved temporary, free to clobber across a call.
     let mut region = platform.alloc_exec(8)?;
-    let veneer = unsafe { region.as_mut_slice() };
+    let veneer = region.as_mut_slice();
     let target = addr as u32;
     let lo12 = target & 0xfff;
     // %hi/%lo split: round hi up when lo12 is negative as a signed 12-bit value.
@@ -496,7 +509,7 @@ fn maybe_veneer(platform: &mut DevicePlatform, hash: u64, addr: usize) -> Result
     let jalr = (lo12 << 20) | (6 << 15) | 0x67; // jalr x0, lo12(t1)
     veneer[0..4].copy_from_slice(&lui.to_le_bytes());
     veneer[4..8].copy_from_slice(&jalr.to_le_bytes());
-    platform.make_exec(&mut region)?;
+    let region = platform.make_exec(region)?;
     Ok(region.as_ptr() as usize)
 }
 
@@ -629,11 +642,11 @@ mod tests {
         let start = backing.as_mut_ptr() as usize;
         let end = start + backing.len();
         let mut platform = DevicePlatform::new(start, end, 0);
-        let mut region = platform.alloc_exec(16).unwrap();
+        let region = platform.alloc_exec(16).unwrap();
         let cursor = platform.cursor();
 
-        platform.make_exec(&mut region).unwrap();
-        platform.release(&mut region);
+        let region = platform.make_exec(region).unwrap();
+        platform.release_rx(region);
 
         assert_eq!(platform.cursor(), cursor);
     }

@@ -16,6 +16,9 @@ pub enum TyuError {
     #[error("manifest read: {0}")]
     ManifestRead(std::io::Error),
 
+    #[error("manifest: {0}")]
+    Manifest(String),
+
     #[error("unknown profile '{0}'")]
     UnknownProfile(String),
 
@@ -30,6 +33,9 @@ pub enum TyuError {
 
     #[error("project manifest parse: {0}")]
     ProjectParse(#[from] toml::de::Error),
+
+    #[error("project: {0}")]
+    Project(String),
 
     #[error("module graph: {0}")]
     Graph(String),
@@ -58,6 +64,15 @@ pub enum TyuError {
     #[error("runner: {0}")]
     Runner(String),
 
+    #[error("platform: {0}")]
+    Platform(String),
+
+    #[error("debug escalation: {0}")]
+    Debug(String),
+
+    #[error("high-water: {0}")]
+    Highwater(String),
+
     #[error("non-UTF-8 path: {0}")]
     NonUtf8Path(std::path::PathBuf),
 
@@ -74,23 +89,31 @@ pub enum TyuError {
     Toolchain(String),
 }
 
-impl From<String> for TyuError {
-    fn from(s: String) -> Self {
-        TyuError::Build(s)
-    }
-}
+#[cfg(test)]
+mod tests {
+    use super::TyuError;
 
-impl From<&str> for TyuError {
-    fn from(s: &str) -> Self {
-        TyuError::Build(s.to_string())
-    }
-}
+    #[test]
+    fn string_backed_variants_render_own_subsystem_prefix() {
+        let cases = [
+            (TyuError::Manifest("x".into()), "manifest: x"),
+            (TyuError::Project("x".into()), "project: x"),
+            (TyuError::Graph("x".into()), "module graph: x"),
+            (TyuError::Build("x".into()), "build: x"),
+            (TyuError::Deploy("x".into()), "deploy: x"),
+            (TyuError::Cache("x".into()), "cache: x"),
+            (TyuError::Key("x".into()), "key: x"),
+            (TyuError::Runner("x".into()), "runner: x"),
+            (TyuError::Platform("x".into()), "platform: x"),
+            (TyuError::Debug("x".into()), "debug escalation: x"),
+            (TyuError::Highwater("x".into()), "high-water: x"),
+            (TyuError::Test("x".into()), "test: x"),
+            (TyuError::Provision("x".into()), "provisioning: x"),
+            (TyuError::Toolchain("x".into()), "toolchain: x"),
+        ];
 
-/// Allow `?` to convert `TyuError` to `String` for modules that still
-/// use the legacy `Result<_, String>` return type.  This is a transitional
-/// shim — new code should return `Result<_, TyuError>`.
-impl From<TyuError> for String {
-    fn from(e: TyuError) -> Self {
-        e.to_string()
+        for (err, expected) in cases {
+            assert_eq!(err.to_string(), expected);
+        }
     }
 }

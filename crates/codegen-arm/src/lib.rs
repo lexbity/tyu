@@ -1,4 +1,5 @@
 #![no_std]
+#![forbid(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
 //! ARM Thumb code generation backend for Tyu.
 //!

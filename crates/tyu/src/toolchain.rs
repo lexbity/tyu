@@ -3,6 +3,7 @@
 //! Resolves tool binaries (assembler, linker, QEMU) for a target using
 //! a precedence chain: flag override → manifest → env var → PATH.
 
+use crate::error::TyuError;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -204,7 +205,7 @@ fn resolve_one(
 ///   2. `PATH` lookup.
 ///
 /// Returns a clean `Err` if not found.
-pub fn resolve_tool(name: &str) -> Result<PathBuf, String> {
+pub fn resolve_tool(name: &str) -> Result<PathBuf, TyuError> {
     let candidates: &[&str] = match name {
         "riscv32-elf-as"
         | "riscv32-unknown-elf-as"
@@ -224,7 +225,7 @@ pub fn resolve_tool(name: &str) -> Result<PathBuf, String> {
 }
 
 /// Resolve a tool binary from a list of acceptable candidate names.
-pub fn resolve_tool_candidates(names: &[&str]) -> Result<PathBuf, String> {
+pub fn resolve_tool_candidates(names: &[&str]) -> Result<PathBuf, TyuError> {
     for name in names {
         // Development fallback: check workspace target/debug (avoids requiring
         // every contributor to add CARGO_TARGET_DIR/debug to their PATH).
@@ -245,7 +246,10 @@ pub fn resolve_tool_candidates(names: &[&str]) -> Result<PathBuf, String> {
         }
     }
 
-    Err(format!("tool '{}' not found in PATH", names.join(" or ")))
+    Err(TyuError::Toolchain(format!(
+        "tool '{}' not found in PATH",
+        names.join(" or ")
+    )))
 }
 
 /// Find a binary — first in PATH, then in `target/debug/` (for workspace-built

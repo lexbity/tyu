@@ -13,12 +13,19 @@ fn workspace_root() -> PathBuf {
 
 fn build_tools() {
     BUILD_ONCE.call_once(|| {
-        let status = Command::new(env!("CARGO"))
+        // Capture stdio so the nested cargo never flips the shared test
+        // terminal to O_NONBLOCK; that flag leaks back to the outer
+        // `cargo test` harness, whose writes then panic with EAGAIN.
+        let out = Command::new(env!("CARGO"))
             .current_dir(workspace_root())
             .args(["build", "-q"])
-            .status()
+            .output()
             .expect("cargo build");
-        assert!(status.success());
+        assert!(
+            out.status.success(),
+            "cargo build failed:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     });
 }
 

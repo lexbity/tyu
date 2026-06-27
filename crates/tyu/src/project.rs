@@ -1,3 +1,4 @@
+use crate::error::TyuError;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -90,10 +91,11 @@ pub fn find_manifest(start_dir: &Path) -> Option<PathBuf> {
 }
 
 /// Parse a `tyu.toml` file into a `ProjectManifest`.
-pub fn parse_project_manifest(path: &Path) -> Result<ProjectManifest, String> {
-    let text =
-        fs::read_to_string(path).map_err(|e| format!("reading '{}': {}", path.display(), e))?;
-    toml::from_str(&text).map_err(|e| format!("parsing '{}': {}", path.display(), e))
+pub fn parse_project_manifest(path: &Path) -> Result<ProjectManifest, TyuError> {
+    let text = fs::read_to_string(path)
+        .map_err(|e| TyuError::Project(format!("reading '{}': {}", path.display(), e)))?;
+    toml::from_str(&text)
+        .map_err(|e| TyuError::Project(format!("parsing '{}': {}", path.display(), e)))
 }
 
 /// Resolve a target name (alias or triple) to a parsed `Target`.
@@ -130,7 +132,7 @@ pub fn toolchain_for_target<'a>(
 pub fn resolve_feature_set(
     profile_name_opt: Option<&str>,
     manifest: &ProjectManifest,
-) -> Result<(FeatureSet, Option<String>), String> {
+) -> Result<(FeatureSet, Option<String>), TyuError> {
     let name = profile_name_opt.map(|n| n.to_string()).or_else(|| {
         if manifest.profile.contains_key("dev") {
             Some("dev".to_string())
@@ -144,11 +146,12 @@ pub fn resolve_feature_set(
             let pc = manifest
                 .profile
                 .get(n.as_str())
-                .ok_or_else(|| format!("unknown profile '{}'", n))?;
+                .ok_or_else(|| TyuError::Project(format!("unknown profile '{}'", n)))?;
             let mut set = FeatureSet::empty();
             for f_str in &pc.features {
-                let f = Feature::parse(f_str)
-                    .ok_or_else(|| format!("unknown feature '{}' in profile '{}'", f_str, n))?;
+                let f = Feature::parse(f_str).ok_or_else(|| {
+                    TyuError::Project(format!("unknown feature '{}' in profile '{}'", f_str, n))
+                })?;
                 set = set.with(f);
             }
             set
@@ -163,8 +166,8 @@ pub fn resolve_feature_set(
 mod tests {
     use super::*;
 
-    fn parse_project_manifest_from_str(text: &str) -> Result<ProjectManifest, String> {
-        toml::from_str(text).map_err(|e| e.to_string())
+    fn parse_project_manifest_from_str(text: &str) -> Result<ProjectManifest, TyuError> {
+        toml::from_str(text).map_err(|e| TyuError::Project(e.to_string()))
     }
 
     #[test]
@@ -315,7 +318,7 @@ features = []
     fn resolve_feature_set_unknown_profile_errs() {
         let manifest = ProjectManifest::default();
         let err = resolve_feature_set(Some("nonexistent"), &manifest).unwrap_err();
-        assert!(err.contains("unknown profile"), "error: {err}");
+        assert!(err.to_string().contains("unknown profile"), "error: {err}");
     }
 
     #[test]
@@ -326,7 +329,7 @@ features = ["bogus"]
 "#;
         let manifest = parse_project_manifest_from_str(toml).unwrap();
         let err = resolve_feature_set(Some("x"), &manifest).unwrap_err();
-        assert!(err.contains("unknown feature"), "error: {err}");
+        assert!(err.to_string().contains("unknown feature"), "error: {err}");
     }
 
     #[test]

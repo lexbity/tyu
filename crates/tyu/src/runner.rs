@@ -82,7 +82,7 @@ impl Runner {
     /// Run the image with the given timeout.
     ///
     /// For `Device`, flashes via OpenOCD and captures serial output.
-    pub fn run(&self, image: &Path, timeout: Duration) -> Result<RunOutcome, String> {
+    pub fn run(&self, image: &Path, timeout: Duration) -> Result<RunOutcome, TyuError> {
         match self {
             Runner::Native => run_native(image, timeout),
             Runner::Qemu(spec) => run_qemu(spec, image, timeout, None),
@@ -98,7 +98,7 @@ impl Runner {
         &self,
         image: &Path,
         timeout: Duration,
-    ) -> Result<RunOutcome, String> {
+    ) -> Result<RunOutcome, TyuError> {
         let exec_image = resolve_static_image(image)?;
         self.run(&exec_image, timeout)
     }
@@ -113,12 +113,12 @@ impl Runner {
         image: &Path,
         port: u16,
         mode: QemuDebugStart,
-    ) -> Result<Child, String> {
+    ) -> Result<Child, TyuError> {
         let mut cmd = build_qemu_command(spec, image, Some(port), Some(mode))?;
         cmd.stdout(Stdio::null());
         cmd.stderr(Stdio::null());
         cmd.spawn()
-            .map_err(|e| format!("spawning debug QEMU: {}", e))
+            .map_err(|e| TyuError::Runner(format!("spawning debug QEMU: {}", e)))
     }
 }
 
@@ -126,7 +126,7 @@ impl Runner {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn resolve_static_image(image: &Path) -> Result<PathBuf, String> {
+fn resolve_static_image(image: &Path) -> Result<PathBuf, TyuError> {
     if image.extension().and_then(|s| s.to_str()) != Some("lmod") {
         return Ok(image.to_path_buf());
     }
@@ -143,10 +143,10 @@ fn resolve_static_image(image: &Path) -> Result<PathBuf, String> {
         }
     }
     candidates.into_iter().find(|p| p.exists()).ok_or_else(|| {
-        format!(
+        TyuError::Runner(format!(
             "execution image '{}' has no ELF sibling or image.elf companion",
             image.display()
-        )
+        ))
     })
 }
 
@@ -155,7 +155,7 @@ fn spawn_and_wait(
     cmd: &mut Command,
     image: &Path,
     timeout: Duration,
-) -> Result<RunOutcome, String> {
+) -> Result<RunOutcome, TyuError> {
     // Capture both streams: bare-metal targets emit their framed diagnostic
     // output over semihosting, which QEMU writes to *stderr*, while the hosted /
     // debugcon path writes to stdout.  Merging both keeps the runner
@@ -165,16 +165,22 @@ fn spawn_and_wait(
 
     let mut child = cmd
         .spawn()
-        .map_err(|e| format!("spawning '{}': {}", image.display(), e))?;
+        .map_err(|e| TyuError::Runner(format!("spawning '{}': {}", image.display(), e)))?;
 
-    let mut stdout_pipe = child.stdout.take().ok_or("failed to capture stdout")?;
+    let mut stdout_pipe = child
+        .stdout
+        .take()
+        .ok_or_else(|| TyuError::Runner("failed to capture stdout".into()))?;
     let stdout_handle = thread::spawn(move || {
         let mut buf = Vec::new();
         let _ = std::io::Read::read_to_end(&mut stdout_pipe, &mut buf);
         buf
     });
 
-    let mut stderr_pipe = child.stderr.take().ok_or("failed to capture stderr")?;
+    let mut stderr_pipe = child
+        .stderr
+        .take()
+        .ok_or_else(|| TyuError::Runner("failed to capture stderr".into()))?;
     let stderr_handle = thread::spawn(move || {
         let mut buf = Vec::new();
         let _ = std::io::Read::read_to_end(&mut stderr_pipe, &mut buf);
@@ -227,7 +233,7 @@ fn spawn_and_wait(
 // Native runner
 // ---------------------------------------------------------------------------
 
-fn run_native(image: &Path, timeout: Duration) -> Result<RunOutcome, String> {
+fn run_native(image: &Path, timeout: Duration) -> Result<RunOutcome, TyuError> {
     let mut cmd = Command::new(image);
     spawn_and_wait(&mut cmd, image, timeout)
 }
@@ -241,7 +247,7 @@ fn run_qemu(
     image: &Path,
     timeout: Duration,
     gdb_port: Option<u16>,
-) -> Result<RunOutcome, String> {
+) -> Result<RunOutcome, TyuError> {
     let mut cmd = build_qemu_command(
         spec,
         image,
@@ -261,7 +267,7 @@ fn run_qemu(
 ///   1. Flash the ELF via `openocd -f <config> -c "program <image> reset exit"`.
 ///   2. Capture serial output from `<serial_port>` at `<baud>` baud.
 ///   3. Wait for completion or timeout.
-fn run_device(spec: &OpenOcdSpec, image: &Path, timeout: Duration) -> Result<RunOutcome, String> {
+fn run_device(spec: &OpenOcdSpec, image: &Path, timeout: Duration) -> Result<RunOutcome, TyuError> {
     let _ = timeout;
     // Step 1: Flash via OpenOCD.
     let _flash_timeout = Duration::from_secs(spec.flash_timeout_secs);
@@ -314,18 +320,18 @@ fn run_device(spec: &OpenOcdSpec, image: &Path, timeout: Duration) -> Result<Run
 }
 
 #[cfg(not(target_os = "windows"))]
-fn open_serial(port: &str, _baud: u32) -> Result<std::fs::File, String> {
+fn open_serial(port: &str, _baud: u32) -> Result<std::fs::File, TyuError> {
     use std::fs::OpenOptions;
     use std::os::unix::fs::OpenOptionsExt;
     OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY) // non-blocking, no controlling TTY
         .open(port)
-        .map_err(|e| format!("opening serial port '{}': {}", port, e))
+        .map_err(|e| TyuError::Runner(format!("opening serial port '{}': {}", port, e)))
 }
 
 #[cfg(target_os = "windows")]
-fn open_serial(port: &str, _baud: u32) -> Result<std::fs::File, String> {
+fn open_serial(port: &str, _baud: u32) -> Result<std::fs::File, TyuError> {
     // Windows serial ports are opened differently.
     // For now, just return a stub error.
     Err("Device runner not implemented on Windows".into())
@@ -335,10 +341,10 @@ fn read_serial(
     file: &mut std::fs::File,
     buf: &mut [u8],
     _timeout: Duration,
-) -> Result<usize, String> {
+) -> Result<usize, TyuError> {
     use std::io::Read;
     file.read(buf)
-        .map_err(|e| format!("serial read error: {}", e))
+        .map_err(|e| TyuError::Runner(format!("serial read error: {}", e)))
 }
 
 fn build_qemu_command(
@@ -346,13 +352,17 @@ fn build_qemu_command(
     image: &Path,
     gdb_port: Option<u16>,
     debug_start: Option<QemuDebugStart>,
-) -> Result<Command, String> {
+) -> Result<Command, TyuError> {
     if debug_start.is_some() && gdb_port.is_none() {
-        return Err("debug QEMU launch requires a gdb port".into());
+        return Err(TyuError::Runner(
+            "debug QEMU launch requires a gdb port".into(),
+        ));
     }
 
-    let bin = std::str::from_utf8(spec.system_bin).map_err(|_| "non-UTF-8 QEMU binary name")?;
-    let machine = std::str::from_utf8(spec.machine).map_err(|_| "non-UTF-8 QEMU machine name")?;
+    let bin = std::str::from_utf8(spec.system_bin)
+        .map_err(|_| TyuError::Runner("non-UTF-8 QEMU binary name".into()))?;
+    let machine = std::str::from_utf8(spec.machine)
+        .map_err(|_| TyuError::Runner("non-UTF-8 QEMU machine name".into()))?;
     let mut cmd = Command::new(bin);
     cmd.arg("-machine").arg(machine);
 
@@ -385,27 +395,31 @@ fn build_qemu_command(
     Ok(cmd)
 }
 
-fn collect_qemu_extra_args(extra_args: &[&[u8]]) -> Result<Vec<String>, String> {
+fn collect_qemu_extra_args(extra_args: &[&[u8]]) -> Result<Vec<String>, TyuError> {
     extra_args
         .iter()
         .map(|arg| {
             std::str::from_utf8(arg)
                 .map(|s| s.to_owned())
-                .map_err(|_| "non-UTF-8 QEMU extra arg".to_string())
+                .map_err(|_| TyuError::Runner("non-UTF-8 QEMU extra arg".into()))
         })
         .collect()
 }
 
-fn filtered_debug_extra_args(extra_args: &[&[u8]]) -> Result<Vec<String>, String> {
+fn filtered_debug_extra_args(extra_args: &[&[u8]]) -> Result<Vec<String>, TyuError> {
     let mut out = Vec::new();
     let mut i = 0;
     while i < extra_args.len() {
-        let arg = std::str::from_utf8(extra_args[i]).map_err(|_| "non-UTF-8 QEMU extra arg")?;
+        let arg = std::str::from_utf8(extra_args[i])
+            .map_err(|_| TyuError::Runner("non-UTF-8 QEMU extra arg".into()))?;
         match arg {
             "-device" => {
-                let value =
-                    std::str::from_utf8(extra_args.get(i + 1).ok_or("missing -device value")?)
-                        .map_err(|_| "non-UTF-8 QEMU extra arg")?;
+                let value = std::str::from_utf8(
+                    extra_args
+                        .get(i + 1)
+                        .ok_or_else(|| TyuError::Runner("missing -device value".into()))?,
+                )
+                .map_err(|_| TyuError::Runner("non-UTF-8 QEMU extra arg".into()))?;
                 if value.starts_with("isa-debug-exit") {
                     i += 2;
                     continue;
@@ -415,9 +429,12 @@ fn filtered_debug_extra_args(extra_args: &[&[u8]]) -> Result<Vec<String>, String
                 i += 2;
             }
             "-debugcon" => {
-                let _value =
-                    std::str::from_utf8(extra_args.get(i + 1).ok_or("missing -debugcon value")?)
-                        .map_err(|_| "non-UTF-8 QEMU extra arg")?;
+                let _value = std::str::from_utf8(
+                    extra_args
+                        .get(i + 1)
+                        .ok_or_else(|| TyuError::Runner("missing -debugcon value".into()))?,
+                )
+                .map_err(|_| TyuError::Runner("non-UTF-8 QEMU extra arg".into()))?;
                 i += 2;
             }
             _ => {

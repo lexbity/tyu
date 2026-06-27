@@ -1,7 +1,7 @@
 use ir as lir;
 
 use crate::ophelpers;
-use crate::util::{prim_ty_bits_signed, type_size_bytes, write_u32};
+use crate::util::{prim_ty, prim_ty_bits_signed, type_size_bytes, write_u32};
 use crate::X86_64HostedBackend;
 
 pub enum ChannelPayloadKind {
@@ -19,7 +19,7 @@ pub enum ChannelPayloadKind {
 pub fn channel_payload_kind(w: &lir::Word, ty: lir::TypeId) -> Option<ChannelPayloadKind> {
     let ty_bytes = w.types.get(ty.0 as usize).map(|a| a.as_bytes())?;
     if let Some((bits, signed)) = prim_ty_bits_signed(w, ty) {
-        let is_bool = ty_bytes == b"bool";
+        let is_bool = prim_ty(w, ty) == Some(lir::Prim::Bool);
         return Some(ChannelPayloadKind::Primitive {
             bits,
             signed,

@@ -13,12 +13,22 @@ fn workspace_root() -> PathBuf {
 
 fn build_tools() {
     BUILD_ONCE.call_once(|| {
-        let status = Command::new(env!("CARGO"))
+        // Capture the nested cargo's stdio rather than inheriting the parent
+        // terminal. Inheriting lets the inner cargo flip the shared terminal
+        // fd to O_NONBLOCK for its progress rendering; the flag leaks back to
+        // the outer `cargo test` harness, whose subsequent writes then fail
+        // with EAGAIN ("failed printing to stderr: Resource temporarily
+        // unavailable (os error 11)" / "io error when listing tests").
+        let out = Command::new(env!("CARGO"))
             .current_dir(workspace_root())
             .args(["build", "-q"])
-            .status()
+            .output()
             .expect("cargo build");
-        assert!(status.success());
+        assert!(
+            out.status.success(),
+            "cargo build failed:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     });
 }
 

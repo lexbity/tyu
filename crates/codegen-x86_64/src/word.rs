@@ -13,7 +13,7 @@ use crate::region;
 use crate::task;
 use crate::util::{
     count_scoped_slices, fnv1a_u64, is_exported, line_col, locals_bytes_ir, mask_for_bits,
-    max_local_slot_ir, prim_bits_signed, prim_ty_bits_signed,
+    max_local_slot_ir, prim_ty, prim_ty_bits_signed,
 };
 use crate::X86_64HostedBackend;
 
@@ -104,15 +104,20 @@ impl<'a> X86_64HostedBackend<'a> {
         Ok(())
     }
 
-    fn emit_op(&mut self, w: &lir::Word, op: &lir::Op, base: u32) -> Result<(), CodegenError> {
+    fn emit_stack_control_ops(
+        &mut self,
+        w: &lir::Word,
+        op: &lir::Op,
+        _base: u32,
+    ) -> Result<bool, CodegenError> {
         match op.kind {
             lir::OpKind::ConstI64(v) => {
                 emit_push_i64(self.out, v);
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::ConstBool(v) => {
                 emit_push_i64(self.out, if v { 1 } else { 0 });
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::ConstStr(span) => {
                 let id = self.intern_str(span)?;
@@ -120,7 +125,7 @@ impl<'a> X86_64HostedBackend<'a> {
                 write_u32(self.out, id);
                 self.out.write(b"\n");
                 emit_push_rax(self.out);
-                Ok(())
+                Ok(true)
             }
 
             lir::OpKind::AddrOf {
@@ -129,7 +134,7 @@ impl<'a> X86_64HostedBackend<'a> {
             } => {
                 self.uses_mmio = true;
                 emit_push_u64(self.out, addr);
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::AddrOf {
                 const_addr: None, ..
@@ -137,7 +142,7 @@ impl<'a> X86_64HostedBackend<'a> {
             lir::OpKind::MmioPlace { addr, .. } => {
                 self.uses_mmio = true;
                 emit_push_u64(self.out, addr);
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::PtrAddConst { offset, .. } => {
                 self.out.write(b"  sub r15, 8\n");
@@ -146,7 +151,7 @@ impl<'a> X86_64HostedBackend<'a> {
                 write_u32(self.out, offset);
                 self.out.write(b"\n");
                 emit_push_rax(self.out);
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::PtrAddIndex { scale, .. } => {
                 self.out.write(b"  sub r15, 8\n");
@@ -158,7 +163,7 @@ impl<'a> X86_64HostedBackend<'a> {
                 self.out.write(b"\n");
                 self.out.write(b"  add rax, rcx\n");
                 emit_push_rax(self.out);
-                Ok(())
+                Ok(true)
             }
 
             lir::OpKind::ScopedEnter { ty, len } => {
@@ -187,44 +192,44 @@ impl<'a> X86_64HostedBackend<'a> {
                     write_u32(self.out, offset);
                     self.out.write(b"]\n");
                     emit_push_rax(self.out);
-                    return Ok(());
+                    return Ok(true);
                 }
                 if ty_name == b"RegionRef" || ty_name == b"RegionRefMut" {
                     emit_dup(self.out);
-                    return Ok(());
+                    return Ok(true);
                 }
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::TaskSpawn { name, .. } => {
                 self.uses_tasks = true;
                 task::emit_task_spawn(self, name.as_bytes());
-                Ok(())
+                Ok(true)
             }
 
             lir::OpKind::Dup { .. } => {
                 emit_dup(self.out);
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::Drop { .. } => {
                 emit_drop(self.out);
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::Swap { .. } => {
                 emit_swap(self.out);
-                Ok(())
+                Ok(true)
             }
 
             lir::OpKind::AddI64 => {
                 emit_binop(self.out, b"add");
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::SubI64 => {
                 emit_binop(self.out, b"sub");
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::MulI64 => {
                 emit_binop(self.out, b"imul");
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::Cmp { kind, .. } => {
                 let setcc: &[u8] = match kind {
@@ -236,7 +241,7 @@ impl<'a> X86_64HostedBackend<'a> {
                     lir::CmpKind::Ne => b"setne",
                 };
                 emit_cmp(self.out, setcc);
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::AndBool => {
                 self.out.write(b"  sub r15, 8\n");
@@ -249,7 +254,7 @@ impl<'a> X86_64HostedBackend<'a> {
                 self.out.write(b"  movzx rax, al\n");
                 self.out.write(b"  mov [r15], rax\n");
                 self.out.write(b"  add r15, 8\n");
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::OrBool => {
                 self.out.write(b"  sub r15, 8\n");
@@ -262,7 +267,7 @@ impl<'a> X86_64HostedBackend<'a> {
                 self.out.write(b"  movzx rax, al\n");
                 self.out.write(b"  mov [r15], rax\n");
                 self.out.write(b"  add r15, 8\n");
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::NotBool => {
                 self.out.write(b"  sub r15, 8\n");
@@ -272,32 +277,43 @@ impl<'a> X86_64HostedBackend<'a> {
                 self.out.write(b"  movzx rax, al\n");
                 self.out.write(b"  mov [r15], rax\n");
                 self.out.write(b"  add r15, 8\n");
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::InterruptDisable => {
                 self.out.write(b"  cli\n");
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::InterruptEnable => {
                 self.out.write(b"  sti\n");
-                Ok(())
+                Ok(true)
             }
 
             lir::OpKind::LocalSet { slot, .. } => {
                 emit_store_local(self.out, slot as u32);
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::LocalGet { slot, .. } => {
                 emit_load_local(self.out, slot as u32);
-                Ok(())
+                Ok(true)
             }
 
             lir::OpKind::Cast { from, to } => {
                 self.emit_cast(w, from, to);
-                Ok(())
+                Ok(true)
             }
-            lir::OpKind::Bitcast { .. } => Ok(()),
+            lir::OpKind::Bitcast { .. } => Ok(true),
 
+            _ => Ok(false),
+        }
+    }
+
+    fn emit_memory_ops(
+        &mut self,
+        w: &lir::Word,
+        op: &lir::Op,
+        _base: u32,
+    ) -> Result<bool, CodegenError> {
+        match op.kind {
             lir::OpKind::Call { name, sig, .. } => {
                 let n = name.as_bytes();
                 if n == b"platform.io.log" {
@@ -308,45 +324,45 @@ impl<'a> X86_64HostedBackend<'a> {
                     self.out.write(b"  mov rdi, 2\n");
                     self.out.write(b"  mov rax, 1\n");
                     self.out.write(b"  syscall\n");
-                    return Ok(());
+                    return Ok(true);
                 }
                 if n == b"platform.channel.make" {
                     self.uses_channels = true;
                     self.uses_tasks = true;
                     channel::emit_chan_make(self);
-                    return Ok(());
+                    return Ok(true);
                 }
                 if n == b"platform.channel.send" {
                     self.uses_channels = true;
                     self.uses_tasks = true;
                     channel::emit_chan_send(self, w, op, &sig);
-                    return Ok(());
+                    return Ok(true);
                 }
                 if n == b"platform.channel.recv" {
                     self.uses_channels = true;
                     self.uses_tasks = true;
                     channel::emit_chan_recv(self, w, op, &sig);
-                    return Ok(());
+                    return Ok(true);
                 }
                 if n == b"platform.mem.region-create" {
                     self.uses_regions = true;
                     region::emit_region_create(self);
-                    return Ok(());
+                    return Ok(true);
                 }
                 if n == b"platform.mem.region-alloc" {
                     self.uses_regions = true;
                     region::emit_region_alloc(self);
-                    return Ok(());
+                    return Ok(true);
                 }
                 if n == b"platform.mem.region-reset" {
                     self.uses_regions = true;
                     region::emit_region_reset(self);
-                    return Ok(());
+                    return Ok(true);
                 }
                 if n == b"platform.mem.region-destroy" {
                     self.uses_regions = true;
                     region::emit_region_destroy(self);
-                    return Ok(());
+                    return Ok(true);
                 }
                 if n == b"platform.time.now_ms" {
                     self.out.write(b"  sub rsp, 16\n");
@@ -364,37 +380,48 @@ impl<'a> X86_64HostedBackend<'a> {
                     self.out.write(b"  add rax, r9\n");
                     self.out.write(b"  add rsp, 16\n");
                     emit_push_rax(self.out);
-                    return Ok(());
+                    return Ok(true);
                 }
                 if n == b"platform.task.yield" {
                     self.uses_tasks = true;
                     task::emit_task_yield(self);
-                    return Ok(());
+                    return Ok(true);
                 }
                 if n == b"platform.task.join" {
                     self.uses_tasks = true;
                     task::emit_task_join(self);
-                    return Ok(());
+                    return Ok(true);
                 }
                 if n == b"platform.task.sleep-ms" {
                     self.uses_tasks = true;
                     task::emit_task_sleep_ms(self);
-                    return Ok(());
+                    return Ok(true);
                 }
                 if n == b"platform.task.sleep-us" {
                     self.uses_tasks = true;
                     task::emit_task_sleep_us(self);
-                    return Ok(());
+                    return Ok(true);
                 }
                 if n == b"platform.critical.enter" || n == b"platform.critical.exit" {
-                    return Ok(());
+                    return Ok(true);
                 }
                 self.out.write(b"  call ");
                 write_label(self.out, name.as_bytes());
                 self.out.write(b"\n");
-                Ok(())
+                Ok(true)
             }
 
+            _ => Ok(false),
+        }
+    }
+
+    fn emit_platform_ops(
+        &mut self,
+        w: &lir::Word,
+        op: &lir::Op,
+        base: u32,
+    ) -> Result<(), CodegenError> {
+        match op.kind {
             lir::OpKind::Load { ty } => {
                 let (bits, signed) = prim_ty_bits_signed(w, ty)
                     .ok_or(CodegenError::UnknownTypeProperties { type_id: ty })?;
@@ -534,30 +561,34 @@ impl<'a> X86_64HostedBackend<'a> {
                 self.out.write(b"\n");
                 Ok(())
             }
-        } // exhaustive: adding an OpKind MUST be handled here
+            _ => Err(CodegenError::UnsupportedOp {
+                op_name: b"emit_op",
+            }),
+        }
+    }
+
+    fn emit_op(&mut self, w: &lir::Word, op: &lir::Op, base: u32) -> Result<(), CodegenError> {
+        if self.emit_stack_control_ops(w, op, base)? {
+            return Ok(());
+        }
+        if self.emit_memory_ops(w, op, base)? {
+            return Ok(());
+        }
+        self.emit_platform_ops(w, op, base)
     }
 
     fn emit_cast(&mut self, w: &lir::Word, from: lir::TypeId, to: lir::TypeId) {
-        let from_ty = w
-            .types
-            .get(from.0 as usize)
-            .map(|a| a.as_bytes())
-            .unwrap_or(b"");
-        let to_ty = w
-            .types
-            .get(to.0 as usize)
-            .map(|a| a.as_bytes())
-            .unwrap_or(b"");
-        if from_ty == to_ty {
+        let Some(from_prim) = prim_ty(w, from) else {
+            return;
+        };
+        let Some(to_prim) = prim_ty(w, to) else {
+            return;
+        };
+        if from_prim == to_prim {
             return;
         }
-
-        let Some((from_bits, from_signed)) = prim_bits_signed(from_ty) else {
-            return;
-        };
-        let Some((to_bits, to_signed)) = prim_bits_signed(to_ty) else {
-            return;
-        };
+        let (from_bits, from_signed) = from_prim.bits_signed(64);
+        let (to_bits, to_signed) = to_prim.bits_signed(64);
 
         self.out.write(b"  mov rax, [r15-8]\n");
 
@@ -604,7 +635,7 @@ impl<'a> X86_64HostedBackend<'a> {
         } else if to_signed && !from_signed {
         }
 
-        if to_ty == b"bool" && from_ty != b"bool" {
+        if to_prim == lir::Prim::Bool && from_prim != lir::Prim::Bool {
             self.out.write(b"  cmp rax, 0\n");
             self.out.write(b"  setne al\n");
             self.out.write(b"  movzx rax, al\n");

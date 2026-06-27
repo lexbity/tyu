@@ -503,7 +503,7 @@ mod tests {
     #[test]
     fn sig_trailer_within_bounds_ok() {
         // Container with a (zero-length) sig area is valid.
-        let mut buf = build_valid_container();
+        let buf = build_valid_container();
         // sig_off is already set by compute_layout, sig_len = 0.
         let c = Container::parse(&buf).unwrap();
         assert_eq!(c.header().sig_len, 0);

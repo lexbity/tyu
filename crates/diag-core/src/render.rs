@@ -11,7 +11,6 @@ use std::collections::HashMap;
 use std::format;
 use std::path::{Path, PathBuf};
 use std::string::{String, ToString};
-use std::sync::Arc;
 use std::vec::Vec;
 
 use crate::decode::Diagnostic;
@@ -22,11 +21,52 @@ use crate::decode::Diagnostic;
 
 /// A lazy, indexed source-file cache.
 ///
-/// Maps file system paths to their line-split source text.  Lines are
+/// Maps file system paths to indexed source text.  Lines are
 /// 1-indexed: `get_line(path, 1)` returns the first line.
 #[derive(Clone, Debug)]
 pub struct SourceMap {
-    files: HashMap<PathBuf, Arc<Vec<String>>>,
+    files: HashMap<PathBuf, LineIndex>,
+}
+
+#[derive(Clone, Debug)]
+struct LineIndex {
+    source: String,
+    line_starts: Vec<usize>,
+}
+
+impl LineIndex {
+    fn new(source: String) -> Self {
+        let mut line_starts = Vec::new();
+        if !source.is_empty() {
+            line_starts.push(0);
+            for (idx, byte) in source.bytes().enumerate() {
+                if byte == b'\n' && idx + 1 < source.len() {
+                    line_starts.push(idx + 1);
+                }
+            }
+        }
+        Self {
+            source,
+            line_starts,
+        }
+    }
+
+    fn get_line(&self, line_no: u32) -> Option<&str> {
+        if line_no == 0 || line_no > self.line_starts.len() as u32 {
+            return None;
+        }
+        let start = self.line_starts[(line_no - 1) as usize];
+        let mut end = self
+            .line_starts
+            .get(line_no as usize)
+            .map(|next| next.saturating_sub(1))
+            .unwrap_or(self.source.len());
+        let bytes = self.source.as_bytes();
+        while end > start && matches!(bytes[end - 1], b'\n' | b'\r') {
+            end -= 1;
+        }
+        self.source.get(start..end)
+    }
 }
 
 impl SourceMap {
@@ -46,26 +86,22 @@ impl SourceMap {
             Ok(c) => c,
             Err(_) => return false,
         };
-        let lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
-        self.files.insert(path.to_path_buf(), Arc::new(lines));
+        self.files
+            .insert(path.to_path_buf(), LineIndex::new(content));
         true
     }
 
     /// Add source text directly (for in-memory sources used in tests).
     pub fn add_source(&mut self, path: &Path, source: &str) {
-        let lines: Vec<String> = source.lines().map(|l| l.to_string()).collect();
-        self.files.insert(path.to_path_buf(), Arc::new(lines));
+        self.files
+            .insert(path.to_path_buf(), LineIndex::new(source.to_string()));
     }
 
     /// Retrieve a source line (1-indexed).
     ///
     /// Returns `None` if the file is not indexed or the line is out of range.
     pub fn get_line(&self, path: &Path, line_no: u32) -> Option<&str> {
-        let lines = self.files.get(path)?;
-        if line_no == 0 || line_no > lines.len() as u32 {
-            return None;
-        }
-        Some(lines[(line_no - 1) as usize].as_str())
+        self.files.get(path)?.get_line(line_no)
     }
 }
 
@@ -141,15 +177,30 @@ impl Diagnostic {
 mod tests {
     use super::*;
     use crate::claims;
-    use crate::decode::{Diagnostic, ModinfoIndex};
+    use crate::decode::Diagnostic;
     use crate::DS_DECLARED_UNKNOWN;
-    use std::format;
 
     fn source_map_with(content: &str) -> (SourceMap, PathBuf) {
         let path = PathBuf::from("test.mod");
         let mut sm = SourceMap::new();
         sm.add_source(&path, content);
         (sm, path)
+    }
+
+    #[test]
+    fn source_map_indexes_single_buffer_by_offsets() {
+        let (sm, path) = source_map_with("first\r\nsecond\nthird\n");
+        assert_eq!(sm.get_line(&path, 1), Some("first"));
+        assert_eq!(sm.get_line(&path, 2), Some("second"));
+        assert_eq!(sm.get_line(&path, 3), Some("third"));
+        assert_eq!(sm.get_line(&path, 0), None);
+        assert_eq!(sm.get_line(&path, 4), None);
+    }
+
+    #[test]
+    fn source_map_handles_empty_source() {
+        let (sm, path) = source_map_with("");
+        assert_eq!(sm.get_line(&path, 1), None);
     }
 
     fn make_diag(
@@ -181,16 +232,6 @@ mod tests {
         let diag = make_diag(Some("main"), 21, 4, 3, 256);
         let rendered = diag.render(Some(&path), &sm);
 
-        let expected = "\
-trap in 'main': E_ISR_STACK (5030) at line 4: ds=3/256
- --> test.mod:4
-  |
-   4 |   100 as Small drop
-  |";
-        // We hardcode 21 → E_ISR_STACK? Wait, 21 should be SUBTYPE_FAIL.
-        // Let me check the claims mapping.
-        // Actually, claim_text(21) = "SUBTYPE_FAIL"
-        // Let me fix this test.
         assert!(rendered.contains("trap in 'main'"));
         assert!(rendered.contains("SUBTYPE_FAIL"));
         assert!(rendered.contains("test.mod:4"));
@@ -239,7 +280,6 @@ trap in 'main': E_ISR_STACK (5030) at line 4: ds=3/256
 
     #[test]
     fn render_uses_correct_trap_code_claim() {
-        let sm = SourceMap::new();
         // Spot-check several trap codes.
         let cases = [
             (10, "STACK_OVERFLOW"),

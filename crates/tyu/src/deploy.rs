@@ -30,8 +30,7 @@ pub fn run(args: &DeployArgs) -> Result<(), TyuError> {
         None => {
             let triple = std::str::from_utf8(target.triple())
                 .map_err(|_| TyuError::Build("non-UTF-8 target triple".into()))?;
-            platform::resolve_platform_selection(&workspace_root, triple, None)
-                .map_err(TyuError::Build)?
+            platform::resolve_platform_selection(&workspace_root, triple, None)?
         }
     };
     let deploy = selection
@@ -65,11 +64,8 @@ pub fn run(args: &DeployArgs) -> Result<(), TyuError> {
                 &args.key_encrypt,
                 "--key-encrypt is required for fleet mode",
             )?;
-            lmod_encrypt::encrypt_fleet(
-                &lmod_bytes,
-                kek.try_as_32bytes().map_err(|e| TyuError::Key(e))?,
-            )
-            .map_err(|e| TyuError::Deploy(format!("lmod-encrypt: {}", e)))?
+            lmod_encrypt::encrypt_fleet(&lmod_bytes, kek.try_as_32bytes()?)
+                .map_err(|e| TyuError::Deploy(format!("lmod-encrypt: {}", e)))?
         }
         crate::args::EncryptMode::Device => {
             let keys_dir = args.device_keys_dir.as_ref().ok_or_else(|| {
@@ -84,11 +80,8 @@ pub fn run(args: &DeployArgs) -> Result<(), TyuError> {
 
     if args.sign || args.key_sign.is_some() {
         let sign_key = resolve_key_material(&args.key_sign, "--key-sign is required for signing")?;
-        let signed = lmod_sign::sign(
-            &encrypted,
-            sign_key.try_as_32bytes().map_err(|e| TyuError::Key(e))?,
-        )
-        .map_err(|e| TyuError::Deploy(format!("lmod-sign: {}", e)))?;
+        let signed = lmod_sign::sign(&encrypted, sign_key.try_as_32bytes()?)
+            .map_err(|e| TyuError::Deploy(format!("lmod-sign: {}", e)))?;
         write_atomic(&signed_path, &signed).map_err(TyuError::Io)?;
     } else {
         fs::copy(&encrypted_path, &signed_path).map_err(TyuError::Io)?;
@@ -116,9 +109,7 @@ pub fn run(args: &DeployArgs) -> Result<(), TyuError> {
         let runner = Runner::for_target(target);
         let timeout = Duration::from_secs(10);
         let outcome = if build_mode == BuildMode::Dynamic {
-            runner
-                .run(&exec_image, timeout)
-                .map_err(|e| TyuError::Runner(e))?
+            runner.run(&exec_image, timeout)?
         } else {
             let runner_image = if signed_path.extension().and_then(|s| s.to_str()) == Some("lmod") {
                 // The deployed artifact is an lmod; static QEMU execution uses
@@ -131,9 +122,7 @@ pub fn run(args: &DeployArgs) -> Result<(), TyuError> {
             } else {
                 built_image.clone()
             };
-            runner
-                .run_static_artifact(&runner_image, timeout)
-                .map_err(|e| TyuError::Runner(e))?
+            runner.run_static_artifact(&runner_image, timeout)?
         };
 
         if outcome.timed_out {
@@ -263,13 +252,13 @@ fn resolve_key_material(
     let kr_str = key_ref
         .as_ref()
         .ok_or_else(|| TyuError::Key(error_msg.to_string()))?;
-    let kr = KeyRef::parse(kr_str).map_err(|e| TyuError::Key(e))?;
-    KeyMaterial::resolve(&kr).map_err(|e| TyuError::Key(e))
+    let kr = KeyRef::parse(kr_str)?;
+    KeyMaterial::resolve(&kr)
 }
 
 fn load_device_keys(keys_dir: &Path) -> Result<Vec<(String, [u8; 32])>, TyuError> {
     use crate::provision::DeviceRegistry;
-    let reg = DeviceRegistry::load(keys_dir).map_err(|e| TyuError::Provision(e))?;
+    let reg = DeviceRegistry::load(keys_dir)?;
     let mut keys: Vec<(String, [u8; 32])> = Vec::new();
     for (id, kek_bytes) in reg.iter() {
         keys.push((id.to_string(), *kek_bytes));

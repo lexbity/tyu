@@ -4,6 +4,7 @@
 //! bare-hex `argv` keys with a diagnostic that names the safe alternatives.
 //! Key buffers are zeroized on drop.
 
+use crate::error::TyuError;
 use std::fs;
 use std::io::Read;
 use std::path::Path;
@@ -35,30 +36,35 @@ impl KeyRef {
     ///
     /// A bare hex string (e.g. `--key=abab...`) is **rejected** with a
     /// diagnostic message naming the safe alternatives.
-    pub fn parse(s: &str) -> Result<Self, String> {
+    pub fn parse(s: &str) -> Result<Self, TyuError> {
         if let Some(path) = s.strip_prefix("file:") {
             return Ok(KeyRef::File(std::path::PathBuf::from(path)));
         }
         if let Some(var) = s.strip_prefix("env:") {
             if var.is_empty() {
-                return Err("empty environment variable name after 'env:'".into());
+                return Err(TyuError::Key(
+                    "empty environment variable name after 'env:'".into(),
+                ));
             }
             return Ok(KeyRef::Env(var.to_string()));
         }
         if let Some(n_str) = s.strip_prefix("fd:") {
-            let n: u32 = n_str
-                .parse()
-                .map_err(|_| format!("invalid file descriptor number '{}' after 'fd:'", n_str))?;
+            let n: u32 = n_str.parse().map_err(|_| {
+                TyuError::Key(format!(
+                    "invalid file descriptor number '{}' after 'fd:'",
+                    n_str
+                ))
+            })?;
             return Ok(KeyRef::Fd(n));
         }
         // If it has no recognized prefix, reject bare hex / raw string.
-        Err(format!(
+        Err(TyuError::Key(format!(
             "refusing to read key from command-line argument.\n  \
              Use one of:\n    \
              --key=file:<path>   (read key from a file)\n    \
              --key=env:<VAR>     (read key from environment variable)\n    \
              --key=fd:<n>        (read key from file descriptor)"
-        ))
+        )))
     }
 }
 
@@ -78,48 +84,52 @@ impl KeyMaterial {
 
     /// Create a `KeyMaterial` from a file path.  The file content is
     /// hex-decoded after trimming whitespace.
-    pub fn from_file(path: &Path) -> Result<Self, String> {
+    pub fn from_file(path: &Path) -> Result<Self, TyuError> {
         let hex = fs::read_to_string(path)
-            .map_err(|e| format!("reading key file '{}': {}", path.display(), e))?;
-        let bytes = hex::decode(hex.trim())
-            .map_err(|e| format!("invalid hex in key file '{}': {}", path.display(), e))?;
+            .map_err(|e| TyuError::Key(format!("reading key file '{}': {}", path.display(), e)))?;
+        let bytes = hex::decode(hex.trim()).map_err(|e| {
+            TyuError::Key(format!(
+                "invalid hex in key file '{}': {}",
+                path.display(),
+                e
+            ))
+        })?;
         Ok(KeyMaterial::new(&bytes))
     }
 
     /// Create a `KeyMaterial` from an environment variable.
     /// The variable value is hex-decoded after trimming whitespace.
-    pub fn from_env(var: &str) -> Result<Self, String> {
-        let hex =
-            std::env::var(var).map_err(|_| format!("environment variable '{}' not set", var))?;
+    pub fn from_env(var: &str) -> Result<Self, TyuError> {
+        let hex = std::env::var(var)
+            .map_err(|_| TyuError::Key(format!("environment variable '{}' not set", var)))?;
         let bytes = hex::decode(hex.trim())
-            .map_err(|e| format!("invalid hex in env var '{}': {}", var, e))?;
+            .map_err(|e| TyuError::Key(format!("invalid hex in env var '{}': {}", var, e)))?;
         Ok(KeyMaterial::new(&bytes))
     }
 
     /// Create a `KeyMaterial` from a file descriptor number.
     /// `fd:0` reads from stdin.  Reads all data until EOF, trims whitespace,
     /// and hex-decodes the result.
-    pub fn from_fd(fd: u32) -> Result<Self, String> {
-        use std::os::unix::io::FromRawFd;
-        let mut file = if fd == 0 {
-            // stdin
-            unsafe { std::fs::File::from_raw_fd(0) }
-        } else {
-            unsafe { std::fs::File::from_raw_fd(fd as i32) }
-        };
+    pub fn from_fd(fd: u32) -> Result<Self, TyuError> {
         let mut hex = String::new();
-        file.read_to_string(&mut hex)
-            .map_err(|e| format!("reading fd {}: {}", fd, e))?;
-        // Prevent the closing of the `Drop` from closing stdin.
-        std::mem::forget(file);
-        let bytes =
-            hex::decode(hex.trim()).map_err(|e| format!("invalid hex from fd {}: {}", fd, e))?;
+        if fd == 0 {
+            std::io::stdin()
+                .read_to_string(&mut hex)
+                .map_err(|e| TyuError::Key(format!("reading fd {}: {}", fd, e)))?;
+        } else {
+            let mut file = fs::File::open(format!("/proc/self/fd/{fd}"))
+                .map_err(|e| TyuError::Key(format!("opening fd {}: {}", fd, e)))?;
+            file.read_to_string(&mut hex)
+                .map_err(|e| TyuError::Key(format!("reading fd {}: {}", fd, e)))?;
+        }
+        let bytes = hex::decode(hex.trim())
+            .map_err(|e| TyuError::Key(format!("invalid hex from fd {}: {}", fd, e)))?;
         Ok(KeyMaterial::new(&bytes))
     }
 
     /// Resolve a `KeyRef` to a `KeyMaterial` by reading the key from
     /// the specified source.
-    pub fn resolve(r: &KeyRef) -> Result<Self, String> {
+    pub fn resolve(r: &KeyRef) -> Result<Self, TyuError> {
         match r {
             KeyRef::File(path) => KeyMaterial::from_file(path),
             KeyRef::Env(var) => KeyMaterial::from_env(var),
@@ -133,12 +143,10 @@ impl KeyMaterial {
     }
 
     /// If the key is exactly 32 bytes, return a reference to a `[u8; 32]`.
-    pub fn try_as_32bytes(&self) -> Result<&[u8; 32], String> {
+    pub fn try_as_32bytes(&self) -> Result<&[u8; 32], TyuError> {
         let slice: &[u8] = &self.0;
-        if slice.len() != 32 {
-            return Err(format!("key must be 32 bytes, got {} bytes", slice.len()));
-        }
-        Ok(unsafe { &*(slice.as_ptr() as *const [u8; 32]) })
+        <&[u8; 32]>::try_from(slice)
+            .map_err(|_| TyuError::Key(format!("key must be 32 bytes, got {} bytes", slice.len())))
     }
 }
 
@@ -149,6 +157,8 @@ impl KeyMaterial {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Seek, SeekFrom, Write};
+    use std::os::fd::AsRawFd;
     use std::path::PathBuf;
 
     fn tmp_dir(label: &str) -> PathBuf {
@@ -196,28 +206,37 @@ mod tests {
     fn bare_hex_rejected() {
         let err = KeyRef::parse("abababababababababababababababab").unwrap_err();
         assert!(
-            err.contains("refusing to read key"),
+            err.to_string().contains("refusing to read key"),
             "bare hex must be rejected"
         );
         assert!(
-            err.contains("file:"),
+            err.to_string().contains("file:"),
             "error must mention file: alternative"
         );
-        assert!(err.contains("env:"), "error must mention env: alternative");
-        assert!(err.contains("fd:"), "error must mention fd: alternative");
+        assert!(
+            err.to_string().contains("env:"),
+            "error must mention env: alternative"
+        );
+        assert!(
+            err.to_string().contains("fd:"),
+            "error must mention fd: alternative"
+        );
     }
 
     #[test]
     fn empty_env_rejected() {
         let err = KeyRef::parse("env:").unwrap_err();
-        assert!(err.contains("empty"), "empty env var name must be rejected");
+        assert!(
+            err.to_string().contains("empty"),
+            "empty env var name must be rejected"
+        );
     }
 
     #[test]
     fn invalid_fd_rejected() {
         let err = KeyRef::parse("fd:xyz").unwrap_err();
         assert!(
-            err.contains("invalid file descriptor"),
+            err.to_string().contains("invalid file descriptor"),
             "non-numeric fd must be rejected"
         );
     }
@@ -225,7 +244,7 @@ mod tests {
     #[test]
     fn no_prefix_rejected() {
         let err = KeyRef::parse("some-random-string").unwrap_err();
-        assert!(err.contains("refusing to read key"));
+        assert!(err.to_string().contains("refusing to read key"));
     }
 
     #[test]
@@ -243,6 +262,52 @@ mod tests {
         let km = KeyMaterial::from_env("TYU_TEST_KEY").unwrap();
         assert_eq!(km.as_bytes(), &[0xbbu8; 32]);
         std::env::remove_var("TYU_TEST_KEY");
+    }
+
+    #[test]
+    fn key_material_from_fd_does_not_take_ownership() {
+        let dir = tmp_dir("from_fd");
+        let path = dir.join("key.bin");
+        let mut file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)
+            .unwrap();
+        file.write_all(hex::encode([0xddu8; 32]).as_bytes())
+            .unwrap();
+        file.seek(SeekFrom::Start(0)).unwrap();
+
+        let fd = file.as_raw_fd() as u32;
+        let km = KeyMaterial::from_fd(fd).unwrap();
+
+        assert_eq!(km.as_bytes(), &[0xddu8; 32]);
+        file.seek(SeekFrom::End(0))
+            .expect("caller-owned fd must remain open");
+    }
+
+    #[test]
+    fn key_material_from_fd_rejects_short_key() {
+        let dir = tmp_dir("from_fd_short");
+        let path = dir.join("key.bin");
+        let mut file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)
+            .unwrap();
+        file.write_all(hex::encode([0xeeu8; 16]).as_bytes())
+            .unwrap();
+        file.seek(SeekFrom::Start(0)).unwrap();
+
+        let fd = file.as_raw_fd() as u32;
+        let km = KeyMaterial::from_fd(fd).unwrap();
+
+        assert!(km.try_as_32bytes().is_err());
+        file.seek(SeekFrom::End(0))
+            .expect("caller-owned fd must remain open");
     }
 
     #[test]

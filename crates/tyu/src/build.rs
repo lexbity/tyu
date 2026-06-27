@@ -58,10 +58,10 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
     let target = ctx.target;
     let out_dir = ctx.out_dir.clone();
     let platform_selection = ctx.platform_selection.clone();
-    let triple = std::str::from_utf8(target.triple()).map_err(|_| "non-UTF-8 target triple")?;
+    let triple = std::str::from_utf8(target.triple()).map_err(|_| TyuError::NonUtf8Triple)?;
     let feature_set = args.feature_set;
     let workspace_root = platform::workspace_root();
-    platform::ensure_build_platform_interface(&workspace_root, target).map_err(TyuError::Build)?;
+    platform::ensure_build_platform_interface(&workspace_root, target)?;
 
     // Ensure output directory exists.
     fs::create_dir_all(&out_dir).map_err(|e| TyuError::Io(e))?;
@@ -167,8 +167,7 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
             let root_obj = module_objs
                 .get(module_count.saturating_sub(1))
                 .ok_or_else(|| TyuError::Build("no root module object to pack".into()))?;
-            pack_final_lmod(root_obj, &out_dir, modules.last().map(|m| m.name.as_str()))
-                .map_err(TyuError::Build)?
+            pack_final_lmod(root_obj, &out_dir, modules.last().map(|m| m.name.as_str()))?
         };
         (final_image, exec_image)
     };
@@ -205,8 +204,7 @@ fn build_dynamic_image(
     let root_obj = module_objs
         .last()
         .ok_or_else(|| TyuError::Build("no root module object to pack".into()))?;
-    let app_lmod = pack_final_lmod(root_obj, &ctx.out_dir, root_module.map(|m| m.name.as_str()))
-        .map_err(TyuError::Build)?;
+    let app_lmod = pack_final_lmod(root_obj, &ctx.out_dir, root_module.map(|m| m.name.as_str()))?;
     let sign_key = resolve_metal_sign_key(metal_sign_key)?;
     let kek = resolve_metal_kek(metal_kek)?;
     if kek.is_some() && sign_key.is_none() {
@@ -261,9 +259,9 @@ fn resolve_metal_sign_key(keyref: Option<&str>) -> Result<Option<[u8; 32]>, TyuE
     let Some(keyref) = keyref else {
         return Ok(None);
     };
-    let parsed = KeyRef::parse(keyref).map_err(TyuError::Key)?;
-    let material = KeyMaterial::resolve(&parsed).map_err(TyuError::Key)?;
-    let key = material.try_as_32bytes().map_err(TyuError::Key)?.to_owned();
+    let parsed = KeyRef::parse(keyref)?;
+    let material = KeyMaterial::resolve(&parsed)?;
+    let key = material.try_as_32bytes()?.to_owned();
     Ok(Some(key))
 }
 
@@ -271,9 +269,9 @@ fn resolve_metal_kek(keyref: Option<&str>) -> Result<Option<[u8; 32]>, TyuError>
     let Some(keyref) = keyref else {
         return Ok(None);
     };
-    let parsed = KeyRef::parse(keyref).map_err(TyuError::Key)?;
-    let material = KeyMaterial::resolve(&parsed).map_err(TyuError::Key)?;
-    let key = material.try_as_32bytes().map_err(TyuError::Key)?.to_owned();
+    let parsed = KeyRef::parse(keyref)?;
+    let material = KeyMaterial::resolve(&parsed)?;
+    let key = material.try_as_32bytes()?.to_owned();
     Ok(Some(key))
 }
 
@@ -423,10 +421,11 @@ fn lmod_first_reloc_offset(bytes: &[u8]) -> Result<usize, TyuError> {
 pub fn resolve_build_context(args: &BuildArgs) -> Result<BuildContext, TyuError> {
     let workspace_root = platform::workspace_root();
     let platform_selection = match args.platform.as_deref() {
-        Some(name) => Some(
-            platform::resolve_platform_selection(&workspace_root, name, args.isa.as_deref())
-                .map_err(TyuError::Build)?,
-        ),
+        Some(name) => Some(platform::resolve_platform_selection(
+            &workspace_root,
+            name,
+            args.isa.as_deref(),
+        )?),
         None => None,
     };
     let target = platform_selection
@@ -461,17 +460,18 @@ fn pack_final_lmod(
     obj_path: &Path,
     out_dir: &Path,
     module_name: Option<&str>,
-) -> Result<PathBuf, String> {
+) -> Result<PathBuf, TyuError> {
     let lmod_name = match module_name {
         Some(name) if !name.is_empty() => format!("{}.lmod", name),
         _ => "image.lmod".to_string(),
     };
     let lmod_path = out_dir.join(lmod_name);
-    let obj_bytes =
-        std::fs::read(obj_path).map_err(|e| format!("reading '{}': {}", obj_path.display(), e))?;
-    let packed = lmod_pack::pack(&obj_bytes).map_err(|e| format!("lmod-pack: {}", e))?;
+    let obj_bytes = std::fs::read(obj_path)
+        .map_err(|e| TyuError::Build(format!("reading '{}': {}", obj_path.display(), e)))?;
+    let packed =
+        lmod_pack::pack(&obj_bytes).map_err(|e| TyuError::Build(format!("lmod-pack: {}", e)))?;
     std::fs::write(&lmod_path, &packed)
-        .map_err(|e| format!("writing '{}': {}", lmod_path.display(), e))?;
+        .map_err(|e| TyuError::Build(format!("writing '{}': {}", lmod_path.display(), e)))?;
     Ok(lmod_path)
 }
 
@@ -596,7 +596,7 @@ pub fn compile_simple(
     include_dirs: &[PathBuf],
     feature_set: FeatureSet,
 ) -> Result<PathBuf, TyuError> {
-    let triple = std::str::from_utf8(target.triple()).map_err(|_| "non-UTF-8 target triple")?;
+    let triple = std::str::from_utf8(target.triple()).map_err(|_| TyuError::NonUtf8Triple)?;
     let langc = toolchain::resolve_tool("langc")?;
 
     let mut cmd = Command::new(&langc);
@@ -926,7 +926,7 @@ fn assemble_runtime_with_mode(
     platform_selection: Option<&platform::ResolvedPlatformSelection>,
     mode: BuildMode,
 ) -> Result<Vec<PathBuf>, TyuError> {
-    let triple = std::str::from_utf8(target.triple()).map_err(|_| "non-UTF-8 triple")?;
+    let triple = std::str::from_utf8(target.triple()).map_err(|_| TyuError::NonUtf8Triple)?;
     let rt_dir = if let Some(selection) = platform_selection {
         selection.pack_root().join(&selection.metal().path)
     } else {
@@ -1257,9 +1257,10 @@ pub fn link_image(
     platform_selection: Option<&platform::ResolvedPlatformSelection>,
 ) -> Result<PathBuf, TyuError> {
     let spec = target.spec();
-    let triple = std::str::from_utf8(target.triple()).map_err(|_| "non-UTF-8 triple")?;
+    let triple = std::str::from_utf8(target.triple()).map_err(|_| TyuError::NonUtf8Triple)?;
 
-    let linker_name = std::str::from_utf8(spec.linker).map_err(|_| "non-UTF-8 linker name")?;
+    let linker_name = std::str::from_utf8(spec.linker)
+        .map_err(|_| TyuError::Build("non-UTF-8 linker name".into()))?;
     let linker = toolchain::resolve_tool(linker_name)?;
 
     // `None` means "no explicit linker script" — let the linker use its

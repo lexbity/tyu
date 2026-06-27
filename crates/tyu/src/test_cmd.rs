@@ -1,6 +1,7 @@
 //! `tyu test` subcommand — suite runner that builds, executes, and verifies
 //! test images across one or many targets.
 
+use crate::error::TyuError;
 use std::collections::HashSet;
 use std::fs::File;
 use std::os::fd::AsRawFd;
@@ -98,7 +99,7 @@ impl TestSelection {
 }
 
 /// Run the `test` subcommand.
-pub fn run(args: &TestArgs) -> Result<(), String> {
+pub fn run(args: &TestArgs) -> Result<(), TyuError> {
     // `--mode=dynamic` is not yet supported by this suite runner. The harness
     // links a *separate* generated `TestRunner` module against each fixture
     // (fixture-as-lib + runner-with-`main`), but the dynamic load path embeds a
@@ -110,14 +111,14 @@ pub fn run(args: &TestArgs) -> Result<(), String> {
     // cargo suites: execution-tests `dynamic_{signed,negative,encrypted}` (x86)
     // and `arm`/`riscv` `dynamic_lmod_runs_under_qemu`.
     if matches!(args.mode, Some(crate::args::BuildMode::Dynamic)) {
-        return Err(
+        return Err(TyuError::Test(
             "tyu test --mode=dynamic is not yet supported (the fixture+runner harness \
              is two-module; modpack v1 loads a single module). Dynamic loading is \
              covered by the cargo suites: `cargo test -p execution-tests --test \
              dynamic_signed --test dynamic_negative --test dynamic_encrypted` and the \
              `arm`/`riscv` `dynamic_lmod_runs_under_qemu` tests."
                 .to_string(),
-        );
+        ));
     }
 
     // Read manifest.
@@ -125,7 +126,7 @@ pub fn run(args: &TestArgs) -> Result<(), String> {
     let fixtures_dir = args
         .manifest_path
         .parent()
-        .ok_or("manifest has no parent directory")?;
+        .ok_or_else(|| TyuError::Test("manifest has no parent directory".into()))?;
     validate_manifest_integrity(&manifest, fixtures_dir)?;
 
     // Filter by name if --filter given.
@@ -170,7 +171,7 @@ pub fn run(args: &TestArgs) -> Result<(), String> {
         let target = selection.target();
         let triple = std::str::from_utf8(target.triple()).unwrap();
         let target_caps = selection.capabilities();
-        let mut acc = SelectionAccumulator::new(selection, &target_caps);
+        let mut acc = SelectionAccumulator::new(selection, &target_caps, &filtered);
 
         // Check tool availability.
         let tools = required_tools(target);
@@ -181,12 +182,12 @@ pub fn run(args: &TestArgs) -> Result<(), String> {
             .collect();
         if !missing.is_empty() {
             if std::env::var("CI").is_ok() {
-                return Err(format!(
+                return Err(TyuError::Test(format!(
                     "tyu: target {} — missing required tools under CI: {}. \
                      Install them or add them to PATH.",
                     triple,
                     missing.join(", "),
-                ));
+                )));
             }
             eprintln!(
                 "tyu: target {} skipped — missing tools: {}",
@@ -304,7 +305,7 @@ pub fn run(args: &TestArgs) -> Result<(), String> {
     }
 
     if any_failure || (args.qualify && report_has_failure(&report)) {
-        Err("some tests failed".into())
+        Err(TyuError::Test("some tests failed".into()))
     } else {
         Ok(())
     }
@@ -315,17 +316,19 @@ struct StdoutRedirect {
 }
 
 impl StdoutRedirect {
-    fn to_null() -> Result<Self, String> {
-        let dev_null = File::options()
-            .write(true)
-            .open("/dev/null")
-            .map_err(|e| format!("opening /dev/null for json report isolation: {}", e))?;
+    fn to_null() -> Result<Self, TyuError> {
+        let dev_null = File::options().write(true).open("/dev/null").map_err(|e| {
+            TyuError::Test(format!(
+                "opening /dev/null for json report isolation: {}",
+                e
+            ))
+        })?;
         let saved_fd = unsafe { libc::dup(libc::STDOUT_FILENO) };
         if saved_fd < 0 {
-            return Err(format!(
+            return Err(TyuError::Test(format!(
                 "duplicating stdout for json report isolation: {}",
                 std::io::Error::last_os_error()
-            ));
+            )));
         }
         let rc = unsafe { libc::dup2(dev_null.as_raw_fd(), libc::STDOUT_FILENO) };
         if rc < 0 {
@@ -333,10 +336,10 @@ impl StdoutRedirect {
             unsafe {
                 libc::close(saved_fd);
             }
-            return Err(format!(
+            return Err(TyuError::Test(format!(
                 "redirecting stdout for json report isolation: {}",
                 err
-            ));
+            )));
         }
         Ok(Self { saved_fd })
     }
@@ -365,7 +368,11 @@ struct SelectionAccumulator {
 }
 
 impl SelectionAccumulator {
-    fn new(selection: &TestSelection, capabilities: &HashSet<String>) -> Self {
+    fn new(
+        selection: &TestSelection,
+        capabilities: &HashSet<String>,
+        fixtures: &[&FixtureEntry],
+    ) -> Self {
         let target = selection.target();
         let mut advertised_capabilities: Vec<String> = capabilities.iter().cloned().collect();
         advertised_capabilities.sort();
@@ -378,7 +385,7 @@ impl SelectionAccumulator {
             advertised_capabilities,
             ran: Vec::new(),
             skipped: Vec::new(),
-            required_axes: required_axes_for_selection(selection, capabilities),
+            required_axes: required_axes_for_selection(selection, capabilities, fixtures),
             covered: HashSet::new(),
             any_fixture_failed: false,
             reasons: Vec::new(),
@@ -493,6 +500,7 @@ fn fixture_qemu_eligible(fixture: &FixtureEntry, target: Target) -> Option<Strin
 fn required_axes_for_selection(
     selection: &TestSelection,
     capabilities: &HashSet<String>,
+    fixtures: &[&FixtureEntry],
 ) -> Vec<CoverageAxis> {
     let target = selection.target();
     let mut required = HashSet::new();
@@ -502,16 +510,35 @@ fn required_axes_for_selection(
             AxisGate::RuntimeService(services) => services
                 .iter()
                 .any(|service| capabilities.contains(*service)),
-            AxisGate::Qemu(qag) => target.spec().qemu.map_or(false, |q| match qag {
-                QemuAxisGate::MmioScratch => q.mmio_scratch.is_some(),
-                QemuAxisGate::InterruptSource => q.interrupt_source.is_some(),
-            }),
+            AxisGate::Qemu(qag) => {
+                target.spec().qemu.map_or(false, |q| match qag {
+                    QemuAxisGate::MmioScratch => q.mmio_scratch.is_some(),
+                    QemuAxisGate::InterruptSource => q.interrupt_source.is_some(),
+                }) && fixtures
+                    .iter()
+                    .any(|fixture| eligible_fixture_covers_axis(fixture, target, capabilities, axis))
+            }
         };
         if is_required {
             required.insert(axis);
         }
     }
     canonical_axes_from_set(&required)
+}
+
+fn eligible_fixture_covers_axis(
+    fixture: &FixtureEntry,
+    target: Target,
+    capabilities: &HashSet<String>,
+    axis: CoverageAxis,
+) -> bool {
+    fixture.axes.contains(&axis)
+        && target_skip_detail(fixture, target).is_none()
+        && fixture_qemu_eligible(fixture, target).is_none()
+        && fixture
+            .requires
+            .iter()
+            .all(|requirement| capabilities.contains(requirement))
 }
 
 fn canonical_axes_from_set(set: &HashSet<CoverageAxis>) -> Vec<CoverageAxis> {
@@ -522,7 +549,7 @@ fn canonical_axes_from_set(set: &HashSet<CoverageAxis>) -> Vec<CoverageAxis> {
         .collect()
 }
 
-fn render_report(report: &QualificationReport, format: ReportFormat) -> Result<(), String> {
+fn render_report(report: &QualificationReport, format: ReportFormat) -> Result<(), TyuError> {
     match format {
         ReportFormat::Human => {
             eprint!("{}", harness_core::render_human(report));
@@ -530,21 +557,28 @@ fn render_report(report: &QualificationReport, format: ReportFormat) -> Result<(
         }
         ReportFormat::Json => {
             let json = serde_json::to_string_pretty(report)
-                .map_err(|e| format!("serializing test report: {}", e))?;
+                .map_err(|e| TyuError::Test(format!("serializing test report: {}", e)))?;
             println!("{json}");
             Ok(())
         }
     }
 }
 
-fn write_report(path: &Path, report: &QualificationReport) -> Result<(), String> {
+fn write_report(path: &Path, report: &QualificationReport) -> Result<(), TyuError> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("creating report dir '{}': {}", parent.display(), e))?;
+        std::fs::create_dir_all(parent).map_err(|e| {
+            TyuError::Test(format!("creating report dir '{}': {}", parent.display(), e))
+        })?;
     }
-    let json = serde_json::to_string_pretty(report)
-        .map_err(|e| format!("serializing test report '{}': {}", path.display(), e))?;
-    std::fs::write(path, json).map_err(|e| format!("writing report '{}': {}", path.display(), e))
+    let json = serde_json::to_string_pretty(report).map_err(|e| {
+        TyuError::Test(format!(
+            "serializing test report '{}': {}",
+            path.display(),
+            e
+        ))
+    })?;
+    std::fs::write(path, json)
+        .map_err(|e| TyuError::Test(format!("writing report '{}': {}", path.display(), e)))
 }
 
 fn report_has_failure(report: &QualificationReport) -> bool {
@@ -554,7 +588,7 @@ fn report_has_failure(report: &QualificationReport) -> bool {
         .any(|selection| selection.verdict == Verdict::Fail)
 }
 
-fn resolve_test_selections(args: &TestArgs) -> Result<Vec<TestSelection>, String> {
+fn resolve_test_selections(args: &TestArgs) -> Result<Vec<TestSelection>, TyuError> {
     if let Some(name) = args.platform.as_deref() {
         let selection =
             platform::resolve_platform_selection(&workspace_root(), name, args.isa.as_deref())?;
@@ -580,10 +614,14 @@ fn resolve_test_selections(args: &TestArgs) -> Result<Vec<TestSelection>, String
 /// Hardware-rung packs (e.g. RP2350) are **not** run in emulation.  They
 /// appear in the aggregate report as explicit `verdict=n/a` entries so the
 /// emulator-coverage gap is surfaced, never silently dropped (FR-9).
-fn run_all_platforms_isolated(args: &TestArgs) -> Result<(), String> {
+fn run_all_platforms_isolated(args: &TestArgs) -> Result<(), TyuError> {
     let root = workspace_root();
-    let exe = std::env::current_exe()
-        .map_err(|e| format!("locating tyu executable for isolated platform run: {}", e))?;
+    let exe = std::env::current_exe().map_err(|e| {
+        TyuError::Test(format!(
+            "locating tyu executable for isolated platform run: {}",
+            e
+        ))
+    })?;
 
     let mut any_failure = false;
     let mut aggregate = QualificationReport {
@@ -641,9 +679,12 @@ fn run_all_platforms_isolated(args: &TestArgs) -> Result<(), String> {
         }
         cmd.stdout(Stdio::null()).stderr(Stdio::null());
 
-        let status = cmd
-            .status()
-            .map_err(|e| format!("running isolated platform test for {}: {}", name, e))?;
+        let status = cmd.status().map_err(|e| {
+            TyuError::Test(format!(
+                "running isolated platform test for {}: {}",
+                name, e
+            ))
+        })?;
         match read_child_report(selection, &report_path) {
             Ok(mut report) => {
                 let child_failed =
@@ -655,7 +696,7 @@ fn run_all_platforms_isolated(args: &TestArgs) -> Result<(), String> {
                 any_failure = true;
                 aggregate
                     .selections
-                    .push(synthetic_fail_selection(selection, reason));
+                    .push(synthetic_fail_selection(selection, reason.to_string()));
             }
         }
         let _ = std::fs::remove_file(&report_path);
@@ -671,7 +712,7 @@ fn run_all_platforms_isolated(args: &TestArgs) -> Result<(), String> {
     }
 
     if any_failure || (args.qualify && report_has_failure(&aggregate)) {
-        Err("some tests failed".into())
+        Err(TyuError::Test("some tests failed".into()))
     } else {
         Ok(())
     }
@@ -728,29 +769,34 @@ fn feature_set_arg(feature_set: FeatureSet) -> String {
 fn read_child_report(
     selection: &TestSelection,
     path: &Path,
-) -> Result<QualificationReport, String> {
+) -> Result<QualificationReport, TyuError> {
     let text = std::fs::read_to_string(path)
-        .map_err(|e| format!("missing child report '{}': {}", path.display(), e))?;
-    let report: QualificationReport = serde_json::from_str(&text)
-        .map_err(|e| format!("malformed child report '{}': {}", path.display(), e))?;
+        .map_err(|e| TyuError::Test(format!("missing child report '{}': {}", path.display(), e)))?;
+    let report: QualificationReport = serde_json::from_str(&text).map_err(|e| {
+        TyuError::Test(format!(
+            "malformed child report '{}': {}",
+            path.display(),
+            e
+        ))
+    })?;
     if report.schema_version != REPORT_SCHEMA_VERSION {
-        return Err(format!(
+        return Err(TyuError::Test(format!(
             "schema-version-mismatch: expected {} got {}",
             REPORT_SCHEMA_VERSION, report.schema_version
-        ));
+        )));
     }
     if report.selections.is_empty() {
-        return Err(format!(
+        return Err(TyuError::Test(format!(
             "empty child report for selection {}",
             selection.label()
-        ));
+        )));
     }
     Ok(report)
 }
 
 fn synthetic_fail_selection(selection: &TestSelection, reason: String) -> SelectionReport {
     let capabilities = selection.capabilities();
-    let mut acc = SelectionAccumulator::new(selection, &capabilities);
+    let mut acc = SelectionAccumulator::new(selection, &capabilities, &[]);
     acc.any_fixture_failed = true;
     acc.reasons.push(reason);
     acc.finish()
@@ -762,7 +808,7 @@ fn run_single_suite(
     selection: &TestSelection,
     fixtures_dir: &Path,
     feature_set: FeatureSet,
-) -> Result<(), String> {
+) -> Result<(), TyuError> {
     let target = selection.target();
     let triple = std::str::from_utf8(target.triple()).unwrap();
     let out_dir = std::env::temp_dir().join("tyu_test").join(format!(
@@ -786,8 +832,10 @@ fn run_single_suite(
     // Generate test runner.
     let runner_src = generate_runner(&[fixture], target);
     let runner_path = out_dir.join("test_runner.mod");
-    std::fs::create_dir_all(&out_dir).map_err(|e| format!("creating out_dir: {}", e))?;
-    std::fs::write(&runner_path, &runner_src).map_err(|e| format!("writing test_runner: {}", e))?;
+    std::fs::create_dir_all(&out_dir)
+        .map_err(|e| TyuError::Test(format!("creating out_dir: {}", e)))?;
+    std::fs::write(&runner_path, &runner_src)
+        .map_err(|e| TyuError::Test(format!("writing test_runner: {}", e)))?;
 
     // Write a .def file for the fixture so the generated runner can import it.
     // langc does not emit .def files, so we write one from the fixture metadata.
@@ -825,10 +873,10 @@ fn run_single_suite(
 
     if outcome.timed_out {
         let classify = crate::debug_escalate::classify_hang(&image, target);
-        return Err(format!(
+        return Err(TyuError::Test(format!(
             "HANG (timed out after {:?})\n  {}",
             timeout, classify,
-        ));
+        )));
     }
 
     // Parse output.
@@ -859,22 +907,22 @@ fn run_single_suite(
             match (diagnostic_string, error) {
                 (Some(diag), None) => Some(diag),
                 (Some(diag), Some(err)) => {
-                    return Err(format!(
+                    return Err(TyuError::Test(format!(
                         "escalation produced diagnostic but also reported error (target={:?} mode={:?} port={} phase={:?}): {}\n{}",
                         esc_target, mode, port, phase, err, diag,
-                    ));
+                    )));
                 }
                 (None, Some(err)) => {
-                    return Err(format!(
+                    return Err(TyuError::Test(format!(
                         "escalation failed (target={:?} mode={:?} port={} phase={:?}): {}",
                         esc_target, mode, port, phase, err,
-                    ));
+                    )));
                 }
                 (None, None) => {
-                    return Err(format!(
+                    return Err(TyuError::Test(format!(
                         "escalation returned no diagnostic and no error (target={:?} mode={:?} port={} phase={:?})",
                         esc_target, mode, port, phase,
-                    ));
+                    )));
                 }
             }
         } else {
@@ -892,10 +940,10 @@ fn run_single_suite(
             .map(|t| format!("\n{}", t))
             .unwrap_or_default();
 
-        return Err(format!(
+        return Err(TyuError::Test(format!(
             "NO_COMPLETION — exited with code {} but no `S\\n` marker in output{}",
             exit, extra,
-        ));
+        )));
     }
 
     if summary.failures > 0 {
@@ -904,10 +952,10 @@ fn run_single_suite(
         } else {
             format!("\n{}", diag_text)
         };
-        return Err(format!(
+        return Err(TyuError::Test(format!(
             "FAIL_MARKER — {} failure(s) reported via 'F' bytes{}",
             summary.failures, extra,
-        ));
+        )));
     }
 
     // Check QEMU/native exit code.
@@ -916,26 +964,26 @@ fn run_single_suite(
         None => 0,
     };
     if outcome.exit_code != expected {
-        return Err(format!(
+        return Err(TyuError::Test(format!(
             "EXIT_MISMATCH — exit code {} != expected {}",
             outcome.exit_code, expected,
-        ));
+        )));
     }
 
     // Assertion-count check.
     if let Some(expected) = fixture.expects {
         if summary.assertions == 0 {
-            return Err(format!(
+            return Err(TyuError::Test(format!(
                 "NO_ASSERTIONS: fixture '{}' declares expects={} but zero assertions were executed. \
                  The `P` record counter mechanism may not be wired.",
                 fixture.name, expected,
-            ));
+            )));
         }
         if summary.assertions < expected {
-            return Err(format!(
+            return Err(TyuError::Test(format!(
                 "UNDERRAN: fixture '{}' declares expects={} but only {} assertions executed",
                 fixture.name, expected, summary.assertions,
-            ));
+            )));
         }
         if summary.assertions > expected {
             // A fixture running extra assertions is a test-integrity concern.
@@ -1046,17 +1094,21 @@ fn decode_diags_from_stdout(stdout: &[u8], fixture_o: &Path, fixture_src: Option
 /// For a poison fixture the verdict is inverted:
 /// - Expected failure → pass (`Ok(())`).
 /// - Clean run or unexpected failure → `Err("POISON_DID_NOT_FAIL")`.
-fn poison_verdict(fixture: &FixtureEntry, run_result: Result<(), String>) -> Result<(), String> {
+fn poison_verdict(
+    fixture: &FixtureEntry,
+    run_result: Result<(), TyuError>,
+) -> Result<(), TyuError> {
     let poison = match fixture.poison {
         Some(ref p) => p,
         None => return run_result,
     };
 
     match run_result {
-        Ok(()) => Err(
-            "POISON_DID_NOT_FAIL — poison fixture completed without the expected failure".into(),
-        ),
-        Err(ref msg) => {
+        Ok(()) => Err(TyuError::Test(
+            "POISON_DID_NOT_FAIL - poison fixture completed without the expected failure".into(),
+        )),
+        Err(ref err) => {
+            let msg = err.to_string();
             let poison_occurred = match poison {
                 PoisonExpectation::FailMarker => msg.contains("FAIL_MARKER"),
                 PoisonExpectation::NoCompletion => {
@@ -1065,10 +1117,10 @@ fn poison_verdict(fixture: &FixtureEntry, run_result: Result<(), String>) -> Res
                 PoisonExpectation::Trap(code) => {
                     let no_comp_or_hang = msg.contains("NO_COMPLETION") || msg.contains("HANG");
                     if !no_comp_or_hang {
-                        return Err(format!(
+                        return Err(TyuError::Test(format!(
                             "POISON_DID_NOT_FAIL — expected trap:{} but got different failure: {}",
                             code, msg,
-                        ));
+                        )));
                     }
                     if *code == 0 {
                         // Trap code 0 = accept any trap.
@@ -1088,10 +1140,10 @@ fn poison_verdict(fixture: &FixtureEntry, run_result: Result<(), String>) -> Res
             if poison_occurred {
                 Ok(())
             } else {
-                Err(format!(
+                Err(TyuError::Test(format!(
                     "POISON_DID_NOT_FAIL — expected poison outcome did not occur: {}",
                     msg,
-                ))
+                )))
             }
         }
     }
@@ -1155,7 +1207,7 @@ fn compile_mod(
     src: &Path,
     is_lib: bool,
     feature_set: FeatureSet,
-) -> Result<PathBuf, String> {
+) -> Result<PathBuf, TyuError> {
     let sysroot = workspace_root().join("sysroot");
     // Include both the standard fixtures dir AND the out_dir so that
     // the test runner can import fixtures compiled into the same output
@@ -1163,7 +1215,7 @@ fn compile_mod(
     let mut include_dirs = vec![fixtures_dir()];
     include_dirs.push(ctx.out_dir.clone());
     build::compile_module_for_context(ctx, src, is_lib, Some(&sysroot), &include_dirs, feature_set)
-        .map_err(|e| e.to_string())
+        .map_err(|e| TyuError::Test(e.to_string()))
 }
 
 fn fixtures_dir() -> PathBuf {
@@ -1189,6 +1241,24 @@ mod tests {
 
     fn target_selection() -> TestSelection {
         TestSelection::Target(Target::X86_64UnknownNone)
+    }
+
+    fn fixture_with_axis(axis: CoverageAxis) -> FixtureEntry {
+        FixtureEntry {
+            name: axis.as_str().to_string(),
+            file: format!("{}.mod", axis.as_str()),
+            axes: vec![axis],
+            requires: Vec::new(),
+            targets: Vec::new(),
+            poison: None,
+            expects: None,
+        }
+    }
+
+    fn fixture_with_axis_and_requirement(axis: CoverageAxis, requirement: &str) -> FixtureEntry {
+        let mut fixture = fixture_with_axis(axis);
+        fixture.requires.push(requirement.to_string());
+        fixture
     }
 
     fn selection_report(verdict: Verdict) -> SelectionReport {
@@ -1291,9 +1361,12 @@ rung = "{rung}"
     #[test]
     fn required_axes_are_core_for_qemu_targets() {
         let selection = target_selection();
-        let axes = required_axes_for_selection(&selection, &HashSet::new());
+        let mmio_fixture = fixture_with_axis(CoverageAxis::Mmio);
+        let fixtures = [&mmio_fixture];
+        let axes = required_axes_for_selection(&selection, &HashSet::new(), &fixtures);
 
-        // x86_64-unknown-none has mmio_scratch → Mmio is required.
+        // x86_64-unknown-none has mmio_scratch and an eligible MMIO fixture,
+        // so Mmio is required.
         // interrupt_source is None → Interrupt is NOT required.
         assert_eq!(
             axes,
@@ -1313,12 +1386,29 @@ rung = "{rung}"
     }
 
     #[test]
-    fn required_axes_include_interrupt_only_when_qemu_has_it() {
-        // ARM lm3s6965evb has interrupt_source => Interrupt is required.
+    fn required_axes_include_interrupt_only_when_fixture_is_eligible() {
+        // ARM lm3s6965evb has interrupt_source, and an eligible interrupt
+        // fixture makes that axis required.
         let selection = TestSelection::Target(Target::ArmV7MUnknownNone);
-        let axes = required_axes_for_selection(&selection, &HashSet::new());
+        let interrupt_fixture = fixture_with_axis(CoverageAxis::Interrupt);
+        let mmio_fixture = fixture_with_axis(CoverageAxis::Mmio);
+        let fixtures = [&interrupt_fixture, &mmio_fixture];
+        let axes = required_axes_for_selection(&selection, &HashSet::new(), &fixtures);
 
         assert!(axes.contains(&CoverageAxis::Interrupt));
+        assert!(axes.contains(&CoverageAxis::Mmio));
+    }
+
+    #[test]
+    fn required_axes_ignore_capability_gated_qemu_fixture() {
+        let selection = TestSelection::Target(Target::ArmV7MUnknownNone);
+        let interrupt_fixture =
+            fixture_with_axis_and_requirement(CoverageAxis::Interrupt, "QemuInterruptAxis");
+        let mmio_fixture = fixture_with_axis(CoverageAxis::Mmio);
+        let fixtures = [&interrupt_fixture, &mmio_fixture];
+        let axes = required_axes_for_selection(&selection, &HashSet::new(), &fixtures);
+
+        assert!(!axes.contains(&CoverageAxis::Interrupt));
         assert!(axes.contains(&CoverageAxis::Mmio));
     }
 
@@ -1326,7 +1416,7 @@ rung = "{rung}"
     fn required_axes_add_runtime_service_axes_from_capabilities() {
         let selection = target_selection();
         let capabilities = HashSet::from(["Channels".to_string()]);
-        let axes = required_axes_for_selection(&selection, &capabilities);
+        let axes = required_axes_for_selection(&selection, &capabilities, &[]);
 
         assert!(axes.contains(&CoverageAxis::Concurrency));
     }
@@ -1334,7 +1424,9 @@ rung = "{rung}"
     #[test]
     fn accumulator_verdict_fails_when_required_axis_uncovered() {
         let selection = target_selection();
-        let acc = SelectionAccumulator::new(&selection, &HashSet::new());
+        let mmio_fixture = fixture_with_axis(CoverageAxis::Mmio);
+        let fixtures = [&mmio_fixture];
+        let acc = SelectionAccumulator::new(&selection, &HashSet::new(), &fixtures);
         let report = acc.finish();
 
         assert_eq!(report.verdict, Verdict::Fail);
@@ -1348,7 +1440,9 @@ rung = "{rung}"
     #[test]
     fn accumulator_verdict_passes_when_required_axes_are_covered() {
         let selection = target_selection();
-        let mut acc = SelectionAccumulator::new(&selection, &HashSet::new());
+        let mmio_fixture = fixture_with_axis(CoverageAxis::Mmio);
+        let fixtures = [&mmio_fixture];
+        let mut acc = SelectionAccumulator::new(&selection, &HashSet::new(), &fixtures);
         acc.covered.extend(acc.required_axes.iter().copied());
         let report = acc.finish();
 
@@ -1394,8 +1488,8 @@ rung = "{rung}"
 
         let err = read_child_report(&target_selection(), &path).unwrap_err();
 
-        assert!(err.contains("missing child report"));
-        assert!(err.contains(path.to_string_lossy().as_ref()));
+        assert!(err.to_string().contains("missing child report"));
+        assert!(err.to_string().contains(path.to_string_lossy().as_ref()));
     }
 
     #[test]
@@ -1407,8 +1501,8 @@ rung = "{rung}"
         let err = read_child_report(&target_selection(), &path).unwrap_err();
         let _ = fs::remove_file(&path);
 
-        assert!(err.contains("malformed child report"));
-        assert!(err.contains(path.to_string_lossy().as_ref()));
+        assert!(err.to_string().contains("malformed child report"));
+        assert!(err.to_string().contains(path.to_string_lossy().as_ref()));
     }
 
     #[test]
@@ -1424,8 +1518,10 @@ rung = "{rung}"
         let err = read_child_report(&target_selection(), &path).unwrap_err();
         let _ = fs::remove_file(&path);
 
-        assert!(err.contains("schema-version-mismatch"));
-        assert!(err.contains(&(REPORT_SCHEMA_VERSION + 1).to_string()));
+        assert!(err.to_string().contains("schema-version-mismatch"));
+        assert!(err
+            .to_string()
+            .contains(&(REPORT_SCHEMA_VERSION + 1).to_string()));
     }
 
     #[test]
@@ -1441,8 +1537,8 @@ rung = "{rung}"
         let err = read_child_report(&target_selection(), &path).unwrap_err();
         let _ = fs::remove_file(&path);
 
-        assert!(err.contains("empty child report"));
-        assert!(err.contains("x86_64-unknown-none"));
+        assert!(err.to_string().contains("empty child report"));
+        assert!(err.to_string().contains("x86_64-unknown-none"));
     }
 
     #[test]

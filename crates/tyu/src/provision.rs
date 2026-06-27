@@ -4,6 +4,7 @@
 //! containing a hex-encoded 32-byte key.  The registry maps device IDs
 //! to raw KEK bytes for use by the deploy command.
 
+use crate::error::TyuError;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -20,13 +21,19 @@ impl DeviceRegistry {
     ///
     /// Reads every file matching `*.key` in `dir`, treating the filename
     /// stem as the device ID and the file content as a hex-encoded 32-byte key.
-    pub fn load(dir: &Path) -> Result<Self, String> {
+    pub fn load(dir: &Path) -> Result<Self, TyuError> {
         let mut keys = HashMap::new();
-        let entries = fs::read_dir(dir)
-            .map_err(|e| format!("reading device keys dir '{}': {}", dir.display(), e))?;
+        let entries = fs::read_dir(dir).map_err(|e| {
+            TyuError::Provision(format!(
+                "reading device keys dir '{}': {}",
+                dir.display(),
+                e
+            ))
+        })?;
 
         for entry in entries {
-            let entry = entry.map_err(|e| format!("reading dir entry: {}", e))?;
+            let entry =
+                entry.map_err(|e| TyuError::Provision(format!("reading dir entry: {}", e)))?;
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) != Some("key") {
                 continue;
@@ -35,19 +42,22 @@ impl DeviceRegistry {
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .map(|s| s.to_string())
-                .ok_or_else(|| format!("invalid device key filename: {}", path.display()))?;
+                .ok_or_else(|| {
+                    TyuError::Provision(format!("invalid device key filename: {}", path.display()))
+                })?;
 
             let content = fs::read_to_string(&path)
-                .map_err(|e| format!("reading '{}': {}", path.display(), e))?;
+                .map_err(|e| TyuError::Provision(format!("reading '{}': {}", path.display(), e)))?;
             let hex = content.trim();
-            let bytes = hex::decode(hex)
-                .map_err(|e| format!("invalid hex in '{}': {}", path.display(), e))?;
+            let bytes = hex::decode(hex).map_err(|e| {
+                TyuError::Provision(format!("invalid hex in '{}': {}", path.display(), e))
+            })?;
             if bytes.len() != 32 {
-                return Err(format!(
+                return Err(TyuError::Provision(format!(
                     "device key in '{}' must be 32 bytes, got {}",
                     path.display(),
                     bytes.len()
-                ));
+                )));
             }
             let mut kek = [0u8; 32];
             kek.copy_from_slice(&bytes);

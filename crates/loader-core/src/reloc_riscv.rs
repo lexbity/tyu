@@ -111,7 +111,6 @@ fn decode_riscv_jal(insn: &[u8]) -> Result<i64, ()> {
 mod tests {
     use super::*;
     use alloc::vec;
-    use alloc::vec::Vec;
 
     #[test]
     fn riscv32_abs32_basic() {

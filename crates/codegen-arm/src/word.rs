@@ -8,28 +8,13 @@ use crate::ophelpers::{
 };
 use crate::ArmThumbBackend;
 
-fn prim_bits_signed_ty(ty_name: &[u8]) -> Option<(u16, bool)> {
-    let (bits, signed) = match ty_name {
-        b"u8" => (8, false),
-        b"u16" => (16, false),
-        b"u32" => (32, false),
-        b"u64" => (64, false),
-        b"usize" => (32, false),
-        b"i8" => (8, true),
-        b"i16" => (16, true),
-        b"i32" => (32, true),
-        b"i64" => (64, true),
-        b"isize" => (32, true),
-        b"bool" => (8, false),
-        b"ptr" | b"ptr_mut" | b"str" | b"mmio" | b"Chan" | b"Task" => (32, false),
-        _ => return None,
-    };
-    Some((bits, signed))
+fn prim_ty(w: &lir::Word, ty: lir::TypeId) -> Option<lir::Prim> {
+    let ty_name = w.types.get(ty.0 as usize).map(|a| a.as_bytes())?;
+    lir::Prim::from_type_name(ty_name)
 }
 
 fn prim_bits_signed(w: &lir::Word, ty: lir::TypeId) -> Option<(u16, bool)> {
-    let ty_name = w.types.get(ty.0 as usize).map(|a| a.as_bytes())?;
-    prim_bits_signed_ty(ty_name)
+    prim_ty(w, ty).map(|prim| prim.bits_signed(32))
 }
 
 fn find_word_decl<'a>(
@@ -231,7 +216,12 @@ impl<'a> ArmThumbBackend<'a> {
         Ok(())
     }
 
-    fn emit_op(&mut self, _w: &lir::Word, op: &lir::Op, base: u32) -> Result<(), CodegenError> {
+    fn emit_stack_control_ops(
+        &mut self,
+        _w: &lir::Word,
+        op: &lir::Op,
+        base: u32,
+    ) -> Result<bool, CodegenError> {
         match op.kind {
             lir::OpKind::ConstI64(v) => {
                 let low = v as u32;
@@ -241,7 +231,7 @@ impl<'a> ArmThumbBackend<'a> {
                 self.emit_const32(high);
                 self.out.write(b"\tstr r0, [r4]\n\tadds r4, r4, #4\n");
                 self.emit_ds_high_update();
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::ConstBool(v) => {
                 let val: u32 = if v { 1 } else { 0 };
@@ -250,7 +240,7 @@ impl<'a> ArmThumbBackend<'a> {
                 self.emit_const32(0);
                 self.out.write(b"\tstr r0, [r4]\n\tadds r4, r4, #4\n");
                 self.emit_ds_high_update();
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::ConstStr(span) => {
                 let id = self.intern_str(span)?;
@@ -260,7 +250,7 @@ impl<'a> ArmThumbBackend<'a> {
                 self.out.write(b"\teors r1, r1\n");
                 self.emit_push_r0r1();
                 self.emit_ds_high_update();
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::Dup { .. } => {
                 self.out.write(b"\tsubs r4, r4, #8\n");
@@ -270,39 +260,39 @@ impl<'a> ArmThumbBackend<'a> {
                 self.out.write(b"\tstrd r0, r1, [r4]\n");
                 self.out.write(b"\tadds r4, r4, #8\n");
                 self.emit_ds_high_update();
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::Drop { .. } => {
                 self.out.write(b"\tsubs r4, r4, #8\n");
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::Swap { .. } => {
                 self.emit_pop_two_r2r3();
                 self.emit_pop_two_r0r1();
                 self.emit_push_r2r3();
                 self.emit_push_r0r1();
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::AddI64 => {
                 self.emit_pop_two_r2r3();
                 self.emit_pop_two_r0r1();
                 self.out.write(b"\tadds r0, r0, r2\n\tadc r1, r1, r3\n");
                 self.emit_push_r0r1();
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::SubI64 => {
                 self.emit_pop_two_r2r3();
                 self.emit_pop_two_r0r1();
                 self.out.write(b"\tsubs r0, r0, r2\n\tsbc r1, r1, r3\n");
                 self.emit_push_r0r1();
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::MulI64 => {
                 self.emit_pop_two_r2r3();
                 self.emit_pop_two_r0r1();
                 self.out.write(b"\tmuls r0, r2, r0\n\teors r1, r1\n");
                 self.emit_push_r0r1();
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::Cmp { kind, .. } => {
                 self.emit_pop_two_r2r3();
@@ -350,7 +340,7 @@ impl<'a> ArmThumbBackend<'a> {
                 }
                 self.out.write(b"\teors r1, r1\n");
                 self.emit_push_r0r1();
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::AndBool => {
                 self.emit_pop_one_r2();
@@ -358,7 +348,7 @@ impl<'a> ArmThumbBackend<'a> {
                 self.out.write(b"\tands r0, r0, r2\n");
                 self.emit_bool_normalize();
                 self.emit_push_r0r1();
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::OrBool => {
                 self.emit_pop_one_r2();
@@ -366,7 +356,7 @@ impl<'a> ArmThumbBackend<'a> {
                 self.out.write(b"\torrs r0, r0, r2\n");
                 self.emit_bool_normalize();
                 self.emit_push_r0r1();
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::NotBool => {
                 self.emit_pop_two_r0r1();
@@ -378,15 +368,15 @@ impl<'a> ArmThumbBackend<'a> {
                     .write(b"\tite ne\n\tmovne r0, #0\n\tmoveq r0, #1\n");
                 self.out.write(b"\teors r1, r1\n");
                 self.emit_push_r0r1();
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::InterruptDisable => {
                 self.out.write(b"\tcpsid i\n");
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::InterruptEnable => {
                 self.out.write(b"\tcpsie i\n");
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::LocalSet { slot, .. } => {
                 let offset = (slot as u32) * 8;
@@ -395,7 +385,7 @@ impl<'a> ArmThumbBackend<'a> {
                 self.out.write(b"\tstrd r0, r1, [sp, #");
                 write_u32(self.out, offset);
                 self.out.write(b"]\n");
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::LocalGet { slot, .. } => {
                 let offset = (slot as u32) * 8;
@@ -404,13 +394,13 @@ impl<'a> ArmThumbBackend<'a> {
                 self.out.write(b"]\n");
                 self.emit_push_r0r1();
                 self.emit_ds_high_update();
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::Call { name, .. } => {
                 self.out.write(b"\tbl ");
                 write_sym_label(self.out, name.as_bytes());
                 self.out.write(b"\n");
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::Br { target } => {
                 self.out.write(b"\tb .b");
@@ -418,7 +408,7 @@ impl<'a> ArmThumbBackend<'a> {
                 self.out.write(b"_");
                 write_u32(self.out, target.0 as u32);
                 self.out.write(b"\n");
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::BrIf { then_tgt, else_tgt } => {
                 self.out.write(b"\tsubs r4, r4, #8\n");
@@ -433,13 +423,13 @@ impl<'a> ArmThumbBackend<'a> {
                 self.out.write(b"_");
                 write_u32(self.out, else_tgt.0 as u32);
                 self.out.write(b"\n");
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::Ret => {
                 self.out.write(b"\tb .endword_");
                 write_u32(self.out, base);
                 self.out.write(b"\n");
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::TrapIfFalse { code } => {
                 let ok = self.fresh_label();
@@ -453,8 +443,19 @@ impl<'a> ArmThumbBackend<'a> {
                 self.out.write(b".trap_ok_");
                 write_u32(self.out, ok);
                 self.out.write(b":\n");
-                Ok(())
+                Ok(true)
             }
+            _ => Ok(false),
+        }
+    }
+
+    fn emit_memory_ops(
+        &mut self,
+        _w: &lir::Word,
+        op: &lir::Op,
+        _base: u32,
+    ) -> Result<bool, CodegenError> {
+        match op.kind {
             lir::OpKind::Load { ty } => {
                 // Pop address (low word of i64, discard high word).
                 self.emit_pop_one_r0();
@@ -484,7 +485,7 @@ impl<'a> ArmThumbBackend<'a> {
                 }
                 self.emit_push_r0r1();
                 self.emit_ds_high_update();
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::Store { ty } => {
                 // Pop value (i64 → r0:r1 low:high), then pop address (low word).
@@ -499,7 +500,7 @@ impl<'a> ArmThumbBackend<'a> {
                     64 => self.out.write(b"\tstrd r0, r1, [r2]\n"),
                     _ => return Err(CodegenError::UnsupportedOp { op_name: b"Store" }),
                 }
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::AddrOf {
                 const_addr: Some(addr),
@@ -512,7 +513,7 @@ impl<'a> ArmThumbBackend<'a> {
                 self.out.write(b"\teors r0, r0\n");
                 self.out.write(b"\tstr r0, [r4]\n\tadds r4, r4, #4\n");
                 self.emit_ds_high_update();
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::AddrOf {
                 place,
@@ -532,7 +533,7 @@ impl<'a> ArmThumbBackend<'a> {
                 self.out.write(b"\tstr r0, [r4]\n\tadds r4, r4, #4\n");
                 self.out.write(b"\tstr r1, [r4]\n\tadds r4, r4, #4\n");
                 self.emit_ds_high_update();
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::PtrAddConst { offset, .. } => {
                 // Pop pointer (low word, discard high).
@@ -551,7 +552,7 @@ impl<'a> ArmThumbBackend<'a> {
                 self.out.write(b"\teors r1, r1\n");
                 self.emit_push_r0r1();
                 self.emit_ds_high_update();
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::PtrAddIndex { scale, .. } => {
                 // Pop index (low word), pop base (low word), base += index*scale.
@@ -574,26 +575,22 @@ impl<'a> ArmThumbBackend<'a> {
                 self.out.write(b"\teors r1, r1\n");
                 self.emit_push_r0r1();
                 self.emit_ds_high_update();
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::Cast { from, to } => {
-                let from_name = match _w.types.get(from.0 as usize).map(|a| a.as_bytes()) {
-                    Some(n) => n,
-                    None => return Ok(()),
+                let from_prim = match prim_ty(_w, from) {
+                    Some(prim) => prim,
+                    None => return Ok(true),
                 };
-                let to_name = match _w.types.get(to.0 as usize).map(|a| a.as_bytes()) {
-                    Some(n) => n,
-                    None => return Ok(()),
+                let to_prim = match prim_ty(_w, to) {
+                    Some(prim) => prim,
+                    None => return Ok(true),
                 };
-                if from_name == to_name {
-                    return Ok(());
+                if from_prim == to_prim {
+                    return Ok(true);
                 }
-                let Some((from_bits, from_signed)) = prim_bits_signed_ty(from_name) else {
-                    return Ok(()); // silent no-op for unknown types (subtype names)
-                };
-                let Some((to_bits, to_signed)) = prim_bits_signed_ty(to_name) else {
-                    return Ok(()); // silent no-op for unknown types
-                };
+                let (from_bits, from_signed) = from_prim.bits_signed(32);
+                let (to_bits, to_signed) = to_prim.bits_signed(32);
                 self.emit_pop_two_r0r1();
                 // Mask/sign-extend from source width.
                 if from_bits < 64 {
@@ -619,14 +616,14 @@ impl<'a> ArmThumbBackend<'a> {
                     }
                 }
                 // Normalize to bool if target is bool.
-                if to_name == b"bool" && from_name != b"bool" {
+                if to_prim == lir::Prim::Bool && from_prim != lir::Prim::Bool {
                     self.out.write(b"\tcmp r0, #0\n");
                     self.out
                         .write(b"\tite ne\n\tmovne r0, #1\n\tmoveq r0, #0\n");
                     self.out.write(b"\teors r1, r1\n");
                 }
                 // Mask/sign-extend to target width.
-                if to_bits < 64 && to_name != b"bool" {
+                if to_bits < 64 && to_prim != lir::Prim::Bool {
                     let mask = (1u64 << to_bits) - 1;
                     if to_signed {
                         let shift_amt = 32 - to_bits;
@@ -650,13 +647,24 @@ impl<'a> ArmThumbBackend<'a> {
                 }
                 self.emit_push_r0r1();
                 self.emit_ds_high_update();
-                Ok(())
+                Ok(true)
             }
             lir::OpKind::Bitcast { .. } => {
                 // On ARM all values are 8 bytes on the DS; bitcast
                 // does not change the bit pattern, so it's a no-op.
-                Ok(())
+                Ok(true)
             }
+            _ => Ok(false),
+        }
+    }
+
+    fn emit_platform_ops(
+        &mut self,
+        _w: &lir::Word,
+        op: &lir::Op,
+        _base: u32,
+    ) -> Result<(), CodegenError> {
+        match op.kind {
             lir::OpKind::MmioVolLoad { ty, place: _ } => {
                 // Load from the address that's already on the DS (pushed by
                 // MmioPlace or AddrOf). Pop the address, load the value.
@@ -878,7 +886,20 @@ impl<'a> ArmThumbBackend<'a> {
                 Ok(())
             }
             lir::OpKind::CheckSubtype { .. } => Err(CodegenError::UnsupportedCheckSubtype),
-        } // exhaustive: adding an OpKind MUST be handled here
+            _ => Err(CodegenError::UnsupportedOp {
+                op_name: b"emit_op",
+            }),
+        }
+    }
+
+    fn emit_op(&mut self, _w: &lir::Word, op: &lir::Op, base: u32) -> Result<(), CodegenError> {
+        if self.emit_stack_control_ops(_w, op, base)? {
+            return Ok(());
+        }
+        if self.emit_memory_ops(_w, op, base)? {
+            return Ok(());
+        }
+        self.emit_platform_ops(_w, op, base)
     }
 
     // ---- 32-bit constant loading ----

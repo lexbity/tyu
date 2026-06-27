@@ -31,12 +31,12 @@ pub fn resolve_graph(
     main_path: &Path,
     include_dirs: &[PathBuf],
     sysroot: Option<&Path>,
-) -> Result<Vec<ModuleNode>, String> {
+) -> Result<Vec<ModuleNode>, TyuError> {
     let main_abs = if main_path.is_absolute() {
         main_path.to_path_buf()
     } else {
         std::env::current_dir()
-            .map_err(|e| TyuError::Build(format!("current_dir: {}", e)))?
+            .map_err(|e| TyuError::Graph(format!("current_dir: {}", e)))?
             .join(main_path)
     };
 
@@ -64,10 +64,10 @@ pub fn resolve_graph(
 
     while let Some((mod_path, containing_dir)) = pending.pop_front() {
         let src_bytes = fs::read(&mod_path)
-            .map_err(|e| TyuError::Build(format!("reading '{}': {}", mod_path.display(), e)))?;
+            .map_err(|e| TyuError::Graph(format!("reading '{}': {}", mod_path.display(), e)))?;
         // Box the ModuleAst to avoid ~156KB stack frame from FixedVec inline storage.
         let module = Box::new(Parser::new(&src_bytes).parse_module_ast().map_err(|e| {
-            TyuError::Build(format!(
+            TyuError::Graph(format!(
                 "parsing '{}': error {}",
                 mod_path.display(),
                 e.code()
@@ -116,7 +116,7 @@ pub fn resolve_graph(
                         }
                         // Non-platform modules that are neither .mod nor .def
                         // are genuine missing-user-module errors (GR-6).
-                        return Err(TyuError::Build(format!(
+                        return Err(TyuError::Graph(format!(
                             "module '{}' imported by '{}' not found",
                             import_name, mod_name,
                         ))
@@ -210,7 +210,7 @@ pub fn resolve_graph(
 
     if sorted_set.len() != deps.len() {
         return Err(
-            TyuError::Build("circular dependency detected in module graph".to_string()).into(),
+            TyuError::Graph("circular dependency detected in module graph".to_string()).into(),
         );
     }
 
