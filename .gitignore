@@ -2,6 +2,7 @@
 .github
 .tools
 devdocs/
+fuzz/corpus/
 
 target
 tmp_m7

@@ -1,0 +1,25 @@
+[package]
+name = "tyu-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+arbitrary = { version = "1", features = ["derive"] }
+libfuzzer-sys = "0.4"
+lmod = { path = "../crates/lmod" }
+
+[[bin]]
+name = "parse_container"
+path = "fuzz_targets/parse_container.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "modinfo_decode"
+path = "fuzz_targets/modinfo_decode.rs"
+test = false
+doc = false

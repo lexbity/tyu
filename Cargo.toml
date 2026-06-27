@@ -27,6 +27,7 @@ members = [
 ]
 exclude = [
   "crates/device-loader-archive",
+  "fuzz",
 ]
 
 # Panic=abort is intentional: the hosted-rt crate provides a custom panic handler

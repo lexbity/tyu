@@ -249,17 +249,23 @@ mod tests {
     // R_ARM_THM_CALL / R_ARM_THM_JUMP24
     // -----------------------------------------------------------------------
 
+    fn aligned_site(buf: &[u8]) -> usize {
+        let base = buf.as_ptr() as usize;
+        (4 - (base & 3)) & 3
+    }
+
     #[test]
     fn thm_call_encodes_bl_instruction() {
         // Patch a BL instruction: sym = site + 0x200
-        let mut buf = vec![0u8; 8];
-        let p = buf.as_ptr() as u64;
+        let mut buf = vec![0u8; 16];
+        let site = aligned_site(&buf);
+        let p = (buf.as_ptr() as u64) + site as u64;
         // The instruction will be patched to BL target = p + 0x200
-        apply_import_reloc(&mut buf, 0, 5, p + 0x200, 0).unwrap();
+        apply_import_reloc(&mut buf, site, 5, p + 0x200, 0).unwrap();
 
         // Read back the two halfwords
-        let hw0 = u16::from_le_bytes(buf[0..2].try_into().unwrap());
-        let hw1 = u16::from_le_bytes(buf[2..4].try_into().unwrap());
+        let hw0 = u16::from_le_bytes(buf[site..site + 2].try_into().unwrap());
+        let hw1 = u16::from_le_bytes(buf[site + 2..site + 4].try_into().unwrap());
 
         // Verify it's a valid BL instruction (first hw bits 15-11 = 11110).
         assert_eq!(
@@ -278,33 +284,36 @@ mod tests {
     #[test]
     fn thm_call_zero_offset() {
         // BL target = site (offset 0)
-        let mut buf = vec![0u8; 8];
-        let p = buf.as_ptr() as u64;
-        apply_import_reloc(&mut buf, 0, 5, p, 0).unwrap();
+        let mut buf = vec![0u8; 16];
+        let site = aligned_site(&buf);
+        let p = (buf.as_ptr() as u64) + site as u64;
+        apply_import_reloc(&mut buf, site, 5, p, 0).unwrap();
 
         // For BL target = site: offset = -4 (PC adjustment), half = -2
         // S = 1 (negative), J1 = ...
         // The instruction should still be valid
-        let hw0 = u16::from_le_bytes(buf[0..2].try_into().unwrap());
+        let hw0 = u16::from_le_bytes(buf[site..site + 2].try_into().unwrap());
         assert_eq!((hw0 >> 11) & 0x1F, 0b11110);
     }
 
     #[test]
     fn thm_call_negative_offset() {
-        let mut buf = vec![0u8; 8];
-        let p = buf.as_ptr() as u64;
+        let mut buf = vec![0u8; 16];
+        let site = aligned_site(&buf);
+        let p = (buf.as_ptr() as u64) + site as u64;
         // Target is before the site
-        apply_import_reloc(&mut buf, 0, 5, p.wrapping_sub(0x100), 0).unwrap();
-        let hw0 = u16::from_le_bytes(buf[0..2].try_into().unwrap());
+        apply_import_reloc(&mut buf, site, 5, p.wrapping_sub(0x100), 0).unwrap();
+        let hw0 = u16::from_le_bytes(buf[site..site + 2].try_into().unwrap());
         assert_eq!((hw0 >> 11) & 0x1F, 0b11110);
     }
 
     #[test]
     fn thm_jump24_encodes_branch() {
-        let mut buf = vec![0u8; 8];
-        let p = buf.as_ptr() as u64;
-        apply_import_reloc(&mut buf, 0, 6, p + 0x200, 0).unwrap();
-        let hw0 = u16::from_le_bytes(buf[0..2].try_into().unwrap());
+        let mut buf = vec![0u8; 16];
+        let site = aligned_site(&buf);
+        let p = (buf.as_ptr() as u64) + site as u64;
+        apply_import_reloc(&mut buf, site, 6, p + 0x200, 0).unwrap();
+        let hw0 = u16::from_le_bytes(buf[site..site + 2].try_into().unwrap());
         assert_eq!((hw0 >> 11) & 0x1F, 0b11110);
     }
 
@@ -345,9 +354,10 @@ mod tests {
 
     #[test]
     fn thm_call_accepts_thumb_bit_function_pointer() {
-        let mut buf = vec![0u8; 8];
-        let p = buf.as_ptr() as u64;
-        apply_import_reloc(&mut buf, 0, 5, p + 1, 0).unwrap();
+        let mut buf = vec![0u8; 16];
+        let site = aligned_site(&buf);
+        let p = (buf.as_ptr() as u64) + site as u64;
+        apply_import_reloc(&mut buf, site, 5, p + 1, 0).unwrap();
     }
 
     #[test]
