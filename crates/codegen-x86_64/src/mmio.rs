@@ -71,7 +71,7 @@ pub fn emit_mmio_load(
 pub fn emit_mmio_store(
     gen: &mut X86_64HostedBackend<'_>,
     width: u32,
-    access: lir::MmioAccess,
+    write_kind: lir::WriteKind,
     span: Span,
 ) -> Result<(), CodegenError> {
     gen.out.write(b"  sub r15, 8\n");
@@ -80,8 +80,8 @@ pub fn emit_mmio_store(
     gen.out.write(b"  mov rax, [r15]\n"); // address
     emit_mmio_bounds_check(gen, width, span)?;
 
-    match access {
-        lir::MmioAccess::Rw => {
+    match write_kind {
+        lir::WriteKind::Plain => {
             // Plain write: mov [mem+rax], value
             match width {
                 1 => gen.out.write(b"  mov byte [__mmio_mem + rax], cl\n"),
@@ -91,7 +91,7 @@ pub fn emit_mmio_store(
                 _ => gen.emit_trap_with_loc(lir::trap_code_u32(lir::TrapCode::Unreachable), span),
             }
         }
-        lir::MmioAccess::W1c => {
+        lir::WriteKind::W1c => {
             // Write-1-to-clear: *reg = *reg & ~value
             match width {
                 1 => gen.out.write(b"  movzx rdx, byte [__mmio_mem + rax]\n"),
@@ -113,7 +113,7 @@ pub fn emit_mmio_store(
                 _ => {}
             }
         }
-        lir::MmioAccess::W1s => {
+        lir::WriteKind::W1s => {
             // Write-1-to-set: *reg = *reg | value
             match width {
                 1 => gen.out.write(b"  movzx rdx, byte [__mmio_mem + rax]\n"),

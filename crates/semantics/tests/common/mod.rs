@@ -156,6 +156,7 @@ pub fn check(
             let mmio = MmioDb {
                 maps: FixedVec::new(),
                 instances: FixedVec::new(),
+                reg_meta: FixedVec::new(),
             };
             let resources = ResourceDb {
                 items: FixedVec::new(),
@@ -244,6 +245,7 @@ pub fn check_ok_with<F>(
             let mmio = MmioDb {
                 maps: FixedVec::new(),
                 instances: FixedVec::new(),
+                reg_meta: FixedVec::new(),
             };
             let resources = ResourceDb {
                 items: FixedVec::new(),

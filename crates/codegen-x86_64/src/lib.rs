@@ -337,6 +337,32 @@ impl<'a> CodegenBackend for X86_64HostedBackend<'a> {
     }
 }
 
+/// Classify every `(strategy, window-kind, op)` MMIO combination for the
+/// x86 backend (design doc §5.6 matrix). x86 has only the emulated window;
+/// bus-window combos are structurally `Unsupported`.
+pub fn mmio_cell(
+    strategy: lir::WriteKind,
+    kind: lir::WindowKind,
+    op: codegen_core::strategy::MmioOp,
+) -> codegen_core::strategy::StrategyCell {
+    use codegen_core::strategy::{MmioOp, StrategyCell};
+    use lir::{WindowKind, WriteKind};
+    match kind {
+        WindowKind::Bus => StrategyCell::Unsupported {
+            reason: "no bus windows on x86 targets today",
+        },
+        WindowKind::Emulated => match op {
+            MmioOp::Load | MmioOp::LoadField => StrategyCell::Supported { pattern: "mov" },
+            MmioOp::Store => match strategy {
+                WriteKind::Plain => StrategyCell::Supported { pattern: "mov" },
+                WriteKind::W1c => StrategyCell::Supported { pattern: "RMW andn" },
+                WriteKind::W1s => StrategyCell::Supported { pattern: "RMW or" },
+            },
+            MmioOp::StoreField => StrategyCell::Supported { pattern: "RMW field" },
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

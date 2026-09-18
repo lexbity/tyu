@@ -603,11 +603,18 @@ impl<'a> RiscVBackend<'a> {
                 self.emit_ds_high_update();
                 Ok(())
             }
-            lir::OpKind::MmioVolLoad { ty, place: _ } => {
+            lir::OpKind::MmioVolLoad {
+                ty,
+                place: _,
+                read_kind: _,
+                atomic_max: _,
+                barrier,
+            } => {
                 let (bits, _signed) =
                     prim_bits_signed(_w, ty).ok_or(CodegenError::UnsupportedOp {
                         op_name: b"MmioVolLoad",
                     })?;
+                self.emit_mmio_barrier_before(barrier);
                 // Pop address (low word, discard high)
                 self.out.write(b"\taddi s2, s2, -8\n\tlw a0, 0(s2)\n");
                 match bits {
@@ -626,6 +633,7 @@ impl<'a> RiscVBackend<'a> {
                 if bits < 64 {
                     self.out.write(b"\tli a1, 0\n");
                 }
+                self.emit_mmio_barrier_after(barrier);
                 self.out
                     .write(b"\tsw a0, 0(s2)\n\tsw a1, 4(s2)\n\taddi s2, s2, 8\n");
                 self.emit_ds_high_update();
@@ -634,29 +642,31 @@ impl<'a> RiscVBackend<'a> {
             lir::OpKind::MmioVolStore {
                 ty,
                 place: _,
-                access: _,
+                write_kind,
+                read_kind,
+                atomic_max: _,
+                barrier,
             } => {
                 let (bits, _signed) =
                     prim_bits_signed(_w, ty).ok_or(CodegenError::UnsupportedOp {
                         op_name: b"MmioVolStore",
                     })?;
+                // R1 defensive: w1s/w1c stores are RMW; on an effectful
+                // register the read is a phantom bus read (E3642).
+                if read_kind == lir::ReadKind::Effectful
+                    && write_kind != lir::WriteKind::Plain
+                {
+                    return Err(CodegenError::UnsupportedOp {
+                        op_name: b"MmioVolStore",
+                    });
+                }
+                self.emit_mmio_barrier_before(barrier);
                 // Pop value (a0:a1), pop address (a2)
                 self.out
                     .write(b"\taddi s2, s2, -8\n\tlw a0, 0(s2)\n\tlw a1, 4(s2)\n");
                 self.out.write(b"\taddi s2, s2, -8\n\tlw a2, 0(s2)\n");
-                match bits {
-                    8 => self.out.write(b"\tsb a0, 0(a2)\n"),
-                    16 => self.out.write(b"\tsh a0, 0(a2)\n"),
-                    32 => self.out.write(b"\tsw a0, 0(a2)\n"),
-                    64 => {
-                        self.out.write(b"\tsw a0, 0(a2)\n\tsw a1, 4(a2)\n");
-                    }
-                    _ => {
-                        return Err(CodegenError::UnsupportedOp {
-                            op_name: b"MmioVolStore",
-                        })
-                    }
-                }
+                self.emit_riscv_rmw_or_plain_store(bits, write_kind)?;
+                self.emit_mmio_barrier_after(barrier);
                 Ok(())
             }
             lir::OpKind::MmioVolLoadField {
@@ -665,67 +675,11 @@ impl<'a> RiscVBackend<'a> {
                 place: _,
                 mask,
                 shift,
+                read_kind: _,
+                atomic_max: _,
+                barrier,
             } => {
-                let (rbits, _) =
-                    prim_bits_signed(_w, reg_ty).ok_or(CodegenError::UnsupportedOp {
-                        op_name: b"MmioVolLoadField",
-                    })?;
-                let (fbits, f_signed) =
-                    prim_bits_signed(_w, field_ty).ok_or(CodegenError::UnsupportedOp {
-                        op_name: b"MmioVolLoadField",
-                    })?;
-                // Pop address
-                self.out.write(b"\taddi s2, s2, -8\n\tlw a0, 0(s2)\n");
-                match rbits {
-                    32 => self.out.write(b"\tlw a0, 0(a0)\n"),
-                    64 => self.out.write(b"\tlw a0, 0(a0)\n\tlw a1, 4(a0)\n"),
-                    _ => {
-                        return Err(CodegenError::UnsupportedOp {
-                            op_name: b"MmioVolLoadField",
-                        })
-                    }
-                }
-                // Apply shift (right-shift field to LSB)
-                if shift > 0 {
-                    self.out.write(b"\tsrli a0, a0, ");
-                    write_u32(self.out, shift as u32);
-                    self.out.write(b"\n");
-                    if rbits == 64 {
-                        self.out.write(b"\tslli a1, a1, ");
-                        write_u32(self.out, (32 - shift) as u32);
-                        self.out.write(b"\n\tslli a1, a1, ");
-                        write_u32(self.out, shift as u32);
-                        self.out.write(b"\n\tsrli a1, a1, ");
-                        write_u32(self.out, shift as u32);
-                        self.out.write(b"\n");
-                    }
-                }
-                // Apply mask
-                if rbits == 32 {
-                    let mask32 = (mask as u32) >> shift;
-                    if mask32 != 0xFFFFFFFF {
-                        self.out.write(b"\tli a2, ");
-                        write_hex(self.out, mask32);
-                        self.out.write(b"\n\tand a0, a0, a2\n");
-                    }
-                }
-                // Sign-extend field value if needed
-                if fbits < 64 {
-                    if f_signed {
-                        let sh = 32 - fbits;
-                        self.out.write(b"\tslli a0, a0, ");
-                        write_u32(self.out, sh as u32);
-                        self.out.write(b"\n\tsrai a0, a0, ");
-                        write_u32(self.out, sh as u32);
-                        self.out.write(b"\n");
-                        self.out.write(b"\tsrai a1, a0, 31\n");
-                    } else {
-                        self.out.write(b"\tli a1, 0\n");
-                    }
-                }
-                self.out
-                    .write(b"\tsw a0, 0(s2)\n\tsw a1, 4(s2)\n\taddi s2, s2, 8\n");
-                self.emit_ds_high_update();
+                self.emit_riscv_load_field(_w, reg_ty, field_ty, mask, shift, barrier)?;
                 Ok(())
             }
             lir::OpKind::MmioVolStoreField {
@@ -734,31 +688,12 @@ impl<'a> RiscVBackend<'a> {
                 place: _,
                 mask,
                 shift,
+                write_kind: _,
+                read_kind,
+                atomic_max: _,
+                barrier,
             } => {
-                let (fbits, _) =
-                    prim_bits_signed(_w, field_ty).ok_or(CodegenError::UnsupportedOp {
-                        op_name: b"MmioVolStoreField",
-                    })?;
-                // Pop value (a0 = low word), pop address (a2)
-                self.out
-                    .write(b"\taddi s2, s2, -8\n\tlw a0, 0(s2)\n\tlw a1, 4(s2)\n");
-                let _ = fbits; // suppress warning; value in a0 (a1 is the string literal, not a rust variable)
-                self.out.write(b"\taddi s2, s2, -8\n\tlw a2, 0(s2)\n");
-                // Load current register value
-                self.out.write(b"\tlw a3, 0(a2)\n");
-                // Clear field bits
-                let shifted_mask = mask.wrapping_shl(shift as u32) & 0xFFFFFFFF;
-                let clear = (!shifted_mask) & 0xFFFFFFFF;
-                self.out.write(b"\tli a1, ");
-                write_hex(self.out, clear as u32);
-                self.out.write(b"\n\tand a3, a3, a1\n");
-                // Shift value to field position and OR
-                if shift > 0 {
-                    self.out.write(b"\tslli a0, a0, ");
-                    write_u32(self.out, shift as u32);
-                    self.out.write(b"\n");
-                }
-                self.out.write(b"\tor a3, a3, a0\n\tsw a3, 0(a2)\n");
+                self.emit_riscv_store_field(_w, field_ty, mask, shift, read_kind, barrier)?;
                 Ok(())
             }
             lir::OpKind::CheckSubtype { .. } => Err(CodegenError::UnsupportedCheckSubtype),
@@ -802,6 +737,85 @@ impl<'a> RiscVBackend<'a> {
         self.out.write(b":\n");
     }
 
+    /// Barrier before a volatile access (D-9): `fence iorw, iorw` for
+    /// Before|Both.
+    fn emit_mmio_barrier_before(&mut self, barrier: lir::BarrierKind) {
+        if matches!(barrier, lir::BarrierKind::Before | lir::BarrierKind::Both) {
+            self.out.write(b"\tfence iorw, iorw\n");
+        }
+    }
+
+    /// Barrier after a volatile access (D-9): `fence iorw, iorw` for
+    /// After|Both.
+    fn emit_mmio_barrier_after(&mut self, barrier: lir::BarrierKind) {
+        if matches!(barrier, lir::BarrierKind::After | lir::BarrierKind::Both) {
+            self.out.write(b"\tfence iorw, iorw\n");
+        }
+    }
+
+    /// Emit the store body for `MmioVolStore`: a plain store, or a
+    /// read-modify-write for w1s/w1c (D-3, §5.6 matrix). Assumes value in
+    /// a0:a1 and address in a2.
+    fn emit_riscv_rmw_or_plain_store(
+        &mut self,
+        bits: u16,
+        write_kind: lir::WriteKind,
+    ) -> Result<(), CodegenError> {
+        match write_kind {
+            lir::WriteKind::Plain => {
+                match bits {
+                    8 => self.out.write(b"\tsb a0, 0(a2)\n"),
+                    16 => self.out.write(b"\tsh a0, 0(a2)\n"),
+                    32 => self.out.write(b"\tsw a0, 0(a2)\n"),
+                    64 => {
+                        self.out.write(b"\tsw a0, 0(a2)\n\tsw a1, 4(a2)\n");
+                    }
+                    _ => {
+                        return Err(CodegenError::UnsupportedOp {
+                            op_name: b"MmioVolStore",
+                        })
+                    }
+                }
+                Ok(())
+            }
+            lir::WriteKind::W1s | lir::WriteKind::W1c => {
+                let load: &[u8] = match bits {
+                    8 => &b"\tlbu a3, 0(a2)\n"[..],
+                    16 => &b"\tlhu a3, 0(a2)\n"[..],
+                    32 => &b"\tlw a3, 0(a2)\n"[..],
+                    _ => {
+                        return Err(CodegenError::UnsupportedOp {
+                            op_name: b"MmioVolStore",
+                        })
+                    }
+                };
+                self.out.write(load);
+                match bits {
+                    8 => self.out.write(b"\tandi a0, a0, 255\n"),
+                    16 => self.out.write(b"\tli a4, 65535\n\tand a0, a0, a4\n"),
+                    _ => {}
+                }
+                match write_kind {
+                    lir::WriteKind::W1s => self.out.write(b"\tor a3, a3, a0\n"),
+                    lir::WriteKind::W1c => self.out.write(b"\tnot a0, a0\n\tand a3, a3, a0\n"),
+                    lir::WriteKind::Plain => {} // unreachable: outer guard
+                }
+                let store: &[u8] = match bits {
+                    8 => &b"\tsb a3, 0(a2)\n"[..],
+                    16 => &b"\tsh a3, 0(a2)\n"[..],
+                    32 => &b"\tsw a3, 0(a2)\n"[..],
+                    _ => {
+                        return Err(CodegenError::UnsupportedOp {
+                            op_name: b"MmioVolStore",
+                        })
+                    }
+                };
+                self.out.write(store);
+                Ok(())
+            }
+        }
+    }
+
     fn emit_load_symbol_addr(&mut self, reg: &[u8], sym: &[u8]) {
         let id = self.fresh_label();
         self.out.write(b".Laddr_load_");
@@ -825,6 +839,115 @@ impl<'a> RiscVBackend<'a> {
         self.out.write(b"\n.Laddr_after_");
         write_u32(self.out, id);
         self.out.write(b":\n");
+    }
+
+    /// Load a register and extract a bitfield (mask+shift).
+    fn emit_riscv_load_field(
+        &mut self,
+        _w: &lir::Word,
+        reg_ty: lir::TypeId,
+        field_ty: lir::TypeId,
+        mask: u64,
+        shift: u8,
+        barrier: lir::BarrierKind,
+    ) -> Result<(), CodegenError> {
+        let (rbits, _) = prim_bits_signed(_w, reg_ty).ok_or(CodegenError::UnsupportedOp {
+            op_name: b"MmioVolLoadField",
+        })?;
+        let (fbits, f_signed) = prim_bits_signed(_w, field_ty).ok_or(CodegenError::UnsupportedOp {
+            op_name: b"MmioVolLoadField",
+        })?;
+        self.emit_mmio_barrier_before(barrier);
+        self.out.write(b"\taddi s2, s2, -8\n\tlw a0, 0(s2)\n");
+        match rbits {
+            32 => self.out.write(b"\tlw a0, 0(a0)\n"),
+            64 => self.out.write(b"\tlw a0, 0(a0)\n\tlw a1, 4(a0)\n"),
+            _ => {
+                return Err(CodegenError::UnsupportedOp {
+                    op_name: b"MmioVolLoadField",
+                })
+            }
+        }
+        if shift > 0 {
+            self.out.write(b"\tsrli a0, a0, ");
+            write_u32(self.out, shift as u32);
+            self.out.write(b"\n");
+            if rbits == 64 {
+                self.out.write(b"\tslli a1, a1, ");
+                write_u32(self.out, (32 - shift) as u32);
+                self.out.write(b"\n\tslli a1, a1, ");
+                write_u32(self.out, shift as u32);
+                self.out.write(b"\n\tsrli a1, a1, ");
+                write_u32(self.out, shift as u32);
+                self.out.write(b"\n");
+            }
+        }
+        if rbits == 32 {
+            let mask32 = (mask as u32) >> shift;
+            if mask32 != 0xFFFFFFFF {
+                self.out.write(b"\tli a2, ");
+                write_hex(self.out, mask32);
+                self.out.write(b"\n\tand a0, a0, a2\n");
+            }
+        }
+        if fbits < 64 {
+            if f_signed {
+                let sh = 32 - fbits;
+                self.out.write(b"\tslli a0, a0, ");
+                write_u32(self.out, sh as u32);
+                self.out.write(b"\n\tsrai a0, a0, ");
+                write_u32(self.out, sh as u32);
+                self.out.write(b"\n");
+                self.out.write(b"\tsrai a1, a0, 31\n");
+            } else {
+                self.out.write(b"\tli a1, 0\n");
+            }
+        }
+        self.emit_mmio_barrier_after(barrier);
+        self.out
+            .write(b"\tsw a0, 0(s2)\n\tsw a1, 4(s2)\n\taddi s2, s2, 8\n");
+        self.emit_ds_high_update();
+        Ok(())
+    }
+
+    /// Store a bitfield into a register via load-modify-write. Rejects an
+    /// effectful register (R1/E3642, defensive — the typechecker catches it).
+    fn emit_riscv_store_field(
+        &mut self,
+        _w: &lir::Word,
+        field_ty: lir::TypeId,
+        mask: u64,
+        shift: u8,
+        read_kind: lir::ReadKind,
+        barrier: lir::BarrierKind,
+    ) -> Result<(), CodegenError> {
+        if read_kind == lir::ReadKind::Effectful {
+            return Err(CodegenError::UnsupportedOp {
+                op_name: b"MmioVolStoreField",
+            });
+        }
+        let (fbits, _) = prim_bits_signed(_w, field_ty).ok_or(CodegenError::UnsupportedOp {
+            op_name: b"MmioVolStoreField",
+        })?;
+        let _ = fbits;
+        self.emit_mmio_barrier_before(barrier);
+        self.out
+            .write(b"\taddi s2, s2, -8\n\tlw a0, 0(s2)\n\tlw a1, 4(s2)\n");
+        self.out.write(b"\taddi s2, s2, -8\n\tlw a2, 0(s2)\n");
+        self.out.write(b"\tlw a3, 0(a2)\n");
+        let shifted_mask = mask.wrapping_shl(shift as u32) & 0xFFFFFFFF;
+        let clear = (!shifted_mask) & 0xFFFFFFFF;
+        self.out.write(b"\tli a1, ");
+        write_hex(self.out, clear as u32);
+        self.out.write(b"\n\tand a3, a3, a1\n");
+        if shift > 0 {
+            self.out.write(b"\tslli a0, a0, ");
+            write_u32(self.out, shift as u32);
+            self.out.write(b"\n");
+        }
+        self.out.write(b"\tor a3, a3, a0\n\tsw a3, 0(a2)\n");
+        self.emit_mmio_barrier_after(barrier);
+        Ok(())
     }
 
     /// 64-bit subtraction with correct borrow detection.

@@ -23,6 +23,7 @@ __lang_call_loaded_main:
     push {lr}
     ldr r4, =__lang_ds_base
     ldr r5, =__lang_ds_limit
+    orr r0, r0, #1
     blx r0
     subs r4, r4, #8
     ldr r0, [r4]

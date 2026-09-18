@@ -92,5 +92,29 @@ registers = [
   { offset = 0x08, name = "D", width = 64, access = "rw" },
 ]
 
+[[platform.devices]]
+map = "Strategy"
+instance = "strategy"
+window = 0
+base_offset = 0x0
+registers = [
+  { offset = 0x00, name = "CTRL", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x04, name = "STATUS", width = 32, access = "rw", write_kind = "w1c", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x08, name = "SETBITS", width = 32, access = "rw", write_kind = "w1s", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x10, name = "FIFO", width = 8, access = "rw", write_kind = "plain", read_kind = "effectful", atomic_max = 8 },
+  { offset = 0x14, name = "FIFO32", width = 32, access = "rw", write_kind = "plain", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x18, name = "SETEFF", width = 32, access = "rw", write_kind = "w1s", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x20, name = "WIDEW", width = 64, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+]
+
+[[platform.devices]]
+map = "StrategySeed"
+instance = "strategy_seed"
+window = 0
+base_offset = 0x0
+registers = [
+  { offset = 0x04, name = "STATUS", width = 32, access = "rw" },
+]
+
 [platform.metal.trust]
 words = []

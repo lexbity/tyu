@@ -132,3 +132,70 @@ fn symbolic_compile_succeeds() {
         "valid symbolic MMIO must compile, got: {stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// P5 (D-3): register access semantics negatives — R1 (E3642), R2 (E3643).
+// The hosted descriptor's `Strategy` device declares STATUS (w1c, atomic_max
+// 32), SETBITS (w1s) and FIFO32 (effectful-read).
+
+const E3642_FIELD_STORE_ON_EFFECTFUL: &str = "module Main;\n\
+register-map Strategy\n\
+  0x14 FIFO32 u32 rw { foo 0..16 u16 rw }\n\
+end;\n\
+const strategy = Strategy @ board.strategy;\n\
+: store ( -- )\n\
+  strategy.FIFO32.foo 0x1 as u16 !\n\
+;\n\
+end;\n";
+
+#[test]
+fn e3642_field_store_on_effectful() {
+    // A field store is inherently read-modify-write; on an effectful register
+    // the RMW's read is a phantom bus read (rule R1).
+    let stderr = compile_ir(E3642_FIELD_STORE_ON_EFFECTFUL, Some(hosted_desc_dir().to_str().unwrap()));
+    assert!(
+        stderr.contains("E3642"),
+        "field store on an effectful register must be E3642, got: {stderr}"
+    );
+}
+
+const E3643_OVER_WIDE_64_BIT: &str = "module Main;\n\
+register-map Strategy\n\
+  0x20 WIDEW u64 rw\n\
+end;\n\
+const strategy = Strategy @ board.strategy;\n\
+: store ( -- )\n\
+  &!strategy.WIDEW 0x1234 as u64 !u64\n\
+;\n\
+end;\n";
+
+#[test]
+fn e3643_over_wide_access() {
+    // STATUS is atomic_max=32; a 64-bit access is over-wide (rule R2).
+    let stderr = compile_ir(E3643_OVER_WIDE_64_BIT, Some(hosted_desc_dir().to_str().unwrap()));
+    assert!(
+        stderr.contains("E3643"),
+        "64-bit access on an atomic_max=32 register must be E3643, got: {stderr}"
+    );
+}
+
+#[test]
+fn e3642_w1s_store_on_effectful() {
+    // A w1s/w1c store is also a read-modify-write; on an effectful register
+    // it is E3642 (rule R1). The hosted descriptor's SETEFF register is
+    // w1s + effectful-read.
+    let src = "module Main;\n\
+register-map Strategy\n\
+  0x18 SETEFF u32 rw\n\
+end;\n\
+const strategy = Strategy @ board.strategy;\n\
+: store ( -- )\n\
+  &!strategy.SETEFF 0x1 as u32 !u32\n\
+;\n\
+end;\n";
+    let stderr = compile_ir(src, Some(hosted_desc_dir().to_str().unwrap()));
+    assert!(
+        stderr.contains("E3642"),
+        "w1s store on an effectful register must be E3642, got: {stderr}"
+    );
+}

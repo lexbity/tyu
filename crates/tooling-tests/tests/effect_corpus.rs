@@ -358,6 +358,20 @@ fn e5001_suspend_forbidden() {
     );
 }
 
+/// Invariant I-1 (design doc §5.10): a word performing the `{mmio}` effect
+/// must not be able to yield/suspend — the RMW sequence must never interleave
+/// a yield. The effect system rejects it (no SUSPENDABLE capability) before
+/// any lowering exists.
+#[test]
+fn i1_mmio_word_cannot_suspend() {
+    assert_tc_fails_with(
+        "module Main;\n\
+         : foo ( -- ) performs {mmio} platform.task.yield ;\n\
+         end;\n",
+        5001,
+    );
+}
+
 #[test]
 fn e5002_lock_nest() {
     assert_ir_fails_with(

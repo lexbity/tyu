@@ -231,3 +231,30 @@ impl<'a> CodegenBackend for RiscVBackend<'a> {
         self.expected_abi_hash = hash;
     }
 }
+
+/// Classify every `(strategy, window-kind, op)` MMIO combination for the
+/// RISC-V backend (design doc §5.6 matrix). RISC-V has only bus windows;
+/// emulated-window combos are structurally `Unsupported`. Loads are plain
+/// regardless of the write strategy; w1s/w1c stores lower to RMW.
+pub fn mmio_cell(
+    strategy: ir::WriteKind,
+    kind: ir::WindowKind,
+    op: codegen_core::strategy::MmioOp,
+) -> codegen_core::strategy::StrategyCell {
+    use codegen_core::strategy::{MmioOp, StrategyCell};
+    use ir::{WindowKind, WriteKind};
+    match kind {
+        WindowKind::Emulated => StrategyCell::Unsupported {
+            reason: "no emulated windows on RISC-V",
+        },
+        WindowKind::Bus => match op {
+            MmioOp::Load | MmioOp::LoadField => StrategyCell::Supported { pattern: "l*" },
+            MmioOp::Store => match strategy {
+                WriteKind::Plain => StrategyCell::Supported { pattern: "s*" },
+                WriteKind::W1c => StrategyCell::Supported { pattern: "RMW and" },
+                WriteKind::W1s => StrategyCell::Supported { pattern: "RMW or" },
+            },
+            MmioOp::StoreField => StrategyCell::Supported { pattern: "RMW field" },
+        },
+    }
+}

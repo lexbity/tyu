@@ -1,0 +1,114 @@
+# arm MMIO strategy matrix (design doc §5.6)
+plain  bus       ld        ldr*
+plain  bus       st        str*
+plain  bus       field-ld  ldr*
+plain  bus       field-st  RMW field
+plain  emulated  ld        no emulated windows on ARM
+plain  emulated  st        no emulated windows on ARM
+plain  emulated  field-ld  no emulated windows on ARM
+plain  emulated  field-st  no emulated windows on ARM
+w1s    bus       ld        ldr*
+w1s    bus       st        RMW orr
+w1s    bus       field-ld  ldr*
+w1s    bus       field-st  RMW field
+w1s    emulated  ld        no emulated windows on ARM
+w1s    emulated  st        no emulated windows on ARM
+w1s    emulated  field-ld  no emulated windows on ARM
+w1s    emulated  field-st  no emulated windows on ARM
+w1c    bus       ld        ldr*
+w1c    bus       st        RMW bic
+w1c    bus       field-ld  ldr*
+w1c    bus       field-st  RMW field
+w1c    emulated  ld        no emulated windows on ARM
+w1c    emulated  st        no emulated windows on ARM
+w1c    emulated  field-ld  no emulated windows on ARM
+w1c    emulated  field-st  no emulated windows on ARM
+# compile-time guards (all backends, any strategy / window kind)
+any any field-st-on-effectful E3642 phantom-read (R1)
+any any access-over-atomic_max E3643 over-wide (R2)
+
+# fixture coverage (crates/execution-tests/fixtures)
+#   plain  bus       ld/st      mmio_smoke_{arm,riscv}
+#   w1s    bus       st         mmio_strategies_{arm,riscv} (RMW or/orr)
+#   w1c    bus       st         mmio_strategies_{arm,riscv} (RMW and/bic)
+#   field-ld/st       bus       mmio_strategies_* (FIFO32 field via brace block)
+#   plain  emulated  ld/st      mmio_smoke_x86
+#   w1s/w1c emulated st         mmio_strategies_x86 (RMW or / RMW andn)
+#   E3642  any        field-st-on-effectful  platform_resolution::e3642_*
+#   E3643  any        over-atomic_max        platform_resolution::e3643_over_wide
+# riscv MMIO strategy matrix (design doc §5.6)
+plain  bus       ld        l*
+plain  bus       st        s*
+plain  bus       field-ld  l*
+plain  bus       field-st  RMW field
+plain  emulated  ld        no emulated windows on RISC-V
+plain  emulated  st        no emulated windows on RISC-V
+plain  emulated  field-ld  no emulated windows on RISC-V
+plain  emulated  field-st  no emulated windows on RISC-V
+w1s    bus       ld        l*
+w1s    bus       st        RMW or
+w1s    bus       field-ld  l*
+w1s    bus       field-st  RMW field
+w1s    emulated  ld        no emulated windows on RISC-V
+w1s    emulated  st        no emulated windows on RISC-V
+w1s    emulated  field-ld  no emulated windows on RISC-V
+w1s    emulated  field-st  no emulated windows on RISC-V
+w1c    bus       ld        l*
+w1c    bus       st        RMW and
+w1c    bus       field-ld  l*
+w1c    bus       field-st  RMW field
+w1c    emulated  ld        no emulated windows on RISC-V
+w1c    emulated  st        no emulated windows on RISC-V
+w1c    emulated  field-ld  no emulated windows on RISC-V
+w1c    emulated  field-st  no emulated windows on RISC-V
+# compile-time guards (all backends, any strategy / window kind)
+any any field-st-on-effectful E3642 phantom-read (R1)
+any any access-over-atomic_max E3643 over-wide (R2)
+
+# fixture coverage (crates/execution-tests/fixtures)
+#   plain  bus       ld/st      mmio_smoke_{arm,riscv}
+#   w1s    bus       st         mmio_strategies_{arm,riscv} (RMW or/orr)
+#   w1c    bus       st         mmio_strategies_{arm,riscv} (RMW and/bic)
+#   field-ld/st       bus       mmio_strategies_* (FIFO32 field via brace block)
+#   plain  emulated  ld/st      mmio_smoke_x86
+#   w1s/w1c emulated st         mmio_strategies_x86 (RMW or / RMW andn)
+#   E3642  any        field-st-on-effectful  platform_resolution::e3642_*
+#   E3643  any        over-atomic_max        platform_resolution::e3643_over_wide
+# x86_64 MMIO strategy matrix (design doc §5.6)
+plain  bus       ld        no bus windows on x86 targets today
+plain  bus       st        no bus windows on x86 targets today
+plain  bus       field-ld  no bus windows on x86 targets today
+plain  bus       field-st  no bus windows on x86 targets today
+plain  emulated  ld        mov
+plain  emulated  st        mov
+plain  emulated  field-ld  mov
+plain  emulated  field-st  RMW field
+w1s    bus       ld        no bus windows on x86 targets today
+w1s    bus       st        no bus windows on x86 targets today
+w1s    bus       field-ld  no bus windows on x86 targets today
+w1s    bus       field-st  no bus windows on x86 targets today
+w1s    emulated  ld        mov
+w1s    emulated  st        RMW or
+w1s    emulated  field-ld  mov
+w1s    emulated  field-st  RMW field
+w1c    bus       ld        no bus windows on x86 targets today
+w1c    bus       st        no bus windows on x86 targets today
+w1c    bus       field-ld  no bus windows on x86 targets today
+w1c    bus       field-st  no bus windows on x86 targets today
+w1c    emulated  ld        mov
+w1c    emulated  st        RMW andn
+w1c    emulated  field-ld  mov
+w1c    emulated  field-st  RMW field
+# compile-time guards (all backends, any strategy / window kind)
+any any field-st-on-effectful E3642 phantom-read (R1)
+any any access-over-atomic_max E3643 over-wide (R2)
+
+# fixture coverage (crates/execution-tests/fixtures)
+#   plain  bus       ld/st      mmio_smoke_{arm,riscv}
+#   w1s    bus       st         mmio_strategies_{arm,riscv} (RMW or/orr)
+#   w1c    bus       st         mmio_strategies_{arm,riscv} (RMW and/bic)
+#   field-ld/st       bus       mmio_strategies_* (FIFO32 field via brace block)
+#   plain  emulated  ld/st      mmio_smoke_x86
+#   w1s/w1c emulated st         mmio_strategies_x86 (RMW or / RMW andn)
+#   E3642  any        field-st-on-effectful  platform_resolution::e3642_*
+#   E3643  any        over-atomic_max        platform_resolution::e3643_over_wide

@@ -150,3 +150,25 @@ file = "mmio_smoke_riscv.mod"
 axes = ["mmio"]
 requires = []
 targets = ["riscv32-unknown-none"]
+
+[[fixture]]
+name = "mmio_strategies_x86"
+file = "mmio_strategies_x86.mod"
+axes = ["mmio"]
+requires = []
+targets = ["x86_64-unknown-none"]
+
+[[fixture]]
+name = "mmio_strategies_arm"
+file = "mmio_strategies_arm.mod"
+axes = ["mmio"]
+requires = []
+targets = ["armv7m-unknown-none"]
+
+[[fixture]]
+name = "mmio_strategies_riscv"
+file = "mmio_strategies_riscv.mod"
+axes = ["mmio"]
+requires = []
+targets = ["riscv32-unknown-none"]
+

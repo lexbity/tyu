@@ -353,6 +353,21 @@ pub enum TcError {
     MmioRowMissingFromDescriptor {
         span: Span,
     },
+    /// R1 (D-3): an access that lowers to a read-modify-write on an
+    /// `effectful` register would perform a phantom bus read (E3642).
+    MmioPhantomRead {
+        span: Span,
+    },
+    /// R2 (D-3): an access wider than the register's `atomic_max` (E3643).
+    MmioOverWideAccess {
+        span: Span,
+    },
+    /// A descriptor names a register-access kind this compiler does not
+    /// understand (E3646): forward-compat refusal — the descriptor was written
+    /// against a newer registry than this toolchain.
+    MmioUnknownRegisterKind {
+        span: Span,
+    },
 
     // 3700-3718: Struct/Enum
     DestructBorrowMix {
@@ -689,6 +704,9 @@ impl TcError {
             TcError::MmioBoardInstanceNotFound { .. } => 3644,
             TcError::MmioRowDivergesFromDescriptor { .. } => 3647,
             TcError::MmioRowMissingFromDescriptor { .. } => 3647,
+            TcError::MmioPhantomRead { .. } => 3642,
+            TcError::MmioOverWideAccess { .. } => 3643,
+            TcError::MmioUnknownRegisterKind { .. } => 3646,
             TcError::DestructBorrowMix { .. } => 3701,
             TcError::DestructExpectedIdent { .. } => 3702,
             TcError::DestructEmpty { .. } => 3703,
@@ -869,6 +887,9 @@ impl TcError {
             | TcError::MmioBoardInstanceNotFound { span }
             | TcError::MmioRowDivergesFromDescriptor { span }
             | TcError::MmioRowMissingFromDescriptor { span }
+            | TcError::MmioPhantomRead { span }
+            | TcError::MmioOverWideAccess { span }
+            | TcError::MmioUnknownRegisterKind { span }
             | TcError::IsrCapacityExceeded { span }
             | TcError::DestructBorrowMix { span }
             | TcError::DestructExpectedIdent { span }

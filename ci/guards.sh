@@ -479,6 +479,20 @@ else
     failures=$((failures + 1))
 fi
 
+# --- G16: ARM on-device loader forces the Thumb bit before `blx` (P5 fix) ---
+# The loader resolves module functions to an even `code_base`; Cortex-M is
+# Thumb-only, so a `blx` to an even address switches to (nonexistent) ARM
+# state → `v7M INVSTATE`. The dynamic-entry glue must OR the Thumb bit in, and
+# the loader must stamp it on module function addresses by construction.
+thumb_orr=$(grep -B1 "blx r0" platforms/armv7m-unknown-none/metal/dynamic_entry.asm | grep -c "orr r0, r0, #1" || true)
+loader_thmb_hits=$(grep -c "module_fn_addr" crates/loader-core/src/load.rs || true)
+if [ "$thumb_orr" -ge 1 ] && [ "$loader_thmb_hits" -ge 2 ]; then
+    msg $GREEN "  G16: ARM on-device loader forces the Thumb bit before blx (INVSTATE fix)"
+else
+    msg $RED "  G16 FAIL: ARM dynamic loader Thumb-bit protection missing (blx to even address faults)"
+    failures=$((failures + 1))
+fi
+
 echo ""
 msg $GREEN "============================================"
 msg $GREEN "Per-package test counts:"

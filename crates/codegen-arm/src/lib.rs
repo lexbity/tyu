@@ -250,3 +250,30 @@ impl<'a> CodegenBackend for ArmThumbBackend<'a> {
         self.expected_abi_hash = hash;
     }
 }
+
+/// Classify every `(strategy, window-kind, op)` MMIO combination for the ARM
+/// backend (design doc §5.6 matrix). ARM has only bus windows; emulated-window
+/// combos are structurally `Unsupported`. Loads are plain regardless of the
+/// write strategy; w1s/w1c stores lower to read-modify-write.
+pub fn mmio_cell(
+    strategy: ir::WriteKind,
+    kind: ir::WindowKind,
+    op: codegen_core::strategy::MmioOp,
+) -> codegen_core::strategy::StrategyCell {
+    use codegen_core::strategy::{MmioOp, StrategyCell};
+    use ir::{WindowKind, WriteKind};
+    match kind {
+        WindowKind::Emulated => StrategyCell::Unsupported {
+            reason: "no emulated windows on ARM",
+        },
+        WindowKind::Bus => match op {
+            MmioOp::Load | MmioOp::LoadField => StrategyCell::Supported { pattern: "ldr*" },
+            MmioOp::Store => match strategy {
+                WriteKind::Plain => StrategyCell::Supported { pattern: "str*" },
+                WriteKind::W1c => StrategyCell::Supported { pattern: "RMW bic" },
+                WriteKind::W1s => StrategyCell::Supported { pattern: "RMW orr" },
+            },
+            MmioOp::StoreField => StrategyCell::Supported { pattern: "RMW field" },
+        },
+    }
+}

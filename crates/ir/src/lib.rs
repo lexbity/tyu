@@ -16,7 +16,7 @@ pub use contract::{abi_hash, CapSet, Context, EffectSet, High, StackBound, ABI_C
 /// consumer of the text format (golden tooling, corpus tooling, the future
 /// Lean-side parser) checks the first emitted line against this constant and
 /// fails fast on mismatch.
-pub const FORMAT_VER: u32 = 4;
+pub const FORMAT_VER: u32 = 5;
 
 /// A `format_ver` header that does not match this reader's [`FORMAT_VER`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -560,11 +560,19 @@ pub enum OpKind {
     MmioVolLoad {
         ty: TypeId,
         place: Atom,
+        /// Whether this load has side effects on the device (D-3, R1).
+        read_kind: ReadKind,
+        /// Widest single-undeclared-access width (D-3, R2).
+        atomic_max: u8,
+        barrier: BarrierKind,
     },
     MmioVolStore {
         ty: TypeId,
         place: Atom,
-        access: MmioAccess,
+        write_kind: WriteKind,
+        read_kind: ReadKind,
+        atomic_max: u8,
+        barrier: BarrierKind,
     },
     MmioVolLoadField {
         reg_ty: TypeId,
@@ -572,6 +580,9 @@ pub enum OpKind {
         place: Atom,
         mask: u64,
         shift: u8,
+        read_kind: ReadKind,
+        atomic_max: u8,
+        barrier: BarrierKind,
     },
     MmioVolStoreField {
         reg_ty: TypeId,
@@ -579,6 +590,10 @@ pub enum OpKind {
         place: Atom,
         mask: u64,
         shift: u8,
+        write_kind: WriteKind,
+        read_kind: ReadKind,
+        atomic_max: u8,
+        barrier: BarrierKind,
     },
 
     // Produces `bool` while preserving the value (so `trap_if_false` can consume the bool).
@@ -610,19 +625,38 @@ pub enum CmpKind {
     Ne,
 }
 
-/// MMIO register access mode, describing how reads and writes behave.
-/// This is a subset of the full `AccessMode` from the semantics crate,
-/// defined here so the IR and codegen can make code-generation decisions
-/// without depending on the semantics crate.
+/// What a *store* does to the register (decision D-3, design doc §5.2).
+/// Replaces the former `MmioAccess` (its `Rw` is `Plain` here).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum MmioAccess {
-    /// Read-write: plain load/store.
-    Rw,
+pub enum WriteKind {
+    /// Plain store.
+    Plain,
     /// Write-1-to-clear: writing 1 clears the bit; writing 0 has no effect.
     W1c,
     /// Write-1-to-set: writing 1 sets the bit; writing 0 has no effect.
     W1s,
 }
+
+/// Whether a *load* has side effects on the device (D-3 rule R1).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReadKind {
+    Plain,
+    Effectful,
+}
+
+/// Ordering requirement of an access vs code around it (decision D-9).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BarrierKind {
+    None,
+    Before,
+    After,
+    Both,
+}
+
+/// Semantics version of the register-access model (D-2/D-3). Folded into
+/// `platform_hash` so a semantics evolution can never masquerade as a match.
+/// Mirrors the descriptor-side `MMIO_SEM_VER` in the platform pack.
+pub const MMIO_SEM_VER: u32 = 1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Op {
@@ -711,6 +745,8 @@ pub enum VerifyError {
     ScopedEnterTypeNotScoped { span: Span },
     MmioWindowOutOfRange { span: Span },
     MmioPlaceOutOfBounds { span: Span },
+    MmioPhantomRead { span: Span },
+    MmioOverWideAccess { span: Span },
 }
 
 impl VerifyError {
@@ -748,6 +784,8 @@ impl VerifyError {
             VerifyError::ScopedEnterTypeNotScoped { .. } => 9036,
             VerifyError::MmioWindowOutOfRange { .. } => 9037,
             VerifyError::MmioPlaceOutOfBounds { .. } => 9038,
+            VerifyError::MmioPhantomRead { .. } => 9040,
+            VerifyError::MmioOverWideAccess { .. } => 9041,
         }
     }
 
@@ -784,7 +822,9 @@ impl VerifyError {
             | VerifyError::PushFullStack { span }
             | VerifyError::ScopedEnterTypeNotScoped { span }
             | VerifyError::MmioWindowOutOfRange { span }
-            | VerifyError::MmioPlaceOutOfBounds { span } => span,
+            | VerifyError::MmioPlaceOutOfBounds { span }
+            | VerifyError::MmioPhantomRead { span }
+            | VerifyError::MmioOverWideAccess { span } => span,
         }
     }
 }
@@ -1055,7 +1095,12 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
                     return Err(VerifyError::StoreAddrNotMutPtr { span: op.span });
                 }
             }
-            OpKind::MmioVolLoad { ty, place } => {
+            OpKind::MmioVolLoad {
+                ty,
+                place,
+                atomic_max,
+                ..
+            } => {
                 let addr = pop(&mut stack, &mut sp, op.span)?;
                 if addr != TY_MMIO && addr != TY_PTR && addr != TY_PTR_MUT {
                     return Err(VerifyError::LoadAddrNotPtr { span: op.span });
@@ -1065,10 +1110,22 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
                     {
                         return Err(e);
                     }
+                    // R2 (D-3): no access wider than the register's atomic_max
+                    // (width in bytes, atomic_max in bits).
+                    if width * 8 > atomic_max as u32 {
+                        return Err(VerifyError::MmioOverWideAccess { span: op.span });
+                    }
                 }
                 push(&mut stack, &mut sp, ty, op.span)?;
             }
-            OpKind::MmioVolStore { ty, place, .. } => {
+            OpKind::MmioVolStore {
+                ty,
+                place,
+                write_kind,
+                read_kind,
+                atomic_max,
+                ..
+            } => {
                 let v = pop(&mut stack, &mut sp, op.span)?;
                 let addr = pop(&mut stack, &mut sp, op.span)?;
                 if v != ty {
@@ -1077,10 +1134,20 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
                 if addr != TY_MMIO && addr != TY_PTR_MUT {
                     return Err(VerifyError::StoreAddrNotMutPtr { span: op.span });
                 }
+                // R1 (D-3): a w1s/w1c store is a read-modify-write; on an
+                // effectful register that read is a phantom bus read.
+                if read_kind == ReadKind::Effectful
+                    && (write_kind == WriteKind::W1s || write_kind == WriteKind::W1c)
+                {
+                    return Err(VerifyError::MmioPhantomRead { span: op.span });
+                }
                 if let Some(width) = type_width_bytes(w, ty) {
                     if let Err(e) = check_site_bounds(w, &sites[..site_count], place, width, op.span)
                     {
                         return Err(e);
+                    }
+                    if width * 8 > atomic_max as u32 {
+                        return Err(VerifyError::MmioOverWideAccess { span: op.span });
                     }
                 }
             }
@@ -1088,6 +1155,7 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
                 reg_ty,
                 field_ty,
                 place,
+                atomic_max,
                 ..
             } => {
                 let pl = pop(&mut stack, &mut sp, op.span)?;
@@ -1099,21 +1167,41 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
                     {
                         return Err(e);
                     }
+                    if width * 8 > atomic_max as u32 {
+                        return Err(VerifyError::MmioOverWideAccess { span: op.span });
+                    }
                 }
                 push(&mut stack, &mut sp, field_ty, op.span)?;
             }
-            OpKind::MmioVolStoreField { reg_ty, field_ty, place, .. } => {
+            OpKind::MmioVolStoreField {
+                reg_ty,
+                field_ty,
+                place,
+                write_kind,
+                read_kind,
+                atomic_max,
+                ..
+            } => {
                 let v = pop(&mut stack, &mut sp, op.span)?;
                 let pl = pop(&mut stack, &mut sp, op.span)?;
                 if pl != TY_MMIO || v != field_ty {
                     return Err(VerifyError::MmioFieldTypeMismatch { span: op.span });
+                }
+                // R1: a field store is inherently read-modify-write; the read
+                // is a phantom bus read on an effectful register.
+                if read_kind == ReadKind::Effectful {
+                    return Err(VerifyError::MmioPhantomRead { span: op.span });
                 }
                 if let Some(width) = type_width_bytes(w, reg_ty) {
                     if let Err(e) = check_site_bounds(w, &sites[..site_count], place, width, op.span)
                     {
                         return Err(e);
                     }
+                    if width * 8 > atomic_max as u32 {
+                        return Err(VerifyError::MmioOverWideAccess { span: op.span });
+                    }
                 }
+                let _ = write_kind;
             }
             OpKind::CheckSubtype { ty } => {
                 let v = pop(&mut stack, &mut sp, op.span)?;
@@ -1469,22 +1557,37 @@ fn write_op(out: &mut impl Output, w: &Word, op: &Op) {
             out.write(b"store ");
             out.write(type_atom(w, ty).as_bytes());
         }
-        OpKind::MmioVolLoad { ty, place } => {
+        OpKind::MmioVolLoad {
+            ty,
+            place,
+            read_kind,
+            atomic_max,
+            barrier,
+        } => {
             out.write(b"vol_load ");
             out.write(type_atom(w, ty).as_bytes());
             out.write(b" ");
             out.write(place.as_bytes());
+            write_access_meta(out, read_kind, atomic_max, barrier);
         }
-        OpKind::MmioVolStore { ty, place, access } => {
+        OpKind::MmioVolStore {
+            ty,
+            place,
+            write_kind,
+            read_kind,
+            atomic_max,
+            barrier,
+        } => {
             out.write(b"vol_store ");
             out.write(type_atom(w, ty).as_bytes());
             out.write(b" ");
             out.write(place.as_bytes());
-            out.write(match access {
-                MmioAccess::W1c => b" w1c",
-                MmioAccess::W1s => b" w1s",
-                MmioAccess::Rw => b"",
+            out.write(match write_kind {
+                WriteKind::W1c => b" w1c",
+                WriteKind::W1s => b" w1s",
+                WriteKind::Plain => b"",
             });
+            write_access_meta(out, read_kind, atomic_max, barrier);
         }
         OpKind::MmioVolLoadField {
             reg_ty,
@@ -1492,6 +1595,9 @@ fn write_op(out: &mut impl Output, w: &Word, op: &Op) {
             place,
             mask,
             shift,
+            read_kind,
+            atomic_max,
+            barrier,
         } => {
             out.write(b"vol_load_field ");
             out.write(type_atom(w, field_ty).as_bytes());
@@ -1503,6 +1609,7 @@ fn write_op(out: &mut impl Output, w: &Word, op: &Op) {
             write_u64_hex(out, mask);
             out.write(b" shift=");
             write_u32(out, shift as u32);
+            write_access_meta(out, read_kind, atomic_max, barrier);
         }
         OpKind::MmioVolStoreField {
             reg_ty,
@@ -1510,6 +1617,10 @@ fn write_op(out: &mut impl Output, w: &Word, op: &Op) {
             place,
             mask,
             shift,
+            write_kind,
+            read_kind,
+            atomic_max,
+            barrier,
         } => {
             out.write(b"vol_store_field ");
             out.write(type_atom(w, field_ty).as_bytes());
@@ -1521,6 +1632,12 @@ fn write_op(out: &mut impl Output, w: &Word, op: &Op) {
             write_u64_hex(out, mask);
             out.write(b" shift=");
             write_u32(out, shift as u32);
+            out.write(match write_kind {
+                WriteKind::W1c => b" w1c",
+                WriteKind::W1s => b" w1s",
+                WriteKind::Plain => b"",
+            });
+            write_access_meta(out, read_kind, atomic_max, barrier);
         }
         OpKind::CheckSubtype { ty } => {
             out.write(b"check_subtype ");
@@ -1602,6 +1719,24 @@ fn write_addr_of_base(out: &mut impl Output, base: AddrOfBase) {
     }
 }
 
+/// The fused `read_kind/atomic/barrier` suffix on volatile-op lines (P5).
+fn write_access_meta(out: &mut impl Output, read_kind: ReadKind, atomic_max: u8, barrier: BarrierKind) {
+    if read_kind == ReadKind::Effectful {
+        out.write(b" effectful");
+    }
+    out.write(b" atomic=");
+    write_u32(out, atomic_max as u32);
+    if barrier != BarrierKind::None {
+        out.write(b" barrier=");
+        out.write(match barrier {
+            BarrierKind::None => b"none",
+            BarrierKind::Before => b"before",
+            BarrierKind::After => b"after",
+            BarrierKind::Both => b"both",
+        });
+    }
+}
+
 fn write_i64(out: &mut impl Output, v: i64) {
     if v == 0 {
         out.write(b"0");
@@ -1648,13 +1783,16 @@ fn write_u64_hex(out: &mut impl Output, mut v: u64) {
 #[cfg(test)]
 mod format_ver_tests {
     extern crate alloc;
+    use alloc::format;
     use alloc::string::ToString;
     use super::{check_format_ver, FormatVerMismatch, FORMAT_VER};
 
     #[test]
     fn accepts_current_version_with_trailing_newline() {
-        assert_eq!(check_format_ver(b"format_ver 4\nmodule M;"), Ok(()));
-        assert_eq!(check_format_ver(b"format_ver 4"), Ok(()));
+        let header = format!("format_ver {}\nmodule M;", FORMAT_VER);
+        assert_eq!(check_format_ver(header.as_bytes()), Ok(()));
+        let bare = format!("format_ver {}", FORMAT_VER);
+        assert_eq!(check_format_ver(bare.as_bytes()), Ok(()));
     }
 
     #[test]
@@ -1667,10 +1805,11 @@ mod format_ver_tests {
 
     #[test]
     fn rejects_newer_version_with_found_value() {
+        let newer = format!("format_ver {}\n", FORMAT_VER + 1);
         assert_eq!(
-            check_format_ver(b"format_ver 5\n"),
+            check_format_ver(newer.as_bytes()),
             Err(FormatVerMismatch {
-                found: Some(5)
+                found: Some((FORMAT_VER + 1) as u32)
             })
         );
     }
@@ -1697,8 +1836,7 @@ mod format_ver_tests {
         let e = check_format_ver(b"format_ver 3\n").unwrap_err();
         assert_eq!(
             e.to_string(),
-            "format mismatch: reader expects 4, artifact says 3"
+            format!("format mismatch: reader expects {FORMAT_VER}, artifact says 3")
         );
-        assert_eq!(FORMAT_VER, 4);
     }
 }

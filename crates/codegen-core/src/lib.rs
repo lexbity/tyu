@@ -6,10 +6,13 @@
 //! Key entry points include `Target`, `TargetSpec`, `AsmMode`,
 //! `AssemblerKind`, `FeatureSet`, `CodegenBackend`, and `CodegenError`.
 
+extern crate alloc;
+
 pub mod backend;
 pub mod compiled_desc;
 pub mod emit_mode;
 pub mod error;
+pub mod strategy;
 pub mod strings;
 pub mod target;
 pub mod tier;

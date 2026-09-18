@@ -50,11 +50,31 @@ pub struct MmioInstance {
     pub name: TypeAtom,
     pub map: TypeAtom,
     pub base: InstanceBase,
+    /// The descriptor device name from `@ board.<name>`, when symbolic (P5).
+    pub board: Option<TypeAtom>,
 }
 
 pub struct MmioDb {
     pub maps: FixedVec<MmioMapDecl, 16>,
     pub instances: FixedVec<MmioInstance, 64>,
+    /// Descriptor access meta per board *instance* (P5). The same register-map
+    /// name can be instantiated as several devices with different register
+    /// sets (e.g. `Scratch` @ scratch / datascratch), so the rows are keyed by
+    /// the instance name, not the map name.
+    pub reg_meta: FixedVec<InstanceAccessMeta, 64>,
+}
+
+/// Descriptor access rows for one board instance (P5).
+/// No derives: `FixedVec` is a plain aggregate.
+pub struct InstanceAccessMeta {
+    pub instance: TypeAtom,
+    pub rows: FixedVec<RegAccessMeta, 32>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RegAccessMeta {
+    pub offset: u32,
+    pub meta: MmioAccessMeta,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -65,6 +85,15 @@ pub struct MmioRegInfo {
     pub access: AccessMode,
     pub volatile: bool,
     pub array_len: Option<u32>,
+}
+
+/// Descriptor-derived register access meta (P5, D-3), attached at resolution.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MmioAccessMeta {
+    pub write_kind: ir::WriteKind,
+    pub read_kind: ir::ReadKind,
+    pub atomic_max: u8,
+    pub barrier: ir::BarrierKind,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -78,6 +107,8 @@ pub struct MmioResolvedReg {
     pub window: u16,
     pub offset: u32,
     pub array_len: Option<u32>,
+    /// Descriptor access semantics (P5).
+    pub meta: MmioAccessMeta,
     // The original source span of the whole place (e.g. `gpio.OUT_SET`).
     pub place_span: Span,
 }
@@ -93,6 +124,8 @@ pub struct MmioResolvedField {
     pub window: u16,
     pub offset: u32,
     pub array_len: Option<u32>,
+    /// Descriptor access semantics of the enclosing register (P5).
+    pub meta: MmioAccessMeta,
     pub place_span: Span,
 }
 
@@ -155,6 +188,7 @@ pub fn build_mmio_db(
     let mut db = MmioDb {
         maps: FixedVec::new(),
         instances: FixedVec::new(),
+        reg_meta: FixedVec::new(),
     };
 
     for inst in module.instances.iter() {
@@ -166,8 +200,31 @@ pub fn build_mmio_db(
         let map = TypeAtom::new(slice_span(src, inst.map))
             .ok_or(TcError::MmioNameInvalid { span: inst.map })?;
         let base = resolve_instance_base(inst, src, descriptor)?;
+        let board = inst
+            .board_instance
+            .map(|bs| {
+                TypeAtom::new(slice_span(src, bs)).ok_or(TcError::MmioNameInvalid { span: bs })
+            })
+            .transpose()?;
         db.instances
-            .push(MmioInstance { name, map, base })
+            .push(MmioInstance {
+                name,
+                map,
+                base,
+                board,
+            })
+            .map_err(|_| TcError::MmioInstanceCapacityExceeded { span: inst.name })?;
+        // P5: the board instance's device rows are this instance's
+        // authoritative register access semantics.
+        let rows = match (&board, descriptor) {
+            (Some(b), Some(desc)) => descriptor_instance_meta(desc, *b)?,
+            _ => FixedVec::new(),
+        };
+        db.reg_meta
+            .push(InstanceAccessMeta {
+                instance: board.unwrap_or(name),
+                rows,
+            })
             .map_err(|_| TcError::MmioInstanceCapacityExceeded { span: inst.name })?;
     }
 
@@ -193,6 +250,74 @@ pub fn build_mmio_db(
     }
 
     Ok(db)
+}
+
+/// Build the descriptor's access-meta rows for a board instance (P5). Refuses
+/// unknown register-access kinds (E3646): a descriptor written against a newer
+/// registry must not be silently half-understood.
+fn descriptor_instance_meta(
+    desc: &CompiledDescriptor,
+    instance: TypeAtom,
+) -> Result<FixedVec<RegAccessMeta, 32>, TcError> {
+    let mut rows: FixedVec<RegAccessMeta, 32> = FixedVec::new();
+    let inst = ir::Atom::new(instance.as_bytes());
+    let Some(inst) = inst else {
+        return Ok(rows);
+    };
+    let Some(device) = desc.device(inst) else {
+        return Ok(rows);
+    };
+    for r in device.registers() {
+        let write_kind = match r.write_kind {
+            codegen_core::compiled_desc::REG_WRITE_PLAIN => ir::WriteKind::Plain,
+            codegen_core::compiled_desc::REG_WRITE_W1C => ir::WriteKind::W1c,
+            codegen_core::compiled_desc::REG_WRITE_W1S => ir::WriteKind::W1s,
+            _ => return Err(TcError::MmioUnknownRegisterKind { span: Span::UNKNOWN }),
+        };
+        let read_kind = match r.read_kind {
+            codegen_core::compiled_desc::REG_READ_EFFECTFUL => ir::ReadKind::Effectful,
+            codegen_core::compiled_desc::REG_READ_PLAIN => ir::ReadKind::Plain,
+            _ => return Err(TcError::MmioUnknownRegisterKind { span: Span::UNKNOWN }),
+        };
+        let barrier = match r.barrier {
+            codegen_core::compiled_desc::REG_BARRIER_BEFORE => ir::BarrierKind::Before,
+            codegen_core::compiled_desc::REG_BARRIER_AFTER => ir::BarrierKind::After,
+            codegen_core::compiled_desc::REG_BARRIER_BOTH => ir::BarrierKind::Both,
+            codegen_core::compiled_desc::REG_BARRIER_NONE => ir::BarrierKind::None,
+            _ => return Err(TcError::MmioUnknownRegisterKind { span: Span::UNKNOWN }),
+        };
+        let _ = rows.push(RegAccessMeta {
+            offset: r.offset,
+            meta: MmioAccessMeta {
+                write_kind,
+                read_kind,
+                atomic_max: r.atomic_max,
+                barrier,
+            },
+        });
+    }
+    Ok(rows)
+}
+
+/// The descriptor access meta for a register offset in a board instance (P5).
+fn reg_access_meta(db: &MmioDb, instance: TypeAtom, offset: u32) -> MmioAccessMeta {
+    let default = MmioAccessMeta {
+        write_kind: ir::WriteKind::Plain,
+        read_kind: ir::ReadKind::Plain,
+        atomic_max: 64,
+        barrier: ir::BarrierKind::None,
+    };
+    for m in db.reg_meta.iter() {
+        if m.instance != instance {
+            continue;
+        }
+        for row in m.rows.iter() {
+            if row.offset == offset {
+                return row.meta;
+            }
+        }
+    }
+    default
 }
 
 /// Resolve an instance's base operand (§5.7): `board.<instance>` looks the
@@ -395,6 +520,21 @@ fn validate_regmap_body(src: &[u8], body: Span) -> Result<(), TcError> {
             break;
         }
         if tok.kind != TokenKind::Number {
+            // Skip a `{ field ... }` block so its bit numbers are not
+            // mistaken for register offsets.
+            if tok.kind == TokenKind::PunctLBrace {
+                let mut depth = 1usize;
+                while depth > 0 {
+                    let inner = lex.next();
+                    if inner.kind == TokenKind::PunctLBrace {
+                        depth += 1;
+                    } else if inner.kind == TokenKind::PunctRBrace {
+                        depth -= 1;
+                    } else if inner.kind == TokenKind::Eof {
+                        return Err(TcError::MmioUnexpectedEof { span: body });
+                    }
+                }
+            }
             continue;
         }
 
@@ -961,6 +1101,7 @@ pub fn resolve_mmio_place(
         let width = mmio_type_width_bytes(reg_info.reg_ty.as_bytes()).unwrap_or(1) as u64;
         let idx = reg_idx.unwrap_or(0) as u64;
         let (window, offset) = place_window_offset(inst, reg_info.offset, idx, width);
+        let meta = reg_access_meta(db, inst.board.unwrap_or(inst.name), reg_info.offset);
         Ok(Some(MmioResolved::Field(MmioResolvedField {
             map: map_decl.name,
             reg: reg_info.reg,
@@ -971,12 +1112,14 @@ pub fn resolve_mmio_place(
             window,
             offset,
             array_len: reg_info.array_len,
+            meta,
             place_span,
         })))
     } else {
         let width = mmio_type_width_bytes(reg_info.reg_ty.as_bytes()).unwrap_or(1) as u64;
         let idx = reg_idx.unwrap_or(0) as u64;
         let (window, offset) = place_window_offset(inst, reg_info.offset, idx, width);
+        let meta = reg_access_meta(db, inst.board.unwrap_or(inst.name), reg_info.offset);
         Ok(Some(MmioResolved::Reg(MmioResolvedReg {
             map: map_decl.name,
             reg: reg_info.reg,
@@ -986,6 +1129,7 @@ pub fn resolve_mmio_place(
             window,
             offset,
             array_len: reg_info.array_len,
+            meta,
             place_span,
         })))
     }
@@ -1124,5 +1268,64 @@ mod tests {
         }
         let m = module(&src, instances, decls);
         assert!(build_mmio_db(&m, &src, None).is_ok(), "limits are inclusive");
+    }
+
+    /// Build a compiled descriptor with a single device/register.
+    fn desc_with_write_kind(kind: u8) -> codegen_core::compiled_desc::CompiledDescriptor {
+        use codegen_core::compiled_desc::{
+            CompiledDevice, CompiledDescriptor, CompiledRegister, COMPILED_DESC_DEVICE_CAP,
+            COMPILED_DESC_REGISTER_CAP, COMPILED_DESC_WINDOW_CAP,
+        };
+        use codegen_core::target::MmioWindowSpec;
+        let mut regs = [CompiledRegister::EMPTY; COMPILED_DESC_REGISTER_CAP];
+        regs[0] = CompiledRegister {
+            offset: 0x00,
+            name: ir::Atom::new(b"STATUS").unwrap(),
+            width: 32,
+            access: 1,
+            write_kind: kind,
+            read_kind: 0,
+            atomic_max: 32,
+            mask: 0,
+            reset: 0,
+            barrier: 0,
+        };
+        let mut devs = [CompiledDevice::EMPTY; COMPILED_DESC_DEVICE_CAP];
+        devs[0] = CompiledDevice {
+            map: ir::Atom::new(b"Strategy").unwrap(),
+            instance: ir::Atom::new(b"strategy").unwrap(),
+            window: 0,
+            base_offset: 0,
+            registers: regs,
+            register_count: 1,
+        };
+        CompiledDescriptor {
+            windows: [MmioWindowSpec::EMPTY; COMPILED_DESC_WINDOW_CAP],
+            window_count: 0,
+            devices: devs,
+            device_count: 1,
+            platform_hash: 0,
+        }
+    }
+
+    #[test]
+    fn e3646_unknown_register_kind_is_refused() {
+        // A descriptor written against a newer registry carries a kind this
+        // compiler does not know; it must be refused (E3646), not silently
+        // half-understood (forward-compat refusal).
+        for kind in [99u8, 100, 255] {
+            let desc = desc_with_write_kind(kind);
+            let inst = TypeAtom::new(b"strategy").unwrap();
+            let res = descriptor_instance_meta(&desc, inst);
+            assert!(
+                matches!(res, Err(TcError::MmioUnknownRegisterKind { .. })),
+                "write_kind={kind} must be E3646"
+            );
+        }
+        let desc = desc_with_write_kind(0); // REG_WRITE_PLAIN
+        let inst = TypeAtom::new(b"strategy").unwrap();
+        let rows = descriptor_instance_meta(&desc, inst).expect("known kinds accepted");
+        assert_eq!(rows.iter().count(), 1);
+        assert_eq!(rows.iter().next().unwrap().meta.write_kind, ir::WriteKind::Plain);
     }
 }

@@ -1,7 +1,36 @@
 use super::borrow::{mint_id, scan_conflict};
 use super::*;
+use crate::typecheck::mmio::MmioAccessMeta;
 use crate::typecheck::place::parse_place_path;
 use crate::typecheck::value::PLACE_NONE;
+
+/// R2 (D-3): reject an access wider than the register's `atomic_max` (E3643).
+fn check_atomic_width(
+    reg_ty: crate::types::TypeAtom,
+    meta: MmioAccessMeta,
+    span: Span,
+) -> Result<(), TcError> {
+    // atomic_max is expressed in bits; the register width in bytes.
+    let width_bits = mmio_type_width_bytes(reg_ty.as_bytes()).unwrap_or(1) as u32 * 8;
+    if width_bits > meta.atomic_max as u32 {
+        return Err(TcError::MmioOverWideAccess { span });
+    }
+    Ok(())
+}
+
+/// R1+R2 for whole-register stores (E3642/E3643).
+fn check_store_semantics(
+    reg_ty: crate::types::TypeAtom,
+    meta: MmioAccessMeta,
+    span: Span,
+) -> Result<(), TcError> {
+    // R1: a w1s/w1c store lowers to a read-modify-write; on an effectful
+    // register the RMW's read is a phantom bus read.
+    if meta.read_kind == ir::ReadKind::Effectful && meta.write_kind != ir::WriteKind::Plain {
+        return Err(TcError::MmioPhantomRead { span });
+    }
+    check_atomic_width(reg_ty, meta, span)
+}
 
 impl<'a, 'r> IrWordGen<'a, 'r> {
     #[allow(dead_code)]
@@ -587,6 +616,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                             return Err(TcError::MmioTypedTypeMismatch { span: name_abs });
                         }
                     }
+                    check_atomic_width(reg.reg_ty, reg.meta, name_abs)?;
                     push(stack, sp, Value::Plain(reg.reg_ty))?;
                     let tid = self.ty_id_of_type(reg.reg_ty, name_abs)?;
                     self.emit_op(
@@ -594,6 +624,9 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                         lir::OpKind::MmioVolLoad {
                             ty: tid,
                             place: lir_atom(slice_span(self.src, reg.place_span))?,
+                            read_kind: reg.meta.read_kind,
+                            atomic_max: reg.meta.atomic_max,
+                            barrier: reg.meta.barrier,
                         },
                         name_abs,
                     )?;
@@ -608,6 +641,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                             return Err(TcError::MmioTypedTypeMismatch { span: name_abs });
                         }
                     }
+                    check_atomic_width(reg.reg_ty, reg.meta, name_abs)?;
                     push(stack, sp, Value::Plain(reg.reg_ty))?;
                     let tid = self.ty_id_of_type(reg.reg_ty, name_abs)?;
                     self.emit_op(
@@ -615,6 +649,9 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                         lir::OpKind::MmioVolLoad {
                             ty: tid,
                             place: lir_atom(slice_span(self.src, reg.place_span))?,
+                            read_kind: reg.meta.read_kind,
+                            atomic_max: reg.meta.atomic_max,
+                            barrier: reg.meta.barrier,
                         },
                         name_abs,
                     )?;
@@ -627,6 +664,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                     if typed {
                         return Err(TcError::MmioTypedMismatch { span: name_abs });
                     }
+                    check_atomic_width(field.reg_ty, field.meta, name_abs)?;
                     let (mask, shift) = field_mask_shift(&field.field);
                     push(stack, sp, Value::Plain(field.field.ty))?;
                     let reg_tid = self.ty_id_of_type(field.reg_ty, name_abs)?;
@@ -639,6 +677,9 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                             place: lir_atom(slice_span(self.src, field.place_span))?,
                             mask,
                             shift,
+                            read_kind: field.meta.read_kind,
+                            atomic_max: field.meta.atomic_max,
+                            barrier: field.meta.barrier,
                         },
                         name_abs,
                     )?;
@@ -689,18 +730,17 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                     if vty != reg.reg_ty {
                         return Err(TcError::ReturnTypeMismatch { span: name_abs });
                     }
+                    check_store_semantics(reg.reg_ty, reg.meta, name_abs)?;
                     let tid = self.ty_id_of_type(reg.reg_ty, name_abs)?;
-                    let access = match reg.access {
-                        crate::typecheck::mmio::AccessMode::W1c => lir::MmioAccess::W1c,
-                        crate::typecheck::mmio::AccessMode::W1s => lir::MmioAccess::W1s,
-                        _ => lir::MmioAccess::Rw,
-                    };
                     self.emit_op(
                         cur,
                         lir::OpKind::MmioVolStore {
                             ty: tid,
                             place: lir_atom(slice_span(self.src, reg.place_span))?,
-                            access,
+                            write_kind: reg.meta.write_kind,
+                            read_kind: reg.meta.read_kind,
+                            atomic_max: reg.meta.atomic_max,
+                            barrier: reg.meta.barrier,
                         },
                         name_abs,
                     )?;
@@ -718,18 +758,17 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                     if vty != reg.reg_ty {
                         return Err(TcError::ReturnTypeMismatch { span: name_abs });
                     }
+                    check_store_semantics(reg.reg_ty, reg.meta, name_abs)?;
                     let tid = self.ty_id_of_type(reg.reg_ty, name_abs)?;
-                    let access = match reg.access {
-                        crate::typecheck::mmio::AccessMode::W1c => lir::MmioAccess::W1c,
-                        crate::typecheck::mmio::AccessMode::W1s => lir::MmioAccess::W1s,
-                        _ => lir::MmioAccess::Rw,
-                    };
                     self.emit_op(
                         cur,
                         lir::OpKind::MmioVolStore {
                             ty: tid,
                             place: lir_atom(slice_span(self.src, reg.place_span))?,
-                            access,
+                            write_kind: reg.meta.write_kind,
+                            read_kind: reg.meta.read_kind,
+                            atomic_max: reg.meta.atomic_max,
+                            barrier: reg.meta.barrier,
                         },
                         name_abs,
                     )?;
@@ -746,6 +785,12 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                     if vty != field.field.ty {
                         return Err(TcError::ReturnTypeMismatch { span: name_abs });
                     }
+                    // R1 (E3642): a field store is a read-modify-write; on an
+                    // effectful register the RMW's read is a phantom bus read.
+                    if field.meta.read_kind == ir::ReadKind::Effectful {
+                        return Err(TcError::MmioPhantomRead { span: name_abs });
+                    }
+                    check_atomic_width(field.reg_ty, field.meta, name_abs)?;
                     let (mask, shift) = field_mask_shift(&field.field);
                     let reg_tid = self.ty_id_of_type(field.reg_ty, name_abs)?;
                     let tid = self.ty_id_of_type(field.field.ty, name_abs)?;
@@ -757,6 +802,10 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                             place: lir_atom(slice_span(self.src, field.place_span))?,
                             mask,
                             shift,
+                            write_kind: field.meta.write_kind,
+                            read_kind: field.meta.read_kind,
+                            atomic_max: field.meta.atomic_max,
+                            barrier: field.meta.barrier,
                         },
                         name_abs,
                     )?;

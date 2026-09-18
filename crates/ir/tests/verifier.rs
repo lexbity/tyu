@@ -565,9 +565,12 @@ fn verify_rejects_mmio_vol_load_from_non_pointer() {
         &[
             OpKind::ConstBool(true), // not a pointer/mmio
             OpKind::MmioVolLoad {
-                ty: TY_I64,
-                place: atom(b"r"),
-            },
+                    ty: TY_I64,
+                    place: atom(b"r"),
+                    read_kind: ir::ReadKind::Plain,
+                    atomic_max: 64,
+                    barrier: ir::BarrierKind::None,
+                },
             OpKind::Ret,
         ],
     );
@@ -624,12 +627,15 @@ fn verify_rejects_mmio_load_field_not_mmio() {
         &[
             OpKind::ConstI64(42), // not an MMIO place
             OpKind::MmioVolLoadField {
-                reg_ty: TY_I64,
-                field_ty: TY_BOOL,
-                place: atom(b"r"),
-                mask: 0xff,
-                shift: 0,
-            },
+                    reg_ty: TY_I64,
+                    field_ty: TY_BOOL,
+                    place: atom(b"r"),
+                    mask: 0xff,
+                    shift: 0,
+                    read_kind: ir::ReadKind::Plain,
+                    atomic_max: 64,
+                    barrier: ir::BarrierKind::None,
+                },
             OpKind::Ret,
         ],
     );
@@ -653,12 +659,16 @@ fn verify_rejects_mmio_store_field_type_mismatch() {
             },
             OpKind::ConstI64(42),
             OpKind::MmioVolStoreField {
-                reg_ty: TY_I64,
-                field_ty: TY_BOOL,
-                place: atom(b"r"),
-                mask: 0xff,
-                shift: 0,
-            },
+                    reg_ty: TY_I64,
+                    field_ty: TY_BOOL,
+                    place: atom(b"r"),
+                    mask: 0xff,
+                    shift: 0,
+                    write_kind: ir::WriteKind::Plain,
+                    read_kind: ir::ReadKind::Plain,
+                    atomic_max: 64,
+                    barrier: ir::BarrierKind::None,
+                },
         ],
         &[win(0, 0x2000)],
     );
@@ -1627,9 +1637,12 @@ fn verify_accepts_mmio_load() {
                 offset: 0x1000,
             },
             OpKind::MmioVolLoad {
-                ty: TY_I64,
-                place: atom(b"r"),
-            },
+                    ty: TY_I64,
+                    place: atom(b"r"),
+                    read_kind: ir::ReadKind::Plain,
+                    atomic_max: 64,
+                    barrier: ir::BarrierKind::None,
+                },
             OpKind::Ret,
         ],
         &[win(0, 0x2000)],
@@ -1650,10 +1663,13 @@ fn verify_accepts_mmio_store() {
             },
             OpKind::ConstI64(0),
             OpKind::MmioVolStore {
-                ty: TY_I64,
-                place: atom(b"r"),
-                access: ir::MmioAccess::Rw,
-            },
+                    ty: TY_I64,
+                    place: atom(b"r"),
+                    write_kind: ir::WriteKind::Plain,
+                    read_kind: ir::ReadKind::Plain,
+                    atomic_max: 64,
+                    barrier: ir::BarrierKind::None,
+                },
             OpKind::ConstI64(0),
             OpKind::Ret,
         ],
@@ -1920,4 +1936,123 @@ mod proptests {
             }
         }
     }
+}
+
+// ---- P5 R1/R2 verifier re-checks (D-3): E9040 phantom read, E9041 over-wide ----
+
+#[test]
+fn verify_rejects_phantom_read_store_field() {
+    // A field store is read-modify-write; on an effectful register the RMW
+    // read is a phantom bus read (rule R1).
+    let w = word_with_single_block_and_windows(
+        sig0_1(TY_I64),
+        &[
+            OpKind::MmioPlace {
+                place: atom(b"r"),
+                window: 0,
+                offset: 0x1000,
+            },
+            OpKind::ConstI64(0),
+            OpKind::MmioVolStoreField {
+                reg_ty: TY_I64,
+                field_ty: TY_I64,
+                place: atom(b"r"),
+                mask: 0xFFFF,
+                shift: 0,
+                write_kind: ir::WriteKind::Plain,
+                read_kind: ir::ReadKind::Effectful,
+                atomic_max: 64,
+                barrier: ir::BarrierKind::None,
+            },
+            OpKind::ConstI64(0),
+            OpKind::Ret,
+        ],
+        &[win(0, 0x2000)],
+    );
+    let err = ir::verify_word(&w).unwrap_err();
+    assert_eq!(err.code(), 9040, "field store on effectful must be E9040");
+}
+
+#[test]
+fn verify_rejects_phantom_read_w1s_store() {
+    // A w1s/w1c store is read-modify-write; on an effectful register the RMW
+    // read is a phantom bus read (rule R1).
+    let w = word_with_single_block_and_windows(
+        sig0_1(TY_I64),
+        &[
+            OpKind::MmioPlace {
+                place: atom(b"r"),
+                window: 0,
+                offset: 0x1000,
+            },
+            OpKind::ConstI64(0),
+            OpKind::MmioVolStore {
+                ty: TY_I64,
+                place: atom(b"r"),
+                write_kind: ir::WriteKind::W1s,
+                read_kind: ir::ReadKind::Effectful,
+                atomic_max: 64,
+                barrier: ir::BarrierKind::None,
+            },
+            OpKind::ConstI64(0),
+            OpKind::Ret,
+        ],
+        &[win(0, 0x2000)],
+    );
+    let err = ir::verify_word(&w).unwrap_err();
+    assert_eq!(err.code(), 9040, "w1s store on effectful must be E9040");
+}
+
+#[test]
+fn verify_rejects_over_wide_load() {
+    // atomic_max=32 means a 64-bit access is over-wide (rule R2).
+    let w = word_with_single_block_and_windows(
+        sig0_1(TY_I64),
+        &[
+            OpKind::MmioPlace {
+                place: atom(b"r"),
+                window: 0,
+                offset: 0x1000,
+            },
+            OpKind::MmioVolLoad {
+                ty: TY_I64,
+                place: atom(b"r"),
+                read_kind: ir::ReadKind::Plain,
+                atomic_max: 32,
+                barrier: ir::BarrierKind::None,
+            },
+            OpKind::Ret,
+        ],
+        &[win(0, 0x2000)],
+    );
+    let err = ir::verify_word(&w).unwrap_err();
+    assert_eq!(err.code(), 9041, "64-bit access with atomic_max=32 must be E9041");
+}
+
+#[test]
+fn verify_accepts_atomic_max_respecting_access() {
+    // A 32-bit access with atomic_max=32 is fine.
+    let w = word_with_single_block_and_windows(
+        sig0_1(TY_I64),
+        &[
+            OpKind::MmioPlace {
+                place: atom(b"r"),
+                window: 0,
+                offset: 0x1000,
+            },
+            OpKind::ConstI64(0),
+            OpKind::MmioVolStore {
+                ty: TY_I64,
+                place: atom(b"r"),
+                write_kind: ir::WriteKind::Plain,
+                read_kind: ir::ReadKind::Plain,
+                atomic_max: 64,
+                barrier: ir::BarrierKind::None,
+            },
+            OpKind::ConstI64(0),
+            OpKind::Ret,
+        ],
+        &[win(0, 0x2000)],
+    );
+    ir::verify_word(&w).unwrap();
 }

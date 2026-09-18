@@ -24,6 +24,25 @@ pub use crate::error::{
 /// Name of the optional per-module init word.
 const MOD_INIT_NAME: &[u8] = b"__lang_mod_init";
 
+/// The code-state bit for a module function address on this target.
+///
+/// Cortex-M is Thumb-only: the LSB of a call target selects the ISA, and a
+/// `blx`/fn-pointer call to an even address switches to (nonexistent) ARM
+/// state — an immediate `v7M INVSTATE` usage fault. Module code is placed at
+/// an even `code_base`, so every function address handed to a caller (the
+/// `main` entry via the symmap, and `__lang_mod_init` via `run_init`) must
+/// carry this bit. Other targets have no such state bit.
+fn module_fn_addr(base: usize) -> usize {
+    #[cfg(target_arch = "arm")]
+    {
+        base | 1
+    }
+    #[cfg(not(target_arch = "arm"))]
+    {
+        base
+    }
+}
+
 /// Save-restore guard for the global symbol map.
 ///
 /// On drop without a call to [`commit`](RollbackGuard::commit), the map
@@ -555,7 +574,7 @@ fn register_exports<'a, const N: usize>(
         if exp.name == MOD_INIT_NAME {
             continue;
         }
-        map.register_with_hash(exp.sym_hash, exp.name, code_base)?;
+        map.register_with_hash(exp.sym_hash, exp.name, module_fn_addr(code_base))?;
     }
     Ok(())
 }
@@ -778,7 +797,7 @@ fn lookup_mod_init<'a>(container: &'a Container<'a>, code_base: u64) -> usize {
         if exp.name == MOD_INIT_NAME {
             // The init function is exported; its address is code_base
             // (same simplification as other exports — see Phase 8).
-            return code_base as usize;
+            return module_fn_addr(code_base as usize);
         }
     }
     0

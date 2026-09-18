@@ -61,6 +61,7 @@ fn subtype_value_returned_as_base_passes_ir_verification() {
             let mmio = MmioDb {
                 maps: FixedVec::new(),
                 instances: FixedVec::new(),
+                reg_meta: FixedVec::new(),
             };
             let resources = ResourceDb {
                 items: FixedVec::new(),
@@ -123,6 +124,7 @@ fn subtype_argument_to_base_param_passes_ir_verification() {
             let mmio = MmioDb {
                 maps: FixedVec::new(),
                 instances: FixedVec::new(),
+                reg_meta: FixedVec::new(),
             };
             let resources = ResourceDb {
                 items: FixedVec::new(),
