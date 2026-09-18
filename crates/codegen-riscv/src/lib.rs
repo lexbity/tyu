@@ -148,7 +148,7 @@ impl<'a> RiscVBackend<'a> {
         } else {
             lmod::abi_hash::compute_abi_hash(3, 4, 32, lmod::modinfo::MODINFO_VER)
         };
-        if let Some(size) = lmod::modinfo::encode_into(
+        let size = match lmod::modinfo::encode_into(
             &mut buf,
             module_name,
             &export_entries[..export_count],
@@ -161,16 +161,18 @@ impl<'a> RiscVBackend<'a> {
             },
             &[],
         ) {
-            self.out.write(b"\t.section .lang.modinfo\n\t.byte ");
-            if size > 0 {
-                ophelpers::write_u32(self.out, buf[0] as u32);
-                for i in 1..size {
-                    self.out.write(b",");
-                    ophelpers::write_u32(self.out, buf[i] as u32);
-                }
+            Some(s) => s,
+            None => return Err(CodegenError::ModInfoTooLarge),
+        };
+        self.out.write(b"\t.section .lang.modinfo\n\t.byte ");
+        if size > 0 {
+            ophelpers::write_u32(self.out, buf[0] as u32);
+            for i in 1..size {
+                self.out.write(b",");
+                ophelpers::write_u32(self.out, buf[i] as u32);
             }
-            self.out.write(b"\n");
         }
+        self.out.write(b"\n");
         Ok(())
     }
 }
@@ -186,8 +188,7 @@ impl<'a> CodegenBackend for RiscVBackend<'a> {
         RiscVBackend::emit_postlude(self)
     }
     fn emit_extern_word(&mut self, name: &[u8]) -> Result<(), CodegenError> {
-        RiscVBackend::emit_extern_word(self, name);
-        Ok(())
+        RiscVBackend::emit_extern_word(self, name)
     }
     fn set_expected_abi_hash(&mut self, hash: u64) {
         self.expected_abi_hash = hash;

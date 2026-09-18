@@ -2,6 +2,7 @@ use codegen_core::{AsmMode, CodegenError};
 
 use crate::ophelpers::write_u32;
 use crate::task;
+use crate::util::{resource_decl_names, slice_span, write_res_label};
 use crate::X86_64HostedBackend;
 use codegen_core::strings::decode_string_bytes;
 
@@ -102,6 +103,13 @@ impl<'a> X86_64HostedBackend<'a> {
                 if self.uses_mmio {
                     self.out.write(b"__mmio_mem rb 65536\n");
                 }
+                if self.uses_resources {
+                    let module_name = slice_span(self.src, self.module.name);
+                    for name in resource_decl_names(self.module, self.src) {
+                        write_res_label(self.out, module_name, name);
+                        self.out.write(b" dq 0\n");
+                    }
+                }
                 self.out.write(b"__lang_ds_base rb 65536\n");
                 self.out.write(b"__lang_ds_limit:\n");
                 self.out.write(b"__lang_ds_high dq 0\n");
@@ -111,6 +119,16 @@ impl<'a> X86_64HostedBackend<'a> {
                 if self.str_len > 0 {
                     self.out.write(b"\nsection '.rodata'\n");
                     self.emit_string_table()?;
+                }
+                if self.uses_resources {
+                    self.out.write(b"\nsection '.bss' writeable\n");
+                    let module_name = slice_span(self.src, self.module.name);
+                    for name in resource_decl_names(self.module, self.src) {
+                        write_res_label(self.out, module_name, name);
+                        // `dq 0` (not `rq`): matches the runtime's .bss style so
+                        // the linker does not warn on a NOBITS/PROGBITS merge.
+                        self.out.write(b" dq 0\n");
+                    }
                 }
                 X86_64HostedBackend::emit_modinfo_section(self)?;
                 X86_64HostedBackend::emit_debugsec_section(self)?;

@@ -21,7 +21,7 @@ fn lookup_miss_on_unknown_key() {
     let dir = temp_dir("lookup_miss");
     let cache = BuildCache::load(&dir.join("build.json"));
     assert!(
-        cache.lookup(0, 0, 0).is_none(),
+        cache.lookup(0, 0, 0, 0).is_none(),
         "cache miss should return None"
     );
 }
@@ -34,9 +34,9 @@ fn insert_then_lookup_hit() {
     let obj = dir.join("out.o");
     fs::write(&obj, b"\x7fELF").unwrap();
 
-    cache.insert(1, 2, 42, "x86_64-unknown-none", &obj).unwrap();
+    cache.insert(1, 2, 42, 0, "x86_64-unknown-none", &obj).unwrap();
 
-    let result = cache.lookup(1, 2, 42);
+    let result = cache.lookup(1, 2, 42, 0);
     assert!(result.is_some(), "cache hit after insert");
     assert_eq!(result.unwrap().object_path, obj);
 }
@@ -49,9 +49,9 @@ fn lookup_miss_on_different_compiler_fp() {
     let obj = dir.join("out.o");
     fs::write(&obj, b"\x7fELF").unwrap();
 
-    cache.insert(1, 2, 42, "t", &obj).unwrap();
+    cache.insert(1, 2, 42, 0, "t", &obj).unwrap();
     assert!(
-        cache.lookup(99, 2, 42).is_none(),
+        cache.lookup(99, 2, 42, 0).is_none(),
         "different compiler_fp must miss"
     );
 }
@@ -64,9 +64,9 @@ fn lookup_miss_on_different_inputs_fp() {
     let obj = dir.join("out.o");
     fs::write(&obj, b"\x7fELF").unwrap();
 
-    cache.insert(1, 2, 42, "t", &obj).unwrap();
+    cache.insert(1, 2, 42, 0, "t", &obj).unwrap();
     assert!(
-        cache.lookup(1, 99, 42).is_none(),
+        cache.lookup(1, 99, 42, 0).is_none(),
         "different inputs_fp must miss"
     );
 }
@@ -81,12 +81,12 @@ fn cache_persists_to_disk() {
     {
         let mut cache = BuildCache::load(&p);
         cache
-            .insert(10, 20, 99, "armv7m-unknown-none", &obj)
+            .insert(10, 20, 99, 0, "armv7m-unknown-none", &obj)
             .unwrap();
     }
 
     let cache2 = BuildCache::load(&p);
-    let result = cache2.lookup(10, 20, 99);
+    let result = cache2.lookup(10, 20, 99, 0);
     assert!(result.is_some(), "cache must persist to disk");
     assert_eq!(result.unwrap().object_path, obj);
 }
@@ -101,13 +101,13 @@ fn abi_hash_isolation() {
     fs::write(&oa, b"\x7fELF").unwrap();
     fs::write(&ob, b"\x7fELF").unwrap();
 
-    cache.insert(1, 2, 100, "x86_64-unknown-none", &oa).unwrap();
-    cache.insert(1, 2, 200, "x86_64-unknown-none", &ob).unwrap();
+    cache.insert(1, 2, 100, 0, "x86_64-unknown-none", &oa).unwrap();
+    cache.insert(1, 2, 200, 0, "x86_64-unknown-none", &ob).unwrap();
 
-    let r1 = cache.lookup(1, 2, 100).unwrap();
+    let r1 = cache.lookup(1, 2, 100, 0).unwrap();
     assert_eq!(r1.object_path, oa);
 
-    let r2 = cache.lookup(1, 2, 200).unwrap();
+    let r2 = cache.lookup(1, 2, 200, 0).unwrap();
     assert_eq!(r2.object_path, ob);
 }
 

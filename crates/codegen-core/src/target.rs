@@ -231,6 +231,12 @@ impl FeatureSet {
         (self.0 & (1 << (f as u8))) != 0
     }
 
+    /// Raw feature bitmask.  Stable per feature ordering; used in cache keys
+    /// so a feature toggle invalidates cached artifacts.
+    pub fn bits(self) -> u8 {
+        self.0
+    }
+
     /// Iterate over enabled features in declaration order.
     pub fn iter(self) -> impl Iterator<Item = Feature> {
         Feature::ALL

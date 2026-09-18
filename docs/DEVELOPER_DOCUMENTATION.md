@@ -1,5 +1,7 @@
 # Developer Documentation
 
+_Last verified against commit `109a89e` (2026-06-26)._
+
 ## 1. Executive Summary
 
 Tyu is a concatenative, stack-based systems language and toolchain for embedded and simulation targets. This repository contains the compiler front end, semantic checker, IR, target-specific code generators, module packer/signing/encryption tools, loader/runtime support, and the `tyu` project driver that orchestrates build, run, test, and deploy workflows.
@@ -21,9 +23,8 @@ What a new developer should learn first:
 Big gotchas:
 - `--emit=asm` in `langc` is inspection-only; `--emit=obj` is the production path.
 - `tyu` defaults to `x86_64-unknown-linux-gnu` if no target is provided in common paths.
-- The loader’s trust tier defaults to Tier 0, and at that tier signature verification is effectively trust-unconditionally in the platform abstraction.
+- Loader trust is expressed through `LoaderPlatform::trust_level()`; `verify_sig` is a required trait method with no default, so every platform must state its verification behavior explicitly.
 - `tyu` build caching is fingerprint-based; changes to the compiler binary mtime and `CODEGEN_REV` intentionally invalidate cached objects.
-- There is a visible versioning inconsistency in the codebase: `crates/lmod/src/modinfo.rs` sets `MODINFO_VER = 2`, while `crates/lmod/src/abi_hash.rs` tests/comments still reference `3`. I did not reconcile that mismatch here; treat it as a compatibility risk until verified.
 
 ## 2. High-Level Architecture
 
@@ -56,11 +57,9 @@ Data flow:
 1. `.mod` or `.def` source is parsed into an AST.
 2. Semantic analysis turns source into typed IR and verifies stack/effect/borrow/contract constraints.
 3. Target backends lower IR to assembly or object code.
-4. `lmod-pack` converts object code into `.lmod`.
-5. `lmod-sign` appends a signature trailer.
-6. `lmod-encrypt` optionally encrypts payload sections.
-7. `loader-core` validates, verifies, relocates, and maps the container.
-8. `tyu` and `harness-core` interpret execution output and diagnostics.
+4. `tyu build` links a **static** image directly, or — in **dynamic** mode (`--mode=dynamic`, the default for QEMU-capable targets) — packs the objects into `.lmod` containers via `lmod-pack`, then optionally encrypts (`lmod-encrypt`) and signs (`lmod-sign`) them.
+5. In dynamic mode the on-device/host loader (`loader-core`, entered via `loader_core::boot::__lang_load_and_run` on bare-metal) validates, verifies, decrypts (platform-provided `unwrap_cek`), relocates, and maps each container.
+6. `tyu` and `harness-core` interpret execution output and diagnostics.
 
 Architectural style:
 - Modular monolith with strong internal layering.
@@ -99,11 +98,12 @@ flowchart LR
 | `docs/DOCS.md` | Documentation index | Treat this as the tracked docs map. Add new docs here. |
 | `docs/SETUP.md` | Setup and local development | Mirrors the actual CI/tooling commands. |
 | `docs/TROUBLESHOOTING.md` | Known failure modes | Good reference for loader, diagnostic, and toolchain failures. |
-| `docs/LIMITATIONS.md` | Known gaps and risks | Records visible debt, including ignored tests and trust-model caveats. |
 | `docs/GLOSSARY.md` | Shared vocabulary | Useful for matching parser/IR/loader terminology. |
 | `ci-lint.sh` | Test lint gate | Enforces test-quality conventions and a few repository-specific invariants. |
 | `ci/guards.sh` | Test delivery gate | Checks that crates with `#[test]` actually execute tests. |
-| `rust-toolchain.toml` | Toolchain pin | Stable Rust is required. |
+| `rust-toolchain.toml` | Toolchain pin | Pins **nightly** Rust with `rust-src` and the `riscv32im-unknown-none-elf` target. |
+| `platforms/` | Platform packs | Per-target `platform.toml` packs (x86_64, armv7m, riscv32, rp2350) discovered by `tyu platform`. |
+| `fuzz/` | cargo-fuzz targets | `modinfo_decode` and `parse_container`; excluded from the workspace but run by CI (`fuzz_smoke` job). |
 | `runtime/` | Per-target runtime assembly/link scripts | Target-specific runtime units are assembled and linked by `tyu build`. |
 | `sysroot/` | Standard library sources | Used by the compiler and test suites as the language sysroot. |
 | `test-goldens/` | Checked-in artifact goldens | Used for binary and assembly golden tests. |
@@ -127,6 +127,9 @@ flowchart LR
 | `crates/rsp-client` | GDB Remote Serial Protocol client | Used by debug escalation against QEMU gdbstub. |
 | `crates/tyu` | Build/test/deploy orchestrator | The main entry point for project-level workflows. |
 | `crates/lang-assemble` | Assembler wrapper | Thin CLI around assembler invocation. |
+| `crates/lang-symtab-gen` | Symbol table generator | Generates runtime symbol tables from ELF objects. |
+| `crates/device-loader-archive` | Static device-loader image | Excluded from the workspace; builds the on-device loader image whose entry is `loader_core::boot::__lang_load_and_run`. Used for dynamic-mode `.lmod` loading on bare-metal targets. |
+| `crates/diag-core` | Runtime diagnostic protocol | Fixed 35-byte `DiagRecord`, trap-to-claim mapping, and host decoder. |
 | `crates/execution-tests` | End-to-end execution tests | Runs target-specific assembly/QEMU suites. |
 | `crates/tooling-tests` | Corpus-driven tooling tests | Verifies diagnostics, effects, encryption, loader behavior, and corpus expectations. |
 | `Arith.asm` | Unknown/legacy root assembly file | The repository does not clearly document its role. Treat as unresolved. |
@@ -313,8 +316,8 @@ What happens:
 2. Compute the target ABI hash using `lmod::abi_hash::compute_abi_hash`.
 3. Load the build cache (`target/tyu/build.json`).
 4. Compile each module with `langc`.
-5. Assemble required runtime units from `runtime/<triple>`.
-6. Link the resulting object files into an ELF image.
+5. Assemble required runtime units from `runtime/<triple>` (or the platform pack under `platforms/<name>/`).
+6. Static mode: link the resulting object files into an ELF image. Dynamic mode: pack modules into `.lmod` containers, then optionally encrypt (`lmod-encrypt`) and sign (`lmod-sign`).
 7. Persist the build cache.
 
 Failure points:
@@ -419,7 +422,7 @@ Logging is mostly stderr text with a few structured diagnostics:
 | Command | Purpose | Location | Inputs | Output | Notes |
 |---|---|---|---|---|---|
 | `langc` | Compile a single module | `crates/langc/src/main.rs` | Source file, flags from `crates/langc/src/args.rs` | AST/IR/asm/object/stdout diagnostics | `no_std`, `no_main`, hosted entry macro. |
-| `tyu` | Project driver | `crates/tyu/src/main.rs` | Subcommands `build`, `run`, `test`, `deploy`, `toolchain check`, `clean` | Build outputs, execution results, toolchain report | The main orchestration interface. |
+| `tyu` | Project driver | `crates/tyu/src/main.rs` | Subcommands `build`, `run`, `test`, `deploy`, `platform`, `toolchain check`, `clean` | Build outputs, execution results, toolchain report | The main orchestration interface. |
 | `lmod-pack` | Pack ELF object to `.lmod` | `crates/lmod-pack/src/main.rs` | Input `.o`, output `.lmod` | Packed container | Uses `lmod_pack::pack`. |
 | `lmod-sign` | Append HMAC signature | `crates/lmod-sign/src/main.rs` | Input `.lmod`, output `.lmod`, `--key=<hex>` | Signed container | Requires 32-byte key. |
 | `lmod-encrypt` | Encrypt payload sections | `crates/lmod-encrypt/src/main.rs` | Input `.lmod`, output `.lmod`, mode-specific key material | Encrypted container | Supports fleet/device modes. |
@@ -433,6 +436,7 @@ Logging is mostly stderr text with a few structured diagnostics:
 | `run` | `tyu run` | Build and execute an image | None | Build args + `--timeout`, `--runner` | Exit classification, stdout parsing | `crates/tyu/src/run_cmd.rs` |
 | `test` | `tyu test` | Discover and run fixtures | None | `--target`, `--all-targets`, `--filter`, `--manifest` | Per-fixture result reporting | `crates/tyu/src/test_cmd.rs` |
 | `deploy` | `tyu deploy` | Build, pack, encrypt, sign, and execute | None, but key material required for secure modes | Build args + encrypt/sign/device options | Deploy artifacts and verification summary | `crates/tyu/src/deploy.rs` |
+| `platform` | `tyu platform <sub>` | Inspect/scaffold platform packs | None | `list`, `info <name> [--isa=]`, `lint <name> [--all]`, `new <name>` | Pack listing, details, lint report | `crates/tyu/src/platform/` (`config.rs`, `lint.rs`, `linker_script.rs`) |
 | `toolchain check` | `tyu toolchain check <target>` | Resolve compiler/tool paths | None | Target alias or triple | Human-readable tool report | `crates/tyu/src/toolchain.rs` |
 
 ### Core traits and internal interfaces
@@ -458,39 +462,63 @@ Logging is mostly stderr text with a few structured diagnostics:
 - `--out-dir=<path>`
 - `--target=<triple>`
 
+`langc` also parses `--unsafe-allow-5031`, which is intentionally not listed in `--help`. As of the last verification it is stored in `Args` but not yet consumed by the driver (diagnostic 5031 is `TcError::ResourceSharedUnlocked`); treat it as reserved.
+
 ### `tyu` command-line options
+Common (build/run/test/deploy):
 - `--target=<triple>`
+- `--platform=<name>` (select a platform pack)
+- `--isa=<arch>` (ISA filter for platform packs)
 - `--profile=<name>`
+- `--mode=static|dynamic` (link/load mode; defaults to dynamic for QEMU-capable targets)
 - `--sysroot=<dir>`
 - `--out-dir=<dir>`
 - `-I <dir>`
-- `--timeout=<secs>`
-- `--runner=native|qemu`
-- `--all-targets`
+
+Run-specific:
+- `--timeout=<secs>` (default: 10)
+- `--runner=native|qemu` (default: auto)
+
+Test-specific:
+- `--all-targets`, `--all-platforms`
 - `--filter=<pat>`
 - `--manifest=<path>`
+- `--qualify` (fail when required coverage axes are uncovered)
+- `--format=human|json`
+- `--report-out=<path>`
+
+Deploy/metal options:
 - `--encrypt=none|fleet|device`
-- `--key-encrypt=<ref>`
-- `--key-sign=<ref>`
-- `--device-keys=<dir>`
-- `--sign`
+- `--key-encrypt=<keyref>`, `--key-sign=<keyref>`, `--device-keys=<dir>`, `--sign`
+- `--commit-otp` (guarded irreversible OTP path; requires `TYU_ALLOW_OTP=1` and `TYU_OTP_READBACK=verified`)
+- `--metal-sign-key=<keyref>` (provision Tier-1 firmware HMAC key)
+- `--metal-kek=<keyref>` (encrypt dynamic `.lmod` with a firmware KEK)
+- `--metal-encrypt=fleet|device` (default: fleet)
+
+Key references (`<keyref>`) accept `file:<path>`, `env:<VAR>`, and `fd:<n>`; bare hex on the command line is rejected by `tyu::keys` (note: the standalone `lmod-sign` CLI still takes `--key=<hex>` directly).
 
 ## 7. Configuration and Environment
 
 Config files:
 - `rust-toolchain.toml`
 - `tyu.toml` project manifests
-- `fixtures/manifest.toml` as the default test-manifest path for `tyu test`
+- `platforms/<name>/platform.toml` platform packs (discovered by `tyu platform`)
+- `fixtures/manifest.toml` as the default test-manifest path for `tyu test` (relative to CWD; pass `--manifest` explicitly at the repo root)
 
 Environment variables:
 
 | Name | Required | Default | Used By | Description |
-|---|---:|---|---|---|
+|---|---|---:|---|---|
 | `TYU_BIN_DIR` | No | none | `tyu` tests and integration helpers | Points to a directory containing built host binaries. |
 | `TYU_<ROLE>_<TRIPLE>` | No | none | `tyu::toolchain` | Overrides a specific tool for a target triple. |
 | `PATH` | Yes in practice | system PATH | `tyu`, host tools, tests | Used to resolve assemblers, linkers, QEMU, OpenOCD, and `langc`. |
 | `CI` | No | unset | tests/guards | Changes missing-tool behavior from skip to hard failure in some suites. |
 | `TYU_TEST_KEY` | No | test-only | `crates/tyu/src/keys.rs` tests | Demonstrates safe env-based key loading. |
+| `TYU_SIGN_KEY` / `TYU_ENC_KEK` | No | none | `tyu deploy`/`tyu build` | Key material for `key_sign = "env:TYU_SIGN_KEY"` and `key_encrypt = "env:TYU_ENC_KEK"` manifest keyrefs. |
+| `TYU_ALLOW_OTP` | Only for `--commit-otp` | unset | `crates/tyu/src/deploy.rs` | Must be `1` to unlock the manual OTP-commit board procedure. |
+| `TYU_OTP_READBACK` | Only for `--commit-otp` | unset | `crates/tyu/src/deploy.rs` | Must be `verified` before any irreversible OTP write. |
+| `TYU_TEST_ENCRYPT_WITH_KEK` | No | unset | `tyu build` test paths | Test-only hook forcing KEK-based encryption in build tests. |
+| `TYU_TEST_MUTATE_LMOD` | No | unset | `tyu build` test paths | Test-only hook that mutates a packed `.lmod` to exercise loader rejection. |
 
 Project manifest sections:
 - `[project]`: main module and module roots.
@@ -501,7 +529,8 @@ Project manifest sections:
 
 Defaulting rules:
 - `tyu` build/run defaults to `x86_64-unknown-linux-gnu` if no target is provided.
-- `tyu test` defaults to `fixtures/manifest.toml`.
+- `tyu test` defaults to `fixtures/manifest.toml` relative to the current working directory; no such file exists at the repo root, so pass `--manifest=crates/execution-tests/fixtures/manifest.toml` (as CI does).
+- Link/load mode defaults to dynamic for QEMU-capable targets, static otherwise.
 - `tyu` build/run output defaults to `target/tyu/<triple>`.
 - If no `profile` is set and a manifest contains `[profile.dev]`, that profile is used; otherwise the feature set defaults to all enabled in `tyu`.
 - `langc` defaults to `FeatureSet::all()` unless overridden by flags or project resolution.
@@ -559,7 +588,7 @@ Important constraints:
 |---|---|---|---|---|
 | `fasm` | Assemble x86_64 runtime and objects | `crates/tyu/src/build.rs`, `crates/lang-assemble/src/driver.rs` | PATH or `tyu.toml` toolchain override | Hard error if missing or non-zero exit. |
 | `arm-none-eabi-as` / `arm-none-eabi-ld` | ARM bare-metal assembly/linking | `crates/tyu/src/build.rs` | PATH or `[toolchain.<triple>]` | Hard error. |
-| `riscv64-unknown-elf-as` / `riscv64-unknown-elf-ld` | RISC-V bare-metal assembly/linking | `crates/tyu/src/build.rs` | PATH or `[toolchain.<triple>]` | Hard error. |
+| `riscv32-unknown-elf-as` / `riscv32-unknown-elf-ld` | RISC-V bare-metal assembly/linking | `crates/tyu/src/build.rs` | PATH or `[toolchain.<triple>]` | Hard error. |
 | `ld` | Hosted x86_64 linking | `crates/tyu/src/build.rs` | PATH or manifest override | Hard error. |
 | `qemu-system-x86_64`, `qemu-system-arm`, `qemu-system-riscv32` | Execution backend for tests and run modes | `crates/tyu/src/runner.rs`, `crates/execution-tests/tests/*` | PATH or toolchain override | Timeout, exit-code mismatch, or skip when unavailable outside CI. |
 | `OpenOCD` | Physical device flashing | `crates/tyu/src/runner.rs` | Runner configuration | Flash failure becomes a `TyuError::Runner`/build error. |
@@ -845,7 +874,8 @@ Explicit edge cases:
 - Test fixtures that are allowed to fail only in prescribed ways.
 
 Under-tested or missing:
-- The repository’s own docs note limited RISC-V end-to-end coverage and no tracked fuzzing harness.
+- The repository’s own docs note limited RISC-V end-to-end coverage.
+- Fuzzing is limited to two cargo-fuzz targets (`fuzz/fuzz_targets/modinfo_decode.rs`, `parse_container.rs`); parser and codegen surfaces are not fuzzed.
 - There is no visible HTTP/API layer, so network-edge validation is not a concern.
 
 ## 15. Authentication, Authorization, and Security
@@ -854,9 +884,10 @@ Authentication and authorization are not present in the usual web-app sense. The
 
 Security mechanisms:
 - Trusted container signatures and encryption envelopes.
-- Trust tiers in the loader platform abstraction.
+- Trust levels in the loader platform abstraction; `verify_sig` and `unwrap_cek` are required `LoaderPlatform` methods, so platforms must implement signature verification and content-key unwrapping (on-device decryption) explicitly — there is no fail-open default.
 - Zeroized key material in `tyu::keys::KeyMaterial`.
 - Key source parsing that rejects raw command-line hex keys and prefers `file:`, `env:`, or `fd:` references.
+- A guarded OTP-commit path: `--commit-otp` is refused unless `TYU_ALLOW_OTP=1` and `TYU_OTP_READBACK=verified` are set, and is always refused under `CI`.
 
 Where checks are enforced:
 - `loader-core::load_module` enforces trust-tier and signature/encryption rules.
@@ -879,7 +910,7 @@ Security-sensitive areas:
 - QEMU gdbstub escalation, because it can expose execution state and symbols.
 
 Obvious risks:
-- A fail-open default at Tier 0 if a platform implementation does not override verification.
+- A platform implementing `verify_sig` or `unwrap_cek` incorrectly (e.g. always returning success) would weaken the trust model; there is no default left in place, but implementations are trusted.
 - Version mismatches between container format, modinfo, and ABI hash can silently reject old artifacts.
 
 ## 16. Testing Strategy
@@ -933,7 +964,7 @@ Weaker areas:
 ## 17. Local Development Setup
 
 Required tools:
-- Stable Rust toolchain from `rust-toolchain.toml`.
+- Nightly Rust toolchain as pinned by `rust-toolchain.toml` (includes `rust-src` and `riscv32im-unknown-none-elf`).
 - `fasm`
 - `ld`
 - `qemu-system-x86_64`
@@ -1048,8 +1079,7 @@ What would need to change to scale further:
 
 ## 21. Common Developer Tasks
 
-### Add a new endpoint
-There is no HTTP endpoint surface in this repository. If you mean a new command or API entry point, add it to `tyu`, `langc`, or a helper binary using the relevant CLI parser and driver module.
+This section covers the template tasks that apply to this repository. (Tasks like "add a new endpoint", "database migration", "background job", or "UI component" do not apply: there is no HTTP, database, queue, or UI surface here.)
 
 ### Add a new config value
 Goal:
@@ -1155,7 +1185,7 @@ tyu test --filter=corpus --manifest=fixtures/manifest.toml
 Confirmed limitations:
 - Some tests are ignored; the docs note 15 ignored tests at the time of writing.
 - RISC-V end-to-end coverage is thinner than x86_64 and ARM.
-- There is no fuzzing harness tracked in the workspace.
+- Fuzzing covers only `modinfo_decode` and `parse_container`; the parser and codegen paths have no fuzz targets.
 - The effect/context matrix is a normative artifact, but not backed by a fully synthesized per-cell oracle.
 - `lang-assemble` is not fully implemented for the GAS backends in the current code path.
 
@@ -1170,7 +1200,6 @@ Coupling and hidden dependencies:
 - The build cache key assumes the compiler binary mtime and `CODEGEN_REV` are enough to model compiler identity.
 
 What should be refactored first:
-- Reconcile the modinfo/ABI versioning mismatch.
 - Continue reducing duplicated target/tool lookup logic.
 - Consider a clearer strategy for scaling beyond fixed-capacity compiler structures.
 
@@ -1220,11 +1249,13 @@ Mistakes to avoid:
 - `tyu run`
 - `tyu test`
 - `tyu deploy`
+- `tyu platform list|info|lint|new`
 - `tyu toolchain check <target>`
 - `langc --emit=ast|ir|tc|asm|obj ...`
 - `lmod-pack <input.o> <output.lmod>`
 - `lmod-sign <input.lmod> <output.lmod> --key=<hex-key>`
 - `lmod-encrypt <in.lmod> <out.lmod> --mode=fleet|device ...`
+- `cargo fuzz run parse_container` (from `fuzz/`)
 
 ### Important file references
 - `crates/tyu/src/main.rs`
@@ -1251,11 +1282,11 @@ Mistakes to avoid:
 - `docs/SETUP.md`
 - `docs/TROUBLESHOOTING.md`
 - `docs/GLOSSARY.md`
-- `docs/LIMITATIONS.md`
-- `docs/CLEANUP.md`
+- `docs/hil/rp2350.md` (hardware-in-the-loop replay via `TYU_RP2350_TRANSCRIPT` / `TYU_RP2350_EXPECT_DIAG`)
+
+Note: `devdocs/` (design specs, technical manual, developer guide) is intentionally git-ignored and non-authoritative; see `docs/DOCS.md`.
 
 ### Unanswered questions
-- Whether the `MODINFO_VER = 2` versus `3` discrepancy is an intentional transition or stale documentation/tests.
 - The exact intent of the root `Arith.asm` file.
 - Whether `lang-assemble` is meant to remain a thin wrapper or evolve into a first-class build step.
 

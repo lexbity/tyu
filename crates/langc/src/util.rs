@@ -41,7 +41,7 @@ impl Output for MemOut {
     }
 }
 
-pub fn emit_parse_error(path: &[u8], src: &[u8], code: u32, offset: usize) {
+pub fn emit_parse_error(path: &[u8], src: &[u8], code: u32, msg: &[u8], offset: usize) {
     let (line, col) = line_col(src, offset);
     let _ = io::stderr(path);
     let _ = io::stderr(b":");
@@ -49,7 +49,7 @@ pub fn emit_parse_error(path: &[u8], src: &[u8], code: u32, offset: usize) {
     let _ = io::stderr(b":");
     write_u32_stderr(col);
     let _ = io::stderr(b" ");
-    let _ = diag::error_simple(code, b"parse error");
+    let _ = diag::error_simple(code, msg);
 }
 
 pub fn write_u32_stderr(mut v: u32) {

@@ -75,6 +75,7 @@ fn single_block_word(sig: Sig, ops: &[OpKind]) -> Word {
         entry: BlockId(0),
         types: baseline_types(),
         type_sizes: baseline_sizes(),
+        subtype_bases: FixedVec::new(),
         blocks: {
             let mut b = FixedVec::new();
             b.push(Block {

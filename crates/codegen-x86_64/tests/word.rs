@@ -28,6 +28,51 @@ fn emit_const_i64() {
 }
 
 #[test]
+fn emit_const_i64_large_uses_register_path() {
+    // BUG-010: `mov r/m64, imm64` has no x86-64 encoding, so constants
+    // outside the sign-extended imm32 range must be loaded via a register.
+    // fasm rejects `mov qword [r15], 9223372036854775807`.
+    run_8mb!({
+        let out = emit(&single_block_word(
+            sig_0_1(TY_I64),
+            &[
+                OpKind::ConstI64(i64::MAX),
+                OpKind::ConstI64(i64::MIN),
+                OpKind::Drop { ty: TY_I64 },
+                OpKind::Ret,
+            ],
+        ));
+        assert!(
+            out.contains("mov rax, 9223372036854775807"),
+            "i64::MAX must be loaded via a register, got: {out}"
+        );
+        assert!(
+            out.contains("mov rax, -9223372036854775808"),
+            "i64::MIN must be loaded via a register, got: {out}"
+        );
+        assert!(
+            !out.contains("mov qword [r15], 9223372036854775807"),
+            "no unencodable memory-immediate for large constants, got: {out}"
+        );
+    });
+}
+
+#[test]
+fn emit_const_i64_small_keeps_memory_immediate() {
+    run_8mb!({
+        let out = emit(&single_block_word(
+            sig_0_1(TY_I64),
+            &[OpKind::ConstI64(2147483647), OpKind::Ret],
+        ));
+        // Fits in a sign-extended imm32 — the compact memory-immediate form is kept.
+        assert!(
+            out.contains("mov qword [r15], 2147483647"),
+            "small constants should keep the compact form, got: {out}"
+        );
+    });
+}
+
+#[test]
 fn emit_const_bool_true() {
     run_8mb!({
         let out = emit(&single_block_word(
@@ -331,6 +376,7 @@ fn emit_br_if() {
             entry: BlockId(1),
             types: baseline_types(),
             type_sizes: baseline_sizes(),
+            subtype_bases: frontend::fixed::FixedVec::new(),
             blocks,
         };
         let out = emit(&w);

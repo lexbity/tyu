@@ -62,6 +62,16 @@ const EQUIVALENT_FILES: &[(&str, &str)] = &[
         "runtime/include/semihosting-riscv.s",
         "platforms/riscv32-unknown-none/include/semihosting-riscv.s",
     ),
+    // x86_64-unknown-none generic pack (runtime + concurrency units were
+    // lifted; dynamic_entry.asm has no runtime/ counterpart)
+    (
+        "runtime/x86_64-unknown-none/concurrency.asm",
+        "platforms/x86_64-unknown-none/metal/concurrency.asm",
+    ),
+    (
+        "runtime/x86_64-unknown-none/runtime.asm",
+        "platforms/x86_64-unknown-none/metal/runtime.asm",
+    ),
 ];
 
 fn read(root: &Path, rel: &str) -> String {
@@ -98,6 +108,48 @@ fn generic_platform_runtimes_define_native_stack_guard() {
         assert!(
             rt.contains("__stack_overflow"),
             "platform {triple} runtime must define __stack_overflow"
+        );
+    }
+}
+
+/// BUG-016: the x86_64 codegen bounds-checks MMIO offsets against
+/// `MMIO_SIZE = 65536` (`crates/codegen-x86_64/src/mmio.rs`) and indexes
+/// `__mmio_mem + rax`.  Every runtime the emitted code links against must
+/// allocate at least that much, or an offset in `[allocation, 65535]`
+/// reads/writes past the array with no trap.
+fn mmio_mem_allocation(rt: &str) -> usize {
+    let lines: Vec<&str> = rt.lines().collect();
+    let idx = lines
+        .iter()
+        .position(|l| l.contains("__mmio_mem"))
+        .unwrap_or_else(|| panic!("runtime must define __mmio_mem"));
+    for line in &lines[idx..(idx + 4).min(lines.len())] {
+        for (needle, offset) in [("rb ", 3usize), (".space ", 7)] {
+            if let Some(pos) = line.find(needle) {
+                return line[pos + offset..]
+                    .trim()
+                    .parse::<usize>()
+                    .unwrap_or_else(|_| panic!("unparseable allocation: {line:?}"));
+            }
+        }
+    }
+    panic!("no allocation found after __mmio_mem");
+}
+
+#[test]
+fn x86_64_runtimes_allocate_mmio_mem_matching_codegen_bound() {
+    const MMIO_SIZE: usize = 65536; // MMIO_SIZE in crates/codegen-x86_64/src/mmio.rs
+    let root = workspace_root();
+    for rel in [
+        "runtime/x86_64-unknown-none/runtime.asm",
+        "platforms/x86_64-unknown-none/metal/runtime.asm",
+        "runtime/linux-x86_64-hosted.asm",
+    ] {
+        let rt = read(&root, rel);
+        assert_eq!(
+            mmio_mem_allocation(&rt),
+            MMIO_SIZE,
+            "{rel}: __mmio_mem must match codegen MMIO_SIZE (BUG-016)"
         );
     }
 }

@@ -268,6 +268,7 @@ pub enum TrapCode {
     StackOverflow,
     TaskQueueOverflow,
     Unreachable,
+    Deadlock,
 }
 
 pub const fn trap_code_u32(code: TrapCode) -> u32 {
@@ -278,6 +279,7 @@ pub const fn trap_code_u32(code: TrapCode) -> u32 {
         TrapCode::Unreachable => 23,
         TrapCode::TaskQueueOverflow => 24,
         TrapCode::StackOverflow => 10,
+        TrapCode::Deadlock => 25,
     }
 }
 
@@ -461,6 +463,10 @@ pub struct Word {
     pub entry: BlockId,
     pub types: FixedVec<Atom, 64>,
     pub type_sizes: FixedVec<u32, 64>,
+    /// `subtype_bases[i]` is the base `TypeId` of `types[i]` when it is a
+    /// subtype, otherwise `TY_EMPTY`.  The verifier uses it to accept a
+    /// subtype value where its base is declared (subsumption).
+    pub subtype_bases: FixedVec<TypeId, 64>,
     pub blocks: FixedVec<Block, 16>,
 }
 
@@ -721,7 +727,7 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
             OpKind::InterruptDisable | OpKind::InterruptEnable => {}
             OpKind::LocalSet { ty, .. } => {
                 let v = pop(&mut stack, &mut sp, op.span)?;
-                if v != ty {
+                if !type_ok(w, v, ty) {
                     return Err(VerifyError::LocalTypeMismatch { span: op.span });
                 }
             }
@@ -748,7 +754,7 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
                     return Err(VerifyError::CallStackUnderflow { span: op.span });
                 }
                 for i in 0..need {
-                    if stack[sp - need + i] != sig.inputs[i] {
+                    if !type_ok(w, stack[sp - need + i], sig.inputs[i]) {
                         return Err(VerifyError::CallInputTypeMismatch { span: op.span });
                     }
                 }
@@ -858,7 +864,7 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
                     return Err(VerifyError::RetStackDepthMismatch { span: op.span });
                 }
                 for (i, item) in stack.iter().enumerate().take(sp) {
-                    if *item != w.sig.outputs[i] {
+                    if !type_ok(w, *item, w.sig.outputs[i]) {
                         return Err(VerifyError::RetOutputTypeMismatch { span: op.span });
                     }
                 }
@@ -894,6 +900,19 @@ fn pop(stack: &mut [TypeId; 64], sp: &mut usize, span: Span) -> Result<TypeId, V
     }
     *sp -= 1;
     Ok(stack[*sp])
+}
+
+/// True when a value of type `got` may be used where `want` is declared:
+/// exact match, or `got` is a subtype of `want` (subsumption).  Keeps the
+/// verifier in agreement with the typechecker's `type_compatible`.
+fn type_ok(w: &Word, got: TypeId, want: TypeId) -> bool {
+    if got == want {
+        return true;
+    }
+    w.subtype_bases
+        .get(got.0 as usize)
+        .map(|&base| base == want)
+        .unwrap_or(false)
 }
 
 pub fn write_module(out: &mut impl Output, m: &Module) {
@@ -1187,6 +1206,7 @@ fn write_op(out: &mut impl Output, w: &Word, op: &Op) {
                 TrapCode::StackOverflow => b"STACK_OVERFLOW",
                 TrapCode::TaskQueueOverflow => b"TASK_QUEUE_OVERFLOW",
                 TrapCode::Unreachable => b"UNREACHABLE",
+                TrapCode::Deadlock => b"DEADLOCK",
             });
         }
         OpKind::Br { target } => {

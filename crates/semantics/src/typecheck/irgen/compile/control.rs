@@ -44,6 +44,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             Value::Quot(s) => s,
             _ => return Err(TcError::CallPopQuot { span: name_abs }),
         };
+        // `call` consumes the quotation value at runtime (BUG-012).
+        self.acc = self.acc.compose(StackBound {
+            net: -1,
+            high: High::Slots(0),
+        });
         // Build the runtime word first (with parent's lock context so
         // resource access inside the call works correctly).
         let (qname, qsig, performs, qbound) =

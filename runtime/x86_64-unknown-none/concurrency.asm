@@ -120,9 +120,15 @@ __task_exit:
   mov rcx, [__task_current]
   mov qword [__task_state + rcx*8], 3
   call __task_yield
-  mov rdi, 0
-  mov rax, 60
-  syscall
+  ; Yield returned to a DONE task: nothing is runnable anymore.  Mirror the
+  ; hosted runtime's clean exit(0) using this target's exit convention —
+  ; isa-debug-exit port 0x501 (guest writes 0 → QEMU exits (0<<1)|1 = pass),
+  ; then halt.  A Linux `exit` syscall is invalid here (BUG-015).
+  xor ax, ax
+  mov dx, 0x501
+  out dx, ax
+  cli
+  hlt
 
 ; ===========================================================================
 ; Task yield
@@ -232,7 +238,9 @@ __task_yield:
   je .task_yield_no_ready_active
   cmp r12, 4
   jne .task_yield_return
-  mov rdi, 23
+  ; All tasks blocked and nothing is runnable: program deadlock (BUG-005) —
+  ; deliver Deadlock (25), not the generic Unreachable (23).
+  mov rdi, 25
   jmp __lang_trap
 .task_yield_no_ready_active:
   mov qword [__task_state + rbx*8], 2
@@ -277,46 +285,20 @@ __task_join:
 ; ===========================================================================
 ; Task sleep (milliseconds)
 ; ===========================================================================
+; Bare metal has no timer driver, and the sysroot exposes sleep only on the
+; hosted target — nothing in the language surface can reach these entry
+; points.  A direct call must fail loudly instead of executing an invalid
+; Linux nanosleep syscall (BUG-015).
 __task_sleep_ms:
-  sub rsp, 16
-  mov rax, rdi
-  xor rdx, rdx
-  mov rcx, 1000
-  div rcx
-  mov [rsp], rax
-  mov rax, rdx
-  mov rcx, 1000000
-  imul rax, rcx
-  mov [rsp+8], rax
-  mov rdi, rsp
-  xor rsi, rsi
-  mov rax, 35
-  syscall
-  add rsp, 16
-  call __task_yield
-  ret
+  mov rdi, 23
+  jmp __lang_trap
 
 ; ===========================================================================
 ; Task sleep (microseconds)
 ; ===========================================================================
 __task_sleep_us:
-  sub rsp, 16
-  mov rax, rdi
-  xor rdx, rdx
-  mov rcx, 1000000
-  div rcx
-  mov [rsp], rax
-  mov rax, rdx
-  mov rcx, 1000
-  imul rax, rcx
-  mov [rsp+8], rax
-  mov rdi, rsp
-  xor rsi, rsi
-  mov rax, 35
-  syscall
-  add rsp, 16
-  call __task_yield
-  ret
+  mov rdi, 23
+  jmp __lang_trap
 
 ; ===========================================================================
 ; BSS — scheduler and channel state

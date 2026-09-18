@@ -437,7 +437,9 @@ end;\n",
     assert!(status.success());
 
     let run = Command::new(dir.join("prog")).status().unwrap();
-    assert_eq!(run.code(), Some(23));
+    // BUG-005: all-tasks-blocked deadlock delivers Deadlock (25), not the
+    // generic Unreachable (23), in the inline scheduler too.
+    assert_eq!(run.code(), Some(25));
 }
 
 #[test]

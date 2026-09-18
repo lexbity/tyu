@@ -70,6 +70,7 @@ fn word_with_single_block(sig: Sig, block_ops: &[OpKind]) -> Word {
         entry: BlockId(0),
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
+        subtype_bases: FixedVec::new(),
         blocks,
     }
 }
@@ -156,6 +157,7 @@ fn verifier_rejects_branch_stack_mismatch() {
         entry: BlockId(0),
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
+        subtype_bases: FixedVec::new(),
         blocks,
     };
 
@@ -217,6 +219,7 @@ fn verify_word_rejects_missing_entry_block() {
         entry: BlockId(0),
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
+        subtype_bases: FixedVec::new(),
         blocks,
     };
     assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9001);
@@ -266,6 +269,7 @@ fn verify_word_rejects_entry_stack_type_mismatch() {
         entry: BlockId(0),
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
+        subtype_bases: FixedVec::new(),
         blocks,
     };
     assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9003);
@@ -321,6 +325,7 @@ fn verify_block_rejects_ops_after_br() {
         entry: BlockId(1),
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
+        subtype_bases: FixedVec::new(),
         blocks,
     };
     assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9010);
@@ -728,6 +733,7 @@ fn verify_rejects_br_target_stack_type_mismatch() {
         entry: BlockId(1),
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
+        subtype_bases: FixedVec::new(),
         blocks,
     };
     assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9028);
@@ -781,6 +787,7 @@ fn verify_rejects_brif_cond_not_bool() {
         entry: BlockId(1),
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
+        subtype_bases: FixedVec::new(),
         blocks,
     };
     assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9029);
@@ -862,6 +869,7 @@ fn verify_rejects_brif_target_stack_depth_mismatch() {
         entry: BlockId(1),
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
+        subtype_bases: FixedVec::new(),
         blocks,
     };
     assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9031);
@@ -930,6 +938,7 @@ fn verify_rejects_brif_target_stack_type_mismatch() {
         entry: BlockId(1),
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
+        subtype_bases: FixedVec::new(),
         blocks,
     };
     assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9032);
@@ -990,6 +999,7 @@ fn verify_handles_stack_overflow() {
         entry: BlockId(0),
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
+        subtype_bases: FixedVec::new(),
         blocks,
     };
     // The verifier's stack is [TypeId; 64]; push 65 returns 9099.
@@ -1036,6 +1046,7 @@ fn verify_accepts_stack_64_exact() {
         entry: BlockId(0),
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
+        subtype_bases: FixedVec::new(),
         blocks,
     };
     ir::verify_word(&w).unwrap();
@@ -1086,6 +1097,7 @@ fn word_with_two_blocks(b0_ops: &[OpKind], b1_ops: &[OpKind]) -> Word {
         entry: BlockId(0),
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
+        subtype_bases: FixedVec::new(),
         blocks,
     }
 }
@@ -1183,6 +1195,7 @@ fn verify_rejects_brif_asymmetric_mismatch() {
         entry: BlockId(0),
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
+        subtype_bases: FixedVec::new(),
         blocks,
     };
     // BrIf then_tgt=1 expects empty stack, else_tgt=2 expects 1 i64 → mismatch
@@ -1253,6 +1266,7 @@ fn verify_accepts_back_edge() {
         entry: BlockId(0),
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
+        subtype_bases: FixedVec::new(),
         blocks,
     };
     // The verifier must not loop forever on the back-edge.
@@ -1447,6 +1461,132 @@ fn verify_accepts_check_subtype() {
 }
 
 // ---------------------------------------------------------------------------
+// BUG-007: subtype values flow where the base type is declared
+// ---------------------------------------------------------------------------
+
+/// A word whose type table adds `R` (a subtype of i64) at TypeId 7 with
+/// `subtype_bases[7] = TY_I64`.
+fn word_with_subtype(sig: Sig, block_ops: &[OpKind]) -> Word {
+    let mut ops: FixedVec<Op, 96> = FixedVec::new();
+    for &kind in block_ops {
+        ops.push(Op {
+            kind,
+            span: Span::UNKNOWN,
+        })
+        .unwrap();
+    }
+    let mut types = baseline_types();
+    types.push(atom(b"R")).unwrap(); // 7 — subtype of i64
+    let mut sizes = baseline_type_sizes();
+    sizes.push(8).unwrap(); // same runtime width as i64
+    let mut bases = FixedVec::new();
+    for _ in 0..7 {
+        bases.push(TY_EMPTY).unwrap();
+    }
+    bases.push(TY_I64).unwrap(); // R <: i64 (R is at index 7)
+
+    let b0 = Block {
+        id: BlockId(0),
+        entry_stack: FixedVec::new(),
+        ops,
+    };
+    let mut blocks: FixedVec<Block, 16> = FixedVec::new();
+    blocks.push(b0).unwrap();
+
+    Word {
+        name: atom(b"w"),
+        sig,
+        performs: EffectSet::empty(),
+        requires: CapSet::empty(),
+        bound: StackBound::ID,
+        entry: BlockId(0),
+        types,
+        type_sizes: sizes,
+        subtype_bases: bases,
+        blocks,
+    }
+}
+
+#[test]
+fn verifier_accepts_subtype_in_local_set() {
+    // Store a subtype R value into a local declared as its base i64.
+    let w = word_with_subtype(
+        sig0_1(TY_I64),
+        &[
+            OpKind::ConstI64(0),
+            OpKind::Cast {
+                from: TY_I64,
+                to: TypeId(7),
+            },
+            OpKind::LocalSet { slot: 0, ty: TY_I64 },
+            OpKind::LocalGet { slot: 0, ty: TY_I64 },
+            OpKind::Ret,
+        ],
+    );
+    ir::verify_word(&w).unwrap();
+}
+
+#[test]
+fn verifier_accepts_subtype_at_ret() {
+    // Return a subtype R value where the word declares i64.
+    let w = word_with_subtype(
+        sig0_1(TY_I64),
+        &[
+            OpKind::ConstI64(0),
+            OpKind::Cast {
+                from: TY_I64,
+                to: TypeId(7),
+            },
+            OpKind::Ret,
+        ],
+    );
+    ir::verify_word(&w).unwrap();
+}
+
+#[test]
+fn verifier_accepts_subtype_as_call_arg() {
+    let mut csig = Sig::empty();
+    csig.in_len = 1;
+    csig.inputs[0] = TY_I64;
+    let w = word_with_subtype(
+        Sig::empty(),
+        &[
+            OpKind::ConstI64(0),
+            OpKind::Cast {
+                from: TY_I64,
+                to: TypeId(7),
+            },
+            OpKind::Call {
+                name: atom(b"callee"),
+                sig: csig,
+                performs: EffectSet::empty(),
+                requires: CapSet::empty(),
+                bound: StackBound::ID,
+            },
+            OpKind::Ret,
+        ],
+    );
+    ir::verify_word(&w).unwrap();
+}
+
+#[test]
+fn verifier_rejects_base_value_where_subtype_declared() {
+    // Narrowing without a check is still invalid: an i64 value cannot be
+    // stored into an R-typed local.
+    let w = word_with_subtype(
+        sig0_1(TypeId(7)),
+        &[
+            OpKind::ConstI64(0),
+            OpKind::LocalSet { slot: 0, ty: TypeId(7) },
+            OpKind::LocalGet { slot: 0, ty: TypeId(7) },
+            OpKind::Ret,
+        ],
+    );
+    let err = ir::verify_word(&w).unwrap_err();
+    assert_eq!(err.code(), 9016);
+}
+
+// ---------------------------------------------------------------------------
 // Property-based tests
 // ---------------------------------------------------------------------------
 
@@ -1484,6 +1624,7 @@ mod proptests {
             entry: ir::BlockId(0),
             types: super::baseline_types(),
             type_sizes: super::baseline_type_sizes(),
+            subtype_bases: frontend::fixed::FixedVec::new(),
             blocks,
         }
     }

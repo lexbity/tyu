@@ -33,9 +33,18 @@ pub fn emit_push_i64(out: &mut dyn Output, v: i64) {
     out.write(b"  lea rax, [r15+8]\n");
     out.write(b"  cmp rax, r14\n");
     out.write(b"  ja __stack_overflow\n");
-    out.write(b"  mov qword [r15], ");
-    emit_i64(out, v);
-    out.write(b"\n");
+    if (i32::MIN as i64..=i32::MAX as i64).contains(&v) {
+        // Fits in a sign-extended imm32: `mov r/m64, imm32` is encodable.
+        out.write(b"  mov qword [r15], ");
+        emit_i64(out, v);
+        out.write(b"\n");
+    } else {
+        // `mov r/m64, imm64` has no encoding — go through a register.
+        out.write(b"  mov rax, ");
+        emit_i64(out, v);
+        out.write(b"\n");
+        out.write(b"  mov [r15], rax\n");
+    }
     out.write(b"  add r15, 8\n");
     emit_update_ds_high(out);
 }
@@ -44,9 +53,19 @@ pub fn emit_push_u64(out: &mut dyn Output, v: u64) {
     out.write(b"  lea rax, [r15+8]\n");
     out.write(b"  cmp rax, r14\n");
     out.write(b"  ja __stack_overflow\n");
-    out.write(b"  mov qword [r15], ");
-    write_u64_hex(out, v);
-    out.write(b"\n");
+    let as_i64 = v as i64;
+    if as_i64 >= i32::MIN as i64 && as_i64 <= i32::MAX as i64 {
+        // Fits in a sign-extended imm32: `mov r/m64, imm32` is encodable.
+        out.write(b"  mov qword [r15], ");
+        write_u64_hex(out, v);
+        out.write(b"\n");
+    } else {
+        // `mov r/m64, imm64` has no encoding — go through a register.
+        out.write(b"  mov rax, ");
+        write_u64_hex(out, v);
+        out.write(b"\n");
+        out.write(b"  mov [r15], rax\n");
+    }
     out.write(b"  add r15, 8\n");
     emit_update_ds_high(out);
 }
@@ -69,7 +88,9 @@ pub fn emit_i64(out: &mut dyn Output, mut v: i64) {
     } else {
         if v < 0 {
             out.write(b"-");
-            v = -v;
+            // Negate in u64 space so i64::MIN (-9223372036854775808) does
+            // not overflow on `-v`.
+            v = v.wrapping_neg();
         }
         let mut u = v as u64;
         while u > 0 && n < buf.len() {

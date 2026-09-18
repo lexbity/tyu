@@ -25,6 +25,32 @@ struct DriverEnv {
     import_env_end: usize,
 }
 
+/// Human-readable message for a codegen error code.  Most codegen failures
+/// share the generic "asm emission error" text, but E8013 (modinfo too large)
+/// must surface the specific "too many exports for modinfo" diagnostic (BUG-006).
+fn codegen_error_message(code: u32) -> &'static [u8] {
+    match code {
+        8013 => b"too many exports for modinfo",
+        _ => b"asm emission error",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::codegen_error_message;
+
+    #[test]
+    fn e8013_names_too_many_exports() {
+        assert_eq!(codegen_error_message(8013), b"too many exports for modinfo");
+    }
+
+    #[test]
+    fn other_codegen_codes_stay_generic() {
+        assert_eq!(codegen_error_message(8001), b"asm emission error");
+        assert_eq!(codegen_error_message(0), b"asm emission error");
+    }
+}
+
 fn init_env(
     module: &ModuleAst,
     src: &[u8],
@@ -143,7 +169,7 @@ pub fn emit_asm_driver(
     );
     let gen: &mut dyn CodegenBackend = &mut gen_backend;
     if let Err(e) = gen.emit_prelude() {
-        let _ = diag::error_simple(e.code(), b"asm emission error");
+        let _ = diag::error_simple(e.code(), codegen_error_message(e.code()));
         return 2;
     }
 
@@ -178,7 +204,7 @@ pub fn emit_asm_driver(
             return 2;
         }
         Err(semantics::typecheck::ForEachIrError::Consumer(e)) => {
-            let _ = diag::error_simple(e.code(), b"asm emission error");
+            let _ = diag::error_simple(e.code(), codegen_error_message(e.code()));
             return 2;
         }
     }
@@ -188,7 +214,7 @@ pub fn emit_asm_driver(
     }
 
     if let Err(e) = gen.emit_postlude() {
-        let _ = diag::error_simple(e.code(), b"asm emission error");
+        let _ = diag::error_simple(e.code(), codegen_error_message(e.code()));
         return 2;
     }
     0
@@ -347,7 +373,7 @@ pub fn emit_obj_driver(
     };
 
     if let Err(e) = gen.emit_prelude() {
-        let _ = diag::error_simple(e.code(), b"asm emission error");
+        let _ = diag::error_simple(e.code(), codegen_error_message(e.code()));
         return 2;
     }
 
@@ -355,7 +381,7 @@ pub fn emit_obj_driver(
     // can resolve cross-module calls at link time.
     for i in builtin_env_end..import_env_end {
         if let Err(e) = gen.emit_extern_word(es.env[i].name.as_bytes()) {
-            let _ = diag::error_simple(e.code(), b"asm emission error");
+            let _ = diag::error_simple(e.code(), codegen_error_message(e.code()));
             return 2;
         }
     }
@@ -390,7 +416,7 @@ pub fn emit_obj_driver(
             return 2;
         }
         Err(semantics::typecheck::ForEachIrError::Consumer(e)) => {
-            let _ = diag::error_simple(e.code(), b"asm emission error");
+            let _ = diag::error_simple(e.code(), codegen_error_message(e.code()));
             return 2;
         }
     }
@@ -400,7 +426,7 @@ pub fn emit_obj_driver(
     }
 
     if let Err(e) = gen.emit_postlude() {
-        let _ = diag::error_simple(e.code(), b"asm emission error");
+        let _ = diag::error_simple(e.code(), codegen_error_message(e.code()));
         return 2;
     }
     if mem.err.is_some() {

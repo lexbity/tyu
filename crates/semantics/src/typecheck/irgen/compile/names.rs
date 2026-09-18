@@ -190,6 +190,21 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                     place: self.local_place[idx],
                 },
             )?;
+        } else if matches!(self.local_tys[idx], TypeAtom::PTR | TypeAtom::PTR_MUT) {
+            // Raw pointer local (no provenance): reconstruct the Value::Ptr
+            // shape so the typed load/store surface (@TY / !TY) accepts it
+            // (BUG-003).  Pointee is unknown (EMPTY), so the asserted type
+            // wins — identical to the `as ptr` cast shape.
+            let mutable = self.local_tys[idx] == TypeAtom::PTR_MUT;
+            push(
+                stack,
+                sp,
+                Value::Ptr {
+                    ty: TypeAtom::EMPTY,
+                    mutable,
+                    place: PLACE_NONE,
+                },
+            )?;
         } else if self.local_scoped[idx] != 0 {
             push(
                 stack,
@@ -233,7 +248,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 return Err(TcError::SuspendForbidden { span });
             }
         }
-        self.acc = self.acc.compose(entry.bound);
         apply_sig(stack, sp, entry, name_abs, self.subtypes)?;
 
         // S7: accumulate callee effects into the word's computed performs set.
@@ -298,6 +312,15 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         if let Some(kind) = builtin {
             self.emit_op(cur, kind, name_abs)?;
         } else {
+            // Real call: `emit_op` does not account `Call`, so compose the
+            // caller-visible delta from the callee's signature (`out − in`).
+            // `entry.bound`'s `net` is unreliable for imported/stub words
+            // (net 0 regardless of sig) and must not drive branch-merging
+            // equality (BUG-012); its `high` still carries the callee's peak.
+            self.acc = self.acc.compose(StackBound {
+                net: entry.sig.out_len as i16 - entry.sig.in_len as i16,
+                high: entry.bound.high,
+            });
             let call_sig = self.lir_sig_for_entry(&entry.sig, name_abs)?;
             self.emit_op(
                 cur,
@@ -497,10 +520,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             if is_iso_type(self.iso, top_ty) {
                 return Err(TcError::IsoDup { span: name_abs });
             }
-            self.acc = self.acc.compose(StackBound {
-                net: 1,
-                high: High::Slots(1),
-            });
             push(stack, sp, top)?;
             push(stack, sp, top)?;
             let tid = self.ty_id_of_value(top, name_abs)?;
@@ -513,16 +532,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             if is_iso_type(self.iso, top_ty) {
                 return Err(TcError::IsoDrop { span: name_abs });
             }
-            self.acc = self.acc.compose(StackBound {
-                net: -1,
-                high: High::Slots(0),
-            });
             let tid = self.ty_id_of_value(top, name_abs)?;
             self.emit_op(cur, lir::OpKind::Drop { ty: tid }, name_abs)?;
             return Ok(cur);
         }
         if name == b"swap" {
-            self.acc = self.acc.compose(StackBound::ID);
             let b = pop(stack, sp).ok_or(TcError::StackUnderflow { span })?;
             let a = pop(stack, sp).ok_or(TcError::StackUnderflow { span })?;
             push(stack, sp, b)?;

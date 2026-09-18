@@ -42,6 +42,10 @@ pub enum CodegenError {
 
     /// Exceeded available scoped-allocation slots.
     ScopedAllocationOverflow,
+
+    /// The `.lang.modinfo` section could not be encoded (fixed 64-entry
+    /// export/import arrays or fixed-size buffer too small).
+    ModInfoTooLarge,
 }
 
 impl CodegenError {
@@ -62,6 +66,7 @@ impl CodegenError {
             Self::UnsupportedCheckSubtype => 8010,
             Self::StringLiteralCapacityExceeded => 8011,
             Self::ScopedAllocationOverflow => 8012,
+            Self::ModInfoTooLarge => 8013,
         }
     }
 }

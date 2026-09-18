@@ -120,6 +120,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         let arena = arena as *mut arena::ArenaAllocator;
         let mut types: FixedVec<lir::Atom, 64> = FixedVec::new();
         let mut type_sizes: FixedVec<u32, 64> = FixedVec::new();
+        let mut subtype_bases: FixedVec<lir::TypeId, 64> = FixedVec::new();
         let z = lir::AT_EMPTY;
         types.push(z).map_err(|_| TcError::TypeTableFull {
             span: Span::new(0, 0),
@@ -127,6 +128,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         type_sizes.push(0).map_err(|_| TcError::TypeTableFull {
             span: Span::new(0, 0),
         })?;
+        subtype_bases
+            .push(lir::TY_EMPTY)
+            .map_err(|_| TcError::TypeTableFull {
+                span: Span::new(0, 0),
+            })?;
         types
             .push(lir::AT_I64)
             .map_err(|_| TcError::TypeTableFull {
@@ -135,6 +141,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         type_sizes.push(8).map_err(|_| TcError::TypeTableFull {
             span: Span::new(0, 0),
         })?;
+        subtype_bases
+            .push(lir::TY_EMPTY)
+            .map_err(|_| TcError::TypeTableFull {
+                span: Span::new(0, 0),
+            })?;
         types
             .push(lir::AT_BOOL)
             .map_err(|_| TcError::TypeTableFull {
@@ -143,6 +154,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         type_sizes.push(1).map_err(|_| TcError::TypeTableFull {
             span: Span::new(0, 0),
         })?;
+        subtype_bases
+            .push(lir::TY_EMPTY)
+            .map_err(|_| TcError::TypeTableFull {
+                span: Span::new(0, 0),
+            })?;
         types
             .push(lir::AT_STR)
             .map_err(|_| TcError::TypeTableFull {
@@ -151,6 +167,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         type_sizes.push(8).map_err(|_| TcError::TypeTableFull {
             span: Span::new(0, 0),
         })?;
+        subtype_bases
+            .push(lir::TY_EMPTY)
+            .map_err(|_| TcError::TypeTableFull {
+                span: Span::new(0, 0),
+            })?;
         types
             .push(lir::AT_PTR)
             .map_err(|_| TcError::TypeTableFull {
@@ -159,6 +180,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         type_sizes.push(8).map_err(|_| TcError::TypeTableFull {
             span: Span::new(0, 0),
         })?;
+        subtype_bases
+            .push(lir::TY_EMPTY)
+            .map_err(|_| TcError::TypeTableFull {
+                span: Span::new(0, 0),
+            })?;
         types
             .push(lir::AT_PTR_MUT)
             .map_err(|_| TcError::TypeTableFull {
@@ -167,6 +193,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         type_sizes.push(8).map_err(|_| TcError::TypeTableFull {
             span: Span::new(0, 0),
         })?;
+        subtype_bases
+            .push(lir::TY_EMPTY)
+            .map_err(|_| TcError::TypeTableFull {
+                span: Span::new(0, 0),
+            })?;
         types
             .push(lir::AT_MMIO)
             .map_err(|_| TcError::TypeTableFull {
@@ -175,6 +206,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         type_sizes.push(8).map_err(|_| TcError::TypeTableFull {
             span: Span::new(0, 0),
         })?;
+        subtype_bases
+            .push(lir::TY_EMPTY)
+            .map_err(|_| TcError::TypeTableFull {
+                span: Span::new(0, 0),
+            })?;
 
         let mut lir_sig = lir::Sig::empty();
         lir_sig.in_len = sig.in_len;
@@ -250,6 +286,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 entry: lir::BlockId(0),
                 types,
                 type_sizes,
+                subtype_bases,
                 blocks,
             },
             extra_words,
@@ -299,10 +336,76 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         kind: lir::OpKind,
         span: Span,
     ) -> Result<(), TcError> {
+        // BUG-012: keep the stack-bound accumulator in lockstep with the
+        // runtime data-stack delta of every op, so `branch_max`'s equal-net
+        // invariant holds for all well-typed programs.  Ops that need caller
+        // context (`Call`, control-flow targets) return `None` and their
+        // caller accounts the delta.
+        if let Some(delta) = Self::op_stack_delta(&kind) {
+            self.acc = self.acc.compose(delta);
+        }
         let op = lir::Op { kind, span };
         let b = self.block_mut(cur)?;
         b.ops.push(op).map_err(|_| TcError::OpTableFull { span })?;
         Ok(())
+    }
+
+    /// Stack delta of a single `OpKind`, matching the runtime data-stack
+    /// effect (BUG-012).  `None` means the op does not change stack depth or
+    /// the caller accounts it explicitly (`Call`, `Br`, `Ret`).
+    pub(super) fn op_stack_delta(kind: &lir::OpKind) -> Option<StackBound> {
+        const ONE: StackBound = StackBound {
+            net: 1,
+            high: High::Slots(1),
+        };
+        const ZERO: StackBound = StackBound {
+            net: 0,
+            high: High::Slots(0),
+        };
+        const NEG1: StackBound = StackBound {
+            net: -1,
+            high: High::Slots(0),
+        };
+        const NEG2: StackBound = StackBound {
+            net: -2,
+            high: High::Slots(0),
+        };
+        match kind {
+            lir::OpKind::ConstI64(_) | lir::OpKind::ConstBool(_) | lir::OpKind::ConstStr(_) => {
+                Some(ONE)
+            }
+            lir::OpKind::AddrOf { .. } | lir::OpKind::MmioPlace { .. } => Some(ONE),
+            lir::OpKind::ScopedEnter { .. } => Some(ONE),
+            lir::OpKind::TaskSpawn { .. } => Some(ONE),
+            lir::OpKind::PtrAddConst { .. } => Some(ZERO),
+            lir::OpKind::PtrAddIndex { .. } => Some(NEG1),
+            lir::OpKind::Dup { .. } => Some(ONE),
+            lir::OpKind::Drop { .. } => Some(NEG1),
+            lir::OpKind::Swap { .. } => Some(ZERO),
+            lir::OpKind::AddI64 | lir::OpKind::SubI64 | lir::OpKind::MulI64 => Some(NEG1),
+            lir::OpKind::Cmp { .. } | lir::OpKind::AndBool | lir::OpKind::OrBool => Some(NEG1),
+            lir::OpKind::NotBool
+            | lir::OpKind::InterruptDisable
+            | lir::OpKind::InterruptEnable => Some(ZERO),
+            lir::OpKind::LocalSet { .. } => Some(NEG1),
+            lir::OpKind::LocalGet { .. } => Some(ONE),
+            lir::OpKind::Cast { .. } | lir::OpKind::Bitcast { .. } => Some(ZERO),
+            lir::OpKind::Load { .. }
+            | lir::OpKind::MmioVolLoad { .. }
+            | lir::OpKind::MmioVolLoadField { .. } => Some(ZERO),
+            lir::OpKind::Store { .. }
+            | lir::OpKind::MmioVolStore { .. }
+            | lir::OpKind::MmioVolStoreField { .. } => Some(NEG2),
+            lir::OpKind::CheckSubtype { .. } => Some(ONE),
+            lir::OpKind::TrapIfFalse { .. } => Some(NEG1),
+            // `BrIf` pops the condition, but the control-flow compilers
+            // (`if`/`while`/`loop`) snapshot and reset `self.acc` around the
+            // branch, so they account it themselves.  `Call` (caller composes
+            // the callee's sig/bound), `Br`, `Ret` are handled by their callers.
+            lir::OpKind::BrIf { .. } | lir::OpKind::Call { .. } | lir::OpKind::Br { .. } | lir::OpKind::Ret => {
+                None
+            }
+        }
     }
 
     pub(super) fn emit_subtype_range_trap(
@@ -415,6 +518,7 @@ pub(super) enum SuspendBlocker {
 
 impl<'a, 'r> IrWordGen<'a, 'r> {
     pub(super) fn finish(mut self, span: Span) -> Result<IrWordOutput<'r>, TcError> {
+        self.fill_subtype_bases(span)?;
         self.word.bound = self.acc;
         let word = unsafe {
             let arena = &mut *self.arena;
@@ -425,6 +529,30 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             word,
             extra_words: self.extra_words,
         })
+    }
+
+    /// Populate `word.subtype_bases` so the IR verifier can accept a subtype
+    /// value where its base type is declared (subsumption).  Runs once the
+    /// word's type table is final.
+    pub(super) fn fill_subtype_bases(&mut self, span: Span) -> Result<(), TcError> {
+        let mut bases: FixedVec<lir::TypeId, 64> = FixedVec::new();
+        let n = self.word.types.len();
+        for i in 0..n {
+            let atom_opt = self.word.types.iter().nth(i);
+            let Some(atom) = atom_opt else {
+                break;
+            };
+            let ty = TypeAtom::new(atom.as_bytes()).unwrap_or(TypeAtom::EMPTY);
+            let base = match find_subtype(self.subtypes, ty) {
+                Some(st) => self.ty_id_of_type(st.base, span)?,
+                None => lir::TY_EMPTY,
+            };
+            bases
+                .push(base)
+                .map_err(|_| TcError::TypeTableFull { span })?;
+        }
+        self.word.subtype_bases = bases;
+        Ok(())
     }
 
     /// Unified suspend blocker — checks the three rejection dimensions

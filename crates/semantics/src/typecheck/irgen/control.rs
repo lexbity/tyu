@@ -40,6 +40,12 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         if cond != Value::Plain(TypeAtom::BOOL) {
             return Err(TcError::IfCondNotBool { span });
         }
+        // `if` consumes its boolean condition at runtime — account the pop so
+        // branch nets reflect the real stack delta (BUG-012).
+        self.acc = self.acc.compose(StackBound {
+            net: -1,
+            high: High::Slots(0),
+        });
         let then_span = match then_q {
             Value::Quot(s) => s,
             _ => return Err(TcError::IfThenNotQuot { span }),

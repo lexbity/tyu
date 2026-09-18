@@ -129,13 +129,15 @@ __task_spawn:
     addi sp, sp, 16
     ret
 .spawn_fail:
-    li a0, 0
+    # No free slot or global queue full: trap (BUG-005) instead of returning
+    # task id 0 (which would alias main).
     lw ra, 12(sp)
     lw s0, 8(sp)
     lw s1, 4(sp)
     lw s4, 0(sp)
     addi sp, sp, 16
-    ret
+    li a0, 23
+    j __lang_trap
 
 # ===========================================================================
 # __task_entry_tramp
@@ -180,12 +182,13 @@ __task_exit:
 #   ACTIVE, then finds next task: local queue → global queue → stay.
 # ===========================================================================
 __task_yield:
-    addi sp, sp, -20
-    sw ra, 16(sp)
-    sw s0, 12(sp)
-    sw s1, 8(sp)
-    sw s4, 4(sp)
-    sw s5, 0(sp)
+    addi sp, sp, -24
+    sw ra, 20(sp)
+    sw s0, 16(sp)
+    sw s1, 12(sp)
+    sw s4, 8(sp)
+    sw s5, 4(sp)
+    sw s6, 0(sp)
     # save current task context
     la t0, __task_current
     lw s0, 0(t0)              # s0 = current task id
@@ -201,13 +204,14 @@ __task_yield:
     slli t1, s0, 2
     add t0, t0, t1
     sw s3, 0(t0)              # save DS limit
-    # re-enqueue if state == ACTIVE (2)
+    # capture entry state for the no-ready/deadlock decision (BUG-005)
     la t0, __task_state
     slli t1, s0, 2
     add t0, t0, t1
-    lw t1, 0(t0)              # t1 = state
+    lw s6, 0(t0)              # s6 = entry state
+    # re-enqueue if state == ACTIVE (2)
     li t2, 2
-    bne t1, t2, .yield_no_enqueue
+    bne s6, t2, .yield_no_enqueue
     li t1, 1                  # READY
     sw t1, 0(t0)
     # enqueue to current worker
@@ -287,12 +291,30 @@ __task_yield:
     sw t2, 0(t1)
     j .yield_switch
 .yield_return_self:
-    lw ra, 16(sp)
-    lw s0, 12(sp)
-    lw s1, 8(sp)
-    lw s4, 4(sp)
-    lw s5, 0(sp)
-    addi sp, sp, 20
+    # deadlock detection (BUG-005): nothing is runnable and the current task
+    # was BLOCKED (state 4) → the program is deadlocked — deliver Deadlock
+    # (25), not the generic Unreachable (23).
+    li t0, 2
+    beq s6, t0, .yield_keep_running
+    li t0, 4
+    bne s6, t0, .yield_keep_running
+    lw ra, 20(sp)
+    lw s0, 16(sp)
+    lw s1, 12(sp)
+    lw s4, 8(sp)
+    lw s5, 4(sp)
+    lw s6, 0(sp)
+    addi sp, sp, 24
+    li a0, 25
+    j __lang_trap
+.yield_keep_running:
+    lw ra, 20(sp)
+    lw s0, 16(sp)
+    lw s1, 12(sp)
+    lw s4, 8(sp)
+    lw s5, 4(sp)
+    lw s6, 0(sp)
+    addi sp, sp, 24
     ret
 .yield_switch:
     # switch to task s0
@@ -315,12 +337,13 @@ __task_yield:
     slli t1, s0, 2
     add t0, t0, t1
     lw s3, 0(t0)              # restore DS limit
-    lw ra, 16(sp)
-    lw s0, 12(sp)
-    lw s1, 8(sp)
-    lw s4, 4(sp)
-    lw s5, 0(sp)
-    addi sp, sp, 20
+    lw ra, 20(sp)
+    lw s0, 16(sp)
+    lw s1, 12(sp)
+    lw s4, 8(sp)
+    lw s5, 4(sp)
+    lw s6, 0(sp)
+    addi sp, sp, 24
     ret
 
 # ===========================================================================
@@ -348,10 +371,12 @@ __task_join:
     add t0, t0, t1
     sw zero, 0(t0)
 .join_invalid:
+    # Invalid task id: trap (BUG-005) instead of silently returning.
     lw ra, 4(sp)
     lw s0, 0(sp)
     addi sp, sp, 8
-    ret
+    li a0, 23
+    j __lang_trap
 
 # ===========================================================================
 # BSS

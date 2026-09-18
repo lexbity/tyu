@@ -32,8 +32,8 @@ impl<'a> Parser<'a> {
             let mut lex2 = self.lex;
             let next = lex2.next();
             if next.kind == TokenKind::PunctLBrace {
-                // Old `!{` syntax — produce a migration hint.
-                // Consume tokens until matching `}` to keep parser in sync.
+                // Old `!{` syntax — migration hint.  Consume tokens until
+                // matching `}` to keep parser in sync.
                 let mut depth = 1u32;
                 while depth > 0 {
                     let t = lex2.next();
@@ -49,59 +49,7 @@ impl<'a> Parser<'a> {
                 }
                 self.lex = lex2;
                 // Error: migration hint
-                return Err(ParseError::ExpectedModule {
-                    span: self.look.span,
-                });
-                // TODO: proper error message when ParseError gets a migration-hint variant
-            }
-        }
-        if self.look.kind == TokenKind::KwPerforms {
-            has_explicit_performs = true;
-            self.bump();
-            if self.look.kind == TokenKind::PunctLBrace {
-                let brace_span = self.capture_balanced(
-                    TokenKind::PunctLBrace,
-                    TokenKind::PunctRBrace,
-                    ParseError::ExpectedRBrace {
-                        span: self.look.span,
-                    },
-                )?;
-                let inner = &self.slice(brace_span)[1..brace_span.end - brace_span.start - 1];
-                // Build a fixed buffer mimicking `!{content}` for parse_effect_bits.
-                let mut buf = [0u8; 128];
-                let mut buf_len = 0usize;
-                buf[buf_len] = b'!';
-                buf_len += 1;
-                buf[buf_len] = b'{';
-                buf_len += 1;
-                for &b in inner.iter().take(125 - buf_len) {
-                    buf[buf_len] = b;
-                    buf_len += 1;
-                }
-                buf[buf_len] = b'}';
-                buf_len += 1;
-                let (bits, net, high) = parse_effect_bits(&buf[..buf_len]);
-                effect_bits = bits;
-                effect_net = net;
-                effect_high = high;
-                // D-8: reject unknown effect names.
-                // Scan the inner content (comma-separated) for any name that
-                // is not in the known set.  Skip net=/high= parameters.
-                for segment in core::str::from_utf8(inner).unwrap_or("").split(',') {
-                    let s = segment.trim();
-                    if s.is_empty() || s.starts_with("net=") || s.starts_with("high=") {
-                        continue;
-                    }
-                    let known = matches!(s, "suspend" | "interrupt" | "diverge" | "mmio" | "alloc");
-                    if !known {
-                        return Err(ParseError::UnknownEffect {
-                            span: brace_span,
-                            name: Span::UNKNOWN,
-                        });
-                    }
-                }
-            } else {
-                return Err(ParseError::ExpectedRBrace {
+                return Err(ParseError::LegacyEffectBang {
                     span: self.look.span,
                 });
             }
@@ -111,6 +59,8 @@ impl<'a> Parser<'a> {
         // `requires {...}` introduces compile-time capability sets.
         // `requires [...]` is a migration hint error.
         // `ensures [...]` is unchanged.
+        // `performs {...}` may appear before or after the bracket clauses —
+        // the clause loop accepts any order (BUG-011).
         let mut contract_needs: Option<Span> = None;
         let mut ensures: Option<Span> = None;
         let mut cap_set: Option<Span> = None;
@@ -134,10 +84,10 @@ impl<'a> Parser<'a> {
                             },
                         )?);
                     } else if self.look.kind == TokenKind::PunctLBracket {
-                        return Err(ParseError::ExpectedModule {
+                        // Legacy `requires [ ... ]` contract — migration hint.
+                        return Err(ParseError::LegacyRequiresContract {
                             span: self.look.span,
                         });
-                        // TODO: proper migration hint error: "use `needs [` for contracts"
                     } else {
                         return Err(ParseError::ExpectedQuotation {
                             span: self.look.span,
@@ -149,6 +99,57 @@ impl<'a> Parser<'a> {
                     ensures = Some(self.capture_quotation(ParseError::ExpectedQuotation {
                         span: self.look.span,
                     })?);
+                }
+                TokenKind::KwPerforms => {
+                    has_explicit_performs = true;
+                    self.bump();
+                    if self.look.kind != TokenKind::PunctLBrace {
+                        return Err(ParseError::ExpectedRBrace {
+                            span: self.look.span,
+                        });
+                    }
+                    let brace_span = self.capture_balanced(
+                        TokenKind::PunctLBrace,
+                        TokenKind::PunctRBrace,
+                        ParseError::ExpectedRBrace {
+                            span: self.look.span,
+                        },
+                    )?;
+                    let inner = &self.slice(brace_span)[1..brace_span.end - brace_span.start - 1];
+                    // Build a fixed buffer mimicking `!{content}` for parse_effect_bits.
+                    let mut buf = [0u8; 128];
+                    let mut buf_len = 0usize;
+                    buf[buf_len] = b'!';
+                    buf_len += 1;
+                    buf[buf_len] = b'{';
+                    buf_len += 1;
+                    for &b in inner.iter().take(125 - buf_len) {
+                        buf[buf_len] = b;
+                        buf_len += 1;
+                    }
+                    buf[buf_len] = b'}';
+                    buf_len += 1;
+                    let (bits, net, high) = parse_effect_bits(&buf[..buf_len]);
+                    effect_bits = bits;
+                    effect_net = net;
+                    effect_high = high;
+                    // D-8: reject unknown effect names.
+                    // Scan the inner content (comma-separated) for any name that
+                    // is not in the known set.  Skip net=/high= parameters.
+                    for segment in core::str::from_utf8(inner).unwrap_or("").split(',') {
+                        let s = segment.trim();
+                        if s.is_empty() || s.starts_with("net=") || s.starts_with("high=") {
+                            continue;
+                        }
+                        let known =
+                            matches!(s, "suspend" | "interrupt" | "diverge" | "mmio" | "alloc");
+                        if !known {
+                            return Err(ParseError::UnknownEffect {
+                                span: brace_span,
+                                name: Span::UNKNOWN,
+                            });
+                        }
+                    }
                 }
                 _ => break,
             }

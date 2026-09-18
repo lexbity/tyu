@@ -208,7 +208,7 @@ pub enum TcError {
         span: Span,
     },
 
-    // 3520-3522: Resources/db
+    // 3520-3523: Resources/db
     ResourceNameInvalid {
         span: Span,
     },
@@ -216,6 +216,9 @@ pub enum TcError {
         span: Span,
     },
     ResourceCapacityExceeded {
+        span: Span,
+    },
+    IsrCapacityExceeded {
         span: Span,
     },
 
@@ -312,6 +315,18 @@ pub enum TcError {
         span: Span,
     },
     MmioTypedMismatch {
+        span: Span,
+    },
+    MmioInstanceCapacityExceeded {
+        span: Span,
+    },
+    MmioMapCapacityExceeded {
+        span: Span,
+    },
+    MmioNameInvalid {
+        span: Span,
+    },
+    MmioAddrInvalid {
         span: Span,
     },
 
@@ -610,6 +625,7 @@ impl TcError {
             TcError::ResourceNameInvalid { .. } => 3520,
             TcError::ResourceTypeInvalid { .. } => 3521,
             TcError::ResourceCapacityExceeded { .. } => 3522,
+            TcError::IsrCapacityExceeded { .. } => 3523,
             TcError::MmioPlaceTooDeep { .. } => 3600,
             TcError::MmioMapNotFound { .. } => 3602,
             TcError::MmioRegNotFound { .. } => 3603,
@@ -640,6 +656,10 @@ impl TcError {
             TcError::MmioTypedAtomInvalid { .. } => 3632,
             TcError::MmioTypedPopAddr { .. } => 3633,
             TcError::MmioTypedMismatch { .. } => 3634,
+            TcError::MmioInstanceCapacityExceeded { .. } => 3635,
+            TcError::MmioMapCapacityExceeded { .. } => 3636,
+            TcError::MmioNameInvalid { .. } => 3637,
+            TcError::MmioAddrInvalid { .. } => 3638,
             TcError::DestructBorrowMix { .. } => 3701,
             TcError::DestructExpectedIdent { .. } => 3702,
             TcError::DestructEmpty { .. } => 3703,
@@ -811,6 +831,11 @@ impl TcError {
             | TcError::MmioTypedAtomInvalid { span }
             | TcError::MmioTypedPopAddr { span }
             | TcError::MmioTypedMismatch { span }
+            | TcError::MmioInstanceCapacityExceeded { span }
+            | TcError::MmioMapCapacityExceeded { span }
+            | TcError::MmioNameInvalid { span }
+            | TcError::MmioAddrInvalid { span }
+            | TcError::IsrCapacityExceeded { span }
             | TcError::DestructBorrowMix { span }
             | TcError::DestructExpectedIdent { span }
             | TcError::DestructEmpty { span }

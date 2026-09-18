@@ -246,7 +246,9 @@ __task_yield:
   je .task_yield_no_ready_active
   cmp r12, 4
   jne .task_yield_return
-  mov rdi, 23
+  ; All tasks blocked and nothing is runnable: this is a program deadlock
+  ; (BUG-005) — deliver Deadlock (25), not the generic Unreachable (23).
+  mov rdi, 25
   jmp __lang_trap
 .task_yield_no_ready_active:
   mov qword [__task_state + rbx*8], 2
@@ -414,6 +416,7 @@ __task_g_tail dq 0
 __task_g_buf rq TASK_GLOBAL_CAP
 __task_ds_mem rb 1048576
 __task_cs_mem rb 1048576
+public __mmio_mem
 __mmio_mem rb 65536
 __lang_gpio_state dq 0
 __lang_ds_base rb 65536

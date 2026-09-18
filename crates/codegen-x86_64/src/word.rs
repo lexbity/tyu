@@ -12,8 +12,8 @@ use crate::ophelpers::{
 use crate::region;
 use crate::task;
 use crate::util::{
-    count_scoped_slices, fnv1a_u64, is_exported, line_col, locals_bytes_ir, mask_for_bits,
-    max_local_slot_ir, prim_ty, prim_ty_bits_signed,
+    count_scoped_slices, find_resource_decl, fnv1a_u64, is_exported, line_col, locals_bytes_ir,
+    mask_for_bits, max_local_slot_ir, prim_ty, prim_ty_bits_signed, slice_span, write_res_label,
 };
 use crate::X86_64HostedBackend;
 
@@ -52,6 +52,8 @@ impl<'a> X86_64HostedBackend<'a> {
                     stack_bound: w.bound.wire_u32(),
                 };
                 self.mi_export_count = idx + 1;
+            } else {
+                return Err(CodegenError::ModInfoTooLarge);
             }
         }
         write_label(self.out, w.name.as_bytes());
@@ -137,8 +139,26 @@ impl<'a> X86_64HostedBackend<'a> {
                 Ok(true)
             }
             lir::OpKind::AddrOf {
-                const_addr: None, ..
-            } => Err(CodegenError::UnsupportedAddrOf),
+                const_addr: None,
+                place,
+                mutable: _,
+            } => {
+                // Resources live at a runtime symbol; emit its address so
+                // `lock [ &!Res … ]` works on the hosted target (BUG-004).
+                if find_resource_decl(self.module, self.src, place.as_bytes()).is_none() {
+                    return Err(CodegenError::UnsupportedAddrOf);
+                }
+                self.uses_resources = true;
+                self.out.write(b"  mov rax, ");
+                write_res_label(
+                    self.out,
+                    slice_span(self.src, self.module.name),
+                    place.as_bytes(),
+                );
+                self.out.write(b"\n");
+                emit_push_rax(self.out);
+                Ok(true)
+            }
             lir::OpKind::MmioPlace { addr, .. } => {
                 self.uses_mmio = true;
                 emit_push_u64(self.out, addr);

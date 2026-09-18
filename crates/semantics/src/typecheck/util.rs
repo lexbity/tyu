@@ -1,6 +1,6 @@
 use crate::typecheck::db::{NominalDb, SubtypeInfo};
 use crate::typecheck::error::{Output, TcError};
-use crate::typecheck::value::Value;
+use crate::typecheck::value::{Value, PLACE_NONE};
 use crate::types::{TypeAtom, WordEntry, WordSig};
 use frontend::span::Span;
 
@@ -381,7 +381,23 @@ pub fn apply_sig(
     }
     *sp -= need;
     for i in 0..(sig.out_len as usize) {
-        push(stack, sp, Value::Plain(sig.outputs[i]))?;
+        let out_ty = sig.outputs[i];
+        // S-8: a pointer-typed signature output is a raw pointer — shape it
+        // as Value::Ptr (pointee unknown, PLACE_NONE) so the typed load/store
+        // forms (@TY / !TY) and the rest of the pointer surface accept it
+        // (BUG-003: `region-alloc` handed back a plain ptr_mut value that
+        // @/! rejected with E3614).  Mirrors the `as ptr` cast and the
+        // S-8 input-seeding below.
+        let val = if out_ty == TypeAtom::PTR || out_ty == TypeAtom::PTR_MUT {
+            Value::Ptr {
+                ty: TypeAtom::EMPTY,
+                mutable: out_ty == TypeAtom::PTR_MUT,
+                place: PLACE_NONE,
+            }
+        } else {
+            Value::Plain(out_ty)
+        };
+        push(stack, sp, val)?;
     }
     Ok(())
 }

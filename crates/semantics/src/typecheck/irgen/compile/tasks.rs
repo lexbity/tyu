@@ -15,6 +15,12 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             Value::Quot(s) => s,
             _ => return Err(TcError::TaskSpawnPop { span: name_abs }),
         };
+        // `platform.task.spawn` consumes the task-body quotation (BUG-012);
+        // the TaskSpawn op itself pushes the task handle (+1).
+        self.acc = self.acc.compose(StackBound {
+            net: -1,
+            high: High::Slots(0),
+        });
         let (qname, qsig, _performs, _qbound) = self.build_quote_word(body_span, observer)?;
         if qsig.in_len != 0 || qsig.out_len != 0 {
             return Err(TcError::TaskSpawnSig { span: name_abs });
@@ -60,6 +66,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             Value::Quot(s) => s,
             _ => return Err(TcError::TaskRunNotQuot { span: name_abs }),
         };
+        // `platform.task.run` consumes the handler-body quotation (BUG-012).
+        self.acc = self.acc.compose(StackBound {
+            net: -1,
+            high: High::Slots(0),
+        });
         let base_stack = *stack;
         let base_sp = *sp;
 

@@ -17,6 +17,7 @@ pub fn claim_text(trap_code: u16) -> &'static str {
         22 => "ASSERT_FAIL",
         23 => "UNREACHABLE",
         24 => "TASK_QUEUE_OVERFLOW",
+        25 => "DEADLOCK",
         // Effect / context model 50xx band
         5001 => "E_SUSPEND_FORBIDDEN",
         5002 => "E_LOCK_NEST",
@@ -49,6 +50,7 @@ mod tests {
         assert_eq!(claim_text(22), "ASSERT_FAIL");
         assert_eq!(claim_text(23), "UNREACHABLE");
         assert_eq!(claim_text(24), "TASK_QUEUE_OVERFLOW");
+        assert_eq!(claim_text(25), "DEADLOCK");
     }
 
     #[test]

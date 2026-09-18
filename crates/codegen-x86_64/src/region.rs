@@ -76,6 +76,10 @@ pub fn emit_region_create(gen: &mut X86_64HostedBackend<'_>) {
     gen.out.write(b"  add rax, 7\n");
     gen.out.write(b"  and rax, -8\n");
     gen.out.write(b"  mov rsi, rax\n");
+    // Preserve the slot index across the syscall: `mmap` clobbers rcx (and
+    // r11), and rcx is needed after to index the region arrays and as the
+    // returned handle.  r12 is callee-saved and untouched by the syscall.
+    gen.out.write(b"  mov r12, rcx\n");
     gen.out.write(b"  xor rdi, rdi\n");
     gen.out.write(b"  mov rdx, 3\n");
     gen.out.write(b"  mov r10, 0x22\n");
@@ -94,10 +98,10 @@ pub fn emit_region_create(gen: &mut X86_64HostedBackend<'_>) {
     gen.out.write(b".region_mmap_ok_");
     write_u32(gen.out, mmap_ok);
     gen.out.write(b":\n");
-    gen.out.write(b"  mov [__region_base + rcx*8], rax\n");
-    gen.out.write(b"  mov [__region_size + rcx*8], rsi\n");
-    gen.out.write(b"  mov qword [__region_off + rcx*8], 0\n");
-    gen.out.write(b"  mov rax, rcx\n");
+    gen.out.write(b"  mov [__region_base + r12*8], rax\n");
+    gen.out.write(b"  mov [__region_size + r12*8], rsi\n");
+    gen.out.write(b"  mov qword [__region_off + r12*8], 0\n");
+    gen.out.write(b"  mov rax, r12\n");
     ophelpers::emit_push_rax(gen.out);
 }
 
@@ -204,7 +208,9 @@ pub fn emit_region_destroy(gen: &mut X86_64HostedBackend<'_>) {
     let munmap_ok = gen.fresh_label();
     gen.out.write(b"  sub r15, 8\n");
     gen.out.write(b"  mov rax, [r15]\n");
-    gen.out.write(b"  mov r11, rax\n");
+    // Preserve the handle in r12: the munmap syscall clobbers rcx and r11,
+    // and the handle is needed after to clear the slot arrays.
+    gen.out.write(b"  mov r12, rax\n");
     gen.out.write(b"  cmp rax, 16\n");
     gen.out.write(b"  jb .region_destroy_ok_");
     write_u32(gen.out, ok);
@@ -216,7 +222,7 @@ pub fn emit_region_destroy(gen: &mut X86_64HostedBackend<'_>) {
     gen.out.write(b".region_destroy_ok_");
     write_u32(gen.out, ok);
     gen.out.write(b":\n");
-    gen.out.write(b"  mov rcx, [__region_size + r11*8]\n");
+    gen.out.write(b"  mov rcx, [__region_size + r12*8]\n");
     gen.out.write(b"  cmp rcx, 0\n");
     gen.out.write(b"  jne .region_destroy_live_");
     write_u32(gen.out, live);
@@ -228,7 +234,7 @@ pub fn emit_region_destroy(gen: &mut X86_64HostedBackend<'_>) {
     gen.out.write(b".region_destroy_live_");
     write_u32(gen.out, live);
     gen.out.write(b":\n");
-    gen.out.write(b"  mov rdi, [__region_base + r11*8]\n");
+    gen.out.write(b"  mov rdi, [__region_base + r12*8]\n");
     gen.out.write(b"  mov rsi, rcx\n");
     gen.out.write(b"  mov rax, 11\n");
     gen.out.write(b"  syscall\n");
@@ -243,7 +249,7 @@ pub fn emit_region_destroy(gen: &mut X86_64HostedBackend<'_>) {
     gen.out.write(b".region_destroy_munmap_ok_");
     write_u32(gen.out, munmap_ok);
     gen.out.write(b":\n");
-    gen.out.write(b"  mov qword [__region_base + r11*8], 0\n");
-    gen.out.write(b"  mov qword [__region_size + r11*8], 0\n");
-    gen.out.write(b"  mov qword [__region_off + r11*8], 0\n");
+    gen.out.write(b"  mov qword [__region_base + r12*8], 0\n");
+    gen.out.write(b"  mov qword [__region_size + r12*8], 0\n");
+    gen.out.write(b"  mov qword [__region_off + r12*8], 0\n");
 }

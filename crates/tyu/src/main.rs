@@ -98,7 +98,8 @@ fn main() {
 }
 
 /// Resolve a profile name to a `FeatureSet`, printing the result.
-/// Falls back to `FeatureSet::all()` (implicit default) on error.
+/// An unresolvable profile is a usage error (exit 2), not a silent
+/// all-features-on fallback — a typo must not quietly change what builds.
 fn resolve_profile(
     feature_set: &mut codegen_core::FeatureSet,
     profile_name: Option<&str>,
@@ -118,8 +119,7 @@ fn resolve_profile(
         }
         Err(e) => {
             eprintln!("tyu: profile resolution error: {}", e);
-            eprintln!("tyu: falling back to all-features-on default");
-            *feature_set = codegen_core::FeatureSet::all();
+            std::process::exit(2);
         }
     }
 }

@@ -245,6 +245,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 }
                 qgen.emit_op(cur, lir::OpKind::Ret, quot_span)?;
             }
+            qgen.fill_subtype_bases(quot_span)?;
             qgen.word.bound = qgen.acc;
             qgen.word
         };

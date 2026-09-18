@@ -40,7 +40,7 @@ pub fn emit_ir(
     let mmio = build_mmio_db(module, src)?;
     let mut resources = build_resource_db(module, src)?;
     // Compute resource sharing from ISR roots before compiling any word body.
-    compute_resource_sharing(module, src, &mut resources);
+    compute_resource_sharing(module, src, &mut resources)?;
     let nominals = build_nominal_db(module, src)?;
     let iso = build_iso_db(module, src)?;
     let mut arena = irgen::arena::ArenaAllocator::new();
@@ -143,7 +143,7 @@ pub fn emit_stackcheck(
 ) -> Result<(), TcError> {
     let mmio = build_mmio_db(module, src)?;
     let mut resources = build_resource_db(module, src)?;
-    compute_resource_sharing(module, src, &mut resources);
+    compute_resource_sharing(module, src, &mut resources)?;
     let nominals = build_nominal_db(module, src)?;
     let iso = build_iso_db(module, src)?;
     let mut arena = irgen::arena::ArenaAllocator::new();
@@ -227,7 +227,7 @@ where
     let nominals = build_nominal_db(module, src).map_err(ForEachIrError::Type)?;
     let iso = build_iso_db(module, src).map_err(ForEachIrError::Type)?;
     // Compute resource sharing from ISR roots before compiling any word body.
-    compute_resource_sharing(module, src, resources);
+    compute_resource_sharing(module, src, resources).map_err(ForEachIrError::Type)?;
     let mut arena = irgen::arena::ArenaAllocator::new();
     let summary_env = local_summary_env(
         module,

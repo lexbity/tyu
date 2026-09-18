@@ -39,7 +39,7 @@ pub unsafe fn run(argc: isize, argv: *const *const hosted::c::c_char) -> i32 {
     let module = match Parser::new(src).parse_module_ast() {
         Ok(m) => m,
         Err(e) => {
-            emit_parse_error(cfg.input, src, e.code(), e.span().start);
+            emit_parse_error(cfg.input, src, e.code(), e.message(), e.span().start);
             return 2;
         }
     };
@@ -80,7 +80,7 @@ pub unsafe fn run(argc: isize, argv: *const *const hosted::c::c_char) -> i32 {
         EmitMode::Ast => match Parser::new(src).parse_module_dump(&mut out) {
             Ok(()) => 0,
             Err(e) => {
-                emit_parse_error(cfg.input, src, e.code(), e.span().start);
+                emit_parse_error(cfg.input, src, e.code(), e.message(), e.span().start);
                 2
             }
         },

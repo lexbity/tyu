@@ -139,6 +139,38 @@ fn word_with_cap_requires() {
     assert!(d.cap_set.is_some());
 }
 
+// ---------------------------------------------------------------------------
+// Legacy syntax → migration hints (BUG-008)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn legacy_requires_bracket_is_migration_hint() {
+    assert_parse_err!(
+        "module m; : foo requires [ 0 > ] ; end;",
+        ParseError::LegacyRequiresContract { .. }
+    );
+}
+
+#[test]
+fn legacy_bang_effect_is_migration_hint() {
+    assert_parse_err!(
+        "module m; : foo !{suspend} ; end;",
+        ParseError::LegacyEffectBang { .. }
+    );
+}
+
+#[test]
+fn migration_hint_messages() {
+    assert_eq!(
+        ParseError::LegacyRequiresContract { span: Span::UNKNOWN }.message(),
+        b"parse error: use `needs [` for contract predicates"
+    );
+    assert_eq!(
+        ParseError::LegacyEffectBang { span: Span::UNKNOWN }.message(),
+        b"parse error: use `performs { ... }` for effect sets"
+    );
+}
+
 #[test]
 fn err_word_name() {
     assert_parse_err!("module m; : ; end;", ParseError::ExpectedWordName { .. });
@@ -489,6 +521,38 @@ fn word_effect_multiple() {
     assert_eq!(bits & 2, 0); // no interrupt
 }
 
+// ---------------------------------------------------------------------------
+// BUG-011: `performs` may appear in any order relative to bracket clauses
+// ---------------------------------------------------------------------------
+
+#[test]
+fn word_effect_after_needs() {
+    let ast = assert_parse_ok("module m; : foo needs [ 0 0 == ] performs {mmio} ; end;");
+    let d = ast.decls.get(0).unwrap();
+    assert!(d.requires.is_some());
+    assert_eq!(d.effect_bits & 8, 8); // mmio
+    assert!(d.has_explicit_performs);
+}
+
+#[test]
+fn word_effect_after_ensures() {
+    let ast = assert_parse_ok("module m; : foo ensures [ 0 0 == ] performs {mmio} ; end;");
+    let d = ast.decls.get(0).unwrap();
+    assert!(d.ensures.is_some());
+    assert_eq!(d.effect_bits & 8, 8); // mmio
+}
+
+#[test]
+fn word_effect_between_bracket_clauses() {
+    let ast = assert_parse_ok(
+        "module m; : foo needs [ 0 0 == ] performs {mmio} ensures [ 0 0 == ] ; end;",
+    );
+    let d = ast.decls.get(0).unwrap();
+    assert!(d.requires.is_some());
+    assert!(d.ensures.is_some());
+    assert_eq!(d.effect_bits & 8, 8); // mmio
+}
+
 #[test]
 fn word_effect_unknown_name() {
     // D-8: Unknown effect names are now a parse error.
@@ -785,6 +849,14 @@ fn error_codes_are_distinct() {
         }
         .code(),
         ParseError::ExpectedSemiSkip {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::LegacyRequiresContract {
+            span: Span::UNKNOWN,
+        }
+        .code(),
+        ParseError::LegacyEffectBang {
             span: Span::UNKNOWN,
         }
         .code(),

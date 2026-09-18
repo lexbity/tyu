@@ -133,6 +133,16 @@ pub enum ParseError {
         span: Span,
         name: crate::span::Span,
     },
+    /// Legacy `requires [ … ]` contract clause — the modern spelling is
+    /// `needs [ … ]`.
+    LegacyRequiresContract {
+        span: Span,
+    },
+    /// Legacy `!{ … }` effect annotation — the modern spelling is
+    /// `performs { … }`.
+    LegacyEffectBang {
+        span: Span,
+    },
     /// Skipped unrecognized input at the top level (recovery marker).
     Skipped {
         span: Span,
@@ -183,6 +193,8 @@ impl ParseError {
             Self::ExpectedSemiSkip { .. } => 2199,
             Self::TooManyItems { .. } => 2198,
             Self::UnknownEffect { .. } => 2143,
+            Self::LegacyRequiresContract { .. } => 2195,
+            Self::LegacyEffectBang { .. } => 2196,
             Self::Skipped { .. } => 2144,
         }
     }
@@ -231,6 +243,23 @@ impl ParseError {
             | Self::TooManyItems { span }
             | Self::Skipped { span } => *span,
             Self::UnknownEffect { name, .. } => *name,
+            Self::LegacyRequiresContract { span }
+            | Self::LegacyEffectBang { span } => *span,
+        }
+    }
+
+    /// User-facing message for this error.  Most parse errors share the
+    /// generic "parse error" text; the legacy-syntax variants carry a
+    /// migration hint so learners know the modern spelling.
+    pub fn message(&self) -> &'static [u8] {
+        match self {
+            Self::LegacyRequiresContract { .. } => {
+                b"parse error: use `needs [` for contract predicates"
+            }
+            Self::LegacyEffectBang { .. } => {
+                b"parse error: use `performs { ... }` for effect sets"
+            }
+            _ => b"parse error",
         }
     }
 }

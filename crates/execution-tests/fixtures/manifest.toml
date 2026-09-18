@@ -129,6 +129,15 @@ requires = []
 targets = ["x86_64-unknown-none"]
 
 [[fixture]]
+name = "resource_lock_hosted"
+file = "resource_lock_hosted.mod"
+axes = ["ptr"]
+# BUG-004 regression: resource + lock must compile on the hosted x86_64
+# backend (previously E8008 at emission).
+requires = []
+targets = ["x86_64-unknown-linux-gnu"]
+
+[[fixture]]
 name = "mmio_smoke_arm"
 file = "mmio_smoke_arm.mod"
 axes = ["mmio"]

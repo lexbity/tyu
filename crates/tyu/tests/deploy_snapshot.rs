@@ -66,9 +66,20 @@ fn deploy_pipeline_snapshot() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    // Find the Main.o produced (not runtime.o).
-    let main_o = out_dir.join("Main.o");
-    assert!(main_o.exists(), "build must produce Main.o at {:?}", main_o);
+    // Find the module object produced (not runtime.o).  Since the BUG-002
+    // fix, tyu re-homes langc's `Main.o` under a source-keyed
+    // `Main-<inputs_fp>.o`, so locate it by that prefix.
+    let main_o = std::fs::read_dir(&out_dir)
+        .expect("read out_dir")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.starts_with("Main-") && n.ends_with(".o"))
+                .unwrap_or(false)
+        })
+        .expect("build must produce Main-<inputs_fp>.o in out dir");
 
     // --- Step 2: Pack ---
     let packed = dir.join("packed.lmod");

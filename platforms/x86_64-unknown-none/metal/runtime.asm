@@ -549,9 +549,11 @@ __lang_gpio_state:
     db 0
 
     ; RAM-backed register-map scratch for generic emulator fixtures.
+    ; MUST match MMIO_SIZE in crates/codegen-x86_64/src/mmio.rs (65536): the
+    ; emitted bounds check admits any offset below that value (BUG-016).
 public __mmio_mem
 __mmio_mem:
-    rb 4096
+    rb 65536
 
     ; Call stack — 64KB
     align 16

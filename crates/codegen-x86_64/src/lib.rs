@@ -64,6 +64,7 @@ pub struct X86_64HostedBackend<'a> {
     pub uses_mmio: bool,
     pub uses_regions: bool,
     pub uses_tasks: bool,
+    pub uses_resources: bool,
     pub str_len: usize,
     pub str_spans: [Span; 128],
     pub str_ids: [u32; 128],
@@ -116,6 +117,7 @@ impl<'a> X86_64HostedBackend<'a> {
             uses_mmio: false,
             uses_regions: false,
             uses_tasks: false,
+            uses_resources: false,
             str_len: 0,
             str_spans: [Span::UNKNOWN; 128],
             str_ids: [0u32; 128],
@@ -212,7 +214,7 @@ impl<'a> X86_64HostedBackend<'a> {
             &[], // res_metas (no resources in current modules)
         ) {
             Some(s) => s,
-            None => return Ok(()), // buffer too small (should not happen)
+            None => return Err(CodegenError::ModInfoTooLarge),
         };
 
         // Emit FASM section.
@@ -290,11 +292,53 @@ impl<'a> CodegenBackend for X86_64HostedBackend<'a> {
     }
 
     fn emit_extern_word(&mut self, name: &[u8]) -> Result<(), CodegenError> {
-        X86_64HostedBackend::emit_extern_word(self, name);
-        Ok(())
+        X86_64HostedBackend::emit_extern_word(self, name)
     }
 
     fn set_expected_abi_hash(&mut self, hash: u64) {
         self.expected_abi_hash = hash;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Sink {
+        buf: alloc::vec::Vec<u8>,
+    }
+    impl Output for Sink {
+        fn write(&mut self, bytes: &[u8]) {
+            self.buf.extend_from_slice(bytes);
+        }
+    }
+
+    // Regression test for BUG-006: when the `.lang.modinfo` encoder cannot fit
+    // the collected metadata into its fixed 8 KiB buffer, `emit_modinfo_section`
+    // must report an error instead of silently dropping the section.
+    #[test]
+    fn modinfo_encoding_failure_is_an_error() {
+        let mut src = alloc::vec::Vec::new();
+        src.extend_from_slice(b"module ");
+        src.extend(alloc::vec![b'x'; 4096]);
+        src.extend_from_slice(b"; end;");
+        let mod_ast = frontend::parse::Parser::new(&src).parse_module_ast().unwrap();
+
+        let mut sink = Sink {
+            buf: alloc::vec::Vec::new(),
+        };
+        let mut backend =
+            X86_64HostedBackend::new(&mod_ast, &src, &mut sink, false, AsmMode::Object);
+        let long_name = lir::Atom::new(&[b'y'; 32]).unwrap();
+        backend.mi_exports = [ModInfoExport {
+            name: long_name,
+            effects: 0,
+            requires_caps: 0,
+            stack_bound: 0,
+        }; 64];
+        backend.mi_export_count = 64;
+
+        let err = backend.emit_modinfo_section().unwrap_err();
+        assert_eq!(err, CodegenError::ModInfoTooLarge);
     }
 }

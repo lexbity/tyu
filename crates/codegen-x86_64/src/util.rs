@@ -117,6 +117,59 @@ pub fn find_word_decl<'a>(m: &'a ModuleAst, src: &[u8], name: &[u8]) -> Option<&
     None
 }
 
+/// Find a `resource` declaration by name (BUG-004: resources are addressable
+/// through `&`/`&!`; the backend must emit the resource symbol address).
+pub fn find_resource_decl<'a>(
+    m: &'a ModuleAst,
+    src: &[u8],
+    name: &[u8],
+) -> Option<&'a DeclAst> {
+    for d in m.decls.iter() {
+        if d.kind != DeclKind::Resource {
+            continue;
+        }
+        if slice_span(src, d.name) == name {
+            return Some(d);
+        }
+    }
+    None
+}
+
+/// Names of every `resource` declared in the module.
+pub fn resource_decl_names<'a>(
+    m: &'a ModuleAst,
+    src: &'a [u8],
+) -> impl Iterator<Item = &'a [u8]> {
+    m.decls.iter().filter_map(move |d| {
+        if d.kind != DeclKind::Resource {
+            return None;
+        }
+        Some(slice_span(src, d.name))
+    })
+}
+
+/// Emit the resource symbol label `r_<fnv1a(module) ⊙ name>` — identical to
+/// the ARM backend's scheme (`r_` + hashed module/name) so resource symbols
+/// are consistent across backends.
+pub fn write_res_label(
+    out: &mut dyn frontend::parse::Output,
+    module_name: &[u8],
+    resource_name: &[u8],
+) {
+    let mut hash = fnv1a_u64(module_name);
+    hash ^= 0xff;
+    hash = hash.wrapping_mul(1099511628211);
+    for &b in resource_name {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(1099511628211);
+    }
+    out.write(b"r_");
+    for i in (0..64).step_by(4).rev() {
+        let nib = ((hash >> i) & 0xf) as u8;
+        out.write(&[hex_digit(nib)]);
+    }
+}
+
 pub fn max_local_slot_ir(w: &lir::Word) -> Option<u16> {
     let mut max = None;
     for b in w.blocks.iter() {

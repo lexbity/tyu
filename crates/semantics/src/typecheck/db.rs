@@ -85,42 +85,6 @@ pub fn is_iso_type(iso: &IsoDb, ty: TypeAtom) -> bool {
     false
 }
 
-/// A word bound to an interrupt vector via `@interrupt(VEC)`.
-#[derive(Clone, Copy)]
-pub struct IsrBinding {
-    /// Name of the bound word.
-    pub word_name: TypeAtom,
-    /// Vector/shorthand name parsed from `@interrupt(VEC)` source text, e.g. `TIMER0`.
-    pub vec_name: TypeAtom,
-}
-
-/// Collects all `@interrupt(VEC)` bindings from word declarations.
-/// Returns an empty vec if none are found.
-pub fn build_isr_bindings(module: &ModuleAst, src: &[u8]) -> FixedVec<IsrBinding, 16> {
-    let mut bindings: FixedVec<IsrBinding, 16> = FixedVec::new();
-    for d in module.decls.iter() {
-        if d.kind != DeclKind::Word {
-            continue;
-        }
-        for a in d.attrs.iter() {
-            let vec_name = match a {
-                frontend::parse::AttrAst::Interrupt { vector } => {
-                    TypeAtom::new(slice_span(src, *vector))
-                }
-                _ => None,
-            };
-            if let Some(vec_name) = vec_name {
-                let word_name = TypeAtom::new(slice_span(src, d.name)).unwrap_or(TypeAtom::EMPTY);
-                let _ = bindings.push(IsrBinding {
-                    word_name,
-                    vec_name,
-                });
-            }
-        }
-    }
-    bindings
-}
-
 pub fn build_resource_db(module: &ModuleAst, src: &[u8]) -> Result<ResourceDb, TcError> {
     let mut items: FixedVec<ResourceInfo, 64> = FixedVec::new();
     for d in module.decls.iter() {
@@ -258,7 +222,11 @@ pub fn resource_sharing_class(db: &ResourceDb, name: TypeAtom) -> u8 {
 /// Sets `sharing_class = 1` (main + ISR, single-core) for each such resource.
 /// This is a simple declaration-level scan: for every ISR word, we scan its
 /// body text for any resource name known to the db.
-pub fn compute_resource_sharing(module: &ModuleAst, src: &[u8], db: &mut ResourceDb) {
+pub fn compute_resource_sharing(
+    module: &ModuleAst,
+    src: &[u8],
+    db: &mut ResourceDb,
+) -> Result<(), TcError> {
     // Collect ISR word bodies.
     let isr_bodies: FixedVec<Span, 64> = {
         let mut bodies = FixedVec::new();
@@ -272,14 +240,16 @@ pub fn compute_resource_sharing(module: &ModuleAst, src: &[u8], db: &mut Resourc
                 .any(|a| matches!(a, frontend::parse::AttrAst::Interrupt { .. }));
             if is_isr {
                 if let Some(body) = d.body {
-                    let _ = bodies.push(body);
+                    bodies
+                        .push(body)
+                        .map_err(|_| TcError::IsrCapacityExceeded { span: body })?;
                 }
             }
         }
         bodies
     };
     if isr_bodies.is_empty() {
-        return; // no ISRs → nothing is shared
+        return Ok(()); // no ISRs → nothing is shared
     }
 
     // For each resource, check if its name appears in any ISR body.
@@ -303,6 +273,7 @@ pub fn compute_resource_sharing(module: &ModuleAst, src: &[u8], db: &mut Resourc
             }
         }
     }
+    Ok(())
 }
 
 pub fn struct_field_ty(db: &NominalDb, struct_ty: TypeAtom, field: TypeAtom) -> Option<TypeAtom> {
@@ -333,4 +304,105 @@ pub fn enum_variant_value(db: &NominalDb, enum_ty: TypeAtom, variant: TypeAtom) 
         return None;
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::format;
+    use alloc::vec::Vec;
+    use frontend::parse::{AttrAst, DeclAst};
+
+    fn isr_word(
+        src: &mut Vec<u8>,
+        decls: &mut FixedVec<DeclAst, 256>,
+        name: &str,
+        body: &str,
+    ) {
+        let ns = src.len();
+        src.extend_from_slice(name.as_bytes());
+        let name_span = Span::new(ns, src.len());
+        src.push(b'\n');
+        let bs = src.len();
+        src.extend_from_slice(body.as_bytes());
+        let body_span = Span::new(bs, src.len());
+        src.push(b'\n');
+        let mut attrs = FixedVec::new();
+        attrs
+            .push(AttrAst::Interrupt {
+                vector: Span::new(bs, bs + 4),
+            })
+            .unwrap();
+        decls.push(DeclAst {
+            kind: DeclKind::Word,
+            name: name_span,
+            sig: None,
+            attrs,
+            body: Some(body_span),
+            requires: None,
+            ensures: None,
+            cap_set: None,
+            effect_bits: 0,
+            effect_net: 0,
+            effect_high: 0,
+            has_explicit_performs: false,
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn sixty_fifth_isr_body_is_capacity_error() {
+        let mut src = Vec::new();
+        let mut decls = FixedVec::new();
+        for i in 0..65 {
+            isr_word(&mut src, &mut decls, &format!("isr{}", i), "noop");
+        }
+        let module = ModuleAst {
+            name: Span::new(0, 4.min(src.len())),
+            imports: FixedVec::new(),
+            exports: FixedVec::new(),
+            decls,
+            has_export_stmt: false,
+            subtypes: FixedVec::new(),
+            instances: FixedVec::new(),
+            structs: FixedVec::new(),
+            enums: FixedVec::new(),
+        };
+        let mut resources = ResourceDb {
+            items: FixedVec::new(),
+        };
+        let err = compute_resource_sharing(&module, &src, &mut resources).unwrap_err();
+        assert_eq!(
+            err.code(),
+            3523,
+            "65th ISR body must be IsrCapacityExceeded"
+        );
+    }
+
+    #[test]
+    fn sixty_four_isr_bodies_are_accepted() {
+        let mut src = Vec::new();
+        let mut decls = FixedVec::new();
+        for i in 0..64 {
+            isr_word(&mut src, &mut decls, &format!("isr{}", i), "noop");
+        }
+        let module = ModuleAst {
+            name: Span::new(0, 4.min(src.len())),
+            imports: FixedVec::new(),
+            exports: FixedVec::new(),
+            decls,
+            has_export_stmt: false,
+            subtypes: FixedVec::new(),
+            instances: FixedVec::new(),
+            structs: FixedVec::new(),
+            enums: FixedVec::new(),
+        };
+        let mut resources = ResourceDb {
+            items: FixedVec::new(),
+        };
+        assert!(
+            compute_resource_sharing(&module, &src, &mut resources).is_ok(),
+            "64 ISR bodies fit the budget"
+        );
+    }
 }

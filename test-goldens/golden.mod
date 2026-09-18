@@ -1,4 +1,0 @@
-module Main;
-: main ( -- i64 ) 42 ;
-export { main };
-end;

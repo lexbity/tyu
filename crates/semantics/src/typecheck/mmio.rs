@@ -124,18 +124,23 @@ pub fn build_mmio_db(module: &ModuleAst, src: &[u8]) -> Result<MmioDb, TcError> 
     };
 
     for inst in module.instances.iter() {
-        let Some(name) = TypeAtom::new(slice_span(src, inst.name)) else {
-            continue;
-        };
-        let Some(map) = TypeAtom::new(slice_span(src, inst.map)) else {
-            continue;
-        };
-        let base_addr = parse_u32_any(slice_span(src, inst.base_addr)).unwrap_or(0) as u64;
-        let _ = db.instances.push(MmioInstance {
-            name,
-            map,
-            base_addr,
-        });
+        // A name that exceeds the atom limit would otherwise make the
+        // instance silently vanish from the db — every lookup would then
+        // fail with a misleading "map/instance not found" (BUG-013).
+        let name = TypeAtom::new(slice_span(src, inst.name))
+            .ok_or(TcError::MmioNameInvalid { span: inst.name })?;
+        let map = TypeAtom::new(slice_span(src, inst.map))
+            .ok_or(TcError::MmioNameInvalid { span: inst.map })?;
+        let base_addr = parse_u32_any(slice_span(src, inst.base_addr))
+            .ok_or(TcError::MmioAddrInvalid { span: inst.base_addr })?
+            as u64;
+        db.instances
+            .push(MmioInstance {
+                name,
+                map,
+                base_addr,
+            })
+            .map_err(|_| TcError::MmioInstanceCapacityExceeded { span: inst.name })?;
     }
 
     for decl in module.decls.iter() {
@@ -145,14 +150,15 @@ pub fn build_mmio_db(module: &ModuleAst, src: &[u8]) -> Result<MmioDb, TcError> 
         let Some(body) = decl.body else {
             continue;
         };
-        let Some(map_name) = TypeAtom::new(slice_span(src, decl.name)) else {
-            continue;
-        };
+        let map_name = TypeAtom::new(slice_span(src, decl.name))
+            .ok_or(TcError::MmioNameInvalid { span: decl.name })?;
         validate_regmap_body(src, body)?;
-        let _ = db.maps.push(MmioMapDecl {
-            name: map_name,
-            body,
-        });
+        db.maps
+            .push(MmioMapDecl {
+                name: map_name,
+                body,
+            })
+            .map_err(|_| TcError::MmioMapCapacityExceeded { span: decl.name })?;
     }
 
     Ok(db)
@@ -764,5 +770,116 @@ pub fn resolve_mmio_place(
             array_len: reg_info.array_len,
             place_span,
         })))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::format;
+    use alloc::vec::Vec;
+    use frontend::parse::{DeclAst, RegMapInstanceAst};
+
+    fn push_instance(
+        src: &mut Vec<u8>,
+        instances: &mut FixedVec<RegMapInstanceAst, 64>,
+        name: &str,
+        base_addr: &str,
+    ) {
+        let ns = src.len();
+        src.extend_from_slice(name.as_bytes());
+        let name_span = Span::new(ns, src.len());
+        src.push(b'\n');
+        let ms = src.len();
+        src.extend_from_slice(b"map");
+        let map_span = Span::new(ms, src.len());
+        src.push(b'\n');
+        let bs = src.len();
+        src.extend_from_slice(base_addr.as_bytes());
+        let base_span = Span::new(bs, src.len());
+        src.push(b'\n');
+        instances
+            .push(RegMapInstanceAst {
+                name: name_span,
+                map: map_span,
+                base_addr: base_span,
+            })
+            .unwrap();
+    }
+
+    fn push_regmap(src: &mut Vec<u8>, decls: &mut FixedVec<DeclAst, 256>, name: &str) {
+        let ns = src.len();
+        src.extend_from_slice(name.as_bytes());
+        let name_span = Span::new(ns, src.len());
+        src.push(b'\n');
+        let bs = src.len();
+        src.extend_from_slice(b"0x00 REG u32 rw\n");
+        let body_span = Span::new(bs, src.len());
+        decls.push(DeclAst {
+            kind: DeclKind::RegisterMap,
+            name: name_span,
+            sig: None,
+            attrs: FixedVec::new(),
+            body: Some(body_span),
+            requires: None,
+            ensures: None,
+            cap_set: None,
+            effect_bits: 0,
+            effect_net: 0,
+            effect_high: 0,
+            has_explicit_performs: false,
+        })
+        .unwrap();
+    }
+
+    fn module(src: &[u8], instances: FixedVec<RegMapInstanceAst, 64>, decls: FixedVec<DeclAst, 256>) -> ModuleAst {
+        ModuleAst {
+            name: Span::new(0, 4.min(src.len())),
+            imports: FixedVec::new(),
+            exports: FixedVec::new(),
+            decls,
+            has_export_stmt: false,
+            subtypes: FixedVec::new(),
+            instances,
+            structs: FixedVec::new(),
+            enums: FixedVec::new(),
+        }
+    }
+
+    #[test]
+    fn malformed_base_address_is_an_error() {
+        let mut src = Vec::new();
+        let mut instances = FixedVec::new();
+        push_instance(&mut src, &mut instances, "gpio", "not-a-number");
+        let m = module(&src, instances, FixedVec::new());
+        let err = build_mmio_db(&m, &src).map(|_| ()).unwrap_err();
+        assert_eq!(err.code(), 3638, "malformed base addr must be MmioAddrInvalid");
+    }
+
+    #[test]
+    fn seventeenth_register_map_is_capacity_error() {
+        let mut src = Vec::new();
+        let mut decls = FixedVec::new();
+        for i in 0..17 {
+            push_regmap(&mut src, &mut decls, &format!("m{}", i));
+        }
+        let m = module(&src, FixedVec::new(), decls);
+        let err = build_mmio_db(&m, &src).map(|_| ()).unwrap_err();
+        assert_eq!(err.code(), 3636, "17th map must be MmioMapCapacityExceeded");
+    }
+
+    #[test]
+    fn sixteen_register_maps_and_sixty_four_instances_are_accepted() {
+        let mut src = Vec::new();
+        let mut instances = FixedVec::new();
+        for i in 0..64 {
+            push_instance(&mut src, &mut instances, &format!("i{}", i), "0x1000");
+        }
+        let mut decls = FixedVec::new();
+        for i in 0..16 {
+            push_regmap(&mut src, &mut decls, &format!("m{}", i));
+        }
+        let m = module(&src, instances, decls);
+        assert!(build_mmio_db(&m, &src).is_ok(), "limits are inclusive");
     }
 }

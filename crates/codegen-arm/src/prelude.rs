@@ -59,9 +59,9 @@ impl<'a> ArmThumbBackend<'a> {
         }
     }
 
-    pub fn emit_extern_word(&mut self, name: &[u8]) {
+    pub fn emit_extern_word(&mut self, name: &[u8]) -> Result<(), CodegenError> {
         if self.mode != AsmMode::Object {
-            return;
+            return Ok(());
         }
         self.out.write(b"\t.thumb_func\n");
         self.out.write(b"\t.global ");
@@ -77,6 +77,9 @@ impl<'a> ArmThumbBackend<'a> {
                 self.mi_imports[idx] = crate::ModInfoImport { name: n };
                 self.mi_import_count = idx + 1;
             }
+            Ok(())
+        } else {
+            Err(CodegenError::ModInfoTooLarge)
         }
     }
 }

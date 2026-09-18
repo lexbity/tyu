@@ -175,7 +175,7 @@ impl<'a> ArmThumbBackend<'a> {
             &[],
         ) {
             Some(s) => s,
-            None => return Ok(()),
+            None => return Err(CodegenError::ModInfoTooLarge),
         };
 
         self.out.write(b"\t.section .lang.modinfo\n");
@@ -206,8 +206,7 @@ impl<'a> CodegenBackend for ArmThumbBackend<'a> {
     }
 
     fn emit_extern_word(&mut self, name: &[u8]) -> Result<(), CodegenError> {
-        ArmThumbBackend::emit_extern_word(self, name);
-        Ok(())
+        ArmThumbBackend::emit_extern_word(self, name)
     }
 
     fn set_expected_abi_hash(&mut self, hash: u64) {

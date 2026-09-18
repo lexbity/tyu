@@ -19,6 +19,10 @@ name    = "x86_64_none"
 harness = true
 
 [[test]]
+name    = "hosted"
+harness = true
+
+[[test]]
 name    = "arm"
 harness = true
 

@@ -84,6 +84,74 @@ end;\n";
 }
 
 // ---------------------------------------------------------------------------
+// BUG-011: `performs {…}` after a bracket clause (any order is legal)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn performs_after_needs_is_legal() {
+    let dir = fresh_dir("performs_after_needs");
+    let src = b"module Main;\n\
+import platform/linux { };\n\
+: main ( -- i64 )\n\
+  needs [ 1 1 == ]\n\
+  performs {mmio}\n\
+  42\n\
+;\n\
+end;\n";
+    compile_ok(src, &dir);
+}
+
+#[test]
+fn performs_between_bracket_clauses_is_legal() {
+    let dir = fresh_dir("performs_between");
+    let src = b"module Main;\n\
+import platform/linux { };\n\
+: main ( -- i64 )\n\
+  needs [ 1 1 == ]\n\
+  performs {mmio}\n\
+  ensures [ 1 1 == ]\n\
+  42\n\
+;\n\
+end;\n";
+    compile_ok(src, &dir);
+}
+
+// ---------------------------------------------------------------------------
+// BUG-012: two-sided-predicate `needs` must not abort a debug langc
+// ---------------------------------------------------------------------------
+
+#[test]
+fn two_sided_predicate_contract_compiles_in_debug() {
+    // Debug builds used to abort on this `needs` predicate: the stack-bound
+    // net accumulator under-counted literal pushes, so `branch_max`'s
+    // equal-net assertion fired (crates/ir/src/contract.rs:245).
+    let dir = fresh_dir("two_sided_predicate");
+    let src = b"module Main;\n\
+subtype Reading = i64 range -40 .. 125;\n\
+: validate ( i64 -- i64 )\n\
+  needs [ dup -40 >= [ dup 125 <= ] [ 0 0 == ] if ]\n\
+  as Reading as i64\n\
+;\n\
+export { validate };\n\
+end;\n";
+    compile_ok(src, &dir);
+}
+
+#[test]
+fn nested_if_with_literals_compiles_in_debug() {
+    // Regression for the same under-accounting exposed by nested branches:
+    // `branch_max` must see equal nets for arms that use literals.
+    let dir = fresh_dir("nested_if_literals");
+    let src = b"module Main;\n\
+: main ( -- i64 )\n\
+  true [ true [ 1 ] [ 2 ] if ] [ 3 ] if drop 0\n\
+;\n\
+export { main };\n\
+end;\n";
+    compile_ok(src, &dir);
+}
+
+// ---------------------------------------------------------------------------
 // POS: `ensures [...]` postcondition (unchanged)
 // ---------------------------------------------------------------------------
 
@@ -115,10 +183,32 @@ import platform/linux { };\n\
 ;\n\
 end;\n";
     let err = compile_expect_err(src, &dir);
-    // Should produce a parse error (ExpectedModule or similar migration hint).
+    // BUG-008: must be a migration hint pointing at `needs [`, not a generic E2100.
     assert!(
-        err.contains("use") || err.contains("needs") || !err.is_empty(),
-        "old requires [ should produce an error, got: {err}"
+        err.contains("needs [") && err.contains("E2195"),
+        "old requires [ should produce the `needs [` migration hint, got: {err}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// NEG: old `!{...}` effect annotation → migration hint
+// ---------------------------------------------------------------------------
+
+#[test]
+fn old_bang_effect_rejected() {
+    let dir = fresh_dir("old_bang_effect");
+    let src = b"module Main;\n\
+import platform/linux { };\n\
+: main ( -- i64 )\n\
+  !{suspend}\n\
+  42\n\
+;\n\
+end;\n";
+    let err = compile_expect_err(src, &dir);
+    // BUG-008: must point at `performs { ... }`, not a generic E2100.
+    assert!(
+        err.contains("performs") && err.contains("E2196"),
+        "old !{{...}} should produce the `performs` migration hint, got: {err}"
     );
 }
 

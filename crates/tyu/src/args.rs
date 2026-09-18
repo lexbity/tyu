@@ -271,7 +271,7 @@ fn print_usage() {
     eprintln!("  --metal-encrypt=<mode>    Metal encryption mode: fleet|device (default: fleet)");
 }
 
-fn parse_common(args: &[String]) -> CommonArgs {
+fn parse_common(args: &[String], extra_known: &[&str]) -> Result<CommonArgs, ()> {
     let mut target: Option<Target> = None;
     let mut platform: Option<String> = None;
     let mut isa: Option<String> = None;
@@ -293,6 +293,7 @@ fn parse_common(args: &[String]) -> CommonArgs {
             target = Target::parse(tb);
             if target.is_none() {
                 eprintln!("tyu: unknown target '{}'", val);
+                return Err(());
             }
         } else if a == "--platform" {
             i += 1;
@@ -300,6 +301,7 @@ fn parse_common(args: &[String]) -> CommonArgs {
                 platform = Some(args[i].clone());
             } else {
                 eprintln!("tyu: --platform requires a value");
+                return Err(());
             }
         } else if a == "--isa" {
             i += 1;
@@ -307,6 +309,7 @@ fn parse_common(args: &[String]) -> CommonArgs {
                 isa = Some(args[i].clone());
             } else {
                 eprintln!("tyu: --isa requires a value");
+                return Err(());
             }
         } else if let Some(val) = a.strip_prefix("--platform=") {
             platform = Some(val.to_string());
@@ -318,6 +321,7 @@ fn parse_common(args: &[String]) -> CommonArgs {
             mode = BuildMode::parse(val);
             if mode.is_none() {
                 eprintln!("tyu: invalid --mode '{}'", val);
+                return Err(());
             }
         } else if let Some(val) = a.strip_prefix("--metal-sign-key=") {
             metal_sign_key = Some(val.to_string());
@@ -332,7 +336,7 @@ fn parse_common(args: &[String]) -> CommonArgs {
                 "device" => Some(EncryptMode::Device),
                 _ => {
                     eprintln!("tyu: invalid --metal-encrypt '{}'", val);
-                    None
+                    return Err(());
                 }
             };
         } else if let Some(val) = a.strip_prefix("--sysroot=") {
@@ -345,9 +349,15 @@ fn parse_common(args: &[String]) -> CommonArgs {
                 include_dirs.push(PathBuf::from(&args[i]));
             } else {
                 eprintln!("tyu: -I requires a value");
+                return Err(());
             }
         } else if a.starts_with('-') {
-            // Skip.
+            // Unknown flags are an error on every subcommand (BUG-009).  The
+            // only exceptions are flags the caller's own loop handles.
+            if !flag_known(a, extra_known) {
+                eprintln!("tyu: unknown option '{}'", a);
+                return Err(());
+            }
         } else {
             input = Some(PathBuf::from(a));
         }
@@ -360,7 +370,7 @@ fn parse_common(args: &[String]) -> CommonArgs {
         PathBuf::from("target").join("tyu").join(triple)
     });
 
-    CommonArgs {
+    Ok(CommonArgs {
         target,
         platform,
         isa,
@@ -373,7 +383,19 @@ fn parse_common(args: &[String]) -> CommonArgs {
         metal_sign_key,
         metal_kek,
         metal_encrypt_mode,
-    }
+    })
+}
+
+/// True when the flag `a` is one the caller's own loop handles: an exact
+/// match, or a prefix match for value-taking flags (listed with a trailing
+/// `=`).
+fn flag_known(a: &str, known: &[&str]) -> bool {
+    known.iter().any(|k| {
+        if a == *k {
+            return true;
+        }
+        k.ends_with('=') && a.starts_with(k)
+    })
 }
 
 struct CommonArgs {
@@ -392,7 +414,10 @@ struct CommonArgs {
 }
 
 fn parse_build(args: &[String]) -> Command {
-    let common = parse_common(args);
+    let common = match parse_common(args, &[]) {
+        Ok(c) => c,
+        Err(()) => return Command::Usage,
+    };
     let input = match common.input {
         Some(p) => p,
         None => {
@@ -418,7 +443,10 @@ fn parse_build(args: &[String]) -> Command {
 }
 
 fn parse_run(args: &[String]) -> Command {
-    let common = parse_common(args);
+    let common = match parse_common(args, &["--timeout=", "--runner="]) {
+        Ok(c) => c,
+        Err(()) => return Command::Usage,
+    };
     let mut timeout = Duration::from_secs(10);
     let mut runner_override: Option<String> = None;
 
@@ -610,7 +638,20 @@ fn default_manifest() -> PathBuf {
 }
 
 fn parse_deploy(args: &[String]) -> Command {
-    let common = parse_common(args);
+    let common = match parse_common(
+        args,
+        &[
+            "--encrypt=",
+            "--key-encrypt=",
+            "--key-sign=",
+            "--device-keys=",
+            "--sign",
+            "--commit-otp",
+        ],
+    ) {
+        Ok(c) => c,
+        Err(()) => return Command::Usage,
+    };
     let mut enc_mode = EncryptMode::None;
     let mut key_encrypt: Option<String> = None;
     let mut key_sign: Option<String> = None;
@@ -698,7 +739,8 @@ fn parse_platform(args: &[String]) -> Command {
                         return Command::Usage;
                     }
                 } else if a.starts_with('-') {
-                    // Skip unknown flags for now.
+                    eprintln!("tyu: unknown option '{}'", a);
+                    return Command::Usage;
                 } else if name.is_none() {
                     name = Some(a.clone());
                 }
@@ -826,6 +868,136 @@ mod tests {
             parse_test(&strings(&["--definitely-not-a-flag"])),
             Command::Usage
         ));
+    }
+
+    // -----------------------------------------------------------------------
+    // BUG-009: unknown flags are an error on every subcommand, not skipped.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn unknown_build_flag_is_usage_error() {
+        assert!(matches!(
+            parse_build(&strings(&["--check=all", "Main.mod"])),
+            Command::Usage
+        ));
+        assert!(matches!(
+            parse_build(&strings(&["--definitely-not-a-flag", "Main.mod"])),
+            Command::Usage
+        ));
+    }
+
+    #[test]
+    fn unknown_run_flag_is_usage_error() {
+        assert!(matches!(
+            parse_run(&strings(&["--check=all", "Main.tyu"])),
+            Command::Usage
+        ));
+    }
+
+    #[test]
+    fn unknown_deploy_flag_is_usage_error() {
+        assert!(matches!(
+            parse_deploy(&strings(&["--definitely-not-a-flag", "Main.mod"])),
+            Command::Usage
+        ));
+    }
+
+    #[test]
+    fn unknown_platform_info_flag_is_usage_error() {
+        assert!(matches!(
+            parse_platform(&strings(&["info", "demo", "--definitely-not-a-flag"])),
+            Command::Usage
+        ));
+    }
+
+    // -----------------------------------------------------------------------
+    // BUG-013: invalid flag VALUES are an error, not warn-and-continue — a
+    // typo'd --target must not silently build for the default target.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn unknown_target_value_is_usage_error() {
+        assert!(matches!(
+            parse_build(&strings(&["--target=x86_64-unknown-none-typo", "Main.mod"])),
+            Command::Usage
+        ));
+        assert!(matches!(
+            parse_run(&strings(&["--target=not-a-target", "Main.tyu"])),
+            Command::Usage
+        ));
+    }
+
+    #[test]
+    fn invalid_mode_value_is_usage_error() {
+        assert!(matches!(
+            parse_build(&strings(&["--mode=stats", "Main.mod"])),
+            Command::Usage
+        ));
+    }
+
+    #[test]
+    fn invalid_metal_encrypt_value_is_usage_error() {
+        assert!(matches!(
+            parse_build(&strings(&["--metal-encrypt=devise", "Main.mod"])),
+            Command::Usage
+        ));
+    }
+
+    #[test]
+    fn trailing_valueless_flag_is_usage_error() {
+        assert!(matches!(
+            parse_build(&strings(&["Main.mod", "--platform"])),
+            Command::Usage
+        ));
+        assert!(matches!(parse_build(&strings(&["Main.mod", "--isa"])), Command::Usage));
+        assert!(matches!(parse_build(&strings(&["Main.mod", "-I"])), Command::Usage));
+    }
+
+    #[test]
+    fn valid_flag_values_still_parse() {
+        match parse_build(&strings(&[
+            "--target=x86_64-unknown-none",
+            "--mode=static",
+            "--metal-encrypt=device",
+            "Main.mod",
+        ])) {
+            Command::Build(args) => {
+                assert_eq!(args.target, Target::X86_64UnknownNone);
+                assert_eq!(args.mode, Some(BuildMode::Static));
+                assert_eq!(args.metal_encrypt_mode, Some(EncryptMode::Device));
+            }
+            other => panic!("unexpected command: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn run_specific_flags_still_parse() {
+        match parse_run(&strings(&["--timeout=5", "--runner=qemu", "Main.tyu"])) {
+            Command::Run(args) => {
+                assert_eq!(args.timeout, Duration::from_secs(5));
+                assert_eq!(args.runner_override.as_deref(), Some("qemu"));
+            }
+            other => panic!("unexpected command: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn deploy_specific_flags_still_parse() {
+        match parse_deploy(&strings(&[
+            "--sign",
+            "--commit-otp",
+            "--encrypt=fleet",
+            "--key-sign=k1",
+            "Main.mod",
+        ])) {
+            Command::Deploy(args) => {
+                assert!(args.sign);
+                assert!(args.commit_otp);
+                assert_eq!(args.enc_mode, EncryptMode::Fleet);
+                assert_eq!(args.key_sign.as_deref(), Some("k1"));
+            }
+            other => panic!("unexpected command: {:?}", other),
+        }
     }
 
     #[test]

@@ -240,8 +240,10 @@ fn emit_task_yield_runtime(out: &mut dyn frontend::parse::Output) {
     out.write(b"  je .task_yield_no_ready_active\n");
     out.write(b"  cmp r12, 4\n");
     out.write(b"  jne .task_yield_return\n");
+    // All tasks blocked and nothing runnable: program deadlock (BUG-005) —
+    // deliver Deadlock (25), not the generic Unreachable (23).
     out.write(b"  mov rdi, ");
-    write_u32(out, lir::trap_code_u32(lir::TrapCode::Unreachable));
+    write_u32(out, lir::trap_code_u32(lir::TrapCode::Deadlock));
     out.write(b"\n");
     out.write(b"  jmp __lang_trap\n");
     out.write(b".task_yield_no_ready_active:\n");

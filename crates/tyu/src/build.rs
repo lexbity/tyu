@@ -63,6 +63,10 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
     let workspace_root = platform::workspace_root();
     platform::ensure_build_platform_interface(&workspace_root, target)?;
 
+    // Capture before any compilation so pruning only reclaims objects that
+    // predate this build (concurrent builds sharing the out-dir are safe).
+    let build_started = std::time::SystemTime::now();
+
     // Ensure output directory exists.
     fs::create_dir_all(&out_dir).map_err(|e| TyuError::Io(e))?;
 
@@ -103,6 +107,9 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
     // Transitive-dep hash cache: module path → sorted hashes of all transitive deps.
     let mut transitive_cache: BTreeMap<PathBuf, Vec<u64>> = BTreeMap::new();
 
+    // Module name → fingerprints built in this run (for stale-artifact pruning).
+    let mut built_fps: BTreeMap<String, Vec<u64>> = BTreeMap::new();
+
     // Compile each module in dependency order.
     let mut module_objs: Vec<PathBuf> = Vec::new();
     for module in &modules {
@@ -112,6 +119,10 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
                 cache::collect_transitive_hashes(module, &path_to_hash, &mut transitive_cache);
             cache::inputs_fingerprint(own_hash, triple, &transitive)
         };
+        built_fps
+            .entry(module.name.clone())
+            .or_default()
+            .push(inputs_fp);
 
         let obj_path = compile_module(
             &langc,
@@ -172,7 +183,8 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
         (final_image, exec_image)
     };
 
-    // Persist cache.
+    // Persist cache (and prune stale artifacts from this out-dir first).
+    prune_out_dir(&out_dir, &mut cache, &built_fps, build_started)?;
     cache.save()?;
 
     Ok(BuildOutcome {
@@ -700,6 +712,12 @@ fn expected_object_path(src: &Path, out_dir: &Path) -> PathBuf {
 }
 
 /// Compile a single module with `langc`.
+///
+/// langc writes its object into a per-process scratch directory (named after
+/// the module *declaration*, e.g. `<Module>.o`), which is then moved into
+/// `out_dir` under a source-keyed `<Module>-<inputs_fp>.o`.  Using a scratch
+/// directory (rather than `out_dir` directly) means two concurrent builds that
+/// share an `out_dir` can never cross-wire the shared `<Module>.o` slot.
 fn compile_module(
     langc: &Path,
     _target: Target,
@@ -714,18 +732,22 @@ fn compile_module(
     triple: &str,
     feature_set: FeatureSet,
 ) -> Result<PathBuf, TyuError> {
+    let features = feature_set.bits();
     // Check cache first.
-    if let Some(cached) = cache.lookup(compiler_fp, inputs_fp, abi_hash) {
+    if let Some(cached) = cache.lookup(compiler_fp, inputs_fp, abi_hash, features) {
         if cached.object_path.exists() {
             eprintln!("tyu: cache hit for '{}'", module.path.display());
             return Ok(cached.object_path);
         }
     }
 
+    let scratch = out_dir.join(format!(".langc-scratch-{}", std::process::id()));
+    fs::create_dir_all(&scratch).map_err(TyuError::Io)?;
+
     let mut cmd = Command::new(langc);
     cmd.arg("--emit=obj");
     cmd.arg(format!("--target={}", triple));
-    cmd.arg(format!("--out-dir={}", out_dir.display()));
+    cmd.arg(format!("--out-dir={}", scratch.display()));
 
     if let Some(sr) = sysroot {
         cmd.arg(format!("--sysroot={}", sr.display()));
@@ -753,6 +775,7 @@ fn compile_module(
         .status()
         .map_err(|e| TyuError::Build(format!("running langc: {}", e)))?;
     if !status.success() {
+        let _ = fs::remove_dir_all(&scratch);
         return Err(TyuError::Build(format!(
             "langc failed on '{}' (exit code {:?})",
             module.path.display(),
@@ -760,30 +783,141 @@ fn compile_module(
         )));
     }
 
-    // Langc names the object after the module declaration.  Prefer the
-    // deterministic path so recompiles that overwrite an existing object do
-    // not get mistaken for a miss.
-    let expected_obj_path = out_dir.join(format!("{}.o", module.name));
-    let obj_path = if expected_obj_path.exists() {
-        expected_obj_path
-    } else {
-        std::fs::read_dir(out_dir)
-            .map_err(|e| TyuError::Build(format!("reading out_dir: {}", e)))?
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .find(|p| p.extension().and_then(|x| x.to_str()) == Some("o"))
-            .ok_or_else(|| {
-                TyuError::Build(format!(
-                    "langc produced no .o file for '{}' in '{}'",
-                    module.path.display(),
-                    out_dir.display(),
-                ))
-            })?
-    };
+    // Langc names the object after the module *declaration*, so distinct
+    // source files that declare the same module (e.g. every tutorial's
+    // `module Main;`) would share one `<ModuleName>.o` slot — a later cache
+    // hit could then return an object clobbered by a different program
+    // (BUG-002).  Re-home the produced object under a source-keyed name
+    // (inputs_fp folds in the source content hash), so each distinct source
+    // owns an artifact nothing else can overwrite.
+    let obj_path = rehome_object(&module.name, inputs_fp, &scratch, out_dir)?;
 
-    cache.insert(compiler_fp, inputs_fp, abi_hash, triple, &obj_path)?;
+    // The scratch directory is per-process and per-compilation; drop it now.
+    let _ = fs::remove_dir_all(&scratch);
+
+    cache.insert(compiler_fp, inputs_fp, abi_hash, features, triple, &obj_path)?;
 
     Ok(obj_path)
+}
+
+/// Move `langc`'s output object `<scratch>/<ModuleName>.o` to a
+/// source-keyed `<out_dir>/<ModuleName>-<inputs_fp:016x>.o`.
+///
+/// `inputs_fp` is content-addressed (own source + deps + triple), so two
+/// programs with identical content share an object (which is identical too),
+/// while distinct programs never collide.  The exact `<ModuleName>.o` slot is
+/// deterministic per `langc` (`crates/langc/src/driver.rs`), so the old
+/// first-`.o` fallback is dropped: if langc did not write it, that is an
+/// error, not a reason to guess.
+fn rehome_object(
+    module_name: &str,
+    inputs_fp: u64,
+    scratch: &Path,
+    out_dir: &Path,
+) -> Result<PathBuf, TyuError> {
+    let langc_obj = scratch.join(format!("{}.o", module_name));
+    if !langc_obj.exists() {
+        return Err(TyuError::Build(format!(
+            "langc produced no '{}.o' in '{}'",
+            module_name,
+            scratch.display(),
+        )));
+    }
+    let unique_obj = out_dir.join(format!("{}-{:016x}.o", module_name, inputs_fp));
+    fs::rename(&langc_obj, &unique_obj).map_err(|e| {
+        TyuError::Build(format!(
+            "re-homing '{}' -> '{}': {}",
+            langc_obj.display(),
+            unique_obj.display(),
+            e,
+        ))
+    })?;
+    Ok(unique_obj)
+}
+
+/// Remove stale artifacts from a custom `--out-dir`:
+///
+/// - cache records whose object file no longer exists;
+/// - re-homed `<Module>-<inputs_fp>.o` files whose fingerprint is stale for a
+///   module rebuilt in this build (a source edit changes the inputs fp, so the
+///   previous `<Module>-<old_fp>.o` and its cache record are both reclaimed);
+/// - re-homed objects that no cache record references (left by interrupted
+///   builds);
+/// - scratch directories left by interrupted `langc` invocations.
+///
+/// Only objects that predate this build are reclaimed, so a concurrent build
+/// sharing this out-dir can never have its in-flight artifact deleted
+/// (`build_started` is captured before any compilation begins).  Objects for
+/// modules *not* part of this build are left alone (they may be legitimately
+/// cached for a later program sharing this out-dir).
+fn prune_out_dir(
+    out_dir: &Path,
+    cache: &mut BuildCache,
+    current_fps: &BTreeMap<String, Vec<u64>>,
+    build_started: std::time::SystemTime,
+) -> Result<(), TyuError> {
+    let predates = |path: &Path| -> bool {
+        fs::metadata(path)
+            .and_then(|m| m.modified())
+            .map(|t| t < build_started)
+            .unwrap_or(false)
+    };
+
+    cache.prune_missing();
+
+    let live: std::collections::HashSet<PathBuf> = cache.referenced_objects().cloned().collect();
+    let entries = fs::read_dir(out_dir).map_err(TyuError::Io)?;
+    let mut removed: Vec<PathBuf> = Vec::new();
+    for entry in entries {
+        let path = entry.map_err(TyuError::Io)?.path();
+        if path.is_dir() {
+            if is_scratch_dir(&path) && predates(&path) {
+                let _ = fs::remove_dir_all(&path);
+            }
+            continue;
+        }
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let Some((module, fp)) = parse_rehomed_object_name(name) else {
+            continue;
+        };
+        let current = current_fps
+            .get(&module)
+            .map(|fps| fps.contains(&fp))
+            .unwrap_or(false);
+        if current || !predates(&path) {
+            continue;
+        }
+        let referenced = live.contains(&path);
+        // Stale fingerprint of a module rebuilt here, or an orphan with no
+        // cache record — either way the object is dead.
+        if current_fps.contains_key(&module) || !referenced {
+            removed.push(path.clone());
+            let _ = fs::remove_file(&path);
+        }
+    }
+    if !removed.is_empty() {
+        cache.remove_objects(&removed);
+    }
+    Ok(())
+}
+
+/// Is `path` a per-process langc scratch directory we can reclaim?
+fn is_scratch_dir(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| n.starts_with(".langc-scratch-"))
+        .unwrap_or(false)
+}
+
+/// Split a re-homed `<Module>-<inputs_fp:016x>.o` name into `(module, fp)`.
+fn parse_rehomed_object_name(name: &str) -> Option<(String, u64)> {
+    let stem = name.strip_suffix(".o")?;
+    let (module, fp) = stem.rsplit_once('-')?;
+    if fp.len() != 16 || !fp.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let fp_val = u64::from_str_radix(fp, 16).ok()?;
+    Some((module.to_string(), fp_val))
 }
 
 /// Assemble the runtime unit `stem` (e.g. `"runtime"`, `"concurrency"`) for

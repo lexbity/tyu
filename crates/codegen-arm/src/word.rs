@@ -121,6 +121,8 @@ impl<'a> ArmThumbBackend<'a> {
                         stack_bound: w.bound.wire_u32(),
                     };
                     self.mi_export_count = idx + 1;
+                } else {
+                    return Err(CodegenError::ModInfoTooLarge);
                 }
             }
         }

@@ -99,6 +99,8 @@ pub struct ArtifactRecord {
     pub inputs_fp: u64,
     /// ABI hash at time of compilation.
     pub abi_hash: u64,
+    /// Feature-set bitmask at time of compilation.
+    pub features: u8,
     /// Target triple.
     pub target: String,
     /// Path to the output `.o` file.
@@ -128,7 +130,7 @@ impl BuildCache {
         let artifacts = fs::read_to_string(path)
             .ok()
             .and_then(|data| serde_json::from_str::<CacheFile>(&data).ok())
-            .filter(|cf| cf.version == 2)
+            .filter(|cf| cf.version == 4)
             .map(|cf| cf.artifacts)
             .unwrap_or_default();
         BuildCache {
@@ -138,8 +140,11 @@ impl BuildCache {
     }
 
     /// Build a cache key.
-    fn key(compiler_fp: u64, inputs_fp: u64, abi_hash: u64) -> String {
-        format!("{:x}-{:x}-{:x}", compiler_fp, inputs_fp, abi_hash)
+    fn key(compiler_fp: u64, inputs_fp: u64, abi_hash: u64, features: u8) -> String {
+        format!(
+            "{:x}-{:x}-{:x}-{:02x}",
+            compiler_fp, inputs_fp, abi_hash, features
+        )
     }
 
     /// Look up a cached artifact.
@@ -148,8 +153,9 @@ impl BuildCache {
         compiler_fp: u64,
         inputs_fp: u64,
         abi_hash: u64,
+        features: u8,
     ) -> Option<ArtifactRecord> {
-        let key = Self::key(compiler_fp, inputs_fp, abi_hash);
+        let key = Self::key(compiler_fp, inputs_fp, abi_hash, features);
         self.artifacts.get(&key).cloned()
     }
 
@@ -159,16 +165,18 @@ impl BuildCache {
         compiler_fp: u64,
         inputs_fp: u64,
         abi_hash: u64,
+        features: u8,
         target: &str,
         object_path: &Path,
     ) -> Result<(), TyuError> {
-        let key = Self::key(compiler_fp, inputs_fp, abi_hash);
+        let key = Self::key(compiler_fp, inputs_fp, abi_hash, features);
         self.artifacts.insert(
             key,
             ArtifactRecord {
                 compiler_fp,
                 inputs_fp,
                 abi_hash,
+                features,
                 target: target.to_string(),
                 object_path: object_path.to_path_buf(),
             },
@@ -176,10 +184,25 @@ impl BuildCache {
         self.save()
     }
 
+    /// Drop records whose recorded object file no longer exists.
+    pub fn prune_missing(&mut self) {
+        self.artifacts.retain(|_, rec| rec.object_path.exists());
+    }
+
+    /// Drop every record whose object path is one of `paths`.
+    pub fn remove_objects(&mut self, paths: &[PathBuf]) {
+        self.artifacts.retain(|_, rec| !paths.contains(&rec.object_path));
+    }
+
+    /// Iterate over every object path the cache still references.
+    pub fn referenced_objects(&self) -> impl Iterator<Item = &PathBuf> {
+        self.artifacts.values().map(|rec| &rec.object_path)
+    }
+
     /// Persist the cache to disk.
     pub fn save(&self) -> Result<(), TyuError> {
         let cf = CacheFile {
-            version: 2,
+            version: 4,
             artifacts: self.artifacts.clone(),
         };
         let json = serde_json::to_string_pretty(&cf)
@@ -233,7 +256,7 @@ mod tests {
     fn lookup_miss_on_unknown_key() {
         let dir = temp_dir("lookup_miss");
         let c = make_cache(&dir.join("build.json"));
-        assert!(c.lookup(0, 0, 0).is_none());
+        assert!(c.lookup(0, 0, 0, 0).is_none());
     }
 
     #[test]
@@ -243,8 +266,8 @@ mod tests {
         let mut c = make_cache(&p);
         let obj = dir.join("out.o");
         fs::write(&obj, b"\x7fELF").unwrap();
-        c.insert(1, 2, 3, "test", &obj).unwrap();
-        let r = c.lookup(1, 2, 3).unwrap();
+        c.insert(1, 2, 3, 0, "test", &obj).unwrap();
+        let r = c.lookup(1, 2, 3, 0).unwrap();
         assert_eq!(r.object_path, obj);
     }
 
@@ -255,9 +278,9 @@ mod tests {
         let mut c = make_cache(&p);
         let obj = dir.join("out.o");
         fs::write(&obj, b"\x7fELF").unwrap();
-        c.insert(1, 2, 3, "test", &obj).unwrap();
+        c.insert(1, 2, 3, 0, "test", &obj).unwrap();
         assert!(
-            c.lookup(99, 2, 3).is_none(),
+            c.lookup(99, 2, 3, 0).is_none(),
             "different compiler_fp must miss"
         );
     }
@@ -269,11 +292,46 @@ mod tests {
         let mut c = make_cache(&p);
         let obj = dir.join("out.o");
         fs::write(&obj, b"\x7fELF").unwrap();
-        c.insert(1, 2, 3, "test", &obj).unwrap();
+        c.insert(1, 2, 3, 0, "test", &obj).unwrap();
         assert!(
-            c.lookup(1, 99, 3).is_none(),
+            c.lookup(1, 99, 3, 0).is_none(),
             "different inputs_fp must miss"
         );
+    }
+
+    #[test]
+    fn lookup_miss_on_different_features() {
+        let dir = temp_dir("features_miss");
+        let p = dir.join("build.json");
+        let mut c = make_cache(&p);
+        let obj = dir.join("out.o");
+        fs::write(&obj, b"\x7fELF").unwrap();
+        c.insert(1, 2, 3, 0b0101, "test", &obj).unwrap();
+        assert!(
+            c.lookup(1, 2, 3, 0b1010).is_none(),
+            "different feature_set must miss"
+        );
+        assert!(
+            c.lookup(1, 2, 3, 0b0101).is_some(),
+            "same feature_set must hit"
+        );
+    }
+
+    #[test]
+    fn prune_missing_drops_stale_records() {
+        let dir = temp_dir("prune_missing");
+        let p = dir.join("build.json");
+        let mut c = make_cache(&p);
+        let stale = dir.join("stale.o");
+        fs::write(&stale, b"\x7fELF").unwrap();
+        c.insert(1, 2, 3, 0, "t", &stale).unwrap();
+        let live = dir.join("live.o");
+        fs::write(&live, b"\x7fELF").unwrap();
+        c.insert(1, 2, 4, 0, "t", &live).unwrap();
+        fs::remove_file(&stale).unwrap();
+        c.prune_missing();
+        assert!(c.lookup(1, 2, 3, 0).is_none(), "stale record dropped");
+        assert!(c.lookup(1, 2, 4, 0).is_some(), "live record kept");
     }
 
     #[test]
@@ -284,10 +342,10 @@ mod tests {
         fs::write(&obj, b"\x7fELF").unwrap();
         {
             let mut c = make_cache(&p);
-            c.insert(10, 20, 30, "arm", &obj).unwrap();
+            c.insert(10, 20, 30, 0, "arm", &obj).unwrap();
         }
         let c2 = make_cache(&p);
-        assert!(c2.lookup(10, 20, 30).is_some());
+        assert!(c2.lookup(10, 20, 30, 0).is_some());
     }
 
     #[test]
@@ -299,10 +357,10 @@ mod tests {
         let ob = dir.join("b.o");
         fs::write(&oa, b"a").unwrap();
         fs::write(&ob, b"b").unwrap();
-        c.insert(1, 2, 100, "t", &oa).unwrap();
-        c.insert(1, 2, 200, "t", &ob).unwrap();
-        assert_eq!(c.lookup(1, 2, 100).unwrap().object_path, oa);
-        assert_eq!(c.lookup(1, 2, 200).unwrap().object_path, ob);
+        c.insert(1, 2, 100, 0, "t", &oa).unwrap();
+        c.insert(1, 2, 200, 0, "t", &ob).unwrap();
+        assert_eq!(c.lookup(1, 2, 100, 0).unwrap().object_path, oa);
+        assert_eq!(c.lookup(1, 2, 200, 0).unwrap().object_path, ob);
     }
 
     #[test]
@@ -312,10 +370,10 @@ mod tests {
         let mut c = make_cache(&p);
         let obj = dir.join("out.o");
         fs::write(&obj, b"\x7fELF").unwrap();
-        c.insert(1, 2, 3, "t", &obj).unwrap();
+        c.insert(1, 2, 3, 0, "t", &obj).unwrap();
         // Bump version in file.
         let raw = fs::read_to_string(&p).unwrap();
-        let bumped = raw.replace("\"version\": 2", "\"version\": 3");
+        let bumped = raw.replace("\"version\": 4", "\"version\": 5");
         fs::write(&p, &bumped).unwrap();
         let c2 = make_cache(&p);
         assert!(c2.artifacts.is_empty(), "wrong version = cold");
@@ -370,5 +428,31 @@ mod tests {
         fs::write(&p, v1).unwrap();
         let c = make_cache(&p);
         assert!(c.artifacts.is_empty(), "v1 cache must be cold");
+    }
+
+    #[test]
+    fn old_v2_cache_invalidated() {
+        // BUG-002: v2 caches recorded object paths under the shared
+        // `<ModuleName>.o` slot, which distinct sources could clobber.  v3
+        // invalidates them so no stale object is ever served after upgrade.
+        let dir = temp_dir("old_v2");
+        let p = dir.join("build.json");
+        let v2 = r#"{"version":2,"artifacts":{}}"#;
+        fs::write(&p, v2).unwrap();
+        let c = make_cache(&p);
+        assert!(c.artifacts.is_empty(), "v2 cache must be cold after BUG-002 fix");
+    }
+
+    #[test]
+    fn old_v3_cache_invalidated() {
+        // v3 keys omit the feature set, so a cached artifact could bypass the
+        // `--features` gate.  v4 folds feature bits into the key; any v3
+        // record is unreachable and treated as cold.
+        let dir = temp_dir("old_v3");
+        let p = dir.join("build.json");
+        let v3 = r#"{"version":3,"artifacts":{}}"#;
+        fs::write(&p, v3).unwrap();
+        let c = make_cache(&p);
+        assert!(c.artifacts.is_empty(), "v3 cache must be cold after feature-key fix");
     }
 }

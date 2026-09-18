@@ -50,6 +50,8 @@ pub enum ToolSource {
     Manifest,
     /// `TYU_<ROLE>_<TRIPLE>` environment variable.
     EnvVar,
+    /// The workspace `target/debug/` dev fallback (matches what builds use).
+    Workspace,
     /// `PATH` lookup of the target's default tool name.
     Path,
 }
@@ -185,8 +187,29 @@ fn resolve_one(
         });
     }
 
-    // 4. PATH lookup of the default name.
+    // 4. Workspace `target/debug/` fallback.  Builds resolve tools through
+    //    `resolve_tool`/`resolve_tool_candidates`, which prefer the workspace
+    //    `target/debug` binary over PATH.  Mirror that here so `toolchain check`
+    //    reports the same binary the build driver actually uses.
     let default_name = role.default_name(target);
+    if !default_name.is_empty() {
+        let name_str = std::str::from_utf8(default_name).ok()?;
+        let ws = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()?
+            .parent()?
+            .join("target")
+            .join("debug")
+            .join(name_str);
+        if ws.is_file() {
+            return Some(ResolvedTool {
+                version: probe_version(&ws),
+                path: ws,
+                source: ToolSource::Workspace,
+            });
+        }
+    }
+
+    // 5. PATH lookup of the default name.
     if default_name.is_empty() {
         return None;
     }
@@ -306,6 +329,7 @@ pub fn toolchain_check(target: Target, manifest: &ProjectManifest) -> String {
                 ToolSource::FlagOverride => "flag",
                 ToolSource::Manifest => "manifest",
                 ToolSource::EnvVar => "env",
+                ToolSource::Workspace => "workspace target/debug",
                 ToolSource::Path => "PATH",
             };
             let ver = t

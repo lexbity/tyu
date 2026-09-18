@@ -115,8 +115,11 @@ __task_spawn:
     pop {r4, r5, r6, r7, pc}
 .spawn_fail:
 .spawn_fail_full:
-    mov r0, #0
-    pop {r4, r5, r6, r7, pc}
+    @ No free slot or global queue full: trap (BUG-005) instead of returning
+    @ task id 0 (which would alias main).
+    pop {r4, r5, r6, r7, lr}
+    movs r0, #23
+    b __lang_trap
 
 @ ===========================================================================
 @ __task_entry_tramp
@@ -155,7 +158,7 @@ __task_exit:
 @ ===========================================================================
 .thumb_func
 __task_yield:
-    push {r4, r5, r6, r7, lr}
+    push {r4, r5, r6, r7, r8, lr}
     @ --- save current task context ---
     ldr r0, =__task_current
     ldr r6, [r0]               @ r6 = current task ID
@@ -165,10 +168,11 @@ __task_yield:
     str r4, [r0, r6, lsl #2]   @ save DS pointer (r4)
     ldr r0, =__task_r14
     str r5, [r0, r6, lsl #2]   @ save DS limit (r5)
-    @ --- re-enqueue if state == ACTIVE (2) ---
+    @ --- capture entry state for the no-ready/deadlock decision (BUG-005) ---
     ldr r0, =__task_state
-    ldr r7, [r0, r6, lsl #2]   @ r7 = state
-    cmp r7, #2
+    ldr r8, [r0, r6, lsl #2]   @ r8 = entry state
+    @ --- re-enqueue if state == ACTIVE (2) ---
+    cmp r8, #2
     bne .yield_no_enqueue
     mov r7, #1                 @ READY
     str r7, [r0, r6, lsl #2]
@@ -244,8 +248,19 @@ __task_yield:
     str r2, [r1]
     b .yield_switch
 .yield_return_self:
+    @ deadlock detection (BUG-005): nothing is runnable and the current task
+    @ was BLOCKED (state 4) → the program is deadlocked — deliver Deadlock
+    @ (25), not the generic Unreachable (23).
+    cmp r8, #2
+    beq .yield_keep_running
+    cmp r8, #4
+    bne .yield_keep_running
+    pop {r4, r5, r6, r7, r8}
+    movs r0, #25
+    b __lang_trap
+.yield_keep_running:
     @ stay on current task
-    pop {r4, r5, r6, r7, pc}
+    pop {r4, r5, r6, r7, r8, pc}
 .yield_switch:
     @ switch to task r6
     ldr r0, =__task_state
@@ -259,7 +274,7 @@ __task_yield:
     ldr r4, [r0, r6, lsl #2]    @ restore DS pointer
     ldr r0, =__task_r14
     ldr r5, [r0, r6, lsl #2]    @ restore DS limit
-    pop {r4, r5, r6, r7, pc}
+    pop {r4, r5, r6, r7, r8, pc}
 
 @ ===========================================================================
 @ __task_join ( r0 = task_id )
@@ -283,7 +298,10 @@ __task_join:
     mov r1, #0
     str r1, [r0, r4, lsl #2]
 .join_invalid:
-    pop {r4, pc}
+    @ Invalid task id: trap (BUG-005) instead of silently returning.
+    pop {r4}
+    movs r0, #23
+    b __lang_trap
 
 @ ===========================================================================
 @ BSS
