@@ -2,6 +2,9 @@ use crate::typecheck::error::TcError;
 use crate::typecheck::place::{PlacePath, Step};
 use crate::typecheck::util::{parse_u32_any, slice_span};
 use crate::types::TypeAtom;
+use codegen_core::compiled_desc::{
+    CompiledDescriptor, REG_ACCESS_RO, REG_ACCESS_RW, REG_ACCESS_WO,
+};
 use frontend::fixed::FixedVec;
 use frontend::lex::Lexer;
 use frontend::parse::{DeclKind, ModuleAst};
@@ -33,11 +36,20 @@ pub struct MmioMapDecl {
     pub body: Span,
 }
 
+/// How a register-map instance is based (P4, §5.7).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InstanceBase {
+    /// Raw absolute address (`MAP @ 0x…`), the legacy descriptor-less path.
+    Raw(u64),
+    /// Symbolic board instance (`MAP @ board.<instance>`, P4): window-relative.
+    Symbolic { window: u16, base_offset: u32 },
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MmioInstance {
     pub name: TypeAtom,
     pub map: TypeAtom,
-    pub base_addr: u64,
+    pub base: InstanceBase,
 }
 
 pub struct MmioDb {
@@ -62,7 +74,9 @@ pub struct MmioResolvedReg {
     pub reg_ty: TypeAtom,
     pub access: AccessMode,
     pub volatile: bool,
-    pub addr: u64,
+    /// Window-relative place (P4): the module window-use id + byte offset.
+    pub window: u16,
+    pub offset: u32,
     pub array_len: Option<u32>,
     // The original source span of the whole place (e.g. `gpio.OUT_SET`).
     pub place_span: Span,
@@ -76,7 +90,8 @@ pub struct MmioResolvedField {
     pub reg_access: AccessMode,
     pub field: MmioFieldInfo,
     pub volatile: bool,
-    pub addr: u64,
+    pub window: u16,
+    pub offset: u32,
     pub array_len: Option<u32>,
     pub place_span: Span,
 }
@@ -93,6 +108,21 @@ pub fn access_can_read(access: AccessMode) -> bool {
 
 pub fn access_can_write(access: AccessMode) -> bool {
     !matches!(access, AccessMode::Ro)
+}
+
+/// Fused per-window access-mask bits for a register access (design doc §5.5).
+pub fn window_access_bits(access: AccessMode) -> u8 {
+    use ir::{
+        ACCESS_EFFECTFUL_READ, ACCESS_READ, ACCESS_W1C, ACCESS_W1S, ACCESS_WRITE,
+    };
+    match access {
+        AccessMode::Ro => ACCESS_READ,
+        AccessMode::Wo => ACCESS_WRITE,
+        AccessMode::Rw => ACCESS_READ | ACCESS_WRITE,
+        AccessMode::W1c => ACCESS_WRITE | ACCESS_W1C,
+        AccessMode::W1s => ACCESS_WRITE | ACCESS_W1S,
+        AccessMode::Rc => ACCESS_READ | ACCESS_EFFECTFUL_READ,
+    }
 }
 
 pub fn field_mask_shift(field: &MmioFieldInfo) -> (u64, u8) {
@@ -117,7 +147,11 @@ pub fn mmio_type_width_bytes(ty: &[u8]) -> Option<u32> {
     }
 }
 
-pub fn build_mmio_db(module: &ModuleAst, src: &[u8]) -> Result<MmioDb, TcError> {
+pub fn build_mmio_db(
+    module: &ModuleAst,
+    src: &[u8],
+    descriptor: Option<&CompiledDescriptor>,
+) -> Result<MmioDb, TcError> {
     let mut db = MmioDb {
         maps: FixedVec::new(),
         instances: FixedVec::new(),
@@ -131,15 +165,9 @@ pub fn build_mmio_db(module: &ModuleAst, src: &[u8]) -> Result<MmioDb, TcError> 
             .ok_or(TcError::MmioNameInvalid { span: inst.name })?;
         let map = TypeAtom::new(slice_span(src, inst.map))
             .ok_or(TcError::MmioNameInvalid { span: inst.map })?;
-        let base_addr = parse_u32_any(slice_span(src, inst.base_addr))
-            .ok_or(TcError::MmioAddrInvalid { span: inst.base_addr })?
-            as u64;
+        let base = resolve_instance_base(inst, src, descriptor)?;
         db.instances
-            .push(MmioInstance {
-                name,
-                map,
-                base_addr,
-            })
+            .push(MmioInstance { name, map, base })
             .map_err(|_| TcError::MmioInstanceCapacityExceeded { span: inst.name })?;
     }
 
@@ -153,6 +181,9 @@ pub fn build_mmio_db(module: &ModuleAst, src: &[u8]) -> Result<MmioDb, TcError> 
         let map_name = TypeAtom::new(slice_span(src, decl.name))
             .ok_or(TcError::MmioNameInvalid { span: decl.name })?;
         validate_regmap_body(src, body)?;
+        if let Some(desc) = descriptor {
+            check_regmap_against_descriptor(src, body, map_name, desc)?;
+        }
         db.maps
             .push(MmioMapDecl {
                 name: map_name,
@@ -162,6 +193,197 @@ pub fn build_mmio_db(module: &ModuleAst, src: &[u8]) -> Result<MmioDb, TcError> 
     }
 
     Ok(db)
+}
+
+/// Resolve an instance's base operand (§5.7): `board.<instance>` looks the
+/// device up in the descriptor; a raw integer is the legacy path (rejected
+/// under a descriptor, E3641).
+fn resolve_instance_base(
+    inst: &frontend::parse::RegMapInstanceAst,
+    src: &[u8],
+    descriptor: Option<&CompiledDescriptor>,
+) -> Result<InstanceBase, TcError> {
+    if let Some(board_span) = inst.board_instance {
+        // `board.<instance>` requires a descriptor (E3640 if absent).
+        let Some(desc) = descriptor else {
+            return Err(TcError::MmioNeedsDescriptor { span: inst.name });
+        };
+        let instance = TypeAtom::new(slice_span(src, board_span))
+            .ok_or(TcError::MmioNameInvalid { span: board_span })?;
+        let atom = ir::Atom::new(instance.as_bytes())
+            .ok_or(TcError::MmioNameInvalid { span: board_span })?;
+        let device = desc.device(atom).ok_or(TcError::MmioBoardInstanceNotFound {
+            span: board_span,
+        })?;
+        return Ok(InstanceBase::Symbolic {
+            window: device.window,
+            base_offset: device.base_offset,
+        });
+    }
+    // Raw integer base.
+    let base_addr = parse_u32_any(slice_span(src, inst.base_addr))
+        .ok_or(TcError::MmioAddrInvalid { span: inst.base_addr })?
+        as u64;
+    if descriptor.is_some() {
+        return Err(TcError::MmioRawBaseUnderDescriptor { span: inst.base_addr });
+    }
+    Ok(InstanceBase::Raw(base_addr))
+}
+
+/// E3647: every source register-map row must be matched by a descriptor
+/// device row with the same (offset, name, width, access).
+fn check_regmap_against_descriptor(
+    src: &[u8],
+    body: Span,
+    map_name: TypeAtom,
+    descriptor: &CompiledDescriptor,
+) -> Result<(), TcError> {
+    let slice = &src[body.start..body.end];
+    let mut lex = Lexer::new(slice);
+    loop {
+        let tok = lex.next();
+        if tok.kind == TokenKind::Eof {
+            return Ok(());
+        }
+        if tok.kind != TokenKind::Number {
+            continue;
+        }
+        let offset = parse_u32_any(&slice[tok.span.start..tok.span.end]).ok_or(
+            TcError::MmioParseFailed {
+                span: Span::new(body.start + tok.span.start, body.start + tok.span.end),
+            },
+        )?;
+        let name_tok = lex.next();
+        if name_tok.kind != TokenKind::Ident {
+            return Err(TcError::MmioExpectedIdent {
+                span: Span::new(
+                    body.start + name_tok.span.start,
+                    body.start + name_tok.span.end,
+                ),
+            });
+        }
+        // Skip optional `[N]` bracket array suffix.
+        {
+            let mut probe = lex;
+            let maybe_bracket = probe.next();
+            if maybe_bracket.kind == TokenKind::PunctLBracket {
+                probe.next();
+                probe.next();
+                lex = probe;
+            }
+        }
+        let ty_tok = lex.next();
+        if ty_tok.kind != TokenKind::Ident {
+            return Err(TcError::MmioExpectedType {
+                span: Span::new(body.start + ty_tok.span.start, body.start + ty_tok.span.end),
+            });
+        }
+        let ty_bytes = &slice[ty_tok.span.start..ty_tok.span.end];
+        let Some(width) = mmio_type_width_bytes(ty_bytes) else {
+            return Err(TcError::MmioRegUnknownWidth {
+                span: Span::new(body.start + ty_tok.span.start, body.start + ty_tok.span.end),
+            });
+        };
+        let access_tok = lex.next();
+        if access_tok.kind != TokenKind::Ident {
+            return Err(TcError::MmioExpectedAccess {
+                span: Span::new(
+                    body.start + access_tok.span.start,
+                    body.start + access_tok.span.end,
+                ),
+            });
+        }
+        let Some(access) = parse_access_mode(&slice[access_tok.span.start..access_tok.span.end])
+        else {
+            return Err(TcError::MmioInvalidAccess {
+                span: Span::new(
+                    body.start + access_tok.span.start,
+                    body.start + access_tok.span.end,
+                ),
+            });
+        };
+        // Skip optional `volatile` and field block `{ ... }`.
+        {
+            let mut probe = lex;
+            let next = probe.next();
+            if next.kind == TokenKind::Ident
+                && &slice[next.span.start..next.span.end] == b"volatile"
+            {
+                lex = probe;
+            }
+            let mut probe2 = lex;
+            if probe2.next().kind == TokenKind::PunctLBrace {
+                lex = probe2;
+                loop {
+                    match lex.next().kind {
+                        TokenKind::PunctRBrace => break,
+                        TokenKind::Eof => {
+                            return Err(TcError::MmioUnexpectedEof {
+                                span: Span::new(body.start + tok.span.start, body.start + tok.span.end),
+                            })
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        let reg_name_bytes = &slice[name_tok.span.start..name_tok.span.end];
+        let Some(reg_name) = TypeAtom::new(reg_name_bytes) else {
+            return Err(TcError::MmioNameInvalid { span: name_tok.span });
+        };
+        if !descriptor_has_row(descriptor, map_name, offset, reg_name, width, access) {
+            return Err(TcError::MmioRowDivergesFromDescriptor {
+                span: Span::new(
+                    body.start + tok.span.start,
+                    body.start + ty_tok.span.end,
+                ),
+            });
+        }
+    }
+}
+
+/// True when some descriptor device with `map_name` declares a register row
+/// matching (offset, name, width, access).
+fn descriptor_has_row(
+    descriptor: &CompiledDescriptor,
+    map_name: TypeAtom,
+    offset: u32,
+    reg_name: TypeAtom,
+    width: u32,
+    access: AccessMode,
+) -> bool {
+    let map = ir::Atom::new(map_name.as_bytes());
+    let Some(map) = map else {
+        return false;
+    };
+    for device in descriptor.devices() {
+        if device.map != map {
+            continue;
+        }
+        for r in device.registers() {
+            if r.offset == offset
+                && r.name.as_bytes() == reg_name.as_bytes()
+                && r.width as u32 == width.wrapping_mul(8)
+                && compiled_access_matches(access, r.access)
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Map a source `AccessMode` onto the compiled access discriminant for the
+/// E3647 match (ro/wo/rw only — w1c/w1s/rc are source-level refinements).
+fn compiled_access_matches(source: AccessMode, compiled: u8) -> bool {
+    match source {
+        AccessMode::Ro => compiled == REG_ACCESS_RO,
+        AccessMode::Wo => compiled == REG_ACCESS_WO,
+        AccessMode::Rw | AccessMode::W1c | AccessMode::W1s | AccessMode::Rc => {
+            compiled == REG_ACCESS_RW
+        }
+    }
 }
 
 fn validate_regmap_body(src: &[u8], body: Span) -> Result<(), TcError> {
@@ -738,10 +960,7 @@ pub fn resolve_mmio_place(
     if let Some(field) = field_info {
         let width = mmio_type_width_bytes(reg_info.reg_ty.as_bytes()).unwrap_or(1) as u64;
         let idx = reg_idx.unwrap_or(0) as u64;
-        let addr = inst
-            .base_addr
-            .wrapping_add(reg_info.offset as u64)
-            .wrapping_add(idx.wrapping_mul(width));
+        let (window, offset) = place_window_offset(inst, reg_info.offset, idx, width);
         Ok(Some(MmioResolved::Field(MmioResolvedField {
             map: map_decl.name,
             reg: reg_info.reg,
@@ -749,27 +968,50 @@ pub fn resolve_mmio_place(
             reg_access: reg_info.access,
             field,
             volatile: reg_info.volatile,
-            addr,
+            window,
+            offset,
             array_len: reg_info.array_len,
             place_span,
         })))
     } else {
         let width = mmio_type_width_bytes(reg_info.reg_ty.as_bytes()).unwrap_or(1) as u64;
         let idx = reg_idx.unwrap_or(0) as u64;
-        let addr = inst
-            .base_addr
-            .wrapping_add(reg_info.offset as u64)
-            .wrapping_add(idx.wrapping_mul(width));
+        let (window, offset) = place_window_offset(inst, reg_info.offset, idx, width);
         Ok(Some(MmioResolved::Reg(MmioResolvedReg {
             map: map_decl.name,
             reg: reg_info.reg,
             reg_ty: reg_info.reg_ty,
             access: reg_info.access,
             volatile: reg_info.volatile,
-            addr,
+            window,
+            offset,
             array_len: reg_info.array_len,
             place_span,
         })))
+    }
+}
+
+/// The window-relative place of a register access (P4): the window id and the
+/// byte offset = instance base offset + register offset + array index stride.
+fn place_window_offset(inst: MmioInstance, reg_offset: u32, idx: u64, width: u64) -> (u16, u32) {
+    match inst.base {
+        InstanceBase::Symbolic {
+            window,
+            base_offset,
+        } => {
+            let offset = base_offset
+                .wrapping_add(reg_offset)
+                .wrapping_add(idx.wrapping_mul(width) as u32);
+            (window, offset as u32)
+        }
+        InstanceBase::Raw(base_addr) => {
+            // Legacy raw path: window 0 is the module's single raw window and
+            // the offset is the absolute address (a board-less compile — the
+            // verifier treats window 0 as size-bounded by the descriptor,
+            // which never reaches here; this path is unit-test-only).
+            let _ = base_addr;
+            (0, base_addr as u32)
+        }
     }
 }
 
@@ -803,6 +1045,7 @@ mod tests {
                 name: name_span,
                 map: map_span,
                 base_addr: base_span,
+                board_instance: None,
             })
             .unwrap();
     }
@@ -852,7 +1095,7 @@ mod tests {
         let mut instances = FixedVec::new();
         push_instance(&mut src, &mut instances, "gpio", "not-a-number");
         let m = module(&src, instances, FixedVec::new());
-        let err = build_mmio_db(&m, &src).map(|_| ()).unwrap_err();
+        let err = build_mmio_db(&m, &src, None).map(|_| ()).unwrap_err();
         assert_eq!(err.code(), 3638, "malformed base addr must be MmioAddrInvalid");
     }
 
@@ -864,7 +1107,7 @@ mod tests {
             push_regmap(&mut src, &mut decls, &format!("m{}", i));
         }
         let m = module(&src, FixedVec::new(), decls);
-        let err = build_mmio_db(&m, &src).map(|_| ()).unwrap_err();
+        let err = build_mmio_db(&m, &src, None).map(|_| ()).unwrap_err();
         assert_eq!(err.code(), 3636, "17th map must be MmioMapCapacityExceeded");
     }
 
@@ -880,6 +1123,6 @@ mod tests {
             push_regmap(&mut src, &mut decls, &format!("m{}", i));
         }
         let m = module(&src, instances, decls);
-        assert!(build_mmio_db(&m, &src).is_ok(), "limits are inclusive");
+        assert!(build_mmio_db(&m, &src, None).is_ok(), "limits are inclusive");
     }
 }

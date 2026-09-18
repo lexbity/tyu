@@ -262,7 +262,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         let place_abs = abs_path.full;
         let root_atom = TypeAtom::new(&self.src[abs_path.root.start..abs_path.root.end])
             .unwrap_or(TypeAtom::EMPTY);
-        let mut const_addr: Option<u64> = None;
+        let mut addr_of_base = lir::AddrOfBase::Runtime;
 
         if let Some(res) = resolve_mmio_place(self.mmio, self.src, &abs_path, place_abs)? {
             match res {
@@ -270,7 +270,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                     if mut_tok && !access_can_write(reg.access) {
                         return Err(TcError::MmioAccessViolation { span: place_abs });
                     }
-                    const_addr = Some(reg.addr);
+                    self.record_window(reg.window, reg.access);
+                    addr_of_base = lir::AddrOfBase::Mmio {
+                        window: reg.window,
+                        offset: reg.offset,
+                    };
                     push(
                         stack,
                         sp,
@@ -343,7 +347,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             lir::OpKind::AddrOf {
                 place: lir_atom(place_bytes)?,
                 mutable: mut_tok,
-                const_addr,
+                base: addr_of_base,
             },
             place_abs,
         )?;

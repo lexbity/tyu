@@ -1,0 +1,5 @@
+# E3647: unsupported descriptor schema — the toolchain supports schema 2.
+[platform]
+name = "bad"
+schema = 1
+family = "bad"

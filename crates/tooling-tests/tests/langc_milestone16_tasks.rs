@@ -11,6 +11,14 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
+
+fn platform_arg() -> String {
+    format!(
+        "--platform={}",
+        workspace_root().join("runtime").display()
+    )
+}
+
 fn build_tools() {
     BUILD_ONCE.call_once(|| {
         // Capture stdio so the nested cargo never flips the shared test
@@ -74,7 +82,7 @@ end;\n",
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
         .arg(format!("--sysroot={}", repo_sysroot().to_string_lossy()))
-        .args(["--emit=asm", "Main.mod"])
+        .args(["--emit=asm"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -119,7 +127,7 @@ end;\n",
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
         .arg(&sysroot_arg)
-        .args(["--emit=asm", "Main.mod"])
+        .args(["--emit=asm"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -158,7 +166,7 @@ end;\n",
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir", "Main.mod"])
+        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -191,7 +199,7 @@ end;\n",
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
         .arg(&sysroot_arg)
-        .args(["--emit=asm", "Main.mod"])
+        .args(["--emit=asm"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -226,7 +234,7 @@ import platform/linux { platform.task.spawn, platform.task.join };\n\
 register-map GPIO\n\
   0x00 DATA[2] u32 rw\n\
 end;\n\
-const gpio = GPIO @ 0x0;\n\
+const gpio = GPIO @ board.gpio;\n\
 : main ( -- i64 ) performs {suspend, diverge}\n\
   platform.channel.make drop\n\
   0 as u32 &!gpio.DATA.0 swap !u32\n\
@@ -251,7 +259,7 @@ end;\n",
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
         .arg(&sysroot_arg)
-        .args(["--emit=asm", "Main.mod"])
+        .args(["--emit=asm"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -283,7 +291,7 @@ fn mmio_array_const_index_emits_ptr_add_const() {
 register-map GPIO\n\
   0x00 DATA[4] u32 rw\n\
 end;\n\
-const gpio = GPIO @ 0x0;\n\
+const gpio = GPIO @ board.gpio;\n\
 : main ( -- i64 )\n\
   gpio.DATA.2 @u32 drop\n\
   0\n\
@@ -294,7 +302,7 @@ end;\n",
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir", "Main.mod"])
+        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -317,7 +325,7 @@ fn mmio_array_dynamic_index_emits_ptr_add_index() {
 register-map GPIO\n\
   0x00 DATA[4] u32 rw\n\
 end;\n\
-const gpio = GPIO @ 0x0;\n\
+const gpio = GPIO @ board.gpio;\n\
 : main ( -- i64 )\n\
   1 => idx\n\
   gpio.DATA'(idx) @u32 drop\n\
@@ -329,7 +337,7 @@ end;\n",
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir", "Main.mod"])
+        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -355,7 +363,7 @@ import platform/linux { platform.task.spawn, platform.task.join };\n\
 register-map GPIO\n\
   0x00 DATA[2] u32 rw\n\
 end;\n\
-const gpio = GPIO @ 0x0;\n\
+const gpio = GPIO @ board.gpio;\n\
 : main ( -- i64 ) performs {suspend}\n\
   platform.channel.make drop\n\
   0 as u32 &!gpio.DATA.0 swap !u32\n\
@@ -376,7 +384,7 @@ end;\n",
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
         .arg(&sysroot_arg)
-        .args(["--emit=asm", "Main.mod"])
+        .args(["--emit=asm"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -419,7 +427,7 @@ end;\n",
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
         .arg(&sysroot_arg)
-        .args(["--emit=asm", "Main.mod"])
+        .args(["--emit=asm"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -479,7 +487,7 @@ fn milestone8_sysroot_flag_allows_imports() {
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
         .arg(format!("--sysroot={}", sysroot.to_string_lossy()))
-        .args(["--emit=ir", "Main.mod"])
+        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -529,7 +537,7 @@ fn milestone8_sysroot_iface_mismatch_fails() {
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
         .arg(format!("--sysroot={}", sysroot.to_string_lossy()))
-        .args(["--emit=ast", "Main.mod"])
+        .args(["--emit=ast"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -557,7 +565,7 @@ end;\n",
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
         .arg(format!("--sysroot={}", repo_sysroot().to_string_lossy()))
-        .args(["--emit=ir", "Main.mod"])
+        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -585,11 +593,7 @@ end;\n",
 
     let status = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args([
-            "--emit=obj",
-            "--target=x86_64-unknown-linux-gnu",
-            "--out-dir=.",
-        ])
+        .args(["--emit=obj", "--target=x86_64-unknown-linux-gnu"]).arg(platform_arg()).arg("--out-dir=.")
         .arg(&sysroot_arg)
         .arg("Main.mod")
         .status()
@@ -637,11 +641,7 @@ end;\n",
 
     let status = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args([
-            "--emit=obj",
-            "--target=x86_64-unknown-linux-gnu",
-            "--out-dir=.",
-        ])
+        .args(["--emit=obj", "--target=x86_64-unknown-linux-gnu"]).arg(platform_arg()).arg("--out-dir=.")
         .arg(&sysroot_arg)
         .arg("Main.mod")
         .status()
@@ -686,7 +686,7 @@ end;\n",
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=asm", "Main.mod"])
+        .args(["--emit=asm"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -720,7 +720,7 @@ import platform/linux { platform.task.spawn, platform.task.join };\n\
 register-map GPIO\n\
   0x00 DATA u32 rw\n\
 end;\n\
-const gpio = GPIO @ 0x0;\n\
+const gpio = GPIO @ board.gpio;\n\
 : main ( -- i64 ) performs {suspend}\n\
   [ ( -- ) 7 as u32 &!gpio.DATA swap !u32 ] platform.task.spawn\n\
   platform.task.join\n\
@@ -733,7 +733,7 @@ end;\n",
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
         .arg(&sysroot_arg)
-        .args(["--emit=asm", "Main.mod"])
+        .args(["--emit=asm"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -767,7 +767,7 @@ import platform/linux { platform.task.spawn, platform.task.join, platform.task.y
 register-map GPIO\n\
   0x00 DATA[8] u32 rw\n\
 end;\n\
-const gpio = GPIO @ 0x0;\n\
+const gpio = GPIO @ board.gpio;\n\
 : main ( -- i64 ) performs {suspend}\n\
   [ ( -- ) performs {suspend} platform.task.yield 1 as u32 &!gpio.DATA.0 swap !u32 ] platform.task.spawn\n\
   [ ( -- ) performs {suspend} platform.task.yield 2 as u32 &!gpio.DATA.1 swap !u32 ] platform.task.spawn\n\
@@ -801,7 +801,7 @@ end;\n",
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
         .arg(&sysroot_arg)
-        .args(["--emit=asm", "Main.mod"])
+        .args(["--emit=asm"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -843,11 +843,7 @@ end;\n",
 
     let status = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args([
-            "--emit=obj",
-            "--target=x86_64-unknown-linux-gnu",
-            "--out-dir=.",
-        ])
+        .args(["--emit=obj", "--target=x86_64-unknown-linux-gnu"]).arg(platform_arg()).arg("--out-dir=.")
         .arg(&sysroot_arg)
         .arg("Main.mod")
         .status()
@@ -896,11 +892,7 @@ end;\n",
 
     let status = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args([
-            "--emit=obj",
-            "--target=x86_64-unknown-linux-gnu",
-            "--out-dir=.",
-        ])
+        .args(["--emit=obj", "--target=x86_64-unknown-linux-gnu"]).arg(platform_arg()).arg("--out-dir=.")
         .arg(&sysroot_arg)
         .arg("Main.mod")
         .status()
@@ -946,7 +938,7 @@ end;\n",
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir", "Main.mod"])
+        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -972,7 +964,7 @@ end;\n",
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir", "Main.mod"])
+        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -994,7 +986,7 @@ fn milestone9_golden_ir_dump_if_while_locals() {
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir", "Main.mod"])
+        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -1025,7 +1017,7 @@ fn milestone4_checks_flag_controls_insertion() {
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir", "--checks=contracts", "Main.mod"])
+        .args(["--emit=ir", "--checks=contracts"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -1039,7 +1031,7 @@ fn milestone4_checks_flag_controls_insertion() {
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir", "--checks=off", "Main.mod"])
+        .args(["--emit=ir", "--checks=off"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -1065,7 +1057,7 @@ fn milestone5_rejects_mutable_borrow_of_local() {
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir", "Main.mod"])
+        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -1086,7 +1078,7 @@ fn milestone5_scoped_borrow_must_be_consumed() {
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir", "Main.mod"])
+        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -1107,7 +1099,7 @@ fn milestone5_rejects_suspend_with_scoped_live() {
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir", "Main.mod"])
+        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -1128,7 +1120,7 @@ fn milestone5_rejects_suspend_inside_mut_scoped_block() {
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir", "Main.mod"])
+        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -1149,7 +1141,7 @@ fn milestone5_rejects_suspend_inside_lock() {
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir", "Main.mod"])
+        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -1170,7 +1162,7 @@ fn milestone5_allows_drop_before_yield() {
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir", "Main.mod"])
+        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -1191,7 +1183,7 @@ fn langc_x86_64_unknown_none_target_recognized() {
     .unwrap();
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir", "--target=x86_64-unknown-none", "Main.mod"])
+        .args(["--emit=ir", "--target=x86_64-unknown-none"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(

@@ -14,6 +14,17 @@ fn prim_bits_signed(w: &lir::Word, ty: lir::TypeId) -> Option<(u16, bool)> {
     prim_ty(w, ty).map(|prim| prim.bits_signed(32))
 }
 
+/// Compiler-computed class tag of a type (decision D-13). Backends dispatch
+/// on this tag, never on type-name bytes. A missing tag (should not occur —
+/// irgen fills it at word finalization) falls back to `Other` so the caller
+/// reaches its loud `UnsupportedOp` path.
+fn type_class(w: &lir::Word, ty: lir::TypeId) -> lir::TypeClass {
+    w.type_classes
+        .get(ty.0 as usize)
+        .copied()
+        .unwrap_or(lir::TypeClass::Other)
+}
+
 fn line_col(src: &[u8], offset: usize) -> (u32, u32) {
     let mut line: u32 = 1;
     let mut col: u32 = 1;
@@ -367,9 +378,10 @@ impl<'a> RiscVBackend<'a> {
                 Ok(true)
             }
             lir::OpKind::AddrOf {
-                const_addr: Some(addr),
+                base: lir::AddrOfBase::Mmio { window, offset },
                 ..
             } => {
+                let addr = self.mmio_window_addr(window, offset)?;
                 let low = addr as u32;
                 let high = (addr >> 32) as u32;
                 self.emit_const32(low);
@@ -380,7 +392,8 @@ impl<'a> RiscVBackend<'a> {
                 Ok(true)
             }
             lir::OpKind::AddrOf {
-                const_addr: None, ..
+                base: lir::AddrOfBase::Runtime,
+                ..
             } => Err(CodegenError::UnsupportedAddrOf),
             lir::OpKind::PtrAddConst { offset, .. } => {
                 self.out.write(b"\taddi s2, s2, -8\n\tlw a0, 0(s2)\n");
@@ -531,48 +544,56 @@ impl<'a> RiscVBackend<'a> {
                 Ok(())
             }
             lir::OpKind::ScopedEnter { ty, len } => {
-                let ty_name = _w
-                    .types
-                    .get(ty.0 as usize)
-                    .map(|a| a.as_bytes())
-                    .unwrap_or(b"");
-                if ty_name.starts_with(b"Slice(") || ty_name.starts_with(b"SliceMut(") {
-                    if self.scoped_next >= self.scoped_slots {
-                        return Err(CodegenError::ScopedAllocationOverflow);
+                match type_class(_w, ty) {
+                    lir::TypeClass::Slice => {
+                        if self.scoped_next >= self.scoped_slots {
+                            return Err(CodegenError::ScopedAllocationOverflow);
+                        }
+                        let slot = self.scoped_next;
+                        self.scoped_next = self.scoped_next.wrapping_add(1);
+                        let offset = self.scoped_base + (slot * 8);
+                        // Pop data pointer from DS (low word), store at [sp+offset]
+                        self.out.write(b"\taddi s2, s2, -8\n\tlw a0, 0(s2)\n");
+                        self.out.write(b"\tsw a0, ");
+                        write_u32(self.out, offset);
+                        self.out.write(b"(sp)\n");
+                        // Store length at [sp+offset+4]
+                        self.out.write(b"\tli a0, ");
+                        write_u32(self.out, len);
+                        self.out.write(b"\n\tsw a0, ");
+                        write_u32(self.out, offset + 4);
+                        self.out.write(b"(sp)\n");
+                        // Push address of slot as result pointer
+                        self.out.write(b"\taddi a0, sp, ");
+                        write_u32(self.out, offset);
+                        self.out.write(b"\n\tli a1, 0\n");
+                        self.out
+                            .write(b"\tsw a0, 0(s2)\n\tsw a1, 4(s2)\n\taddi s2, s2, 8\n");
+                        self.emit_ds_high_update();
                     }
-                    let slot = self.scoped_next;
-                    self.scoped_next = self.scoped_next.wrapping_add(1);
-                    let offset = self.scoped_base + (slot * 8);
-                    // Pop data pointer from DS (low word), store at [sp+offset]
-                    self.out.write(b"\taddi s2, s2, -8\n\tlw a0, 0(s2)\n");
-                    self.out.write(b"\tsw a0, ");
-                    write_u32(self.out, offset);
-                    self.out.write(b"(sp)\n");
-                    // Store length at [sp+offset+4]
-                    self.out.write(b"\tli a0, ");
-                    write_u32(self.out, len);
-                    self.out.write(b"\n\tsw a0, ");
-                    write_u32(self.out, offset + 4);
-                    self.out.write(b"(sp)\n");
-                    // Push address of slot as result pointer
-                    self.out.write(b"\taddi a0, sp, ");
-                    write_u32(self.out, offset);
-                    self.out.write(b"\n\tli a1, 0\n");
-                    self.out
-                        .write(b"\tsw a0, 0(s2)\n\tsw a1, 4(s2)\n\taddi s2, s2, 8\n");
-                    self.emit_ds_high_update();
-                } else if ty_name == b"RegionRef" || ty_name == b"RegionRefMut" {
-                    self.out
-                        .write(b"\taddi s2, s2, -8\n\tlw a0, 0(s2)\n\tlw a1, 4(s2)\n");
-                    self.out
-                        .write(b"\tsw a0, 0(s2)\n\tsw a1, 4(s2)\n\taddi s2, s2, 8\n");
-                    self.out
-                        .write(b"\tsw a0, 0(s2)\n\tsw a1, 4(s2)\n\taddi s2, s2, 8\n");
-                    self.emit_ds_high_update();
+                    lir::TypeClass::RegionRef | lir::TypeClass::RegionRefMut => {
+                        self.out
+                            .write(b"\taddi s2, s2, -8\n\tlw a0, 0(s2)\n\tlw a1, 4(s2)\n");
+                        self.out
+                            .write(b"\tsw a0, 0(s2)\n\tsw a1, 4(s2)\n\taddi s2, s2, 8\n");
+                        self.out
+                            .write(b"\tsw a0, 0(s2)\n\tsw a1, 4(s2)\n\taddi s2, s2, 8\n");
+                        self.emit_ds_high_update();
+                    }
+                    // D-13: an unmatched class is a loud error, never a
+                    // silent no-op (the G-5 bug class this slice retires).
+                    _ => {
+                        return Err(CodegenError::UnsupportedOp {
+                            op_name: b"ScopedEnter",
+                        });
+                    }
                 }
                 Ok(())
             }
-            lir::OpKind::MmioPlace { addr, .. } => {
+            lir::OpKind::MmioPlace { window, offset, .. } => {
+                // Symbolic place: window_base + offset (P4). The window is
+                // guaranteed declared by construction (descriptor resolution).
+                let addr = self.mmio_window_addr(window, offset)?;
                 let low = addr as u32;
                 let high = (addr >> 32) as u32;
                 self.emit_const32(low);
@@ -935,12 +956,7 @@ fn count_scoped_slices(w: &lir::Word) -> u32 {
     for b in w.blocks.iter() {
         for op in b.ops.iter() {
             if let lir::OpKind::ScopedEnter { ty, .. } = op.kind {
-                let name = w
-                    .types
-                    .get(ty.0 as usize)
-                    .map(|a| a.as_bytes())
-                    .unwrap_or(b"");
-                if name.starts_with(b"Slice(") || name.starts_with(b"SliceMut(") {
+                if type_class(w, ty) == lir::TypeClass::Slice {
                     count = count.wrapping_add(1);
                 }
             }

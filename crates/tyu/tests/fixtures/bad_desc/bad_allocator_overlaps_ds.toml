@@ -1,0 +1,15 @@
+# E3647: allocator span must not overlap the ds_region's span [0, ds_size).
+[platform]
+name = "bad"
+schema = 2
+family = "bad"
+
+[memory]
+sram = { name = "SRAM", origin = 0x20000000, length = 0x10000 }
+ds_region = "SRAM"
+ds_size = 0x4000
+
+[platform.allocator]
+region = "SRAM"
+offset = 0x2000
+length = 0x1000

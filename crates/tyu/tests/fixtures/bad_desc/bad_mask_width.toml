@@ -1,0 +1,21 @@
+# E3647: mask must be representable within the register's width.
+[platform]
+name = "bad"
+schema = 2
+family = "bad"
+
+[[platform.windows]]
+id = 0
+name = "a"
+kind = "bus"
+base = 0x40000000
+size = 0x1000
+
+[[platform.devices]]
+map = "G"
+instance = "g"
+window = 0
+base_offset = 0x0
+registers = [
+  { offset = 0x0, name = "r", width = 8, access = "rw", mask = 0xffff },
+]

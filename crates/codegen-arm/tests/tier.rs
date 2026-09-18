@@ -18,7 +18,7 @@ fn all_ops() -> Vec<(OpKind, OpSupport)> {
             OpKind::AddrOf {
                 place: ir::Atom::new(b"x").unwrap(),
                 mutable: false,
-                const_addr: Some(0),
+                base: ir::AddrOfBase::Mmio { window: 0, offset: 0x1000 },
             },
             OpSupport::Supported,
         ),
@@ -26,14 +26,15 @@ fn all_ops() -> Vec<(OpKind, OpSupport)> {
             OpKind::AddrOf {
                 place: ir::Atom::new(b"x").unwrap(),
                 mutable: false,
-                const_addr: None,
+                base: ir::AddrOfBase::Runtime,
             },
             OpSupport::Supported,
         ),
         (
             OpKind::MmioPlace {
                 place: ir::Atom::new(b"r").unwrap(),
-                addr: 0x1000,
+                window: 0,
+                offset: 0x1000,
             },
             OpSupport::Supported,
         ),

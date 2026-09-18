@@ -4,7 +4,8 @@ use crate::util::{
     check_word_for_gate, join_path, slice_span, try_load_module_file, MemOut, Stdout,
 };
 use alloc::vec::Vec;
-use codegen_core::{FeatureSet, Target};
+use codegen_core::compiled_desc::CompiledDescriptor;
+use codegen_core::{FeatureSet, MmioWindowSpec, Target};
 use frontend::parse::{DeclKind, ModuleAst, Parser};
 use hosted::{diag, fs, process};
 use ir::CapSet;
@@ -112,6 +113,7 @@ pub fn emit_ir_driver(
     checks: ChecksMode,
     allow_raw_casts: bool,
     target: Target,
+    descriptor: Option<&CompiledDescriptor>,
     out: &mut Stdout,
 ) -> i32 {
     let es = match init_env(module, src, search_dirs, target) {
@@ -129,6 +131,7 @@ pub fn emit_ir_driver(
         &es.st_buf[..es.st_len],
         checks,
         allow_raw_casts,
+        descriptor,
         out,
     ) {
         Ok(()) => 0,
@@ -150,6 +153,8 @@ pub fn emit_asm_driver(
     target: Target,
     input_path: &[u8],
     feature_set: FeatureSet,
+    descriptor: Option<&CompiledDescriptor>,
+    mmio_windows: &[MmioWindowSpec],
     out: &mut Stdout,
 ) -> i32 {
     let es = match init_env(module, src, search_dirs, target) {
@@ -167,6 +172,10 @@ pub fn emit_asm_driver(
         debug_trap_loc,
         AsmMode::Executable,
     );
+    if let Err(e) = gen_backend.set_mmio_windows(mmio_windows) {
+        let _ = diag::error_simple(e.code(), codegen_error_message(e.code()));
+        return 2;
+    }
     let gen: &mut dyn CodegenBackend = &mut gen_backend;
     if let Err(e) = gen.emit_prelude() {
         let _ = diag::error_simple(e.code(), codegen_error_message(e.code()));
@@ -189,6 +198,7 @@ pub fn emit_asm_driver(
         checks,
         allow_raw_casts,
         &mut resources,
+        descriptor,
         |w| {
             // Feature gate check — reject gated ops before codegen.
             if check_word_for_gate(w, feature_set, input_path, src) {
@@ -227,6 +237,7 @@ pub fn emit_tc_driver(
     checks: ChecksMode,
     allow_raw_casts: bool,
     target: Target,
+    descriptor: Option<&CompiledDescriptor>,
     out: &mut Stdout,
 ) -> i32 {
     let es = match init_env(module, src, search_dirs, target) {
@@ -243,6 +254,7 @@ pub fn emit_tc_driver(
         &es.env[..es.env_len],
         &es.st_buf[..es.st_len],
         checks,
+        descriptor,
         out,
     ) {
         Ok(()) => 0,
@@ -267,6 +279,8 @@ pub fn emit_obj_driver(
     is_lib: bool,
     input_path: &[u8],
     feature_set: FeatureSet,
+    descriptor: Option<&CompiledDescriptor>,
+    mmio_windows: &[MmioWindowSpec],
 ) -> i32 {
     // Library modules have no entry point; only executables require `main`.
     if !is_lib {
@@ -345,6 +359,10 @@ pub fn emit_obj_driver(
                 debug_trap_loc,
                 AsmMode::Object,
             );
+            if let Err(e) = bk.set_mmio_windows(mmio_windows) {
+                let _ = diag::error_simple(e.code(), codegen_error_message(e.code()));
+                return 2;
+            }
             bk.set_expected_abi_hash(abi_hash_val);
             Backend::X86(bk)
         }
@@ -356,6 +374,10 @@ pub fn emit_obj_driver(
                 debug_trap_loc,
                 AsmMode::Object,
             );
+            if let Err(e) = bk.set_mmio_windows(mmio_windows) {
+                let _ = diag::error_simple(e.code(), codegen_error_message(e.code()));
+                return 2;
+            }
             bk.set_expected_abi_hash(abi_hash_val);
             Backend::Arm(bk)
         }
@@ -367,6 +389,10 @@ pub fn emit_obj_driver(
                 debug_trap_loc,
                 AsmMode::Object,
             );
+            if let Err(e) = bk.set_mmio_windows(mmio_windows) {
+                let _ = diag::error_simple(e.code(), codegen_error_message(e.code()));
+                return 2;
+            }
             bk.set_expected_abi_hash(abi_hash_val);
             Backend::RiscV(bk)
         }
@@ -402,6 +428,7 @@ pub fn emit_obj_driver(
         checks,
         allow_raw_casts,
         &mut resources,
+        descriptor,
         |w| {
             if check_word_for_gate(w, feature_set, input_path, src) {
                 gate_hit = true;

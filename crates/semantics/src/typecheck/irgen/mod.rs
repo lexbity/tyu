@@ -6,7 +6,7 @@ use crate::typecheck::db::{
 use crate::typecheck::error::{ChecksMode, EscapeKind, TcError};
 use crate::typecheck::irgen::compile::borrow::{mint_id, PlaceKey, LEDGER_CAP};
 use crate::typecheck::mmio::mmio_type_width_bytes;
-use crate::typecheck::mmio::{
+use crate::typecheck::mmio::{window_access_bits,
     access_can_read, access_can_write, field_mask_shift, resolve_mmio_place, MmioDb, MmioResolved,
 };
 use crate::typecheck::parse::{capture_balanced, capture_scoped_block, read_qualified_name};
@@ -67,6 +67,9 @@ struct IrWordGen<'a, 'r> {
     env: &'a [WordEntry],
     subtypes: &'a [SubtypeInfo],
     mmio: &'a MmioDb,
+    /// The compiled platform descriptor (P4): sources window identity/size for
+    /// the word's window-use table. `None` for descriptor-less compiles.
+    descriptor: Option<&'a codegen_core::compiled_desc::CompiledDescriptor>,
     resources: &'a ResourceDb,
     nominals: &'a NominalDb,
     iso: &'a IsoDb,
@@ -96,6 +99,9 @@ struct IrWordGen<'a, 'r> {
 
     terminated: bool,
     word: lir::Word,
+    /// Window-use table accumulated while emitting `MmioPlace`/`AddrOf::Mmio`
+    /// ops (P4); assigned to `word.windows` at finalization.
+    word_windows: FixedVec<lir::WindowUse, 8>,
     extra_words: FixedVec<&'r lir::Word, { arena::QUOTE_WORD_CAP }>,
     arena: *mut arena::ArenaAllocator,
     quote_id: u32,
@@ -108,6 +114,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         env: &'a [WordEntry],
         subtypes: &'a [SubtypeInfo],
         mmio: &'a MmioDb,
+        descriptor: Option<&'a codegen_core::compiled_desc::CompiledDescriptor>,
         resources: &'a ResourceDb,
         nominals: &'a NominalDb,
         iso: &'a IsoDb,
@@ -253,6 +260,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             env,
             subtypes,
             mmio,
+            descriptor,
             resources,
             nominals,
             iso,
@@ -286,9 +294,12 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 entry: lir::BlockId(0),
                 types,
                 type_sizes,
+                type_classes: FixedVec::new(),
+                windows: FixedVec::new(),
                 subtype_bases,
                 blocks,
             },
+            word_windows: FixedVec::new(),
             extra_words,
             arena,
             quote_id,
@@ -519,6 +530,8 @@ pub(super) enum SuspendBlocker {
 impl<'a, 'r> IrWordGen<'a, 'r> {
     pub(super) fn finish(mut self, span: Span) -> Result<IrWordOutput<'r>, TcError> {
         self.fill_subtype_bases(span)?;
+        self.fill_type_classes(span)?;
+        self.word.windows = core::mem::replace(&mut self.word_windows, FixedVec::new());
         self.word.bound = self.acc;
         let word = unsafe {
             let arena = &mut *self.arena;
@@ -553,6 +566,58 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         }
         self.word.subtype_bases = bases;
         Ok(())
+    }
+
+    /// Populate `word.type_classes` (decision D-13). Runs once the word's
+    /// type table is final (after `fill_subtype_bases`, which may intern
+    /// subtype-base types). This is the single site where classes are
+    /// computed; backends consume the carried tags and never byte-match type
+    /// names.
+    pub(super) fn fill_type_classes(&mut self, span: Span) -> Result<(), TcError> {
+        let mut classes: FixedVec<lir::TypeClass, 64> = FixedVec::new();
+        let n = self.word.types.len();
+        for i in 0..n {
+            let atom_opt = self.word.types.iter().nth(i);
+            let Some(atom) = atom_opt else {
+                break;
+            };
+            let ty = TypeAtom::new(atom.as_bytes()).unwrap_or(TypeAtom::EMPTY);
+            classes
+                .push(ty.class())
+                .map_err(|_| TcError::TypeTableFull { span })?;
+        }
+        self.word.type_classes = classes;
+        Ok(())
+    }
+
+    /// Record a window use for the word being compiled (P4). Adds or updates
+    /// the entry in `word_windows` from the descriptor's window identity, and
+    /// ORs the register's fused access bits.
+    pub(super) fn record_window(&mut self, window: u16, access: super::mmio::AccessMode) {
+        let Some(descriptor) = self.descriptor else {
+            return;
+        };
+        let Some(spec) = descriptor.windows().iter().find(|w| w.id == window) else {
+            return;
+        };
+        let bits = window_access_bits(access);
+        for wu in self.word_windows.iter_mut() {
+            if wu.id == window {
+                wu.access_mask |= bits;
+                return;
+            }
+        }
+        let _ = self.word_windows.push(lir::WindowUse {
+            id: window,
+            name: spec.name,
+            kind: match spec.kind {
+                codegen_core::MmioWindowKind::Bus => lir::WindowKind::Bus,
+                codegen_core::MmioWindowKind::Emulated => lir::WindowKind::Emulated,
+            },
+            base: spec.base,
+            size: spec.size,
+            access_mask: bits,
+        });
     }
 
     /// Unified suspend blocker — checks the three rejection dimensions
@@ -609,6 +674,7 @@ pub fn build_ir_word<'r>(
     env: &[WordEntry],
     subtypes: &[SubtypeInfo],
     mmio: &MmioDb,
+    descriptor: Option<&codegen_core::compiled_desc::CompiledDescriptor>,
     resources: &ResourceDb,
     nominals: &NominalDb,
     iso: &IsoDb,
@@ -624,6 +690,7 @@ pub fn build_ir_word<'r>(
         env,
         subtypes,
         mmio,
+        descriptor,
         resources,
         nominals,
         iso,

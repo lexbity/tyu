@@ -9,7 +9,7 @@ register-map SysTick
   0x08 VAL u32 rw volatile
 end;
 
-const systick = SysTick @ 0xE000E010;
+const systick = SysTick @ board.systick;
 
 : burn ( -- )
   0 drop 0 drop 0 drop 0 drop 0 drop 0 drop 0 drop 0 drop

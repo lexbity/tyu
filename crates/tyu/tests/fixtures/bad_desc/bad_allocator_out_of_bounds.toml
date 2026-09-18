@@ -1,0 +1,13 @@
+# E3647: [offset, offset+length] must fit the named memory region.
+[platform]
+name = "bad"
+schema = 2
+family = "bad"
+
+[memory]
+sram = { name = "SRAM", origin = 0x20000000, length = 0x1000 }
+
+[platform.allocator]
+region = "SRAM"
+offset = 0x800
+length = 0x1000

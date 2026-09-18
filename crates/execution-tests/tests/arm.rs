@@ -34,6 +34,7 @@ fn arithmetic_and_stack_pass() {
         .args([
             "test",
             "--target=armv7m-unknown-none",
+            "--platform=armv7m-unknown-none",
             &format!("--manifest={}", common::fixtures_manifest().display()),
         ])
         .output()
@@ -312,9 +313,9 @@ fn arm_memory_load_store_asm() {
         dir.join("Main.mod"),
         b"module Main;
 register-map Scratch
-  0x20007000 DATA i64 rw
+  0x00 DATA i64 rw
 end;
-const mmio = Scratch @ 0x20007000;
+const mmio = Scratch @ board.datascratch;
 : main ( -- i64 )
   &mmio.DATA @i64 drop
   0 ;
@@ -337,6 +338,7 @@ end;
             common::sysroot_dir().display()
         ))
         .arg("--out-dir=.")
+        .arg(format!("--platform={}", common::platform_desc_dir(target).display()))
         .arg("Main.mod")
         .status()
         .expect("langc invocation");
@@ -358,8 +360,8 @@ end;
 
     // Verify key instructions are present in the assembly.
     assert!(
-        asm.contains("ldr r0, =0x4000e000"),
-        "MmioPlace / AddrOf must load the MMIO address (0x4000e000)"
+        asm.contains("ldr r0, =0x20007000"),
+        "MmioPlace / AddrOf must load the MMIO address (0x20007000)"
     );
     assert!(
         asm.contains("ldrd r0, r1, [r0]"),
@@ -398,7 +400,7 @@ register-map GPIO
     HI 4..7 u32 rw
   }
 end;
-const gpio = GPIO @ 0x4000;
+const gpio = GPIO @ board.gpio;
 : main ( -- i64 )
   gpio.DATA.LO @ drop
   gpio.DATA.HI @ drop
@@ -422,6 +424,7 @@ end;
             common::sysroot_dir().display()
         ))
         .arg("--out-dir=.")
+        .arg(format!("--platform={}", common::platform_desc_dir(target).display()))
         .arg("Main.mod")
         .status()
         .expect("langc invocation");
@@ -521,6 +524,7 @@ fn langc_compile_g(
         format!("--target={triple}"),
         format!("--sysroot={}", common::sysroot_dir().display()),
         format!("--out-dir={}", out_dir.display()),
+        format!("--platform={}", common::platform_desc_dir(target).display()),
     ];
     if is_lib {
         args.push("--lib".into());
@@ -605,6 +609,7 @@ fn dynamic_lmod_runs_under_qemu() {
             "run",
             "--mode=dynamic",
             "--target=armv7m-unknown-none",
+            "--platform=armv7m-unknown-none",
             &format!("--sysroot={}", sysroot.display()),
             &format!("--out-dir={}", out_dir.display()),
             &main_mod.to_string_lossy(),

@@ -7,7 +7,7 @@ register-map Scratch
   0x04 W u32 rw
 end;
 
-const scratch = Scratch @ 0x80100000;
+const scratch = Scratch @ board.widthscratch;
 
 : check ( bool -- )
   not [ 70 testio.write-byte ] [ ] if ;

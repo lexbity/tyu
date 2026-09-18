@@ -330,6 +330,30 @@ pub enum TcError {
         span: Span,
     },
 
+    // 3640-3647: descriptor-bound MMIO (P4, D-1, FR-1/3/4)
+    /// MMIO construct compiled without `--platform` (D-1, E3640).
+    MmioNeedsDescriptor {
+        span: Span,
+    },
+    /// Raw base literal under a descriptor (`@ 0x…`, E3641).
+    MmioRawBaseUnderDescriptor {
+        span: Span,
+    },
+    /// `board.<instance>` not found (or wrong ISA) in the descriptor (E3644).
+    MmioBoardInstanceNotFound {
+        span: Span,
+    },
+    /// A source register-map row diverges from the descriptor device rows
+    /// (E3647).
+    MmioRowDivergesFromDescriptor {
+        span: Span,
+    },
+    /// A source register-map declares a register absent from the descriptor
+    /// device (E3647).
+    MmioRowMissingFromDescriptor {
+        span: Span,
+    },
+
     // 3700-3718: Struct/Enum
     DestructBorrowMix {
         span: Span,
@@ -660,6 +684,11 @@ impl TcError {
             TcError::MmioMapCapacityExceeded { .. } => 3636,
             TcError::MmioNameInvalid { .. } => 3637,
             TcError::MmioAddrInvalid { .. } => 3638,
+            TcError::MmioNeedsDescriptor { .. } => 3640,
+            TcError::MmioRawBaseUnderDescriptor { .. } => 3641,
+            TcError::MmioBoardInstanceNotFound { .. } => 3644,
+            TcError::MmioRowDivergesFromDescriptor { .. } => 3647,
+            TcError::MmioRowMissingFromDescriptor { .. } => 3647,
             TcError::DestructBorrowMix { .. } => 3701,
             TcError::DestructExpectedIdent { .. } => 3702,
             TcError::DestructEmpty { .. } => 3703,
@@ -835,6 +864,11 @@ impl TcError {
             | TcError::MmioMapCapacityExceeded { span }
             | TcError::MmioNameInvalid { span }
             | TcError::MmioAddrInvalid { span }
+            | TcError::MmioNeedsDescriptor { span }
+            | TcError::MmioRawBaseUnderDescriptor { span }
+            | TcError::MmioBoardInstanceNotFound { span }
+            | TcError::MmioRowDivergesFromDescriptor { span }
+            | TcError::MmioRowMissingFromDescriptor { span }
             | TcError::IsrCapacityExceeded { span }
             | TcError::DestructBorrowMix { span }
             | TcError::DestructExpectedIdent { span }

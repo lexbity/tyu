@@ -6,7 +6,7 @@ register-map Scratch
   0x08 SECOND i64 rw
 end;
 
-const scratch = Scratch @ 0x100;
+const scratch = Scratch @ board.ptrscratch;
 
 : check ( bool -- )
   not [ 70 testio.write-byte ] [ ] if ;

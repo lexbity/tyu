@@ -52,6 +52,13 @@ fn baseline_sizes() -> FixedVec<u32, 64> {
     s.push(1).unwrap();
     s
 }
+fn baseline_classes() -> FixedVec<ir::TypeClass, 64> {
+    let mut c = FixedVec::new();
+    c.push(ir::TypeClass::class_of(b"")).unwrap();
+    c.push(ir::TypeClass::class_of(b"i64")).unwrap();
+    c.push(ir::TypeClass::class_of(b"bool")).unwrap();
+    c
+}
 
 fn empty_module(src: &[u8]) -> ModuleAst {
     Parser::new(src).parse_module_ast().unwrap()
@@ -75,6 +82,8 @@ fn single_block_word(sig: Sig, ops: &[OpKind]) -> Word {
         entry: BlockId(0),
         types: baseline_types(),
         type_sizes: baseline_sizes(),
+        type_classes: baseline_classes(),
+        windows: FixedVec::new(),
         subtype_bases: FixedVec::new(),
         blocks: {
             let mut b = FixedVec::new();

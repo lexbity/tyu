@@ -1,0 +1,9 @@
+# E3647: metal.trust words must be declared in the platform pack (a .def or
+# .mod under the pack root). This word is declared nowhere in the fixture pack.
+[platform]
+name = "bad"
+schema = 2
+family = "bad"
+
+[platform.metal.trust]
+words = ["platform.boot.enter_xip"]

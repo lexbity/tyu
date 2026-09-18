@@ -12,6 +12,84 @@ pub mod contract;
 
 pub use contract::{abi_hash, CapSet, Context, EffectSet, High, StackBound, ABI_CONTRACT_VERSION};
 
+/// Version of the `--emit=ir` text format (design doc §5.4, D-8). Every
+/// consumer of the text format (golden tooling, corpus tooling, the future
+/// Lean-side parser) checks the first emitted line against this constant and
+/// fails fast on mismatch.
+pub const FORMAT_VER: u32 = 4;
+
+/// A `format_ver` header that does not match this reader's [`FORMAT_VER`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FormatVerMismatch {
+    /// The version the artifact actually carried. `None` when the first line
+    /// was not a `format_ver` header at all (pre-D-8 artifact or not IR text).
+    pub found: Option<u32>,
+}
+
+impl core::fmt::Display for FormatVerMismatch {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self.found {
+            Some(found) => write!(
+                f,
+                "format mismatch: reader expects {}, artifact says {}",
+                FORMAT_VER, found
+            ),
+            None => write!(
+                f,
+                "format mismatch: reader expects {}, artifact has no format_ver header",
+                FORMAT_VER
+            ),
+        }
+    }
+}
+
+/// Verify the `format_ver` header of a `--emit=ir` text artifact against the
+/// reader's [`FORMAT_VER`] (decision D-8). Accepts the whole artifact or just
+/// its first line — the header is taken from the first line either way. Every
+/// consumer of the text format MUST call this before parsing anything else;
+/// the error's Display is the fail-fast message the spec requires.
+pub fn check_format_ver(artifact: &[u8]) -> Result<(), FormatVerMismatch> {
+    let mismatch = FormatVerMismatch { found: None };
+    let first_line = artifact.split(|&b| b == b'\n').next().unwrap_or(artifact);
+    let rest = first_line.strip_prefix(b"format_ver ").ok_or(mismatch)?;
+    let text = core::str::from_utf8(rest).map_err(|_| mismatch)?;
+    let found: u32 = text.trim_end().parse().map_err(|_| mismatch)?;
+    if found == FORMAT_VER {
+        Ok(())
+    } else {
+        Err(FormatVerMismatch { found: Some(found) })
+    }
+}
+
+/// Fused per-window access-mask bits (design doc §5.5).
+pub const ACCESS_READ: u8 = 1;
+pub const ACCESS_WRITE: u8 = 2;
+pub const ACCESS_W1S: u8 = 4;
+pub const ACCESS_W1C: u8 = 8;
+pub const ACCESS_EFFECTFUL_READ: u8 = 16;
+
+/// How a memory-mapped window is backed (design doc §5.2, D-7).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WindowKind {
+    Bus,
+    Emulated,
+}
+
+/// A window a module touches, with the fused access mask derived by irgen
+/// (design doc §5.4/§5.5). Carried on the `Word` for the verifier's
+/// place-bounds check and on the `Module` for text emit; the modinfo
+/// projection (name_hash + id + size + access_mask) is derived at pack time.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WindowUse {
+    pub id: u16,
+    pub name: Atom,
+    pub kind: WindowKind,
+    /// Absolute base. `None` = link-time symbol (emulated window).
+    pub base: Option<u64>,
+    pub size: u32,
+    pub access_mask: u8,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Atom {
     len: u8,
@@ -77,6 +155,62 @@ pub const TY_STR: TypeId = TypeId(3);
 pub const TY_PTR: TypeId = TypeId(4);
 pub const TY_PTR_MUT: TypeId = TypeId(5);
 pub const TY_MMIO: TypeId = TypeId(6);
+
+/// Compiler-computed type class tag used by codegen dispatch (decision D-13).
+///
+/// The class is computed once in semantics (irgen) at word finalization and
+/// carried on the `Word` in a vector parallel to `types`; backends dispatch on
+/// the tag and never byte-match type names. An unmatched class is a loud
+/// `UnsupportedOp`, never a silent no-op.
+///
+/// The class is IR-internal: it is *not* serialized in `--emit=ir` text (no
+/// format bump), so a reader re-derives it via [`TypeClass::class_of`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TypeClass {
+    I64,
+    Bool,
+    Str,
+    Ptr,
+    PtrMut,
+    Mmio,
+    /// `Slice(...)` / `SliceMut(...)` — a scoped slice whose descriptor is
+    /// materialized in a per-word metadata slot.
+    Slice,
+    RegionRef,
+    RegionRefMut,
+    /// Everything else (integer prims, nominals, subtypes, quotes, ...).
+    Other,
+}
+
+impl TypeClass {
+    /// Derive the class of a type by name — the single source of truth for
+    /// class computation. Used by irgen at word finalization and by
+    /// `TypeAtom::class` in semantics; never duplicated in backends.
+    pub fn class_of(name: &[u8]) -> Self {
+        match name {
+            b"i64" => Self::I64,
+            b"bool" => Self::Bool,
+            b"str" => Self::Str,
+            b"ptr" => Self::Ptr,
+            b"ptr_mut" => Self::PtrMut,
+            b"mmio" => Self::Mmio,
+            b"RegionRef" => Self::RegionRef,
+            b"RegionRefMut" => Self::RegionRefMut,
+            _ if name.starts_with(b"Slice(") || name.starts_with(b"SliceMut(") => Self::Slice,
+            _ => Self::Other,
+        }
+    }
+}
+
+/// True when the class is one a `ScopedEnter` may carry: every scoped type
+/// the semantics can enter is a slice or a region reference (D-13, verifier
+/// rule, codegen dispatch).
+pub fn is_scoped_enter_class(c: TypeClass) -> bool {
+    matches!(
+        c,
+        TypeClass::Slice | TypeClass::RegionRef | TypeClass::RegionRefMut
+    )
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Prim {
@@ -240,6 +374,53 @@ mod prim_tests {
     }
 }
 
+#[cfg(test)]
+mod type_class_tests {
+    use super::{TypeClass, is_scoped_enter_class};
+
+    #[test]
+    fn class_of_maps_every_builtin_name() {
+        let cases: &[(&[u8], TypeClass)] = &[
+            (b"i64", TypeClass::I64),
+            (b"bool", TypeClass::Bool),
+            (b"str", TypeClass::Str),
+            (b"ptr", TypeClass::Ptr),
+            (b"ptr_mut", TypeClass::PtrMut),
+            (b"mmio", TypeClass::Mmio),
+            (b"Slice(u8)", TypeClass::Slice),
+            (b"SliceMut(i64)", TypeClass::Slice),
+            (b"Slice(i64)", TypeClass::Slice),
+            (b"RegionRef", TypeClass::RegionRef),
+            (b"RegionRefMut", TypeClass::RegionRefMut),
+            (b"", TypeClass::Other),
+            (b"u8", TypeClass::Other),
+            (b"i32", TypeClass::Other),
+            (b"Percent", TypeClass::Other),
+            (b"Task", TypeClass::Other),
+        ];
+        for &(name, class) in cases {
+            assert_eq!(TypeClass::class_of(name), class, "name {:?}", name);
+        }
+    }
+
+    #[test]
+    fn slice_prefix_matching_is_exact_not_ambiguous() {
+        // A name that merely *contains* the slice prefix must not classify.
+        assert_eq!(TypeClass::class_of(b"NotSlice(u8)"), TypeClass::Other);
+        assert_eq!(TypeClass::class_of(b"Slice(u8)x"), TypeClass::Slice);
+    }
+
+    #[test]
+    fn scoped_enter_classes_are_slice_and_region_refs() {
+        assert!(is_scoped_enter_class(TypeClass::Slice));
+        assert!(is_scoped_enter_class(TypeClass::RegionRef));
+        assert!(is_scoped_enter_class(TypeClass::RegionRefMut));
+        assert!(!is_scoped_enter_class(TypeClass::I64));
+        assert!(!is_scoped_enter_class(TypeClass::Bool));
+        assert!(!is_scoped_enter_class(TypeClass::Other));
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Sig {
     pub in_len: u8,
@@ -295,11 +476,12 @@ pub enum OpKind {
     AddrOf {
         place: Atom,
         mutable: bool,
-        const_addr: Option<u64>,
+        base: AddrOfBase,
     },
     MmioPlace {
         place: Atom,
-        addr: u64,
+        window: u16,
+        offset: u32,
     },
     ScopedEnter {
         ty: TypeId,
@@ -448,6 +630,16 @@ pub struct Op {
     pub span: Span,
 }
 
+/// The base of an `AddrOf` (P4): a runtime/resource address, or a
+/// window-relative MMIO register address resolved from the descriptor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AddrOfBase {
+    /// Address computed at runtime (a local/resource/struct place).
+    Runtime,
+    /// Window-relative MMIO register address.
+    Mmio { window: u16, offset: u32 },
+}
+
 pub struct Block {
     pub id: BlockId,
     pub entry_stack: FixedVec<TypeId, 32>,
@@ -463,6 +655,14 @@ pub struct Word {
     pub entry: BlockId,
     pub types: FixedVec<Atom, 64>,
     pub type_sizes: FixedVec<u32, 64>,
+    /// Compiler-computed class tag per entry in `types` (decision D-13).
+    /// Kept parallel to `types`; backends dispatch on this, never on type
+    /// name bytes. Populated once by irgen at word finalization; not
+    /// serialized in `--emit=ir` text (no format bump).
+    pub type_classes: FixedVec<TypeClass, 64>,
+    /// The windows this word touches, derived from its `MmioPlace` ops at
+    /// word finalization (P4). The verifier checks place bounds against it.
+    pub windows: FixedVec<WindowUse, 8>,
     /// `subtype_bases[i]` is the base `TypeId` of `types[i]` when it is a
     /// subtype, otherwise `TY_EMPTY`.  The verifier uses it to accept a
     /// subtype value where its base is declared (subsumption).
@@ -473,6 +673,8 @@ pub struct Word {
 pub struct Module {
     pub name: Atom,
     pub words: FixedVec<Word, 64>,
+    /// The union of every word's window-use table (P4).
+    pub windows: FixedVec<WindowUse, 8>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -506,6 +708,9 @@ pub enum VerifyError {
     NotTerminated { span: Span },
     PopEmptyStack { span: Span },
     PushFullStack { span: Span },
+    ScopedEnterTypeNotScoped { span: Span },
+    MmioWindowOutOfRange { span: Span },
+    MmioPlaceOutOfBounds { span: Span },
 }
 
 impl VerifyError {
@@ -540,6 +745,9 @@ impl VerifyError {
             VerifyError::NotTerminated { .. } => 9035,
             VerifyError::PopEmptyStack { .. } => 9098,
             VerifyError::PushFullStack { .. } => 9099,
+            VerifyError::ScopedEnterTypeNotScoped { .. } => 9036,
+            VerifyError::MmioWindowOutOfRange { .. } => 9037,
+            VerifyError::MmioPlaceOutOfBounds { .. } => 9038,
         }
     }
 
@@ -573,7 +781,10 @@ impl VerifyError {
             | VerifyError::RetOutputTypeMismatch { span }
             | VerifyError::NotTerminated { span }
             | VerifyError::PopEmptyStack { span }
-            | VerifyError::PushFullStack { span } => span,
+            | VerifyError::PushFullStack { span }
+            | VerifyError::ScopedEnterTypeNotScoped { span }
+            | VerifyError::MmioWindowOutOfRange { span }
+            | VerifyError::MmioPlaceOutOfBounds { span } => span,
         }
     }
 }
@@ -619,6 +830,42 @@ pub fn verify_word(w: &Word) -> Result<(), VerifyError> {
     for b in w.blocks.iter() {
         verify_block(w, b)?;
     }
+
+    Ok(())
+}
+
+/// Look up a window-use entry by id in a word's table.
+fn find_window_use(w: &Word, id: u16) -> Option<&WindowUse> {
+    w.windows.iter().find(|wu| wu.id == id)
+}
+
+/// Byte width of a type in the word's table (for place-bounds checking).
+fn type_width_bytes(w: &Word, ty: TypeId) -> Option<u32> {
+    let name = w.types.get(ty.0 as usize)?.as_bytes();
+    let prim = Prim::from_type_name(name)?;
+    Some(prim.bits(64) as u32 / 8)
+}
+
+/// Check that a volatile access at `place` (offset + width) stays inside the
+/// window its `MmioPlace` site declared. Best-effort within a block: sites
+/// recorded in the same block are correlated; a missing site (e.g. the place
+/// was materialized in another block) skips the width check.
+fn check_site_bounds(
+    w: &Word,
+    sites: &[(Atom, u16, u32)],
+    place: Atom,
+    width: u32,
+    span: Span,
+) -> Result<(), VerifyError> {
+    let Some((_, window, offset)) = sites.iter().find(|(p, _, _)| *p == place) else {
+        return Ok(());
+    };
+    let Some(wu) = find_window_use(w, *window) else {
+        return Err(VerifyError::MmioWindowOutOfRange { span });
+    };
+    if offset.saturating_add(width) > wu.size {
+        return Err(VerifyError::MmioPlaceOutOfBounds { span });
+    }
     Ok(())
 }
 
@@ -633,6 +880,11 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
         stack[sp] = *a;
         sp += 1;
     }
+
+    // P4: `MmioPlace` sites in this block, keyed by place atom, so the
+    // consuming volatile ops can check offset + width within the window.
+    let mut sites: [(Atom, u16, u32); 8] = [(AT_EMPTY, 0, 0); 8];
+    let mut site_count = 0usize;
 
     let mut terminated = false;
     for op in b.ops.iter() {
@@ -655,10 +907,33 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
             OpKind::AddrOf { mutable: true, .. } => {
                 push(&mut stack, &mut sp, TY_PTR_MUT, op.span)?;
             }
-            OpKind::MmioPlace { .. } => {
+            OpKind::MmioPlace { place, window, offset } => {
+                // P4: the referenced window must be declared in the word's
+                // use-table, and the offset must fall inside it.
+                let size = match find_window_use(w, window) {
+                    Some(wu) => wu.size,
+                    None => return Err(VerifyError::MmioWindowOutOfRange { span: op.span }),
+                };
+                if offset >= size {
+                    return Err(VerifyError::MmioPlaceOutOfBounds { span: op.span });
+                }
+                if site_count < sites.len() {
+                    sites[site_count] = (place, window, offset);
+                    site_count += 1;
+                }
                 push(&mut stack, &mut sp, TY_MMIO, op.span)?;
             }
             OpKind::ScopedEnter { ty, .. } => {
+                // D-13 / verifier rule: a ScopedEnter may only carry a
+                // scoped class (Slice / RegionRef / RegionRefMut). A
+                // hand-built word with an I64 (or any Other) class is
+                // rejected here — the same class check the backends rely on
+                // to avoid the silent no-op. Defense in depth, mirroring the
+                // stack checker.
+                let class = w.type_classes.get(ty.0 as usize).copied().unwrap_or(TypeClass::Other);
+                if !is_scoped_enter_class(class) {
+                    return Err(VerifyError::ScopedEnterTypeNotScoped { span: op.span });
+                }
                 push(&mut stack, &mut sp, ty, op.span)?;
             }
             OpKind::TaskSpawn { task_ty, .. } => {
@@ -780,14 +1055,20 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
                     return Err(VerifyError::StoreAddrNotMutPtr { span: op.span });
                 }
             }
-            OpKind::MmioVolLoad { ty, .. } => {
+            OpKind::MmioVolLoad { ty, place } => {
                 let addr = pop(&mut stack, &mut sp, op.span)?;
                 if addr != TY_MMIO && addr != TY_PTR && addr != TY_PTR_MUT {
                     return Err(VerifyError::LoadAddrNotPtr { span: op.span });
                 }
+                if let Some(width) = type_width_bytes(w, ty) {
+                    if let Err(e) = check_site_bounds(w, &sites[..site_count], place, width, op.span)
+                    {
+                        return Err(e);
+                    }
+                }
                 push(&mut stack, &mut sp, ty, op.span)?;
             }
-            OpKind::MmioVolStore { ty, .. } => {
+            OpKind::MmioVolStore { ty, place, .. } => {
                 let v = pop(&mut stack, &mut sp, op.span)?;
                 let addr = pop(&mut stack, &mut sp, op.span)?;
                 if v != ty {
@@ -796,19 +1077,42 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
                 if addr != TY_MMIO && addr != TY_PTR_MUT {
                     return Err(VerifyError::StoreAddrNotMutPtr { span: op.span });
                 }
+                if let Some(width) = type_width_bytes(w, ty) {
+                    if let Err(e) = check_site_bounds(w, &sites[..site_count], place, width, op.span)
+                    {
+                        return Err(e);
+                    }
+                }
             }
-            OpKind::MmioVolLoadField { field_ty, .. } => {
-                let place = pop(&mut stack, &mut sp, op.span)?;
-                if place != TY_MMIO {
+            OpKind::MmioVolLoadField {
+                reg_ty,
+                field_ty,
+                place,
+                ..
+            } => {
+                let pl = pop(&mut stack, &mut sp, op.span)?;
+                if pl != TY_MMIO {
                     return Err(VerifyError::MmioFieldAddrNotMmio { span: op.span });
+                }
+                if let Some(width) = type_width_bytes(w, reg_ty) {
+                    if let Err(e) = check_site_bounds(w, &sites[..site_count], place, width, op.span)
+                    {
+                        return Err(e);
+                    }
                 }
                 push(&mut stack, &mut sp, field_ty, op.span)?;
             }
-            OpKind::MmioVolStoreField { field_ty, .. } => {
+            OpKind::MmioVolStoreField { reg_ty, field_ty, place, .. } => {
                 let v = pop(&mut stack, &mut sp, op.span)?;
-                let place = pop(&mut stack, &mut sp, op.span)?;
-                if place != TY_MMIO || v != field_ty {
+                let pl = pop(&mut stack, &mut sp, op.span)?;
+                if pl != TY_MMIO || v != field_ty {
                     return Err(VerifyError::MmioFieldTypeMismatch { span: op.span });
+                }
+                if let Some(width) = type_width_bytes(w, reg_ty) {
+                    if let Err(e) = check_site_bounds(w, &sites[..site_count], place, width, op.span)
+                    {
+                        return Err(e);
+                    }
                 }
             }
             OpKind::CheckSubtype { ty } => {
@@ -916,9 +1220,38 @@ fn type_ok(w: &Word, got: TypeId, want: TypeId) -> bool {
 }
 
 pub fn write_module(out: &mut impl Output, m: &Module) {
+    out.write(b"format_ver ");
+    write_u32(out, FORMAT_VER);
+    out.write(b"\n");
     out.write(b"module ");
     out.write(m.name.as_bytes());
     out.write(b"\n");
+    out.write(b"windows ");
+    write_u32(out, m.windows.len() as u32);
+    out.write(b"\n");
+    for wu in m.windows.iter() {
+        out.write(b"window ");
+        write_u32(out, wu.id as u32);
+        out.write(b" ");
+        out.write(wu.name.as_bytes());
+        out.write(b" ");
+        out.write(match wu.kind {
+            WindowKind::Bus => b"bus",
+            WindowKind::Emulated => b"emulated",
+        });
+        out.write(b" ");
+        match wu.base {
+            Some(base) => {
+                out.write(b"0x");
+                write_u64_hex(out, base);
+            }
+            None => out.write(b"link"),
+        }
+        out.write(b" ");
+        out.write(b"0x");
+        write_u32_hex(out, wu.size);
+        out.write(b"\n");
+    }
     for w in m.words.iter() {
         write_word(out, w);
     }
@@ -1035,32 +1368,28 @@ fn write_op(out: &mut impl Output, w: &Word, op: &Op) {
         OpKind::AddrOf {
             place,
             mutable: false,
-            const_addr,
+            base,
         } => {
             out.write(b"addr_of ");
             out.write(place.as_bytes());
-            if let Some(addr) = const_addr {
-                out.write(b"=0x");
-                write_u64_hex(out, addr);
-            }
+            write_addr_of_base(out, base);
         }
         OpKind::AddrOf {
             place,
             mutable: true,
-            const_addr,
+            base,
         } => {
             out.write(b"addr_of_mut ");
             out.write(place.as_bytes());
-            if let Some(addr) = const_addr {
-                out.write(b"=0x");
-                write_u64_hex(out, addr);
-            }
+            write_addr_of_base(out, base);
         }
-        OpKind::MmioPlace { place, addr } => {
+        OpKind::MmioPlace { place, window, offset } => {
             out.write(b"mmio_place ");
             out.write(place.as_bytes());
-            out.write(b" addr=0x");
-            write_u64_hex(out, addr);
+            out.write(b" window=");
+            write_u32(out, window as u32);
+            out.write(b" offset=0x");
+            write_u32_hex(out, offset);
         }
         OpKind::ScopedEnter { ty, .. } => {
             out.write(b"scoped_enter ");
@@ -1240,6 +1569,39 @@ fn write_u32(out: &mut impl Output, mut v: u32) {
     out.write(&buf[..n]);
 }
 
+fn write_u32_hex(out: &mut impl Output, mut v: u32) {
+    let mut buf = [0u8; 8];
+    let mut n = 0usize;
+    if v == 0 {
+        buf[0] = b'0';
+        n = 1;
+    } else {
+        while v > 0 && n < buf.len() {
+            let d = (v & 0xF) as u8;
+            buf[n] = match d {
+                0..=9 => b'0' + d,
+                _ => b'a' + (d - 10),
+            };
+            n += 1;
+            v >>= 4;
+        }
+        buf[..n].reverse();
+    }
+    out.write(&buf[..n]);
+}
+
+fn write_addr_of_base(out: &mut impl Output, base: AddrOfBase) {
+    match base {
+        AddrOfBase::Runtime => {}
+        AddrOfBase::Mmio { window, offset } => {
+            out.write(b" window=");
+            write_u32(out, window as u32);
+            out.write(b" offset=0x");
+            write_u32_hex(out, offset);
+        }
+    }
+}
+
 fn write_i64(out: &mut impl Output, v: i64) {
     if v == 0 {
         out.write(b"0");
@@ -1281,4 +1643,62 @@ fn write_u64_hex(out: &mut impl Output, mut v: u64) {
         buf[..n].reverse();
     }
     out.write(&buf[..n]);
+}
+
+#[cfg(test)]
+mod format_ver_tests {
+    extern crate alloc;
+    use alloc::string::ToString;
+    use super::{check_format_ver, FormatVerMismatch, FORMAT_VER};
+
+    #[test]
+    fn accepts_current_version_with_trailing_newline() {
+        assert_eq!(check_format_ver(b"format_ver 4\nmodule M;"), Ok(()));
+        assert_eq!(check_format_ver(b"format_ver 4"), Ok(()));
+    }
+
+    #[test]
+    fn rejects_older_version_with_found_value() {
+        assert_eq!(
+            check_format_ver(b"format_ver 3\n"),
+            Err(FormatVerMismatch { found: Some(3) })
+        );
+    }
+
+    #[test]
+    fn rejects_newer_version_with_found_value() {
+        assert_eq!(
+            check_format_ver(b"format_ver 5\n"),
+            Err(FormatVerMismatch {
+                found: Some(5)
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_missing_header_and_garbage() {
+        assert_eq!(
+            check_format_ver(b"module M;\n"),
+            Err(FormatVerMismatch { found: None })
+        );
+        assert_eq!(check_format_ver(b""), Err(FormatVerMismatch { found: None }));
+        assert_eq!(
+            check_format_ver(b"format_ver x\n"),
+            Err(FormatVerMismatch { found: None })
+        );
+        assert_eq!(
+            check_format_ver(b"format_ver\n"),
+            Err(FormatVerMismatch { found: None })
+        );
+    }
+
+    #[test]
+    fn mismatch_display_is_the_fail_fast_message() {
+        let e = check_format_ver(b"format_ver 3\n").unwrap_err();
+        assert_eq!(
+            e.to_string(),
+            "format mismatch: reader expects 4, artifact says 3"
+        );
+        assert_eq!(FORMAT_VER, 4);
+    }
 }

@@ -210,10 +210,15 @@ dependencies = [
 name = "execution-tests"
 version = "0.1.0"
 dependencies = [
+ "codegen-arm",
  "codegen-core",
+ "codegen-riscv",
+ "codegen-x86_64",
  "diag-core",
+ "frontend",
  "harness-core",
  "hosted",
+ "ir",
  "lmod",
  "lmod-pack",
  "loader-core",
@@ -744,6 +749,7 @@ dependencies = [
 name = "semantics"
 version = "0.1.0"
 dependencies = [
+ "codegen-core",
  "frontend",
  "ir",
 ]
@@ -1039,6 +1045,7 @@ dependencies = [
  "harness-core",
  "hex",
  "hosted",
+ "ir",
  "lang-symtab-gen",
  "libc",
  "lmod",

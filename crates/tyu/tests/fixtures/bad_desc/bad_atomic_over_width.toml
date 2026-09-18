@@ -1,0 +1,21 @@
+# E3647: an access wider than atomic_max is a compile-time error (R2).
+[platform]
+name = "bad"
+schema = 2
+family = "bad"
+
+[[platform.windows]]
+id = 0
+name = "a"
+kind = "bus"
+base = 0x40000000
+size = 0x1000
+
+[[platform.devices]]
+map = "G"
+instance = "g"
+window = 0
+base_offset = 0x0
+registers = [
+  { offset = 0x0, name = "r", width = 32, access = "rw", atomic_max = 64 },
+]

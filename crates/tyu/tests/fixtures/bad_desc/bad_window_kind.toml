@@ -1,0 +1,12 @@
+# E3646: unknown window kind — the registry knows only bus|emulated.
+[platform]
+name = "bad"
+schema = 2
+family = "bad"
+
+[[platform.windows]]
+id = 0
+name = "a"
+kind = "bogus"
+base = 0x40000000
+size = 0x1000

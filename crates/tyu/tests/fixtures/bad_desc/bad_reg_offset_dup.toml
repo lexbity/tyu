@@ -1,0 +1,22 @@
+# E3647: register offsets must be unique within a map.
+[platform]
+name = "bad"
+schema = 2
+family = "bad"
+
+[[platform.windows]]
+id = 0
+name = "a"
+kind = "bus"
+base = 0x40000000
+size = 0x1000
+
+[[platform.devices]]
+map = "G"
+instance = "g"
+window = 0
+base_offset = 0x0
+registers = [
+  { offset = 0x0, name = "r0", width = 32, access = "rw" },
+  { offset = 0x0, name = "r1", width = 32, access = "rw" },
+]

@@ -46,6 +46,13 @@ pub enum CodegenError {
     /// The `.lang.modinfo` section could not be encoded (fixed 64-entry
     /// export/import arrays or fixed-size buffer too small).
     ModInfoTooLarge,
+
+    /// MMIO lowering requires a declared window of the needed kind (e.g. an
+    /// emulated window on x86), but the backend has none (P3, D-7).
+    NoMmioWindow,
+
+    /// `set_mmio_windows` received more than the 8-window capacity.
+    TooManyMmioWindows,
 }
 
 impl CodegenError {
@@ -67,6 +74,8 @@ impl CodegenError {
             Self::StringLiteralCapacityExceeded => 8011,
             Self::ScopedAllocationOverflow => 8012,
             Self::ModInfoTooLarge => 8013,
+            Self::NoMmioWindow => 8014,
+            Self::TooManyMmioWindows => 8015,
         }
     }
 }

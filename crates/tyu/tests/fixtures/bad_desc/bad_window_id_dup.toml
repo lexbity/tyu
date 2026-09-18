@@ -1,0 +1,19 @@
+# E3647: window ids must be unique and densely numbered from 0 — duplicate id.
+[platform]
+name = "bad"
+schema = 2
+family = "bad"
+
+[[platform.windows]]
+id = 0
+name = "a"
+kind = "bus"
+base = 0x40000000
+size = 0x1000
+
+[[platform.windows]]
+id = 0
+name = "b"
+kind = "bus"
+base = 0x40001000
+size = 0x1000

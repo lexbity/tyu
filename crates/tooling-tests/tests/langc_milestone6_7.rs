@@ -11,6 +11,14 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
+
+fn platform_arg() -> String {
+    format!(
+        "--platform={}",
+        workspace_root().join("runtime").display()
+    )
+}
+
 fn build_tools() {
     BUILD_ONCE.call_once(|| {
         // Capture stdio so the nested cargo never flips the shared test
@@ -70,7 +78,7 @@ fn iface_conformance_ok() {
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ast", "Main.mod"])
+        .args(["--emit=ast"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(out.status.success());
@@ -99,7 +107,7 @@ fn iface_signature_mismatch_fails() {
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ast", "Main.mod"])
+        .args(["--emit=ast"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -125,7 +133,7 @@ fn import_missing_symbol_fails() {
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ast", "Main.mod"])
+        .args(["--emit=ast"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -149,7 +157,7 @@ fn langc_emit_ir_typechecks_if_while() {
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir", "Main.mod"])
+        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -181,7 +189,7 @@ fn langc_emit_ir_rejects_type_mismatch() {
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir", "Main.mod"])
+        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -202,7 +210,7 @@ fn milestone4_contracts_and_subtypes_in_ir() {
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir", "Main.mod"])
+        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -241,7 +249,7 @@ end;\n",
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir", "--allow-raw-casts", "Main.mod"])
+        .args(["--emit=ir", "--allow-raw-casts"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -291,7 +299,7 @@ end;\n",
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=asm", "--allow-raw-casts", "Main.mod"])
+        .args(["--emit=asm", "--allow-raw-casts"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -321,7 +329,7 @@ register-map GPIO\n\
   0x00 OUT_SET u32 wo volatile\n\
   0x20 IN      u32 ro volatile\n\
 end;\n\
-const gpio = GPIO @ 0x1000;\n\
+const gpio = GPIO @ board.gpio_io;\n\
 : read_in ( -- u32 )\n\
   &gpio.IN @u32\n\
 ;\n\
@@ -334,7 +342,7 @@ end;\n",
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir", "Main.mod"])
+        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -358,7 +366,7 @@ fn milestone6_mmio_field_address_forbidden() {
 register-map UART\n\
   0x00 CTRL u32 rw volatile { enable 0 bool rw }\n\
 end;\n\
-const uart = UART @ 0x2000;\n\
+const uart = UART @ board.uart;\n\
 : bad ( -- )\n\
   &uart.CTRL.enable drop\n\
 ;\n\
@@ -368,7 +376,7 @@ end;\n",
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir", "Main.mod"])
+        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -393,7 +401,7 @@ end;\n",
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir", "Main.mod"])
+        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -413,7 +421,7 @@ register-map GPIO\n\
   0x00 OUT u32 wo volatile\n\
   0x04 IN  u32 ro volatile\n\
 end;\n\
-const gpio = GPIO @ 0x1000;\n\
+const gpio = GPIO @ board.gpio_outin;\n\
 : bad_read ( -- u32 )\n\
   &gpio.OUT @u32\n\
 ;\n\
@@ -426,7 +434,7 @@ end;\n",
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir", "Main.mod"])
+        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -445,7 +453,7 @@ fn milestone6_mmio_array_bounds_error() {
 register-map GPIO\n\
   0x200 PINCFG[2] u32 rw volatile\n\
 end;\n\
-const gpio = GPIO @ 0x1000;\n\
+const gpio = GPIO @ board.gpio_pincfg;\n\
 : bad ( -- u32 )\n\
   &gpio.PINCFG.2 @u32\n\
 ;\n\
@@ -455,7 +463,7 @@ end;\n",
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir", "Main.mod"])
+        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -474,7 +482,7 @@ fn milestone6_mmio_simulated_rw_u32_runtime() {
 register-map GPIO\n\
   0x10 DATA u32 rw volatile\n\
 end;\n\
-const gpio = GPIO @ 0x100;\n\
+const gpio = GPIO @ board.gpio_data10;\n\
 : main ( -- i64 )\n\
   42 as u32 &!gpio.DATA swap !u32\n\
   &gpio.DATA @u32 as i64\n\
@@ -485,7 +493,7 @@ end;\n",
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=asm", "Main.mod"])
+        .args(["--emit=asm"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -517,7 +525,7 @@ fn milestone6_mmio_simulated_field_store_load_runtime() {
 register-map UART\n\
   0x00 CTRL u32 rw volatile { mode 0..7 u8 rw flag 8 bool rw }\n\
 end;\n\
-const uart = UART @ 0x200;\n\
+const uart = UART @ board.uart;\n\
 : main ( -- i64 )\n\
   uart.CTRL.mode 7 as u8 !\n\
   uart.CTRL.flag true !\n\
@@ -529,7 +537,7 @@ end;\n",
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=asm", "Main.mod"])
+        .args(["--emit=asm"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -563,7 +571,7 @@ fn milestone7_compile_assemble_run_exit_code() {
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=asm", "Main.mod"])
+        .args(["--emit=asm"]).arg(platform_arg()).arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -603,12 +611,7 @@ fn milestone7_emit_obj_link_run_exit_code() {
 
     let status = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args([
-            "--emit=obj",
-            "--target=x86_64-unknown-linux-gnu",
-            "--out-dir=.",
-            "Main.mod",
-        ])
+        .args(["--emit=obj", "--target=x86_64-unknown-linux-gnu", "--out-dir=."]).arg(platform_arg()).arg("Main.mod")
         .status()
         .unwrap();
     assert!(status.success());
@@ -647,13 +650,7 @@ fn milestone7_emit_obj_link_trap_exit_code() {
 
     let status = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args([
-            "--emit=obj",
-            "--checks=all",
-            "--target=x86_64-unknown-linux-gnu",
-            "--out-dir=.",
-            "Main.mod",
-        ])
+        .args(["--emit=obj", "--checks=all", "--target=x86_64-unknown-linux-gnu", "--out-dir=."]).arg(platform_arg()).arg("Main.mod")
         .status()
         .unwrap();
     assert!(status.success());

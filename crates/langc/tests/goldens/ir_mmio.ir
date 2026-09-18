@@ -1,0 +1,11 @@
+format_ver 4
+module Main
+windows 1
+window 0 mmio emulated link 0x10000
+word read (  -- u32 )
+  block b0 ()
+    addr_of gpio.DATA window=0 offset=0x0
+    vol_load u32 gpio.DATA
+    local_set 1
+    local_get 1
+    ret

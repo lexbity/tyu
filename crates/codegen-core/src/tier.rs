@@ -4,7 +4,7 @@
 //! exhaustive `match`.  Adding a new `OpKind` variant MUST cause a
 //! compile error here, forcing the developer to classify it.
 
-use ir::OpKind;
+use ir::{AddrOfBase, OpKind};
 
 /// Whether a backend supports a given operation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -24,13 +24,8 @@ pub fn arm_op_tier(op: &OpKind) -> OpSupport {
         OpKind::ConstI64(_) => OpSupport::Supported,
         OpKind::ConstBool(_) => OpSupport::Supported,
         OpKind::ConstStr(_) => OpSupport::Supported,
-        OpKind::AddrOf {
-            const_addr: Some(_),
-            ..
-        } => OpSupport::Supported,
-        OpKind::AddrOf {
-            const_addr: None, ..
-        } => OpSupport::Supported, // returns UnsupportedAddrOf
+        OpKind::AddrOf { base: AddrOfBase::Runtime, .. } => OpSupport::Supported,
+        OpKind::AddrOf { base: AddrOfBase::Mmio { .. }, .. } => OpSupport::Supported,
         OpKind::MmioPlace { .. } => OpSupport::Supported,
         OpKind::ScopedEnter { .. } => OpSupport::Supported,
         OpKind::TaskSpawn { .. } => OpSupport::Supported,
@@ -75,13 +70,8 @@ pub fn riscv_op_tier(op: &OpKind) -> OpSupport {
         OpKind::ConstI64(_) => OpSupport::Supported,
         OpKind::ConstBool(_) => OpSupport::Supported,
         OpKind::ConstStr(_) => OpSupport::Supported,
-        OpKind::AddrOf {
-            const_addr: Some(_),
-            ..
-        } => OpSupport::Supported,
-        OpKind::AddrOf {
-            const_addr: None, ..
-        } => OpSupport::Supported,
+        OpKind::AddrOf { base: AddrOfBase::Runtime, .. } => OpSupport::Supported,
+        OpKind::AddrOf { base: AddrOfBase::Mmio { .. }, .. } => OpSupport::Supported,
         OpKind::MmioPlace { .. } => OpSupport::Supported,
         OpKind::ScopedEnter { .. } => OpSupport::Supported,
         OpKind::TaskSpawn { .. } => OpSupport::Supported,

@@ -1,5 +1,7 @@
-//! Platform pack discovery, introspection, scaffolding, and linting.
+//! Platform pack discovery, introspection, scaffolding, linting, and the
+//! descriptor v2 model (parsing, validation, canonical hash, report).
 
+pub mod desc;
 mod config;
 mod linker_script;
 mod lint;
@@ -16,6 +18,15 @@ pub use config::{
 pub use linker_script::scaffold_platform_pack;
 pub use lint::{
     ensure_build_platform_interface, format_lint_outcome, lint_pack, LintError, LintOutcome,
+};
+pub use desc::{
+    load_descriptor, AccessKind, AllocatorSpec, BarrierKind, Descriptor, DescriptorError,
+    DeviceMap, MemoryModel, MemoryRegionSpec, MmioWindow, ReadKind, RegisterRow, ScopedSpec,
+    WindowKind, WriteKind, DESCRIPTOR_SCHEMA, E_DESC_INVALID, E_DESC_UNKNOWN_KIND, MMIO_SEM_VER,
+    full_mask,
+};
+pub use desc::compile::{
+    ensure_compiled_descriptor, descriptor_file_path, COMPILED_DESC_FILE,
 };
 
 #[cfg(test)]

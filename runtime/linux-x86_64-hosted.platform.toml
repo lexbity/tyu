@@ -1,5 +1,7 @@
 [platform]
 name = "linux-x86_64-hosted"
+schema = 2
+family = "q35-hosted"
 compiler-interface = 1
 description = "x86_64 hosted runtime"
 
@@ -29,3 +31,71 @@ probe_config = ""
 
 [test]
 rung = "untested"
+
+# ---- descriptor v2 ---------------------------------------------------------
+
+[[platform.windows]]
+id = 0
+name = "mmio"                  # the in-guest-RAM `__mmio_mem` array (D-7)
+kind = "emulated"              # RAM the runtime owns; base is a link-time symbol
+size = 0x10000
+
+# Devices for the tooling-test register maps (P4 migration).
+[[platform.devices]]
+map = "GPIO"
+instance = "gpio"
+window = 0
+base_offset = 0x0
+registers = [
+  { offset = 0x00, name = "DATA", width = 32, access = "rw" },
+]
+
+[[platform.devices]]
+map = "GPIO"
+instance = "gpio_io"
+window = 0
+base_offset = 0x1000
+registers = [
+  { offset = 0x00, name = "OUT_SET", width = 32, access = "wo" },
+  { offset = 0x20, name = "IN", width = 32, access = "ro" },
+]
+
+[[platform.devices]]
+map = "UART"
+instance = "uart"
+window = 0
+base_offset = 0x2000
+registers = [
+  { offset = 0x00, name = "CTRL", width = 32, access = "rw" },
+]
+
+[[platform.devices]]
+map = "GPIO"
+instance = "gpio_outin"
+window = 0
+base_offset = 0x1000
+registers = [
+  { offset = 0x00, name = "OUT", width = 32, access = "wo" },
+  { offset = 0x04, name = "IN", width = 32, access = "ro" },
+]
+
+[[platform.devices]]
+map = "GPIO"
+instance = "gpio_pincfg"
+window = 0
+base_offset = 0x1000
+registers = [
+  { offset = 0x200, name = "PINCFG", width = 32, access = "rw" },
+]
+
+[[platform.devices]]
+map = "GPIO"
+instance = "gpio_data10"
+window = 0
+base_offset = 0x100
+registers = [
+  { offset = 0x10, name = "DATA", width = 32, access = "rw" },
+]
+
+[platform.metal.trust]
+words = []

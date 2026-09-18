@@ -6,7 +6,7 @@
 //! The public surface is centered on `ArmThumbBackend`, with support modules
 //! in `ophelpers`, `postlude`, `prelude`, and `word`.
 
-use codegen_core::{AsmMode, CodegenBackend, CodegenError};
+use codegen_core::{AsmMode, CodegenBackend, CodegenError, MmioWindowSpec};
 use frontend::{
     parse::{AttrAst, DeclKind, ModuleAst, Output},
     span::Span,
@@ -61,6 +61,12 @@ pub struct ArmThumbBackend<'a> {
     pub scoped_base: u32,
     pub scoped_slots: u32,
     pub scoped_next: u32,
+
+    // --- P3: descriptor-sourced MMIO windows (D-7) ---
+    /// Windows the board/runtime declares, copied from the langc driver
+    /// (compiled platform descriptor, or the target's static defaults).
+    pub mmio_windows: [MmioWindowSpec; 8],
+    pub mmio_window_count: usize,
 }
 
 impl<'a> ArmThumbBackend<'a> {
@@ -107,13 +113,44 @@ impl<'a> ArmThumbBackend<'a> {
             scoped_base: 0,
             scoped_slots: 0,
             scoped_next: 0,
+            mmio_windows: [MmioWindowSpec::EMPTY; 8],
+            mmio_window_count: 0,
         }
+    }
+
+    /// Set the MMIO windows this backend lowers against (P3, D-7). The langc
+    /// driver supplies either the target's static defaults or the compiled
+    /// platform descriptor's windows.
+    pub fn set_mmio_windows(&mut self, windows: &[MmioWindowSpec]) -> Result<(), CodegenError> {
+        if windows.len() > 8 {
+            return Err(CodegenError::TooManyMmioWindows);
+        }
+        self.mmio_window_count = windows.len();
+        self.mmio_windows = [MmioWindowSpec::EMPTY; 8];
+        for (i, w) in windows.iter().enumerate() {
+            self.mmio_windows[i] = *w;
+        }
+        Ok(())
     }
 
     pub fn fresh_label(&mut self) -> u32 {
         let id = self.label_id;
         self.label_id = self.label_id.wrapping_add(1);
         id
+    }
+
+    /// The absolute address of a window-relative place (P4): `base + offset`.
+    /// A window base that is a link-time symbol is not a bus address and is
+    /// unreachable on this backend (no emulated windows here).
+    pub fn mmio_window_addr(&self, window: u16, offset: u32) -> Result<u64, CodegenError> {
+        for i in 0..self.mmio_window_count {
+            let w = &self.mmio_windows[i];
+            if w.id == window {
+                let base = w.base.ok_or(CodegenError::NoMmioWindow)?;
+                return Ok(base.saturating_add(offset as u64));
+            }
+        }
+        Err(CodegenError::NoMmioWindow)
     }
 
     pub(crate) fn emit_modinfo_section(&mut self) -> Result<(), CodegenError> {

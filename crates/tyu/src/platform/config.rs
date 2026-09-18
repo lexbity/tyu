@@ -361,7 +361,13 @@ pub fn run(args: PlatformArgs) -> Result<(), TyuError> {
         }
         PlatformArgs::Lint { name, all } => {
             let outcome = lint_pack(&workspace_root(), &name, all)?;
-            print!("{}", format_lint_outcome(&outcome));
+            let mut text = format_lint_outcome(&outcome);
+            // Descriptor model report (§5.11): the review artifact for board
+            // packs. Only printed when the pack carries a descriptor v2.
+            if let Ok(Some(desc)) = super::desc::load_descriptor(&workspace_root(), &name) {
+                text.push_str(&super::desc::report::format_descriptor_report(&desc));
+            }
+            print!("{}", text);
             if outcome.errors.is_empty() {
                 Ok(())
             } else {
@@ -676,7 +682,19 @@ pub fn is_qemu_capable_selection(selection: &ResolvedPlatformSelection) -> bool 
 pub fn load_platform_pack(root: &Path, manifest_path: &Path) -> Result<PlatformPack, TyuError> {
     let text = fs::read_to_string(manifest_path)
         .map_err(|e| TyuError::Platform(format!("reading '{}': {}", manifest_path.display(), e)))?;
-    let manifest: PlatformManifest = toml::from_str(&text)
+    load_platform_pack_from_text(root, manifest_path, &text)
+}
+
+/// Load a pack from manifest text already read from `manifest_path`.
+///
+/// Shared by `load_platform_pack` and `lint_pack` so a single file read
+/// serves both the v1 manifest and the v2 descriptor validation.
+pub(crate) fn load_platform_pack_from_text(
+    root: &Path,
+    manifest_path: &Path,
+    text: &str,
+) -> Result<PlatformPack, TyuError> {
+    let manifest: PlatformManifest = toml::from_str(text)
         .map_err(|e| TyuError::Platform(format!("parsing '{}': {}", manifest_path.display(), e)))?;
     Ok(PlatformPack {
         manifest_path: manifest_path.to_path_buf(),

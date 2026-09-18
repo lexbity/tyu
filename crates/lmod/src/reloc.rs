@@ -32,6 +32,10 @@ pub enum RelocKind {
     // RISC-V
     RiscV32 = 8,
     RiscVCall = 9,
+    /// Window-base fixup (P6): a code site holding `window_base + offset`
+    /// that the loader patches with the bound window's base. Carries the
+    /// window id in the entry's symbol-hash field.
+    MmioWindowBase = 10,
 }
 
 impl RelocKind {
@@ -48,6 +52,7 @@ impl RelocKind {
             7 => Some(Self::ArmRel32),
             8 => Some(Self::RiscV32),
             9 => Some(Self::RiscVCall),
+            10 => Some(Self::MmioWindowBase),
             _ => None,
         }
     }

@@ -26,6 +26,8 @@ pub enum TokenKind {
     KwRequires,
     KwEnsures,
     KwNeeds,
+    /// The `board.<instance>` base form for register-map instantiations (P4).
+    KwBoard,
 
     PunctColon,
     PunctSemi,

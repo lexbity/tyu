@@ -55,6 +55,16 @@ pub fn baseline_sizes() -> FixedVec<u32, 64> {
     s
 }
 
+/// Classes for [`baseline_types`], derived through the single source of truth
+/// (`ir::TypeClass::class_of`) so the test table can never drift from it.
+pub fn baseline_classes() -> FixedVec<ir::TypeClass, 64> {
+    let mut c = FixedVec::new();
+    for t in baseline_types().iter() {
+        c.push(ir::TypeClass::class_of(t.as_bytes())).unwrap();
+    }
+    c
+}
+
 pub fn empty_module(src: &[u8]) -> ModuleAst {
     Parser::new(src).parse_module_ast().unwrap()
 }
@@ -77,6 +87,8 @@ pub fn single_block_word(sig: Sig, ops: &[OpKind]) -> Word {
         entry: BlockId(0),
         types: baseline_types(),
         type_sizes: baseline_sizes(),
+        type_classes: baseline_classes(),
+        windows: FixedVec::new(),
         subtype_bases: FixedVec::new(),
         blocks: {
             let mut b = FixedVec::new();
@@ -127,6 +139,9 @@ pub fn emit(w: &Word) -> String {
     let mod_ast = empty_module(b"module m; end;");
     let mut out = TestOut::new();
     let mut backend = X86_64HostedBackend::new(&mod_ast, b"", &mut out, false, AsmMode::Executable);
+    backend
+        .set_mmio_windows(codegen_core::Target::X86_64UnknownNone.spec().mmio_windows)
+        .unwrap();
     backend.emit_word(w).unwrap();
     out.as_str().to_string()
 }

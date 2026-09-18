@@ -26,6 +26,17 @@ pub fn prim_ty(w: &lir::Word, ty: lir::TypeId) -> Option<lir::Prim> {
     lir::Prim::from_type_name(b)
 }
 
+/// Compiler-computed class tag of a type (decision D-13). Backends dispatch
+/// on this tag, never on type-name bytes. A missing tag (should not occur —
+/// irgen fills it at word finalization) falls back to `Other` so the caller
+/// reaches its loud `UnsupportedOp` path.
+pub fn type_class(w: &lir::Word, ty: lir::TypeId) -> lir::TypeClass {
+    w.type_classes
+        .get(ty.0 as usize)
+        .copied()
+        .unwrap_or(lir::TypeClass::Other)
+}
+
 pub fn prim_ty_bits_signed(w: &lir::Word, ty: lir::TypeId) -> Option<(u16, bool)> {
     prim_ty(w, ty).map(|prim| prim.bits_signed(64))
 }
@@ -195,12 +206,7 @@ pub fn count_scoped_slices(w: &lir::Word) -> u32 {
     for b in w.blocks.iter() {
         for op in b.ops.iter() {
             if let lir::OpKind::ScopedEnter { ty, .. } = op.kind {
-                let name = w
-                    .types
-                    .get(ty.0 as usize)
-                    .map(|a| a.as_bytes())
-                    .unwrap_or(b"");
-                if name.starts_with(b"Slice(") || name.starts_with(b"SliceMut(") {
+                if type_class(w, ty) == lir::TypeClass::Slice {
                     count = count.wrapping_add(1);
                 }
             }

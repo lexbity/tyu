@@ -14,6 +14,13 @@ lmod = { path = "../lmod" }
 lmod-pack = { path = "../lmod-pack" }
 tyu = { path = "../tyu" }
 
+[dev-dependencies]
+codegen-arm = { path = "../codegen-arm" }
+codegen-riscv = { path = "../codegen-riscv" }
+codegen-x86_64 = { path = "../codegen-x86_64" }
+frontend = { path = "../frontend" }
+ir = { path = "../ir" }
+
 [[test]]
 name    = "x86_64_none"
 harness = true

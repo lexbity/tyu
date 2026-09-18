@@ -43,6 +43,17 @@ pub fn sysroot_dir() -> PathBuf {
     workspace_root().join("sysroot")
 }
 
+/// The platform pack directory whose compiled descriptor (`platform.desc`)
+/// sources MMIO window/device facts for a target's execution fixtures (P4).
+pub fn platform_desc_dir(target: Target) -> PathBuf {
+    let triple = std::str::from_utf8(target.triple()).unwrap();
+    if triple == "x86_64-unknown-linux-gnu" {
+        workspace_root().join("runtime")
+    } else {
+        workspace_root().join("platforms").join(triple)
+    }
+}
+
 pub fn langc_exe() -> PathBuf {
     workspace_root().join("target").join("debug").join("langc")
 }
@@ -197,6 +208,7 @@ pub fn langc_compile(target: Target, src: &Path, out_dir: &Path, is_lib: bool) -
         format!("--sysroot={}", sysroot_dir().display()),
         format!("--out-dir={}", out_dir.display()),
         format!("-I={}", out_dir.display()),
+        format!("--platform={}", platform_desc_dir(target).display()),
     ];
     if is_lib {
         args.push("--lib".into());

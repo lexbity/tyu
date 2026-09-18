@@ -34,6 +34,7 @@ fn arithmetic_and_stack_pass() {
         .args([
             "test",
             "--target=riscv32-unknown-none",
+            "--platform=riscv32-unknown-none",
             &format!("--manifest={}", common::fixtures_manifest().display()),
         ])
         .output()
@@ -290,6 +291,7 @@ fn langc_compile_g(
         format!("--target={triple}"),
         format!("--sysroot={}", common::sysroot_dir().display()),
         format!("--out-dir={}", out_dir.display()),
+        format!("--platform={}", common::platform_desc_dir(target).display()),
     ];
     if is_lib {
         args.push("--lib".into());
@@ -374,6 +376,7 @@ fn dynamic_lmod_runs_under_qemu() {
             "run",
             "--mode=dynamic",
             "--target=riscv32-unknown-none",
+            "--platform=riscv32-unknown-none",
             &format!("--sysroot={}", sysroot.display()),
             &format!("--out-dir={}", out_dir.display()),
             &main_mod.to_string_lossy(),

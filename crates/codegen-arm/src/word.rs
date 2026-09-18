@@ -13,6 +13,17 @@ fn prim_ty(w: &lir::Word, ty: lir::TypeId) -> Option<lir::Prim> {
     lir::Prim::from_type_name(ty_name)
 }
 
+/// Compiler-computed class tag of a type (decision D-13). Backends dispatch
+/// on this tag, never on type-name bytes. A missing tag (should not occur —
+/// irgen fills it at word finalization) falls back to `Other` so the caller
+/// reaches its loud `UnsupportedOp` path.
+fn type_class(w: &lir::Word, ty: lir::TypeId) -> lir::TypeClass {
+    w.type_classes
+        .get(ty.0 as usize)
+        .copied()
+        .unwrap_or(lir::TypeClass::Other)
+}
+
 fn prim_bits_signed(w: &lir::Word, ty: lir::TypeId) -> Option<(u16, bool)> {
     prim_ty(w, ty).map(|prim| prim.bits_signed(32))
 }
@@ -505,10 +516,11 @@ impl<'a> ArmThumbBackend<'a> {
                 Ok(true)
             }
             lir::OpKind::AddrOf {
-                const_addr: Some(addr),
+                base: lir::AddrOfBase::Mmio { window, offset },
                 ..
             } => {
-                let _ = self.mode; // unused but proves we reach this arm
+                // Symbolic MMIO register address: window_base + offset (P4).
+                let addr = self.mmio_window_addr(window, offset)?;
                 let low = addr as u32;
                 self.emit_const32(low);
                 self.out.write(b"\tstr r0, [r4]\n\tadds r4, r4, #4\n");
@@ -519,7 +531,7 @@ impl<'a> ArmThumbBackend<'a> {
             }
             lir::OpKind::AddrOf {
                 place,
-                const_addr: None,
+                base: lir::AddrOfBase::Runtime,
                 ..
             } => {
                 if find_resource_decl(self.module, self.src, place.as_bytes()).is_none() {
@@ -821,7 +833,11 @@ impl<'a> ArmThumbBackend<'a> {
                 self.out.write(b"\tstr r3, [r2]\n");
                 Ok(())
             }
-            lir::OpKind::MmioPlace { addr, .. } => {
+            lir::OpKind::MmioPlace { window, offset, .. } => {
+                // Symbolic place: window_base + offset (P4). The window is
+                // guaranteed declared by construction (descriptor resolution);
+                // the lookup is a loud error if it ever is not.
+                let addr = self.mmio_window_addr(window, offset)?;
                 // Push the MMIO address onto DS.
                 let low = addr as u32;
                 self.emit_const32(low);
@@ -845,45 +861,50 @@ impl<'a> ArmThumbBackend<'a> {
                 Ok(())
             }
             lir::OpKind::ScopedEnter { ty, len } => {
-                let ty_name = _w
-                    .types
-                    .get(ty.0 as usize)
-                    .map(|a| a.as_bytes())
-                    .unwrap_or(b"");
-                if ty_name.starts_with(b"Slice(") || ty_name.starts_with(b"SliceMut(") {
-                    if self.scoped_next >= self.scoped_slots {
-                        return Err(CodegenError::ScopedAllocationOverflow);
+                match type_class(_w, ty) {
+                    lir::TypeClass::Slice => {
+                        if self.scoped_next >= self.scoped_slots {
+                            return Err(CodegenError::ScopedAllocationOverflow);
+                        }
+                        let slot = self.scoped_next;
+                        self.scoped_next = self.scoped_next.wrapping_add(1);
+                        let offset = self.scoped_base + (slot * 8);
+                        // Pop data pointer from DS (low word), store at [sp+offset]
+                        self.out.write(b"\tsubs r4, r4, #8\n\tldr r0, [r4]\n");
+                        self.out.write(b"\tstr r0, [sp, #");
+                        write_u32(self.out, offset);
+                        self.out.write(b"]\n");
+                        // Store length at [sp+offset+4]
+                        self.out.write(b"\tmovs r0, #");
+                        write_u32(self.out, len);
+                        self.out.write(b"\n\tstr r0, [sp, #");
+                        write_u32(self.out, offset + 4);
+                        self.out.write(b"]\n");
+                        // Push address of slot as result pointer
+                        self.out.write(b"\tadd r0, sp, #");
+                        write_u32(self.out, offset);
+                        self.out.write(b"\n");
+                        self.out.write(b"\teors r1, r1\n");
+                        self.emit_push_r0r1();
+                        self.emit_ds_high_update();
                     }
-                    let slot = self.scoped_next;
-                    self.scoped_next = self.scoped_next.wrapping_add(1);
-                    let offset = self.scoped_base + (slot * 8);
-                    // Pop data pointer from DS (low word), store at [sp+offset]
-                    self.out.write(b"\tsubs r4, r4, #8\n\tldr r0, [r4]\n");
-                    self.out.write(b"\tstr r0, [sp, #");
-                    write_u32(self.out, offset);
-                    self.out.write(b"]\n");
-                    // Store length at [sp+offset+4]
-                    self.out.write(b"\tmovs r0, #");
-                    write_u32(self.out, len);
-                    self.out.write(b"\n\tstr r0, [sp, #");
-                    write_u32(self.out, offset + 4);
-                    self.out.write(b"]\n");
-                    // Push address of slot as result pointer
-                    self.out.write(b"\tadd r0, sp, #");
-                    write_u32(self.out, offset);
-                    self.out.write(b"\n");
-                    self.out.write(b"\teors r1, r1\n");
-                    self.emit_push_r0r1();
-                    self.emit_ds_high_update();
-                } else if ty_name == b"RegionRef" || ty_name == b"RegionRefMut" {
-                    // For region refs, just dup the value on DS.
-                    self.out.write(b"\tsubs r4, r4, #8\n");
-                    self.out.write(b"\tldrd r0, r1, [r4]\n");
-                    self.out.write(b"\tstrd r0, r1, [r4]\n");
-                    self.out.write(b"\tadds r4, r4, #8\n");
-                    self.out.write(b"\tstrd r0, r1, [r4]\n");
-                    self.out.write(b"\tadds r4, r4, #8\n");
-                    self.emit_ds_high_update();
+                    lir::TypeClass::RegionRef | lir::TypeClass::RegionRefMut => {
+                        // For region refs, just dup the value on DS.
+                        self.out.write(b"\tsubs r4, r4, #8\n");
+                        self.out.write(b"\tldrd r0, r1, [r4]\n");
+                        self.out.write(b"\tstrd r0, r1, [r4]\n");
+                        self.out.write(b"\tadds r4, r4, #8\n");
+                        self.out.write(b"\tstrd r0, r1, [r4]\n");
+                        self.out.write(b"\tadds r4, r4, #8\n");
+                        self.emit_ds_high_update();
+                    }
+                    // D-13: an unmatched class is a loud error, never a
+                    // silent no-op (the G-5 bug class this slice retires).
+                    _ => {
+                        return Err(CodegenError::UnsupportedOp {
+                            op_name: b"ScopedEnter",
+                        });
+                    }
                 }
                 Ok(())
             }
@@ -1057,12 +1078,7 @@ fn count_scoped_slices(w: &lir::Word) -> u32 {
     for b in w.blocks.iter() {
         for op in b.ops.iter() {
             if let lir::OpKind::ScopedEnter { ty, .. } = op.kind {
-                let name = w
-                    .types
-                    .get(ty.0 as usize)
-                    .map(|a| a.as_bytes())
-                    .unwrap_or(b"");
-                if name.starts_with(b"Slice(") || name.starts_with(b"SliceMut(") {
+                if type_class(w, ty) == lir::TypeClass::Slice {
                     count = count.wrapping_add(1);
                 }
             }

@@ -202,6 +202,7 @@ impl<'a> Lexer<'a> {
             b"ensures" => TokenKind::KwEnsures,
             b"needs" => TokenKind::KwNeeds,
             b"performs" => TokenKind::KwPerforms,
+            b"board" => TokenKind::KwBoard,
             _ => TokenKind::Ident,
         };
         Token::new(kind, span)

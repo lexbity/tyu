@@ -1,0 +1,13 @@
+# E3647: allocator region must name a [memory] region.
+[platform]
+name = "bad"
+schema = 2
+family = "bad"
+
+[memory]
+sram = { name = "SRAM", origin = 0x20000000, length = 0x10000 }
+
+[platform.allocator]
+region = "NOTHING"
+offset = 0x0
+length = 0x100

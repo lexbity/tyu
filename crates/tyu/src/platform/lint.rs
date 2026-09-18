@@ -9,7 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::config::{
-    discover_platforms_in, find_pack_manifest_path, load_platform_pack, CapabilityConfig,
+    discover_platforms_in, find_pack_manifest_path, load_platform_pack_from_text, CapabilityConfig,
     MemorySection, MetalSection, PlatformManifest, PlatformPack, TestRung,
 };
 
@@ -60,13 +60,43 @@ const E_PACK_DEBUG_AGENT_UNBACKED: u16 = 5412;
 pub fn lint_pack(root: &Path, name: &str, all: bool) -> Result<LintOutcome, TyuError> {
     let manifest_path = find_pack_manifest_path(root, name)
         .ok_or_else(|| TyuError::Platform(format!("platform pack '{}' not found", name)))?;
-    match load_platform_pack(root, &manifest_path) {
-        Ok(pack) => lint_pack_manifest(root, &pack, all),
-        Err(e) => Ok(LintOutcome {
-            pack: name.to_string(),
-            errors: vec![LintError::new(E_PACK_MANIFEST_INVALID, e.to_string())],
-        }),
+    let text = fs::read_to_string(&manifest_path)
+        .map_err(|e| TyuError::Platform(format!("reading '{}': {}", manifest_path.display(), e)))?;
+    let pack = match load_platform_pack_from_text(root, &manifest_path, &text) {
+        Ok(pack) => pack,
+        Err(e) => {
+            return Ok(LintOutcome {
+                pack: name.to_string(),
+                errors: vec![LintError::new(E_PACK_MANIFEST_INVALID, e.to_string())],
+            });
+        }
+    };
+    let mut outcome = lint_pack_manifest(root, &pack, all)?;
+
+    // Descriptor v2 validation (§5.2). A legacy pack (no v2 sections) adds
+    // nothing; a v2 pack contributes E3646/E3647 errors to the outcome so
+    // `tyu platform lint` fails on an invalid descriptor, exactly as it fails
+    // on an invalid pack structure. The pack root backs the `metal.trust`
+    // words-must-exist rule.
+    match super::desc::parse::parse_descriptor(&text) {
+        Ok(Some(desc)) => {
+            for err in super::desc::validate::validate(&desc, Some(pack.pack_root())) {
+                outcome.errors.push(LintError {
+                    code: err.code,
+                    detail: err.detail,
+                });
+            }
+        }
+        Ok(None) => {}
+        Err(e) => {
+            outcome.errors.push(LintError {
+                code: e.code,
+                detail: e.detail,
+            });
+        }
     }
+
+    Ok(outcome)
 }
 
 pub fn ensure_build_platform_interface(root: &Path, target: Target) -> Result<(), TyuError> {

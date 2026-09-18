@@ -178,6 +178,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 self.env,
                 self.subtypes,
                 self.mmio,
+                self.descriptor,
                 self.resources,
                 self.nominals,
                 self.iso,

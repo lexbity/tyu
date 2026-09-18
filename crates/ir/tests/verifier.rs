@@ -1,8 +1,8 @@
 use frontend::{fixed::FixedVec, span::Span};
 
 use ir::{
-    Atom, Block, BlockId, CapSet, EffectSet, Op, OpKind, Sig, StackBound, TypeId, Word, TY_BOOL,
-    TY_EMPTY, TY_I64, TY_MMIO, TY_PTR, TY_PTR_MUT, TY_STR,
+    AddrOfBase, Atom, Block, BlockId, CapSet, EffectSet, Op, OpKind, Sig, StackBound, TypeId,
+    Word, TY_BOOL, TY_EMPTY, TY_I64, TY_MMIO, TY_PTR, TY_PTR_MUT, TY_STR,
 };
 
 fn atom(bytes: &[u8]) -> Atom {
@@ -34,6 +34,14 @@ fn baseline_type_sizes() -> FixedVec<u32, 64> {
     sizes
 }
 
+fn baseline_type_classes() -> FixedVec<ir::TypeClass, 64> {
+    let mut classes = FixedVec::new();
+    for t in baseline_types().iter() {
+        classes.push(ir::TypeClass::class_of(t.as_bytes())).unwrap();
+    }
+    classes
+}
+
 fn sig0_1(out0: TypeId) -> Sig {
     let mut sig = Sig::empty();
     sig.in_len = 0;
@@ -42,7 +50,23 @@ fn sig0_1(out0: TypeId) -> Sig {
     sig
 }
 
+fn win(id: u16, size: u32) -> ir::WindowUse {
+    ir::WindowUse {
+        id,
+        name: atom(b"w"),
+        kind: ir::WindowKind::Bus,
+        base: Some(0x20000000),
+        size,
+        access_mask: ir::ACCESS_READ | ir::ACCESS_WRITE,
+    }
+}
+
 fn word_with_single_block(sig: Sig, block_ops: &[OpKind]) -> Word {
+    word_with_single_block_and_windows(sig, block_ops, &[])
+}
+
+/// Like [`word_with_single_block`] but with a window-use table (P4).
+fn word_with_single_block_and_windows(sig: Sig, block_ops: &[OpKind], windows: &[ir::WindowUse]) -> Word {
     let mut ops: FixedVec<Op, 96> = FixedVec::new();
     for &kind in block_ops {
         ops.push(Op {
@@ -61,6 +85,11 @@ fn word_with_single_block(sig: Sig, block_ops: &[OpKind]) -> Word {
     let mut blocks: FixedVec<Block, 16> = FixedVec::new();
     blocks.push(b0).unwrap();
 
+    let mut win: FixedVec<ir::WindowUse, 8> = FixedVec::new();
+    for &w in windows {
+        win.push(w).unwrap();
+    }
+
     Word {
         name: atom(b"w"),
         sig,
@@ -70,6 +99,8 @@ fn word_with_single_block(sig: Sig, block_ops: &[OpKind]) -> Word {
         entry: BlockId(0),
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
+        type_classes: baseline_type_classes(),
+        windows: win,
         subtype_bases: FixedVec::new(),
         blocks,
     }
@@ -157,6 +188,8 @@ fn verifier_rejects_branch_stack_mismatch() {
         entry: BlockId(0),
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
+        type_classes: baseline_type_classes(),
+        windows: frontend::fixed::FixedVec::new(),
         subtype_bases: FixedVec::new(),
         blocks,
     };
@@ -219,6 +252,8 @@ fn verify_word_rejects_missing_entry_block() {
         entry: BlockId(0),
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
+        type_classes: baseline_type_classes(),
+        windows: frontend::fixed::FixedVec::new(),
         subtype_bases: FixedVec::new(),
         blocks,
     };
@@ -269,6 +304,8 @@ fn verify_word_rejects_entry_stack_type_mismatch() {
         entry: BlockId(0),
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
+        type_classes: baseline_type_classes(),
+        windows: frontend::fixed::FixedVec::new(),
         subtype_bases: FixedVec::new(),
         blocks,
     };
@@ -325,6 +362,8 @@ fn verify_block_rejects_ops_after_br() {
         entry: BlockId(1),
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
+        type_classes: baseline_type_classes(),
+        windows: frontend::fixed::FixedVec::new(),
         subtype_bases: FixedVec::new(),
         blocks,
     };
@@ -565,7 +604,7 @@ fn verify_rejects_store_immutable_ptr() {
             OpKind::AddrOf {
                 place: atom(b"x"),
                 mutable: false,
-                const_addr: None,
+                base: AddrOfBase::Runtime,
             }, // ptr, not ptr_mut
             OpKind::ConstI64(42), // value
             OpKind::Store { ty: TY_I64 },
@@ -604,12 +643,13 @@ fn verify_rejects_mmio_load_field_not_mmio() {
 #[test]
 fn verify_rejects_mmio_store_field_type_mismatch() {
     // push mmio place, push wrong value type
-    let w = word_with_single_block(
+    let w = word_with_single_block_and_windows(
         Sig::empty(),
         &[
             OpKind::MmioPlace {
                 place: atom(b"r"),
-                addr: 0x1000,
+                window: 0,
+                offset: 0x1000,
             },
             OpKind::ConstI64(42),
             OpKind::MmioVolStoreField {
@@ -620,6 +660,7 @@ fn verify_rejects_mmio_store_field_type_mismatch() {
                 shift: 0,
             },
         ],
+        &[win(0, 0x2000)],
     );
     assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9023);
 }
@@ -733,6 +774,8 @@ fn verify_rejects_br_target_stack_type_mismatch() {
         entry: BlockId(1),
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
+        type_classes: baseline_type_classes(),
+        windows: frontend::fixed::FixedVec::new(),
         subtype_bases: FixedVec::new(),
         blocks,
     };
@@ -787,6 +830,8 @@ fn verify_rejects_brif_cond_not_bool() {
         entry: BlockId(1),
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
+        type_classes: baseline_type_classes(),
+        windows: frontend::fixed::FixedVec::new(),
         subtype_bases: FixedVec::new(),
         blocks,
     };
@@ -869,6 +914,8 @@ fn verify_rejects_brif_target_stack_depth_mismatch() {
         entry: BlockId(1),
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
+        type_classes: baseline_type_classes(),
+        windows: frontend::fixed::FixedVec::new(),
         subtype_bases: FixedVec::new(),
         blocks,
     };
@@ -938,6 +985,8 @@ fn verify_rejects_brif_target_stack_type_mismatch() {
         entry: BlockId(1),
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
+        type_classes: baseline_type_classes(),
+        windows: frontend::fixed::FixedVec::new(),
         subtype_bases: FixedVec::new(),
         blocks,
     };
@@ -999,6 +1048,8 @@ fn verify_handles_stack_overflow() {
         entry: BlockId(0),
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
+        type_classes: baseline_type_classes(),
+        windows: frontend::fixed::FixedVec::new(),
         subtype_bases: FixedVec::new(),
         blocks,
     };
@@ -1046,6 +1097,8 @@ fn verify_accepts_stack_64_exact() {
         entry: BlockId(0),
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
+        type_classes: baseline_type_classes(),
+        windows: frontend::fixed::FixedVec::new(),
         subtype_bases: FixedVec::new(),
         blocks,
     };
@@ -1097,6 +1150,8 @@ fn word_with_two_blocks(b0_ops: &[OpKind], b1_ops: &[OpKind]) -> Word {
         entry: BlockId(0),
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
+        type_classes: baseline_type_classes(),
+        windows: frontend::fixed::FixedVec::new(),
         subtype_bases: FixedVec::new(),
         blocks,
     }
@@ -1195,6 +1250,8 @@ fn verify_rejects_brif_asymmetric_mismatch() {
         entry: BlockId(0),
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
+        type_classes: baseline_type_classes(),
+        windows: frontend::fixed::FixedVec::new(),
         subtype_bases: FixedVec::new(),
         blocks,
     };
@@ -1266,6 +1323,8 @@ fn verify_accepts_back_edge() {
         entry: BlockId(0),
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
+        type_classes: baseline_type_classes(),
+        windows: frontend::fixed::FixedVec::new(),
         subtype_bases: FixedVec::new(),
         blocks,
     };
@@ -1285,7 +1344,7 @@ fn verify_accepts_addr_of() {
             OpKind::AddrOf {
                 place: atom(b"x"),
                 mutable: false,
-                const_addr: None,
+                base: AddrOfBase::Runtime,
             },
             OpKind::Ret,
         ],
@@ -1295,21 +1354,64 @@ fn verify_accepts_addr_of() {
 
 #[test]
 fn verify_accepts_mmio_place() {
-    let w = word_with_single_block(
+    let w = word_with_single_block_and_windows(
         sig0_1(TY_MMIO),
         &[
             OpKind::MmioPlace {
                 place: atom(b"r"),
-                addr: 0x1000,
+                window: 0,
+                offset: 0x1000,
             },
             OpKind::Ret,
         ],
+        &[win(0, 0x2000)],
     );
     ir::verify_word(&w).unwrap();
 }
 
 #[test]
-fn verify_accepts_scoped_enter() {
+fn verify_rejects_mmio_place_out_of_window() {
+    // The place offset must fall inside the declared window (P4, E9038).
+    let w = word_with_single_block_and_windows(
+        sig0_1(TY_MMIO),
+        &[
+            OpKind::MmioPlace {
+                place: atom(b"r"),
+                window: 0,
+                offset: 0x1000,
+            },
+            OpKind::Ret,
+        ],
+        &[win(0, 0x100)],
+    );
+    let err = ir::verify_word(&w).unwrap_err();
+    assert_eq!(err.code(), 9038);
+}
+
+#[test]
+fn verify_rejects_mmio_place_unknown_window() {
+    // A place referencing an undeclared window must fail (P4, E9037).
+    let w = word_with_single_block_and_windows(
+        sig0_1(TY_MMIO),
+        &[
+            OpKind::MmioPlace {
+                place: atom(b"r"),
+                window: 3,
+                offset: 0x0,
+            },
+            OpKind::Ret,
+        ],
+        &[win(0, 0x1000)],
+    );
+    let err = ir::verify_word(&w).unwrap_err();
+    assert_eq!(err.code(), 9037);
+}
+
+#[test]
+fn verify_rejects_scoped_enter_non_scoped_class() {
+    // D-13: a ScopedEnter carrying a non-scoped class (I64 here) is a
+    // hand-built/mutated word and must fail E9036 — the codegen path would
+    // otherwise silently emit nothing (the G-5 bug class this slice retires).
     let w = word_with_single_block(
         sig0_1(TY_I64),
         &[
@@ -1322,6 +1424,116 @@ fn verify_accepts_scoped_enter() {
             OpKind::Ret,
         ],
     );
+    let err = ir::verify_word(&w).unwrap_err();
+    assert_eq!(err.code(), 9036);
+}
+
+#[test]
+fn verify_accepts_scoped_enter_slice_class() {
+    // A ScopedEnter carrying a Slice(...) class is the legitimate slice
+    // allocation path and must pass.
+    let mut types = baseline_types();
+    types.push(atom(b"Slice(u8)")).unwrap(); // 7
+    let mut sizes = baseline_type_sizes();
+    sizes.push(16).unwrap();
+    let mut classes = baseline_type_classes();
+    classes.push(ir::TypeClass::class_of(b"Slice(u8)")).unwrap();
+    let slice_ty = TypeId(7);
+
+    let mut sig = Sig::empty();
+    sig.in_len = 0;
+    sig.out_len = 1;
+    sig.outputs[0] = slice_ty;
+
+    let mut ops: FixedVec<Op, 96> = FixedVec::new();
+    ops.push(Op {
+        kind: OpKind::ScopedEnter { ty: slice_ty, len: 16 },
+        span: Span::UNKNOWN,
+    })
+    .unwrap();
+    ops.push(Op {
+        kind: OpKind::Ret,
+        span: Span::UNKNOWN,
+    })
+    .unwrap();
+
+    let w = Word {
+        name: atom(b"w"),
+        sig,
+        performs: EffectSet::empty(),
+        requires: CapSet::empty(),
+        bound: StackBound::ID,
+        entry: BlockId(0),
+        types,
+        type_sizes: sizes,
+        type_classes: classes,
+        windows: frontend::fixed::FixedVec::new(),
+        subtype_bases: FixedVec::new(),
+        blocks: {
+            let mut b = FixedVec::new();
+            b.push(Block {
+                id: BlockId(0),
+                entry_stack: FixedVec::new(),
+                ops,
+            })
+            .unwrap();
+            b
+        },
+    };
+    ir::verify_word(&w).unwrap();
+}
+
+#[test]
+fn verify_accepts_scoped_enter_region_ref_class() {
+    // Region reference scoped entries (duplicate-on-DS) must pass.
+    let mut types = baseline_types();
+    types.push(atom(b"RegionRef")).unwrap(); // 7
+    let mut sizes = baseline_type_sizes();
+    sizes.push(8).unwrap();
+    let mut classes = baseline_type_classes();
+    classes.push(ir::TypeClass::class_of(b"RegionRef")).unwrap();
+    let ref_ty = TypeId(7);
+
+    let mut sig = Sig::empty();
+    sig.in_len = 0;
+    sig.out_len = 1;
+    sig.outputs[0] = ref_ty;
+
+    let mut ops: FixedVec<Op, 96> = FixedVec::new();
+    ops.push(Op {
+        kind: OpKind::ScopedEnter { ty: ref_ty, len: 0 },
+        span: Span::UNKNOWN,
+    })
+    .unwrap();
+    ops.push(Op {
+        kind: OpKind::Ret,
+        span: Span::UNKNOWN,
+    })
+    .unwrap();
+
+    let w = Word {
+        name: atom(b"w"),
+        sig,
+        performs: EffectSet::empty(),
+        requires: CapSet::empty(),
+        bound: StackBound::ID,
+        entry: BlockId(0),
+        types,
+        type_sizes: sizes,
+        type_classes: classes,
+        windows: frontend::fixed::FixedVec::new(),
+        subtype_bases: FixedVec::new(),
+        blocks: {
+            let mut b = FixedVec::new();
+            b.push(Block {
+                id: BlockId(0),
+                entry_stack: FixedVec::new(),
+                ops,
+            })
+            .unwrap();
+            b
+        },
+    };
     ir::verify_word(&w).unwrap();
 }
 
@@ -1350,7 +1562,7 @@ fn verify_accepts_ptr_add_const() {
             OpKind::AddrOf {
                 place: atom(b"x"),
                 mutable: false,
-                const_addr: None,
+                base: AddrOfBase::Runtime,
             },
             OpKind::PtrAddConst {
                 ty: TY_PTR,
@@ -1370,7 +1582,7 @@ fn verify_accepts_ptr_add_index() {
             OpKind::AddrOf {
                 place: atom(b"x"),
                 mutable: false,
-                const_addr: None,
+                base: AddrOfBase::Runtime,
             },
             OpKind::ConstI64(3),
             OpKind::PtrAddIndex {
@@ -1393,7 +1605,7 @@ fn verify_accepts_load_store() {
             OpKind::AddrOf {
                 place: atom(b"x"),
                 mutable: true,
-                const_addr: None,
+                base: AddrOfBase::Runtime,
             },
             OpKind::ConstI64(42),
             OpKind::Store { ty: TY_I64 },
@@ -1406,12 +1618,13 @@ fn verify_accepts_load_store() {
 
 #[test]
 fn verify_accepts_mmio_load() {
-    let w = word_with_single_block(
+    let w = word_with_single_block_and_windows(
         sig0_1(TY_I64),
         &[
             OpKind::MmioPlace {
                 place: atom(b"r"),
-                addr: 0x1000,
+                window: 0,
+                offset: 0x1000,
             },
             OpKind::MmioVolLoad {
                 ty: TY_I64,
@@ -1419,6 +1632,7 @@ fn verify_accepts_mmio_load() {
             },
             OpKind::Ret,
         ],
+        &[win(0, 0x2000)],
     );
     ir::verify_word(&w).unwrap();
 }
@@ -1426,12 +1640,13 @@ fn verify_accepts_mmio_load() {
 #[test]
 fn verify_accepts_mmio_store() {
     // MmioStore pops two: value then mmio. Need trailing value for Ret.
-    let w = word_with_single_block(
+    let w = word_with_single_block_and_windows(
         sig0_1(TY_I64),
         &[
             OpKind::MmioPlace {
                 place: atom(b"r"),
-                addr: 0x1000,
+                window: 0,
+                offset: 0x1000,
             },
             OpKind::ConstI64(0),
             OpKind::MmioVolStore {
@@ -1442,6 +1657,7 @@ fn verify_accepts_mmio_store() {
             OpKind::ConstI64(0),
             OpKind::Ret,
         ],
+        &[win(0, 0x2000)],
     );
     ir::verify_word(&w).unwrap();
 }
@@ -1479,6 +1695,8 @@ fn word_with_subtype(sig: Sig, block_ops: &[OpKind]) -> Word {
     types.push(atom(b"R")).unwrap(); // 7 — subtype of i64
     let mut sizes = baseline_type_sizes();
     sizes.push(8).unwrap(); // same runtime width as i64
+    let mut classes = baseline_type_classes();
+    classes.push(ir::TypeClass::class_of(b"R")).unwrap(); // Other
     let mut bases = FixedVec::new();
     for _ in 0..7 {
         bases.push(TY_EMPTY).unwrap();
@@ -1502,6 +1720,8 @@ fn word_with_subtype(sig: Sig, block_ops: &[OpKind]) -> Word {
         entry: BlockId(0),
         types,
         type_sizes: sizes,
+        type_classes: classes,
+        windows: frontend::fixed::FixedVec::new(),
         subtype_bases: bases,
         blocks,
     }
@@ -1624,6 +1844,8 @@ mod proptests {
             entry: ir::BlockId(0),
             types: super::baseline_types(),
             type_sizes: super::baseline_type_sizes(),
+            type_classes: super::baseline_type_classes(),
+            windows: frontend::fixed::FixedVec::new(),
             subtype_bases: frontend::fixed::FixedVec::new(),
             blocks,
         }

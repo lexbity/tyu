@@ -1,5 +1,7 @@
 [platform]
 name = "riscv32-unknown-none"
+schema = 2
+family = "virt"
 compiler-interface = 1
 description = "RV32 bare-metal runtime"
 
@@ -55,3 +57,47 @@ rung = "untested"
 supported = true
 target = "crates/tyu/tests/escalate.rs"
 evidence = "evidence/debug_escalate.md"
+
+# ---- descriptor v2 ---------------------------------------------------------
+
+[[platform.windows]]
+id = 0
+name = "scratch"               # virt DRAM; QEMU MMIO scratch (D-14)
+kind = "bus"
+base = 0x80000000
+size = 0x08000000
+
+# Devices for the execution-test fixtures (P4 migration, D-14).
+[[platform.devices]]
+map = "Scratch"
+instance = "scratch"
+window = 0
+base_offset = 0x0
+registers = [
+  { offset = 0x00, name = "A", width = 32, access = "rw" },
+  { offset = 0x04, name = "B", width = 32, access = "rw" },
+]
+
+[[platform.devices]]
+map = "Scratch"
+instance = "ptrscratch"
+window = 0
+base_offset = 0x100100
+registers = [
+  { offset = 0x00, name = "FIRST", width = 32, access = "rw" },
+  { offset = 0x04, name = "SECOND", width = 32, access = "rw" },
+]
+
+[[platform.devices]]
+map = "Scratch"
+instance = "widthscratch"
+window = 0
+base_offset = 0x100000
+registers = [
+  { offset = 0x00, name = "B", width = 8, access = "rw" },
+  { offset = 0x02, name = "H", width = 16, access = "rw" },
+  { offset = 0x04, name = "W", width = 32, access = "rw" },
+]
+
+[platform.metal.trust]
+words = []

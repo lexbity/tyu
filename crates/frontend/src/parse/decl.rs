@@ -513,7 +513,7 @@ impl<'a> Parser<'a> {
         )?;
         self.bump();
 
-        // attempt to parse: "= MAP @ <num> ;"
+        // attempt to parse: "= MAP @ <num> ;" or "= MAP @ board.<inst> ;"
         let mut inst: Option<RegMapInstanceAst> = None;
         if self.look.kind == TokenKind::PunctEq {
             self.bump();
@@ -522,7 +522,27 @@ impl<'a> Parser<'a> {
                 self.bump();
                 if self.look.kind == TokenKind::Ident && self.slice(self.look.span) == b"@" {
                     self.bump();
-                    if self.look.kind == TokenKind::Number {
+                    // Symbolic base: `board.<instance>`.
+                    if self.look.kind == TokenKind::KwBoard {
+                        self.bump();
+                        if self.look.kind == TokenKind::PunctDot {
+                            self.bump();
+                            if self.look.kind == TokenKind::Ident {
+                                let board_instance = Some(self.look.span);
+                                self.bump();
+                                if self.look.kind == TokenKind::PunctSemi {
+                                    inst = Some(RegMapInstanceAst {
+                                        name: name.span,
+                                        map,
+                                        // `base_addr` is unused when the
+                                        // symbolic form is present.
+                                        base_addr: name.span,
+                                        board_instance,
+                                    });
+                                }
+                            }
+                        }
+                    } else if self.look.kind == TokenKind::Number {
                         let base_addr = self.look.span;
                         self.bump();
                         if self.look.kind == TokenKind::PunctSemi {
@@ -530,6 +550,7 @@ impl<'a> Parser<'a> {
                                 name: name.span,
                                 map,
                                 base_addr,
+                                board_instance: None,
                             });
                         }
                     }

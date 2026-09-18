@@ -13,8 +13,15 @@
 #   G9  Pure host crates forbid unsafe_code.
 #   G10 Loader decrypt path has no panic/unwrap/expect.
 #   G11 Codegen backends do not byte-match primitive names.
+#   G11b Codegen backends do not byte-match compound type names
+#        (`Slice(...)` / `SliceMut(...)` / `RegionRef*`) — D-13 type-class
+#        dispatch replaced it after Phase P2.
 #   G12 Codegen functions stay <=250 lines.
 #   G13 Host input-derived panic/unreachable sites are retired.
+#   G14 Every discovered platform pack manifest carries the descriptor schema
+#       stamp `schema = 2` (descriptor v2 — platform-descriptor-and-mmio-semantics).
+#   G14b The x86 MMIO emulated-window size is descriptor-sourced; the old
+#        hardcoded 0x10000 constant is gone (P3, FR-21).
 #
 # Escape hatch: add `# guards: allow-no-tests` as a comment in the
 # package's Cargo.toml to suppress G1/G2 for that package.  This is
@@ -37,6 +44,11 @@
 #   6. Add a >250-line function under crates/codegen-* after Slice 7;
 #      G12 MUST report it.
 #   7. Revert all mutations after check.
+#   8. Remove `schema = 2` from one platform pack manifest after Phase P1;
+#      G14 MUST report it.
+#   9. Reintroduce a compound type-name byte-match
+#      (`starts_with(b"Slice(")` / `== b"RegionRef"`) in a codegen backend
+#      after Phase P2; G11 MUST report it.
 
 set -euo pipefail
 
@@ -349,6 +361,18 @@ else
     failures=$((failures + 1))
 fi
 
+compound_dispatch=$(grep -R -n -E 'starts_with\(b"Slice\(|starts_with\(b"SliceMut\(|starts_with\(b"RegionRef|== b"RegionRef|== b"RegionRefMut' \
+    crates/codegen-arm/src crates/codegen-riscv/src crates/codegen-x86_64/src \
+    --include='*.rs' 2>/dev/null || true)
+compound_count=$(printf '%s\n' "$compound_dispatch" | sed '/^$/d' | wc -l | tr -d ' ')
+if [ "$compound_count" -eq 0 ]; then
+    msg $GREEN "  G11b: no backend compound type-name byte-match (D-13)"
+else
+    msg $RED "  G11b FAIL: $compound_count backend compound type-name match(es) remain (D-13)"
+    printf '%s\n' "$compound_dispatch" >&2
+    failures=$((failures + 1))
+fi
+
 long_codegen_functions=$("$PYTHON" - <<'PY'
 import pathlib, re
 for path in sorted(pathlib.Path("crates").glob("codegen-*/src/*.rs")):
@@ -392,6 +416,66 @@ if [ "$host_panic_count" -eq 0 ]; then
 else
     msg $RED "  G13 FAIL: $host_panic_count panic/unreachable hit(s) remain"
     printf '%s\n' "$host_panic_hits" >&2
+    failures=$((failures + 1))
+fi
+
+# --- G14: descriptor schema stamp coverage (Phase P1) ---
+# Every discovered platform pack manifest (platforms/<name>/platform.toml and
+# runtime/*.platform.toml) must carry the descriptor v2 stamp `schema = 2`.
+# A pack without the stamp is a legacy pack the compiler cannot consume; a
+# missing stamp is exactly the drift this spec retires. Mutation check #8.
+missing_schema=""
+for manifest in platforms/*/platform.toml runtime/*.platform.toml; do
+    if [ ! -e "$manifest" ]; then
+        continue
+    fi
+    if ! grep -qE '^schema[[:space:]]*=[[:space:]]*2' "$manifest"; then
+        missing_schema="$missing_schema $manifest"
+    fi
+done
+if [ -z "$missing_schema" ]; then
+    msg $GREEN "  G14: all platform pack manifests carry the descriptor schema stamp"
+else
+    msg $RED "  G14 FAIL: pack manifests missing 'schema = 2':$missing_schema"
+    failures=$((failures + 1))
+fi
+
+# --- G14b: x86 MMIO window size is descriptor-sourced (P3, FR-21) ---
+# The old hardcoded `0x10000`/`65536` emulated-window constant must not
+# return to the x86 mmio lowering OR the Executable-mode `__mmio_mem` BSS
+# reservation; both sizes now come from the backend's window table (target
+# defaults or the compiled platform descriptor). A reservation smaller than
+# the bounds-checked size admits MMIO past the array (finding F1).
+mmio_const_hits=$(grep -R -n -E '0x10000|65536' \
+    crates/codegen-x86_64/src/mmio.rs 2>/dev/null || true)
+mmio_reserve_hits=$(grep -R -n -E '__mmio_mem rb [0-9]' \
+    crates/codegen-x86_64/src/postlude.rs 2>/dev/null || true)
+mmio_const_hits="${mmio_const_hits}${mmio_reserve_hits}"
+mmio_const_count=$(printf '%s\n' "$mmio_const_hits" | sed '/^$/d' | wc -l | tr -d ' ')
+if [ "$mmio_const_count" -eq 0 ]; then
+    msg $GREEN "  G14b: x86 MMIO window size is descriptor-sourced (no 0x10000 constant)"
+else
+    msg $RED "  G14b FAIL: hardcoded emulated-window size returned to mmio.rs:"
+    printf '%s\n' "$mmio_const_hits" >&2
+    failures=$((failures + 1))
+fi
+
+# --- G15: no raw MMIO base literals in product source (P4, FR-23) ---
+# After the P4 migration every register-map instance binds `board.<instance>`;
+# a raw `MAP @ 0x…` base in source is the pre-symbolic pattern this slice
+# retires. Product dirs only (fixtures/tests are migrated too and included).
+raw_mmio_hits=$(grep -R -n -E '@[[:space:]]*0x[0-9a-fA-F]+' \
+    crates/execution-tests/fixtures crates/execution-tests/tests \
+    crates/tooling-tests/tests sysroot platforms runtime \
+    --include='*.mod' --include='*.rs' 2>/dev/null || true)
+# Exclude matches that are not MMIO instantiations (e.g. hex literals in
+# comments/strings are fine; the pattern is `= MAP @ 0x`).
+raw_mmio_count=$(printf '%s\n' "$raw_mmio_hits" | grep -E '= .* @[[:space:]]*0x' | sed '/^$/d' | wc -l | tr -d ' ' || true)
+if [ "$raw_mmio_count" -eq 0 ]; then
+    msg $GREEN "  G15: no raw MMIO base literals remain in product source (P4)"
+else
+    msg $RED "  G15 FAIL: raw MMIO base literals remain:"
+    printf '%s\n' "$raw_mmio_hits" | grep -E '= .* @[[:space:]]*0x' >&2 || true
     failures=$((failures + 1))
 fi
 

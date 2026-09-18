@@ -18,7 +18,7 @@ use crate::cache::{self, BuildCache};
 use crate::error::TyuError;
 use crate::graph::{resolve_graph, ModuleNode};
 use crate::keys::{KeyMaterial, KeyRef};
-use crate::platform::{self, ResolvedPlatformSelection};
+use crate::platform::{self, ResolvedPlatformSelection, desc};
 use crate::toolchain;
 
 /// Build an image from the given build arguments.
@@ -93,8 +93,27 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
     // Find langc binary via PATH.
     let langc = toolchain::resolve_tool("langc")?;
 
-    // Compute compiler fingerprint (stable per build invocation).
-    let compiler_fp = cache::compiler_fingerprint();
+    // When a platform is selected, compile its descriptor to the runtime-side
+    // form (validating it — E3646/E3647 — and writing `platform.desc`), so
+    // langc's `--platform=<dir>` always reads a fresh compiled form (P3).
+    let platform_hash = if let Some(selection) = platform_selection.as_ref() {
+        Some(
+            desc::ensure_compiled_descriptor(&selection.pack.manifest_path, selection.pack.pack_root())?
+                .platform_hash,
+        )
+    } else {
+        None
+    };
+
+    // Compute compiler fingerprint (stable per build invocation). The
+    // platform hash is folded in so a descriptor change invalidates cached
+    // artifacts exactly as a source change would.
+    let mut compiler_fp = cache::compiler_fingerprint();
+    if let Some(h) = platform_hash {
+        compiler_fp = cache::fnv1a_u64(&compiler_fp.to_le_bytes())
+            .wrapping_mul(0x100000001b3)
+            .wrapping_add(h);
+    }
 
     // Pre-compute content hashes for every module path.
     let mut path_to_hash: BTreeMap<PathBuf, u64> = BTreeMap::new();
@@ -131,6 +150,7 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
             &args.include_dirs,
             args.sysroot.as_deref(),
             &out_dir,
+            platform_selection.as_ref().map(|s| s.pack.pack_root()),
             &mut cache,
             compiler_fp,
             inputs_fp,
@@ -607,6 +627,7 @@ pub fn compile_simple(
     sysroot: Option<&Path>,
     include_dirs: &[PathBuf],
     feature_set: FeatureSet,
+    platform_dir: Option<&Path>,
 ) -> Result<PathBuf, TyuError> {
     let triple = std::str::from_utf8(target.triple()).map_err(|_| TyuError::NonUtf8Triple)?;
     let langc = toolchain::resolve_tool("langc")?;
@@ -617,6 +638,9 @@ pub fn compile_simple(
     cmd.arg(format!("--out-dir={}", out_dir.display()));
     if let Some(sr) = sysroot {
         cmd.arg(format!("--sysroot={}", sr.display()));
+    }
+    if let Some(dir) = platform_dir {
+        cmd.arg(format!("--platform={}", dir.display()));
     }
     for inc in include_dirs {
         cmd.arg("-I");
@@ -692,6 +716,7 @@ pub fn compile_module_for_context(
         sysroot,
         include_dirs,
         feature_set,
+        ctx.platform_selection.as_ref().map(|s| s.pack.pack_root()),
     )
 }
 
@@ -725,6 +750,7 @@ fn compile_module(
     include_dirs: &[PathBuf],
     sysroot: Option<&Path>,
     out_dir: &Path,
+    platform_dir: Option<&Path>,
     cache: &mut BuildCache,
     compiler_fp: u64,
     inputs_fp: u64,
@@ -751,6 +777,10 @@ fn compile_module(
 
     if let Some(sr) = sysroot {
         cmd.arg(format!("--sysroot={}", sr.display()));
+    }
+
+    if let Some(dir) = platform_dir {
+        cmd.arg(format!("--platform={}", dir.display()));
     }
 
     for inc in include_dirs {

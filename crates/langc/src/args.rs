@@ -2,7 +2,7 @@ use codegen_core::{EmitMode, FeatureSet, Target};
 use hosted::{args::RawArgs, cstr, io};
 use semantics::typecheck::ChecksMode;
 
-pub const HELP: &[u8] = b"langc (tyu_lang) v0.1.0\n\nUSAGE:\n  langc [options] <file.mod|file.def>\n\nOPTIONS:\n  --help, -h                  Print help\n  --emit=ast                  Parse and dump AST (inspection)\n  --emit=ir                   Typecheck and dump IR (inspection)\n  --emit=tc                   Stack-trace typecheck dump (inspection)\n  --emit=asm                  Emit assembly text (inspection only, not assemblable standalone)\n  --emit=obj                  Emit relocatable object file (production output)\n  --lib                       Compile as a library (no main required, --emit=obj only)\n  -g                          Enable trap-with-location stubs\n  -I <path>                   Add include path\n  --checks=off|contracts|all  Checks insertion mode\n  --allow-raw-casts           Enable raw pointer casts\n  --features=<csv>            Image features to enable (default: all) [concurrency, module-loading]\n  --no-default-features       Start from empty feature set\n  --sysroot=<path>            Sysroot root directory\n  --out-dir=<path>            Output directory (--emit=obj)\n  --target=<triple>           Target triple, required for --emit=obj\n                              Supported: x86_64-unknown-linux-gnu\n                                         x86_64-unknown-none\n                                         armv7m-unknown-none\n                                         riscv32-unknown-none\n\n";
+pub const HELP: &[u8] = b"langc (tyu_lang) v0.1.0\n\nUSAGE:\n  langc [options] <file.mod|file.def>\n\nOPTIONS:\n  --help, -h                  Print help\n  --emit=ast                  Parse and dump AST (inspection)\n  --emit=ir                   Typecheck and dump IR (inspection)\n  --emit=tc                   Stack-trace typecheck dump (inspection)\n  --emit=asm                  Emit assembly text (inspection only, not assemblable standalone)\n  --emit=obj                  Emit relocatable object file (production output)\n  --lib                       Compile as a library (no main required, --emit=obj only)\n  -g                          Enable trap-with-location stubs\n  -I <path>                   Add include path\n  --checks=off|contracts|all  Checks insertion mode\n  --allow-raw-casts           Enable raw pointer casts\n  --features=<csv>            Image features to enable (default: all) [concurrency, module-loading]\n  --no-default-features       Start from empty feature set\n  --sysroot=<path>            Sysroot root directory\n  --out-dir=<path>            Output directory (--emit=obj)\n  --platform=<dir>            Platform pack directory; the compiled descriptor\n                              at <dir>/platform.desc sources MMIO window facts\n  --target=<triple>           Target triple, required for --emit=obj\n                              Supported: x86_64-unknown-linux-gnu\n                                         x86_64-unknown-none\n                                         armv7m-unknown-none\n                                         riscv32-unknown-none\n\n";
 
 /// Validated compiler configuration.
 pub struct Config<'a> {
@@ -19,6 +19,9 @@ pub struct Config<'a> {
     pub sysroot: Option<&'a [u8]>,
     pub out_dir: Option<&'a [u8]>,
     pub features: FeatureSet,
+    /// Platform pack directory (advisory in P3; arms in P4). langc reads the
+    /// compiled descriptor `<dir>/platform.desc` to source MMIO window facts.
+    pub platform_dir: Option<&'a [u8]>,
 }
 
 pub enum ParseResult<'a> {
@@ -71,6 +74,7 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]], emit_diagnostics: bool) -> (Parse
     let mut sysroot: Option<&[u8]> = None;
     let mut out_dir: Option<&[u8]> = None;
     let mut target: Option<Target> = None;
+    let mut platform_dir: Option<&[u8]> = None;
     let mut features = FeatureSet::all();
     let mut no_default_features = false;
 
@@ -179,6 +183,11 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]], emit_diagnostics: bool) -> (Parse
         }
         if a.starts_with(b"--out-dir=") {
             out_dir = Some(&a[b"--out-dir=".len()..]);
+            i += 1;
+            continue;
+        }
+        if a.starts_with(b"--platform=") {
+            platform_dir = Some(&a[b"--platform=".len()..]);
             i += 1;
             continue;
         }
@@ -295,6 +304,7 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]], emit_diagnostics: bool) -> (Parse
             sysroot,
             out_dir,
             features,
+            platform_dir,
         }),
         false,
     )
@@ -469,6 +479,20 @@ mod tests {
             b"x.mod",
         ]);
         assert_eq!(cfg.out_dir, Some(&b"/tmp"[..]));
+    }
+
+    #[test]
+    fn platform_dir() {
+        let cfg = ok(&[
+            b"langc",
+            b"--platform=platforms/rp2350",
+            b"--emit=obj",
+            b"--target=x86_64-unknown-none",
+            b"x.mod",
+        ]);
+        assert_eq!(cfg.platform_dir, Some(&b"platforms/rp2350"[..]));
+        let cfg2 = ok(&[b"langc", b"--emit=asm", b"x.mod"]);
+        assert_eq!(cfg2.platform_dir, None);
     }
 
     #[test]

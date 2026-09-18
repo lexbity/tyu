@@ -1,5 +1,7 @@
 [platform]
 name = "x86_64-unknown-none"
+schema = 2
+family = "q35"
 compiler-interface = 1
 description = "x86_64 bare-metal runtime"
 
@@ -48,3 +50,47 @@ evidence = "evidence/run_qemu_x86.md"
 supported = true
 target = "crates/tyu/tests/escalate.rs"
 evidence = "evidence/debug_escalate.md"
+
+# ---- descriptor v2 ---------------------------------------------------------
+
+[[platform.windows]]
+id = 0
+name = "mmio"                  # the in-guest-RAM `__mmio_mem` array (D-7)
+kind = "emulated"              # RAM the runtime owns; base is a link-time symbol
+size = 0x10000
+
+# Devices for the execution-test fixtures (P4 migration, D-14).
+[[platform.devices]]
+map = "Scratch"
+instance = "scratch"
+window = 0
+base_offset = 0x0
+registers = [
+  { offset = 0x00, name = "A", width = 32, access = "rw" },
+  { offset = 0x04, name = "B", width = 32, access = "rw" },
+]
+
+[[platform.devices]]
+map = "Scratch"
+instance = "ptrscratch"
+window = 0
+base_offset = 0x100
+registers = [
+  { offset = 0x00, name = "FIRST", width = 64, access = "rw" },
+  { offset = 0x08, name = "SECOND", width = 64, access = "rw" },
+]
+
+[[platform.devices]]
+map = "Scratch"
+instance = "widthscratch"
+window = 0
+base_offset = 0x0
+registers = [
+  { offset = 0x00, name = "B", width = 8, access = "rw" },
+  { offset = 0x02, name = "H", width = 16, access = "rw" },
+  { offset = 0x04, name = "W", width = 32, access = "rw" },
+  { offset = 0x08, name = "D", width = 64, access = "rw" },
+]
+
+[platform.metal.trust]
+words = []

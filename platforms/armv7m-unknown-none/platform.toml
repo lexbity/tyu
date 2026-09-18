@@ -1,5 +1,7 @@
 [platform]
 name = "armv7m-unknown-none"
+schema = 2
+family = "lm3s6965evb"
 compiler-interface = 1
 description = "ARMv7-M bare-metal runtime"
 
@@ -56,3 +58,83 @@ rung = "untested"
 supported = true
 target = "crates/tyu/tests/escalate.rs"
 evidence = "evidence/debug_escalate.md"
+
+# ---- descriptor v2 ---------------------------------------------------------
+
+[[platform.windows]]
+id = 0
+name = "scratch"               # lm3s6965evb SRAM; QEMU MMIO scratch (D-14)
+kind = "bus"
+base = 0x20000000
+size = 0x10000
+
+[[platform.windows]]
+id = 1
+name = "systick"               # Cortex-M SysTick SCS region (isr fixtures)
+kind = "bus"
+base = 0xE000E010
+size = 0x1000
+
+# Devices for the execution-test fixtures (P4 migration, D-14).
+[[platform.devices]]
+map = "Scratch"
+instance = "scratch"
+window = 0
+base_offset = 0x0
+registers = [
+  { offset = 0x00, name = "A", width = 32, access = "rw" },
+  { offset = 0x04, name = "B", width = 32, access = "rw" },
+]
+
+[[platform.devices]]
+map = "Scratch"
+instance = "ptrscratch"
+window = 0
+base_offset = 0x7100
+registers = [
+  { offset = 0x00, name = "FIRST", width = 64, access = "rw" },
+  { offset = 0x08, name = "SECOND", width = 64, access = "rw" },
+]
+
+[[platform.devices]]
+map = "Scratch"
+instance = "widthscratch"
+window = 0
+base_offset = 0x7000
+registers = [
+  { offset = 0x00, name = "B", width = 8, access = "rw" },
+  { offset = 0x04, name = "W", width = 32, access = "rw" },
+  { offset = 0x08, name = "D", width = 64, access = "rw" },
+]
+
+[[platform.devices]]
+map = "SysTick"
+instance = "systick"
+window = 1
+base_offset = 0x0
+registers = [
+  { offset = 0x00, name = "CTRL", width = 32, access = "rw" },
+  { offset = 0x04, name = "LOAD", width = 32, access = "rw" },
+  { offset = 0x08, name = "VAL", width = 32, access = "rw" },
+]
+
+[[platform.devices]]
+map = "Scratch"
+instance = "datascratch"
+window = 0
+base_offset = 0x7000
+registers = [
+  { offset = 0x00, name = "DATA", width = 64, access = "rw" },
+]
+
+[[platform.devices]]
+map = "GPIO"
+instance = "gpio"
+window = 0
+base_offset = 0x0
+registers = [
+  { offset = 0x00, name = "DATA", width = 32, access = "rw" },
+]
+
+[platform.metal.trust]
+words = []

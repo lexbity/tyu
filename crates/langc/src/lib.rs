@@ -13,8 +13,9 @@ pub mod driver;
 pub mod iface;
 pub mod util;
 
-use codegen_core::{EmitMode, Target};
-use frontend::parse::Parser;
+use codegen_core::compiled_desc::{decode_compiled_desc, validate_compiled_desc, CompiledDescriptor};
+use codegen_core::{EmitMode, MmioWindowSpec, Target};
+use frontend::parse::{DeclKind, ModuleAst, Parser};
 use hosted::{diag, fs};
 
 use crate::iface::{check_program, iface_error_message};
@@ -25,6 +26,23 @@ pub unsafe fn run(argc: isize, argv: *const *const hosted::c::c_char) -> i32 {
         args::ParseResult::Ok(c) => c,
         args::ParseResult::Help => return 0,
         args::ParseResult::Error(code) => return code,
+    };
+
+    let target = cfg.target.unwrap_or(Target::X86_64UnknownLinuxGnu);
+
+    // Effective MMIO windows: the compiled platform descriptor when
+    // `--platform` is present (P3/P4, D-1), otherwise the target's static
+    // defaults. Loaded once, before any emit that needs them.
+    let mut compiled = CompiledDescriptor::default();
+    let descriptor: Option<&CompiledDescriptor> =
+        match load_descriptor(cfg.platform_dir, &mut compiled) {
+            Ok(Some(())) => Some(&compiled),
+            Ok(None) => None,
+            Err(code) => return code,
+        };
+    let mmio_windows: &[MmioWindowSpec] = match descriptor {
+        Some(cd) => cd.windows(),
+        None => target.spec().mmio_windows,
     };
 
     let buf = match fs::read_file(cfg.input) {
@@ -44,7 +62,17 @@ pub unsafe fn run(argc: isize, argv: *const *const hosted::c::c_char) -> i32 {
         }
     };
 
-    let target = cfg.target.unwrap_or(Target::X86_64UnknownLinuxGnu);
+    // D-1 / E3640: a module containing any MMIO construct (register-map
+    // declaration or instance) requires `--platform`. Raw bases are likewise
+    // rejected under a descriptor (E3641) and symbolic bases require one
+    // (E3640) — both enforced in the typechecker; this gate fails fast.
+    if descriptor.is_none() && module_has_mmio_construct(&module) {
+        let _ = diag::error_simple(
+            3640,
+            b"module uses MMIO but was compiled without --platform=<dir>",
+        );
+        return 2;
+    }
 
     let mut base_dir_buf = [0u8; 512];
     let base_dir = split_dir(cfg.input, &mut base_dir_buf);
@@ -91,6 +119,7 @@ pub unsafe fn run(argc: isize, argv: *const *const hosted::c::c_char) -> i32 {
             cfg.checks,
             cfg.allow_raw_casts,
             target,
+            descriptor,
             &mut out,
         ),
         EmitMode::StackCheck => driver::emit_tc_driver(
@@ -100,6 +129,7 @@ pub unsafe fn run(argc: isize, argv: *const *const hosted::c::c_char) -> i32 {
             cfg.checks,
             cfg.allow_raw_casts,
             target,
+            descriptor,
             &mut out,
         ),
         EmitMode::Asm => driver::emit_asm_driver(
@@ -112,6 +142,8 @@ pub unsafe fn run(argc: isize, argv: *const *const hosted::c::c_char) -> i32 {
             target,
             cfg.input,
             cfg.features,
+            descriptor,
+            mmio_windows,
             &mut out,
         ),
         EmitMode::Obj => {
@@ -128,7 +160,62 @@ pub unsafe fn run(argc: isize, argv: *const *const hosted::c::c_char) -> i32 {
                 cfg.is_lib,
                 cfg.input,
                 cfg.features,
+                descriptor,
+                mmio_windows,
             )
         }
     }
+}
+
+/// True when the module declares any MMIO construct (register-map or a
+/// register-map instance), which requires a platform descriptor (D-1).
+fn module_has_mmio_construct(module: &ModuleAst) -> bool {
+    if !module.instances.is_empty() {
+        return true;
+    }
+    module
+        .decls
+        .iter()
+        .any(|d| d.kind == DeclKind::RegisterMap)
+}
+
+/// Load the compiled platform descriptor from `<dir>/platform.desc`.
+///
+/// `Ok(None)` when no `--platform` was given. Any decode/validation failure is
+/// a loud E3647, never a silent fallback.
+fn load_descriptor(
+    platform_dir: Option<&[u8]>,
+    out: &mut CompiledDescriptor,
+) -> Result<Option<()>, i32> {
+    let Some(dir) = platform_dir else {
+        return Ok(None);
+    };
+    let mut path_buf = [0u8; 512];
+    let Some(desc_path) = join_path(&mut path_buf, dir, b"platform.desc", b"") else {
+        let _ = diag::error_simple(3647, b"compiled descriptor path too long");
+        return Err(2);
+    };
+    let bytes = match fs::read_file(desc_path) {
+        Ok(b) => b,
+        Err(_) => {
+            let _ = diag::error_simple(
+                3647,
+                b"cannot read <dir>/platform.desc (run `tyu` to generate the compiled descriptor)",
+            );
+            return Err(2);
+        }
+    };
+    let cd = match decode_compiled_desc(bytes.as_slice()) {
+        Ok(cd) => cd,
+        Err(e) => {
+            let _ = diag::error_simple(3647, e.as_str().as_bytes());
+            return Err(2);
+        }
+    };
+    if let Err(e) = validate_compiled_desc(&cd) {
+        let _ = diag::error_simple(3647, e.as_str().as_bytes());
+        return Err(2);
+    }
+    *out = cd;
+    Ok(Some(()))
 }

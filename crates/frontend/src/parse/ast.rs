@@ -290,7 +290,13 @@ pub struct SubtypeAst {
 pub struct RegMapInstanceAst {
     pub name: Span,
     pub map: Span,
+    /// The raw integer base (`MAP @ 0x…`). Retained for the descriptor-less
+    /// legacy path (rejected under a descriptor, E3641).
     pub base_addr: Span,
+    /// The `board.<instance>` base operand span (`MAP @ board.x`), when the
+    /// instantiation uses the symbolic form (P4). Mutually exclusive with
+    /// `base_addr`.
+    pub board_instance: Option<Span>,
 }
 
 pub struct ImportAst {

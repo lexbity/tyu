@@ -101,7 +101,13 @@ impl<'a> X86_64HostedBackend<'a> {
                     self.out.write(b"__task_cs_mem rb 1048576\n");
                 }
                 if self.uses_mmio {
-                    self.out.write(b"__mmio_mem rb 65536\n");
+                    // Same descriptor-sourced size as the bounds check
+                    // (P3/FR-21): a hardcoded reservation smaller than the
+                    // checked bound would admit MMIO past the array.
+                    let size = crate::mmio::emulated_window_size(self)?;
+                    self.out.write(b"__mmio_mem rb ");
+                    write_u32(self.out, size);
+                    self.out.write(b"\n");
                 }
                 if self.uses_resources {
                     let module_name = slice_span(self.src, self.module.name);

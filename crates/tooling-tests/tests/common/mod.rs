@@ -34,6 +34,43 @@ pub fn exe(name: &str) -> PathBuf {
     workspace_root().join("target").join("debug").join(name)
 }
 
+/// Product binaries some helpers spawn (`langc`, `lmod-pack`, …), built once
+/// on first use. `cargo test --workspace` does not guarantee another suite
+/// built them first, so spawning without this gate makes pass/fail depend on
+/// suite execution order (the `lmod-pack` NotFound race).
+static BINS_ONCE: std::sync::Once = std::sync::Once::new();
+pub fn ensure_bins() {
+    BINS_ONCE.call_once(|| {
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+        let status = Command::new(cargo)
+            .current_dir(workspace_root())
+            .args([
+                "build",
+                "-q",
+                "-p",
+                "langc",
+                "-p",
+                "lmod-pack",
+                "-p",
+                "lmod-sign",
+                "-p",
+                "lmod-encrypt",
+            ])
+            .status()
+            .expect("cargo build for helper binaries");
+        assert!(status.success(), "building helper binaries failed");
+    });
+}
+
+/// The `--platform=<dir>` argument pointing at the hosted runtime descriptor
+/// (P4). Tooling-test register maps bind `board.<instance>` against it.
+pub fn platform_arg() -> String {
+    format!(
+        "--platform={}",
+        workspace_root().join("runtime/linux-x86_64-hosted").display()
+    )
+}
+
 pub fn fresh_dir(label: &str) -> PathBuf {
     let dir = std::env::temp_dir().join("tyu_lang_tests").join(format!(
         "{}_{}",
@@ -78,6 +115,7 @@ pub fn static_exit_code(source: &str, dir: &PathBuf) -> i32 {
 
 /// Compile a .mod to .o and pack to .lmod.  Returns the .lmod path.
 pub fn compile_and_pack(source: &str, out_dir: &PathBuf) -> PathBuf {
+    ensure_bins();
     std::fs::write(out_dir.join("M.mod"), source).unwrap();
     let status = Command::new(exe("langc"))
         .current_dir(out_dir)

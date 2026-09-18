@@ -40,6 +40,14 @@ impl TypeAtom {
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes[..self.len as usize]
     }
+
+    /// Compiler-computed type class tag (decision D-13). The single source of
+    /// truth for class computation is `ir::TypeClass::class_of`; this method
+    /// is the semantics-side accessor so irgen and the typechecker never
+    /// duplicate the byte-matching logic.
+    pub fn class(&self) -> ir::TypeClass {
+        ir::TypeClass::class_of(self.as_bytes())
+    }
 }
 
 const fn builtin_type_atom(bytes: &[u8]) -> TypeAtom {

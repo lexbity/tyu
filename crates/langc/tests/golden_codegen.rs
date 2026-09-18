@@ -76,6 +76,8 @@ fn compile_fixture(fixture: &str, target: Target) -> String {
         false,
         input_bytes,
         FeatureSet::all(),
+        None,
+        target.spec().mmio_windows,
     );
 
     let asm_path = out_dir.join("Main.asm");

@@ -30,6 +30,18 @@ fn repo_sysroot() -> std::path::PathBuf {
         .join("sysroot")
 }
 
+fn platform_arg() -> String {
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    format!(
+        "--platform={}",
+        workspace.join("runtime").display()
+    )
+}
+
 fn fresh_dir(label: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join("tyu_float_tests").join(format!(
         "{}_{}",
@@ -60,6 +72,7 @@ fn compile_ok(src: &[u8], dir: &std::path::Path) {
     let out = Command::new(langc_exe())
         .current_dir(dir)
         .arg("--emit=ir")
+        .arg(platform_arg())
         .arg(format!("--sysroot={}", repo_sysroot().to_string_lossy()))
         .arg(mod_path.to_str().unwrap())
         .output()
@@ -135,7 +148,7 @@ fn place_projection_via_apostrophe() {
 register-map GPIO\n\
   0x00 DATA[4] u32 rw\n\
 end;\n\
-const gpio = GPIO @ 0x0;\n\
+const gpio = GPIO @ board.gpio;\n\
 : main ( -- i64 )\n\
   gpio.DATA.2 @u32 drop\n\
   0\n\

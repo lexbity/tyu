@@ -6,7 +6,7 @@ register-map Scratch
   0x04 B u32 rw volatile
 end;
 
-const scratch = Scratch @ 0x0;
+const scratch = Scratch @ board.scratch;
 
 : check ( bool -- )
   not [ 70 testio.write-byte ] [ ] if ;

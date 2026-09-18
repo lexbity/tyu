@@ -13,6 +13,7 @@ codegen-core = { path = "../codegen-core" }
 diag-core = { path = "../diag-core", features = ["std"] }
 frontend = { path = "../frontend" }
 harness-core = { path = "../harness-core" }
+ir = { path = "../ir" }
 rsp-client = { path = "../rsp-client" }
 hex = "0.4"
 libc = "0.2"

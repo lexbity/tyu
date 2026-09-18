@@ -13,7 +13,8 @@ use crate::region;
 use crate::task;
 use crate::util::{
     count_scoped_slices, find_resource_decl, fnv1a_u64, is_exported, line_col, locals_bytes_ir,
-    mask_for_bits, max_local_slot_ir, prim_ty, prim_ty_bits_signed, slice_span, write_res_label,
+    mask_for_bits, max_local_slot_ir, prim_ty, prim_ty_bits_signed, slice_span, type_class,
+    write_res_label,
 };
 use crate::X86_64HostedBackend;
 
@@ -131,15 +132,16 @@ impl<'a> X86_64HostedBackend<'a> {
             }
 
             lir::OpKind::AddrOf {
-                const_addr: Some(addr),
+                base: lir::AddrOfBase::Mmio { window, offset },
                 ..
             } => {
                 self.uses_mmio = true;
+                let addr = self.mmio_window_addr(window, offset)?;
                 emit_push_u64(self.out, addr);
                 Ok(true)
             }
             lir::OpKind::AddrOf {
-                const_addr: None,
+                base: lir::AddrOfBase::Runtime,
                 place,
                 mutable: _,
             } => {
@@ -159,8 +161,9 @@ impl<'a> X86_64HostedBackend<'a> {
                 emit_push_rax(self.out);
                 Ok(true)
             }
-            lir::OpKind::MmioPlace { addr, .. } => {
+            lir::OpKind::MmioPlace { window, offset, .. } => {
                 self.uses_mmio = true;
+                let addr = self.mmio_window_addr(window, offset)?;
                 emit_push_u64(self.out, addr);
                 Ok(true)
             }
@@ -187,38 +190,41 @@ impl<'a> X86_64HostedBackend<'a> {
             }
 
             lir::OpKind::ScopedEnter { ty, len } => {
-                let ty_name = w
-                    .types
-                    .get(ty.0 as usize)
-                    .map(|a| a.as_bytes())
-                    .unwrap_or(b"");
-                if ty_name.starts_with(b"Slice(") || ty_name.starts_with(b"SliceMut(") {
-                    if self.scoped_next >= self.scoped_slots {
-                        return Err(CodegenError::ScopedAllocationOverflow);
+                match type_class(w, ty) {
+                    lir::TypeClass::Slice => {
+                        if self.scoped_next >= self.scoped_slots {
+                            return Err(CodegenError::ScopedAllocationOverflow);
+                        }
+                        let slot = self.scoped_next;
+                        self.scoped_next = self.scoped_next.wrapping_add(1);
+                        let offset = self.scoped_base + (slot * 16);
+                        self.out.write(b"  mov rax, [r15-8]\n");
+                        self.out.write(b"  mov [rsp+");
+                        write_u32(self.out, offset);
+                        self.out.write(b"], rax\n");
+                        self.out.write(b"  mov qword [rsp+");
+                        write_u32(self.out, offset + 8);
+                        self.out.write(b"], ");
+                        write_u64_hex(self.out, len as u64);
+                        self.out.write(b"\n");
+                        self.out.write(b"  lea rax, [rsp+");
+                        write_u32(self.out, offset);
+                        self.out.write(b"]\n");
+                        emit_push_rax(self.out);
+                        return Ok(true);
                     }
-                    let slot = self.scoped_next;
-                    self.scoped_next = self.scoped_next.wrapping_add(1);
-                    let offset = self.scoped_base + (slot * 16);
-                    self.out.write(b"  mov rax, [r15-8]\n");
-                    self.out.write(b"  mov [rsp+");
-                    write_u32(self.out, offset);
-                    self.out.write(b"], rax\n");
-                    self.out.write(b"  mov qword [rsp+");
-                    write_u32(self.out, offset + 8);
-                    self.out.write(b"], ");
-                    write_u64_hex(self.out, len as u64);
-                    self.out.write(b"\n");
-                    self.out.write(b"  lea rax, [rsp+");
-                    write_u32(self.out, offset);
-                    self.out.write(b"]\n");
-                    emit_push_rax(self.out);
-                    return Ok(true);
+                    lir::TypeClass::RegionRef | lir::TypeClass::RegionRefMut => {
+                        emit_dup(self.out);
+                        return Ok(true);
+                    }
+                    // D-13: an unmatched class is a loud error, never a
+                    // silent no-op (the G-5 bug class this slice retires).
+                    _ => {
+                        return Err(CodegenError::UnsupportedOp {
+                            op_name: b"ScopedEnter",
+                        });
+                    }
                 }
-                if ty_name == b"RegionRef" || ty_name == b"RegionRefMut" {
-                    emit_dup(self.out);
-                    return Ok(true);
-                }
-                Ok(true)
             }
             lir::OpKind::TaskSpawn { name, .. } => {
                 self.uses_tasks = true;
@@ -485,7 +491,7 @@ impl<'a> X86_64HostedBackend<'a> {
                 let (bits, signed) = prim_ty_bits_signed(w, ty)
                     .ok_or(CodegenError::UnknownTypeProperties { type_id: ty })?;
                 let width = core::cmp::max(1u32, (bits as u32) / 8);
-                mmio::emit_mmio_load(self, width, signed, op.span);
+                mmio::emit_mmio_load(self, width, signed, op.span)?;
                 Ok(())
             }
             lir::OpKind::MmioVolStore { ty, access, .. } => {
@@ -493,7 +499,7 @@ impl<'a> X86_64HostedBackend<'a> {
                 let (bits, _signed) = prim_ty_bits_signed(w, ty)
                     .ok_or(CodegenError::UnknownTypeProperties { type_id: ty })?;
                 let width = core::cmp::max(1u32, (bits as u32) / 8);
-                mmio::emit_mmio_store(self, width, access, op.span);
+                mmio::emit_mmio_store(self, width, access, op.span)?;
                 Ok(())
             }
             lir::OpKind::MmioVolLoadField {
@@ -517,7 +523,7 @@ impl<'a> X86_64HostedBackend<'a> {
                     mask,
                     shift,
                     op.span,
-                );
+                )?;
                 Ok(())
             }
             lir::OpKind::MmioVolStoreField {
@@ -530,7 +536,7 @@ impl<'a> X86_64HostedBackend<'a> {
                 let (reg_bits, _reg_signed) = prim_ty_bits_signed(w, reg_ty)
                     .ok_or(CodegenError::UnknownTypeProperties { type_id: reg_ty })?;
                 let reg_width = core::cmp::max(1u32, (reg_bits as u32) / 8);
-                mmio::emit_mmio_store_field(self, reg_width, mask, shift, op.span);
+                mmio::emit_mmio_store_field(self, reg_width, mask, shift, op.span)?;
                 Ok(())
             }
 

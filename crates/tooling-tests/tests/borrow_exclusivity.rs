@@ -15,6 +15,18 @@ fn langc_exe() -> std::path::PathBuf {
     workspace.join("target").join("debug").join("langc")
 }
 
+fn platform_arg() -> String {
+    let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap();
+    format!(
+        "--platform={}",
+        workspace.join("runtime").display()
+    )
+}
+
 fn repo_sysroot() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -40,6 +52,7 @@ fn compile_args(src: &[u8], dir: &std::path::Path, extra_args: &[&str]) -> Resul
     let mut cmd = Command::new(langc_exe());
     cmd.current_dir(dir)
         .arg("--emit=ir")
+        .arg(platform_arg())
         .arg(format!("--sysroot={}", repo_sysroot().to_string_lossy()));
     for a in extra_args {
         cmd.arg(a);
@@ -63,6 +76,7 @@ fn compile_expect_err_args(src: &[u8], dir: &std::path::Path, extra_args: &[&str
     let mut cmd = Command::new(langc_exe());
     cmd.current_dir(dir)
         .arg("--emit=ir")
+        .arg(platform_arg())
         .arg(format!("--sysroot={}", repo_sysroot().to_string_lossy()));
     for a in extra_args {
         cmd.arg(a);
@@ -592,7 +606,7 @@ import platform/linux { };\n\
 register-map GPIO\n\
   0x00 DATA[8] u32 rw\n\
 end;\n\
-const gpio = GPIO @ 0x0;\n\
+const gpio = GPIO @ board.gpio;\n\
 : main ( -- i64 )\n\
   &!gpio.DATA.0 &!gpio.DATA.1 &!gpio.DATA.2 &!gpio.DATA.3\n\
   &!gpio.DATA.4 &!gpio.DATA.5 &!gpio.DATA.6 &!gpio.DATA.7\n\
@@ -613,7 +627,7 @@ resource counter : u32 = 0;\n\
 register-map GPIO\n\
   0x00 DATA u32 rw\n\
 end;\n\
-const gpio = GPIO @ 0x0;\n\
+const gpio = GPIO @ board.gpio;\n\
 : main ( -- i64 )\n\
   counter lock [\n\
     &!counter &!gpio.DATA drop drop\n\

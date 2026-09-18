@@ -1,0 +1,14 @@
+platform rp2350: ok
+descriptor rp2350 schema=2 family=rp2350
+platform-hash 0xa2f5a534825f3fca
+windows 2
+  [0] apb kind=bus base=0x40000000 size=0x10000
+  [1] mmio kind=bus base=0x20000000 size=0x1000
+devices 1
+  GPIO gpio0 window=0 base_offset=0xd000 extent=0x21
+    ctrl offset=0x0000 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    intr_stat offset=0x0004 width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    fifo offset=0x0020 width=8 access=rw write=plain read=effectful atomic=8 mask=0xff reset=0x0 barrier=none
+allocator region=SRAM offset=0x8400 length=0x77000 impl=glue/region policy=pool-firstfit
+scoped metadata_slots_max=64
+metal.trust (none)

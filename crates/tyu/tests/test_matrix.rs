@@ -40,6 +40,7 @@ fn test_x86_64_none_arithmetic() {
         .args([
             "test",
             "--target=x86_64-unknown-none",
+            "--platform=x86_64-unknown-none",
             &format!("--manifest={}", fixture_manifest().display()),
         ])
         .output()

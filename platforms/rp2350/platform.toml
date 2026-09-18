@@ -1,5 +1,7 @@
 [platform]
 name = "rp2350"
+schema = 2
+family = "rp2350"
 compiler-interface = 1
 description = "Raspberry Pi Pico 2 / RP2350 custom platform"
 
@@ -58,3 +60,47 @@ evidence = "docs/hil/rp2350.md"
 [secure_boot]
 supported = false
 encryption_implies_secure_boot = true
+
+# ---- descriptor v2 ---------------------------------------------------------
+
+[platform.allocator]
+region = "SRAM"                # memory region allocatable payloads live in
+offset = 0x8400                # byte offset into region (carve-out below DS/RS)
+length = 0x77000               # allocatable span
+impl = "glue/region"           # module dir providing platform.region.* words
+policy = "pool-firstfit"       # documentation for reviewers; opaque to toolchain
+
+[platform.scoped]
+metadata_slots_max = 64        # diagnostic bound; per-word body count must be <=
+
+[[platform.windows]]
+id = 0
+name = "apb"
+kind = "bus"
+base = 0x40000000
+size = 0x10000
+
+[[platform.windows]]
+id = 1
+name = "mmio"                  # QEMU/HIL scratch
+kind = "bus"
+base = 0x20000000
+size = 0x1000
+
+# Register maps: the descriptor is the authoritative home for maps a board
+# exposes. Source-side `register-map` declarations must MATCH these rows
+# (name/offset/width/access); the descriptor adds what source cannot say.
+# Full datasheet-verified tables land in P8; this minimal table pins the shape.
+[[platform.devices]]
+map = "GPIO"
+instance = "gpio0"
+window = 0
+base_offset = 0xD000
+registers = [
+  { offset = 0x000, name = "ctrl", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x004, name = "intr_stat", width = 32, access = "rw", write_kind = "w1c", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x020, name = "fifo", width = 8, access = "rw", write_kind = "plain", read_kind = "effectful", atomic_max = 8 },
+]
+
+[platform.metal.trust]         # empty by default; lists asm-backed words
+words = []                     # e.g. ["platform.boot.enter_xip"]

@@ -8,5 +8,6 @@ description = "Semantic analysis, typechecking, and effect checking for Tyu."
 doctest = false
 
 [dependencies]
+codegen-core = { path = "../codegen-core" }
 frontend = { path = "../frontend" }
 ir = { path = "../ir" }

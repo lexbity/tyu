@@ -29,6 +29,7 @@ fn arithmetic_and_stack_pass() {
         .args([
             "test",
             "--target=x86_64-unknown-none",
+            "--platform=x86_64-unknown-none",
             &format!("--manifest={}", common::fixtures_manifest().display()),
         ])
         .output()
@@ -666,6 +667,7 @@ fn langc_compile_g(
         format!("--sysroot={}", common::sysroot_dir().display()),
         format!("--out-dir={}", out_dir.display()),
         format!("-I={}", out_dir.display()), // for .def resolution
+        format!("--platform={}", common::platform_desc_dir(target).display()),
     ];
     if is_lib {
         args.push("--lib".into());
