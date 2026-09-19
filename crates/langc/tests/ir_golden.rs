@@ -48,7 +48,7 @@ fn temp_dir(label: &str) -> PathBuf {
 
 /// The same symbolic MMIO module `platform_resolution.rs` pins its negatives
 /// with; compiled against the hosted runtime descriptor it exercises the
-/// window-use table and `window=` place annotations in the emit.
+/// aperture-use table and `aperture=` place annotations in the emit.
 const MMIO_MOD: &str = "module Main;\n\
 register-map GPIO\n\
   0x00 DATA u32 rw\n\

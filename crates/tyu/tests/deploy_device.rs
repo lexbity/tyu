@@ -13,6 +13,7 @@ use tyu::test_helpers::*;
 
 use hosted::loader::HostedLoaderPlatform;
 use loader_core::load::{load_module, LoadedSet, E_ENC_NO_KEY};
+use loader_core::apertures::ApertureRegistry;
 use loader_core::platform::TrustLevel;
 use loader_core::symbols::SymMap;
 
@@ -70,7 +71,7 @@ fn load_with_kek(signed_path: &PathBuf, kek: &[u8; 32]) -> Result<(), u32> {
     register_generated_runtime_symbols(signed_path, &mut map, stub, ds_high)?;
 
     let mut set = LoadedSet::<64>::new();
-    load_module(&container, &mut plat, &mut map, &mut set)?;
+    load_module(&container, &mut plat, &mut map, &mut set, &mut ApertureRegistry::new())?;
     Ok(())
 }
 

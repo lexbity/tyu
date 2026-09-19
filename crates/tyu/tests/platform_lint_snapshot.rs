@@ -36,7 +36,13 @@ fn rp2350_lint_output_matches_golden() {
         .expect("rp2350 carries a descriptor");
     text.push_str(&format_descriptor_report(&desc));
 
-    let golden = include_str!("snapshots/platform_lint_rp2350.txt");
+    let golden_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/snapshots/platform_lint_rp2350.txt");
+    if std::env::var_os("TYU_BLESS_LINT_SNAPSHOT").is_some() {
+        std::fs::write(&golden_path, &text).unwrap();
+        return;
+    }
+    let golden = std::fs::read_to_string(&golden_path).unwrap();
     assert_eq!(
         text, golden,
         "rp2350 platform lint output drifted from the snapshot golden"

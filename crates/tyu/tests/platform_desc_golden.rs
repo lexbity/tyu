@@ -38,7 +38,7 @@ name = "rp2350"
 schema = 2
 family = "rp2350"
 
-[[platform.windows]]
+[[platform.apertures]]
 id = 0
 name = "apb"
 kind = "bus"
@@ -46,7 +46,7 @@ bind = "arm-thumb-ldr-literal"
 base = 0x40000000
 size = 0x10000
 
-[[platform.windows]]
+[[platform.apertures]]
 id = 1
 name = "mmio"
 kind = "bus"
@@ -57,7 +57,7 @@ size = 0x1000
 [[platform.devices]]
 map = "GPIO"
 instance = "gpio0"
-window = 0
+aperture = 0
 base_offset = 0xD000
 registers = [
   { offset = 0x000, name = "ctrl",     width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
@@ -86,7 +86,7 @@ family = "rp2350"            # board family hook (no v1 semantics)
 schema = 2
 name = "rp2350"
 
-[[platform.windows]]
+[[platform.apertures]]
 id = 1
 name = "mmio"
 size = 0x1000
@@ -94,7 +94,7 @@ base = 0x20000000
 kind = "bus"
 bind = "arm-thumb-ldr-literal"
 
-[[platform.windows]]
+[[platform.apertures]]
 id = 0
 name = "apb"
 kind = "bus"
@@ -104,7 +104,7 @@ size = 0x10000
 
 [[platform.devices]]
 map = "GPIO"
-window = 0
+aperture = 0
 base_offset = 0xD000
 instance = "gpio0"
 registers = [
@@ -135,7 +135,7 @@ name = "rp2350"
 schema = 2
 family = "rp2350"
 
-[[platform.windows]]
+[[platform.apertures]]
 id = 0
 name = "apb"
 kind = "bus"
@@ -143,7 +143,7 @@ bind = "arm-thumb-ldr-literal"
 base = 0x40000000
 size = 0x10000
 
-[[platform.windows]]
+[[platform.apertures]]
 id = 1
 name = "mmio"
 kind = "bus"
@@ -154,7 +154,7 @@ size = 0x1000
 [[platform.devices]]
 map = "GPIO"
 instance = "gpio0"
-window = 0
+aperture = 0
 base_offset = 0xD000
 registers = [
   { offset = 0x000, name = "ctrl",     width = 32, access = "rw" },
@@ -194,7 +194,7 @@ fn hash_invariant_under_formatting() {
     // Golden pin for the P1 rp2350 descriptor.
     assert_eq!(
         ha,
-        0x6098_dc89_8c6e_f1fa,
+        0xd3c7_52fc_f2f2_3206,
         "rp2350 platform_hash golden must be stable"
     );
 }
@@ -215,8 +215,8 @@ fn hash_changes_on_semantic_edit() {
         "changing a register write_kind must change platform_hash"
     );
     // Pin both hex values so a semantic drift is caught on either side.
-    assert_eq!(h_base, 0x6098_dc89_8c6e_f1fa);
-    assert_eq!(h_flipped, 0x6afd_da16_2ff9_0f47);
+    assert_eq!(h_base, 0xd3c7_52fc_f2f2_3206);
+    assert_eq!(h_flipped, 0x42ab_f89e_56d0_e983);
 }
 
 #[test]
@@ -261,39 +261,39 @@ fn check_fixture(name: &str, expected_code: u16, needle: &str) {
 #[test]
 fn validate_rejects_every_rule() {
     check_fixture(
-        "bad_window_id_dup.toml",
+        "bad_aperture_id_dup.toml",
         tyu::platform::desc::E_DESC_INVALID,
         "densely numbered",
     );
     check_fixture(
-        "bad_window_id_gap.toml",
+        "bad_aperture_id_gap.toml",
         tyu::platform::desc::E_DESC_INVALID,
         "densely numbered",
     );
     check_fixture(
-        "bad_window_size_zero.toml",
+        "bad_aperture_size_zero.toml",
         tyu::platform::desc::E_DESC_INVALID,
         "size must be > 0",
     );
     check_fixture(
-        "bad_window_name_dup.toml",
+        "bad_aperture_name_dup.toml",
         tyu::platform::desc::E_DESC_INVALID,
-        "window names must be unique",
+        "aperture names must be unique",
     );
     check_fixture(
-        "bad_window_base_overlap.toml",
+        "bad_aperture_base_overlap.toml",
         tyu::platform::desc::E_DESC_INVALID,
         "overlap",
     );
     check_fixture(
-        "bad_device_unknown_window.toml",
+        "bad_device_unknown_aperture.toml",
         tyu::platform::desc::E_DESC_INVALID,
-        "references unknown window id",
+        "references unknown aperture id",
     );
     check_fixture(
-        "bad_device_overflows_window.toml",
+        "bad_device_overflows_aperture.toml",
         tyu::platform::desc::E_DESC_INVALID,
-        "> window",
+        "> aperture",
     );
     check_fixture(
         "bad_reg_offset_dup.toml",
@@ -346,7 +346,7 @@ fn validate_rejects_every_rule() {
         "parse error",
     );
     check_fixture(
-        "bad_window_kind.toml",
+        "bad_aperture_kind.toml",
         tyu::platform::desc::E_DESC_UNKNOWN_KIND,
         "bus|emulated",
     );
@@ -409,7 +409,7 @@ fn effectful_ro_register_is_legal() {
 name = "ok"
 schema = 2
 family = "ok"
-[[platform.windows]]
+[[platform.apertures]]
 id = 0
 name = "a"
 kind = "bus"
@@ -418,7 +418,7 @@ size = 0x1000
 [[platform.devices]]
 map = "G"
 instance = "g"
-window = 0
+aperture = 0
 base_offset = 0
 registers = [
   { offset = 0x0, name = "status", width = 32, access = "ro", read_kind = "effectful" },
@@ -441,7 +441,7 @@ fn large_descriptor_validates_within_budget() {
 name = "big"
 schema = 2
 family = "big"
-[[platform.windows]]
+[[platform.apertures]]
 id = 0
 name = "apb"
 kind = "bus"
@@ -451,7 +451,7 @@ size = 0x10000
 [[platform.devices]]
 map = "BIG"
 instance = "big0"
-window = 0
+aperture = 0
 base_offset = 0
 registers = [
 "#,

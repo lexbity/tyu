@@ -35,4 +35,27 @@ pub trait CodegenBackend {
     /// output's `.lang.modinfo` section during `emit_postlude`.
     /// This is called by the driver between word emission and postlude.
     fn set_expected_abi_hash(&mut self, _hash: u64) {}
+
+    /// Set the module's `platform_hash` (P6, decision D-5): the canonical
+    /// hash of the compiled platform descriptor the module was built against,
+    /// or 0 for an unplatformed (MMIO-free) module. Stamped into the
+    /// `.lang.modinfo` v4 header; the loader enforces it (E5220).
+    fn set_platform_hash(&mut self, _hash: u64) {}
+}
+
+/// Merge one aperture-use entry into a backend's module aperture table (P6 §5.5):
+/// first use wins for the aperture facts, later uses OR in the access mask.
+/// Shared by every backend so the modinfo aperture table is derived identically
+/// (NFR-6: one implementation).
+pub fn merge_aperture_use(table: &mut [ir::ApertureUse; 8], count: &mut usize, wu: &ir::ApertureUse) {
+    for existing in table.iter_mut().take(*count) {
+        if existing.id == wu.id {
+            existing.access_mask |= wu.access_mask;
+            return;
+        }
+    }
+    if *count < 8 {
+        table[*count] = *wu;
+        *count += 1;
+    }
 }

@@ -8,6 +8,7 @@ use common::*;
 use hosted::loader::HostedLoaderPlatform;
 use lmod::validate::Container;
 use loader_core::load::{load_module, LoadedSet};
+use loader_core::apertures::ApertureRegistry;
 use loader_core::modpack::ModpackIter;
 use loader_core::symbols::SymMap;
 
@@ -21,7 +22,7 @@ fn load_lmod_bytes(lmod_bytes: &[u8], plat: &mut HostedLoaderPlatform) -> i64 {
     register_test_runtime_symtab(&mut global_map, ds_high);
 
     let mut loaded_set = LoadedSet::<64>::new();
-    let _loaded = load_module(&container, plat, &mut global_map, &mut loaded_set).unwrap();
+    let _loaded = load_module(&container, plat, &mut global_map, &mut loaded_set, &mut ApertureRegistry::new()).unwrap();
 
     let main_sym = global_map.lookup_by_name(b"main").unwrap();
     let code_base = main_sym.addr;

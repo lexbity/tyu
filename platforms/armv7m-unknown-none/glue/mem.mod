@@ -4,16 +4,16 @@ type RegionRef;
 type RegionRefMut;
 
 : platform.mem.region-create ( usize -- Region )
-  # ARM: wire a static arena to activate
+  # implemented by the metal runtime asm bump allocator (P7, metal.trust)
 ;
 : platform.mem.region-alloc ( Region usize -- ptr_mut ) performs {alloc}
-   # ARM: allocation within a region arena
+   # implemented by the metal runtime asm bump allocator (P7, metal.trust)
 ;
 : platform.mem.region-reset ( Region -- )
-  # ARM: reset region allocation state
+  # implemented by the metal runtime asm bump allocator (P7, metal.trust)
 ;
 : platform.mem.region-destroy ( Region -- )
-  # ARM: release region resources
+  # implemented by the metal runtime asm bump allocator (P7, metal.trust)
 ;
 
 end;

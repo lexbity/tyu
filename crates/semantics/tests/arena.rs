@@ -32,7 +32,7 @@ fn make_word(name: &[u8]) -> ir::Word {
         types: FixedVec::new(),
         type_sizes: FixedVec::new(),
         type_classes: FixedVec::new(),
-        windows: FixedVec::new(),
+        apertures: FixedVec::new(),
         subtype_bases: FixedVec::new(),
         blocks: FixedVec::new(),
     }

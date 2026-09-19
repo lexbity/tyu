@@ -299,9 +299,9 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                     if mut_tok && !access_can_write(reg.access) {
                         return Err(TcError::MmioAccessViolation { span: place_abs });
                     }
-                    self.record_window(reg.window, reg.access, place_abs)?;
+                    self.record_aperture(reg.aperture, reg.access, place_abs)?;
                     addr_of_base = lir::AddrOfBase::Mmio {
-                        window: reg.window,
+                        aperture: reg.aperture,
                         offset: reg.offset,
                     };
                     push(

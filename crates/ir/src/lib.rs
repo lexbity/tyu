@@ -61,45 +61,45 @@ pub fn check_format_ver(artifact: &[u8]) -> Result<(), FormatVerMismatch> {
     }
 }
 
-/// Fused per-window access-mask bits (design doc §5.5).
+/// Fused per-aperture access-mask bits (design doc §5.5).
 pub const ACCESS_READ: u8 = 1;
 pub const ACCESS_WRITE: u8 = 2;
 pub const ACCESS_W1S: u8 = 4;
 pub const ACCESS_W1C: u8 = 8;
 pub const ACCESS_EFFECTFUL_READ: u8 = 16;
 
-/// How a memory-mapped window is backed (design doc §5.2, D-7).
+/// How a memory-mapped aperture is backed (design doc §5.2, D-7).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum WindowKind {
+pub enum ApertureKind {
     Bus,
     Emulated,
 }
 
-/// The binding-time relocation ISA for a bus window's base (P6). The base is
+/// The binding-time relocation ISA for a bus aperture's base (P6). The base is
 /// *not* baked as an absolute constant; the code carries a relocatable site
 /// that the pack binds and the on-device loader re-derives.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RelocIsa {
     /// ARM Thumb `ldr rN, [pc, #imm]` over a literal-pool word (the reloc
-    /// site) holding the window base.
+    /// site) holding the aperture base.
     ArmThumbLdrLiteral,
     /// RISC-V `auipc rN, hi20` + `lw rN, lo12(rN)` over a literal-pool word
-    /// (the reloc site) holding the window base.
+    /// (the reloc site) holding the aperture base.
     RiscVHi20Lo12,
 }
 
-/// How a window's base is bound into the code (P6). A bus window's base is
+/// How a aperture's base is bound into the code (P6). A bus aperture's base is
 /// *not* an absolute baked constant; the code carries a relocatable site the
-/// pack binds and the on-device loader re-derives. Emulated windows use
+/// pack binds and the on-device loader re-derives. Emulated apertures use
 /// runtime-dynamic addressing (`None`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BindKind {
     None,
     /// ARM Thumb `ldr rN, [pc, #imm]` over a literal-pool word (the reloc
-    /// site) holding the window base.
+    /// site) holding the aperture base.
     ArmThumbLdrLiteral,
     /// RISC-V `auipc rN, hi20` + `lw rN, lo12(rN)` over a literal-pool word
-    /// (the reloc site) holding the window base.
+    /// (the reloc site) holding the aperture base.
     RiscVHi20Lo12,
 }
 
@@ -113,20 +113,20 @@ impl BindKind {
     }
 }
 
-/// A window a module touches, with the fused access mask derived by irgen
+/// A aperture a module touches, with the fused access mask derived by irgen
 /// (design doc §5.4/§5.5). Carried on the `Word` for the verifier's
 /// place-bounds check and on the `Module` for text emit; the modinfo
 /// projection (name_hash + id + size + access_mask) is derived at pack time.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct WindowUse {
+pub struct ApertureUse {
     pub id: u16,
     pub name: Atom,
-    pub kind: WindowKind,
-    /// Absolute base. `None` = link-time symbol (emulated window).
+    pub kind: ApertureKind,
+    /// Absolute base. `None` = link-time symbol (emulated aperture).
     pub base: Option<u64>,
     pub size: u32,
     pub access_mask: u8,
-    /// The binding strategy for this window's base (P6).
+    /// The binding strategy for this aperture's base (P6).
     pub bind: BindKind,
 }
 
@@ -525,7 +525,7 @@ pub enum OpKind {
     },
     MmioPlace {
         place: Atom,
-        window: u16,
+        aperture: u16,
         offset: u32,
     },
     ScopedEnter {
@@ -710,13 +710,13 @@ pub struct Op {
 }
 
 /// The base of an `AddrOf` (P4): a runtime/resource address, or a
-/// window-relative MMIO register address resolved from the descriptor.
+/// aperture-relative MMIO register address resolved from the descriptor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AddrOfBase {
     /// Address computed at runtime (a local/resource/struct place).
     Runtime,
-    /// Window-relative MMIO register address.
-    Mmio { window: u16, offset: u32 },
+    /// Aperture-relative MMIO register address.
+    Mmio { aperture: u16, offset: u32 },
 }
 
 pub struct Block {
@@ -739,9 +739,9 @@ pub struct Word {
     /// name bytes. Populated once by irgen at word finalization; not
     /// serialized in `--emit=ir` text (no format bump).
     pub type_classes: FixedVec<TypeClass, 64>,
-    /// The windows this word touches, derived from its `MmioPlace` ops at
+    /// The apertures this word touches, derived from its `MmioPlace` ops at
     /// word finalization (P4). The verifier checks place bounds against it.
-    pub windows: FixedVec<WindowUse, 8>,
+    pub apertures: FixedVec<ApertureUse, 8>,
     /// `subtype_bases[i]` is the base `TypeId` of `types[i]` when it is a
     /// subtype, otherwise `TY_EMPTY`.  The verifier uses it to accept a
     /// subtype value where its base is declared (subsumption).
@@ -752,8 +752,8 @@ pub struct Word {
 pub struct Module {
     pub name: Atom,
     pub words: FixedVec<Word, 64>,
-    /// The union of every word's window-use table (P4).
-    pub windows: FixedVec<WindowUse, 8>,
+    /// The union of every word's aperture-use table (P4).
+    pub apertures: FixedVec<ApertureUse, 8>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -788,12 +788,12 @@ pub enum VerifyError {
     PopEmptyStack { span: Span },
     PushFullStack { span: Span },
     ScopedEnterTypeNotScoped { span: Span },
-    MmioWindowOutOfRange { span: Span },
+    MmioApertureOutOfRange { span: Span },
     MmioPlaceOutOfBounds { span: Span },
     MmioPhantomRead { span: Span },
     MmioOverWideAccess { span: Span },
-    MmioWindowUnbound { span: Span },
-    MmioWindowEmulatedBound { span: Span },
+    MmioApertureUnbound { span: Span },
+    MmioApertureEmulatedBound { span: Span },
 }
 
 impl VerifyError {
@@ -829,12 +829,12 @@ impl VerifyError {
             VerifyError::PopEmptyStack { .. } => 9098,
             VerifyError::PushFullStack { .. } => 9099,
             VerifyError::ScopedEnterTypeNotScoped { .. } => 9036,
-            VerifyError::MmioWindowOutOfRange { .. } => 9037,
+            VerifyError::MmioApertureOutOfRange { .. } => 9037,
             VerifyError::MmioPlaceOutOfBounds { .. } => 9038,
             VerifyError::MmioPhantomRead { .. } => 9040,
             VerifyError::MmioOverWideAccess { .. } => 9041,
-            VerifyError::MmioWindowUnbound { .. } => 9042,
-            VerifyError::MmioWindowEmulatedBound { .. } => 9043,
+            VerifyError::MmioApertureUnbound { .. } => 9042,
+            VerifyError::MmioApertureEmulatedBound { .. } => 9043,
         }
     }
 
@@ -870,12 +870,12 @@ impl VerifyError {
             | VerifyError::PopEmptyStack { span }
             | VerifyError::PushFullStack { span }
             | VerifyError::ScopedEnterTypeNotScoped { span }
-            | VerifyError::MmioWindowOutOfRange { span }
+            | VerifyError::MmioApertureOutOfRange { span }
             | VerifyError::MmioPlaceOutOfBounds { span }
             | VerifyError::MmioPhantomRead { span }
             | VerifyError::MmioOverWideAccess { span }
-            | VerifyError::MmioWindowUnbound { span }
-            | VerifyError::MmioWindowEmulatedBound { span } => span,
+            | VerifyError::MmioApertureUnbound { span }
+            | VerifyError::MmioApertureEmulatedBound { span } => span,
         }
     }
 }
@@ -922,20 +922,20 @@ pub fn verify_word(w: &Word) -> Result<(), VerifyError> {
         verify_block(w, b)?;
     }
 
-    // P6 (E3649): a window-use's binding must be coherent with its backing.
-    // A bus window's base is bound into relocatable sites (BindKind != None);
-    // an emulated window's base is a link-time symbol with runtime-dynamic
-    // addressing (BindKind == None). A bus window with `None` is unboundable;
-    // an emulated window with a bind is a contradiction.
-    for wu in w.windows.iter() {
+    // P6 (E3649): a aperture-use's binding must be coherent with its backing.
+    // A bus aperture's base is bound into relocatable sites (BindKind != None);
+    // an emulated aperture's base is a link-time symbol with runtime-dynamic
+    // addressing (BindKind == None). A bus aperture with `None` is unboundable;
+    // an emulated aperture with a bind is a contradiction.
+    for wu in w.apertures.iter() {
         match (wu.kind, wu.bind) {
-            (WindowKind::Bus, BindKind::None) => {
-                return Err(VerifyError::MmioWindowUnbound {
+            (ApertureKind::Bus, BindKind::None) => {
+                return Err(VerifyError::MmioApertureUnbound {
                     span: Span::UNKNOWN,
                 })
             }
-            (WindowKind::Emulated, BindKind::ArmThumbLdrLiteral | BindKind::RiscVHi20Lo12) => {
-                return Err(VerifyError::MmioWindowEmulatedBound {
+            (ApertureKind::Emulated, BindKind::ArmThumbLdrLiteral | BindKind::RiscVHi20Lo12) => {
+                return Err(VerifyError::MmioApertureEmulatedBound {
                     span: Span::UNKNOWN,
                 })
             }
@@ -946,9 +946,9 @@ pub fn verify_word(w: &Word) -> Result<(), VerifyError> {
     Ok(())
 }
 
-/// Look up a window-use entry by id in a word's table.
-fn find_window_use(w: &Word, id: u16) -> Option<&WindowUse> {
-    w.windows.iter().find(|wu| wu.id == id)
+/// Look up a aperture-use entry by id in a word's table.
+fn find_aperture_use(w: &Word, id: u16) -> Option<&ApertureUse> {
+    w.apertures.iter().find(|wu| wu.id == id)
 }
 
 /// Byte width of a type in the word's table (for place-bounds checking).
@@ -959,7 +959,7 @@ fn type_width_bytes(w: &Word, ty: TypeId) -> Option<u32> {
 }
 
 /// Check that a volatile access at `place` (offset + width) stays inside the
-/// window its `MmioPlace` site declared. Best-effort within a block: sites
+/// aperture its `MmioPlace` site declared. Best-effort within a block: sites
 /// recorded in the same block are correlated; a missing site (e.g. the place
 /// was materialized in another block) skips the width check.
 fn check_site_bounds(
@@ -969,11 +969,11 @@ fn check_site_bounds(
     width: u32,
     span: Span,
 ) -> Result<(), VerifyError> {
-    let Some((_, window, offset)) = sites.iter().find(|(p, _, _)| *p == place) else {
+    let Some((_, aperture, offset)) = sites.iter().find(|(p, _, _)| *p == place) else {
         return Ok(());
     };
-    let Some(wu) = find_window_use(w, *window) else {
-        return Err(VerifyError::MmioWindowOutOfRange { span });
+    let Some(wu) = find_aperture_use(w, *aperture) else {
+        return Err(VerifyError::MmioApertureOutOfRange { span });
     };
     if offset.saturating_add(width) > wu.size {
         return Err(VerifyError::MmioPlaceOutOfBounds { span });
@@ -994,7 +994,7 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
     }
 
     // P4: `MmioPlace` sites in this block, keyed by place atom, so the
-    // consuming volatile ops can check offset + width within the window.
+    // consuming volatile ops can check offset + width within the aperture.
     let mut sites: [(Atom, u16, u32); 8] = [(AT_EMPTY, 0, 0); 8];
     let mut site_count = 0usize;
 
@@ -1019,18 +1019,18 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
             OpKind::AddrOf { mutable: true, .. } => {
                 push(&mut stack, &mut sp, TY_PTR_MUT, op.span)?;
             }
-            OpKind::MmioPlace { place, window, offset } => {
-                // P4: the referenced window must be declared in the word's
+            OpKind::MmioPlace { place, aperture, offset } => {
+                // P4: the referenced aperture must be declared in the word's
                 // use-table, and the offset must fall inside it.
-                let size = match find_window_use(w, window) {
+                let size = match find_aperture_use(w, aperture) {
                     Some(wu) => wu.size,
-                    None => return Err(VerifyError::MmioWindowOutOfRange { span: op.span }),
+                    None => return Err(VerifyError::MmioApertureOutOfRange { span: op.span }),
                 };
                 if offset >= size {
                     return Err(VerifyError::MmioPlaceOutOfBounds { span: op.span });
                 }
                 if site_count < sites.len() {
-                    sites[site_count] = (place, window, offset);
+                    sites[site_count] = (place, aperture, offset);
                     site_count += 1;
                 }
                 push(&mut stack, &mut sp, TY_MMIO, op.span)?;
@@ -1386,18 +1386,18 @@ pub fn write_module(out: &mut impl Output, m: &Module) {
     out.write(b"module ");
     out.write(m.name.as_bytes());
     out.write(b"\n");
-    out.write(b"windows ");
-    write_u32(out, m.windows.len() as u32);
+    out.write(b"apertures ");
+    write_u32(out, m.apertures.len() as u32);
     out.write(b"\n");
-    for wu in m.windows.iter() {
-        out.write(b"window ");
+    for wu in m.apertures.iter() {
+        out.write(b"aperture ");
         write_u32(out, wu.id as u32);
         out.write(b" ");
         out.write(wu.name.as_bytes());
         out.write(b" ");
         out.write(match wu.kind {
-            WindowKind::Bus => b"bus",
-            WindowKind::Emulated => b"emulated",
+            ApertureKind::Bus => b"bus",
+            ApertureKind::Emulated => b"emulated",
         });
         out.write(b" bind=");
         out.write(match wu.bind {
@@ -1549,11 +1549,11 @@ fn write_op(out: &mut impl Output, w: &Word, op: &Op) {
             out.write(place.as_bytes());
             write_addr_of_base(out, base);
         }
-        OpKind::MmioPlace { place, window, offset } => {
+        OpKind::MmioPlace { place, aperture, offset } => {
             out.write(b"mmio_place ");
             out.write(place.as_bytes());
-            out.write(b" window=");
-            write_u32(out, window as u32);
+            out.write(b" aperture=");
+            write_u32(out, aperture as u32);
             out.write(b" offset=0x");
             write_u32_hex(out, offset);
         }
@@ -1789,9 +1789,9 @@ fn write_u32_hex(out: &mut impl Output, mut v: u32) {
 fn write_addr_of_base(out: &mut impl Output, base: AddrOfBase) {
     match base {
         AddrOfBase::Runtime => {}
-        AddrOfBase::Mmio { window, offset } => {
-            out.write(b" window=");
-            write_u32(out, window as u32);
+        AddrOfBase::Mmio { aperture, offset } => {
+            out.write(b" aperture=");
+            write_u32(out, aperture as u32);
             out.write(b" offset=0x");
             write_u32_hex(out, offset);
         }

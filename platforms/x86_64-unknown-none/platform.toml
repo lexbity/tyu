@@ -9,7 +9,7 @@ description = "x86_64 bare-metal runtime"
 triple = "x86_64-unknown-none"
 arch = "x86_64"
 default = true
-expected_abi_hash = "0x41f05b8b1adab0ab"
+expected_abi_hash = "0x50fbac4f4e87016c"
 
 [metal]
 path = "metal"
@@ -53,7 +53,7 @@ evidence = "evidence/debug_escalate.md"
 
 # ---- descriptor v2 ---------------------------------------------------------
 
-[[platform.windows]]
+[[platform.apertures]]
 id = 0
 name = "mmio"                  # the in-guest-RAM `__mmio_mem` array (D-7)
 kind = "emulated"              # RAM the runtime owns; base is a link-time symbol
@@ -63,7 +63,7 @@ size = 0x10000
 [[platform.devices]]
 map = "Scratch"
 instance = "scratch"
-window = 0
+aperture = 0
 base_offset = 0x0
 registers = [
   { offset = 0x00, name = "A", width = 32, access = "rw" },
@@ -73,7 +73,7 @@ registers = [
 [[platform.devices]]
 map = "Scratch"
 instance = "ptrscratch"
-window = 0
+aperture = 0
 base_offset = 0x100
 registers = [
   { offset = 0x00, name = "FIRST", width = 64, access = "rw" },
@@ -83,7 +83,7 @@ registers = [
 [[platform.devices]]
 map = "Scratch"
 instance = "widthscratch"
-window = 0
+aperture = 0
 base_offset = 0x0
 registers = [
   { offset = 0x00, name = "B", width = 8, access = "rw" },
@@ -95,7 +95,7 @@ registers = [
 [[platform.devices]]
 map = "Strategy"
 instance = "strategy"
-window = 0
+aperture = 0
 base_offset = 0x0
 registers = [
   { offset = 0x00, name = "CTRL", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
@@ -110,7 +110,7 @@ registers = [
 [[platform.devices]]
 map = "StrategySeed"
 instance = "strategy_seed"
-window = 0
+aperture = 0
 base_offset = 0x0
 registers = [
   { offset = 0x04, name = "STATUS", width = 32, access = "rw" },

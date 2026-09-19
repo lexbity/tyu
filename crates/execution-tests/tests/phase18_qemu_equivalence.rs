@@ -9,6 +9,7 @@ use std::time::Duration;
 use hosted::loader::HostedLoaderPlatform;
 use hosted::mem;
 use loader_core::load::{load_module, LoadedSet};
+use loader_core::apertures::ApertureRegistry;
 use loader_core::symbols::SymMap;
 
 const ORACLE_MOD: &str = "module Main;\n: main ( -- i64 ) 0 ;\nexport { main };\nend;\n";
@@ -67,13 +68,19 @@ fn host_loader_value(source: &str, dir: &Path) -> i64 {
     let abi_hash = lmod::abi_hash::compute_abi_hash(1, 8, 64, lmod::modinfo::MODINFO_VER);
     let bsize =
         (container.code().len() + container.rodata().len() + container.data().len() + 4095) & !4095;
-    let mut platform = HostedLoaderPlatform::new(abi_hash);
+    // P6 (D-5): the module was compiled against the hosted runtime descriptor,
+    // so the host loader must carry that board's identity (platform_hash +
+    // aperture table) to accept it.
+    let mut platform = HostedLoaderPlatform::new(abi_hash).with_board(
+        common::board_identity_for(codegen_core::Target::X86_64UnknownLinuxGnu).0,
+        &common::board_identity_for(codegen_core::Target::X86_64UnknownLinuxGnu).1,
+    );
     platform.reserve(bsize).unwrap();
     let mut map: SymMap<'_, 256> = SymMap::new();
     let ds_high = allocate_runtime_page();
     register_host_runtime_symtab(&mut map, ds_high);
     let mut set = LoadedSet::<64>::new();
-    load_module(&container, &mut platform, &mut map, &mut set).unwrap();
+    load_module(&container, &mut platform, &mut map, &mut set, &mut ApertureRegistry::new()).unwrap();
 
     let main = map.lookup_by_name(b"main").unwrap().addr;
     const DS_SIZE: usize = 65536;

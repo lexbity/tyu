@@ -7,7 +7,7 @@ description = "x86_64 bare-metal runtime"
 triple = "x86_64-unknown-none"
 arch = "x86_64"
 default = true
-expected_abi_hash = "0x41f05b8b1adab0ab"
+expected_abi_hash = "0x50fbac4f4e87016c"
 
 [metal]
 path = "."

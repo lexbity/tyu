@@ -555,6 +555,21 @@ public __mmio_mem
 __mmio_mem:
     rb 65536
 
+    ; Region allocator state (P7): mirrors the hosted runtime so the
+    ; codegen-inline bump allocator (region.rs) can carve mmap'd slots.
+public __region_next
+__region_next:
+    dq 0
+public __region_base
+__region_base:
+    rq 16
+public __region_size
+__region_size:
+    rq 16
+public __region_off
+__region_off:
+    rq 16
+
     ; Call stack — 64KB
     align 16
     rb 65536
@@ -574,8 +589,8 @@ __lang_ds_high:
     align 8
 public __lang_expected_abi_hash
 __lang_expected_abi_hash:
-    ; compute_abi_hash(ARCH_TAG_X86_64=1, slot=8, word=64, MODINFO_VER=3), recipe v2
-    dq 0x41f05b8b1adab0ab
+    ; compute_abi_hash(ARCH_TAG_X86_64=1, slot=8, word=64, MODINFO_VER=4), recipe v2
+    dq 0x50fbac4f4e87016c
 
     ; V-once flag — 0 before V is emitted, 1 after.
 public __lang_v_emitted

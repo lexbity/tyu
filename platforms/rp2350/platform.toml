@@ -9,13 +9,13 @@ description = "Raspberry Pi Pico 2 / RP2350 custom platform"
 triple = "armv7m-unknown-none"
 arch = "arm"
 default = true
-expected_abi_hash = "0x5d36b0efe4b2e904"
+expected_abi_hash = "0x4e2b602bb1069843"
 metal = { path = "metal/armv7m", startup = "runtime.asm", linker = "link.ld" }
 
 [[platform.isa]]
 triple = "riscv32-unknown-none"
 arch = "riscv"
-expected_abi_hash = "0xf6dd34a3e430bd85"
+expected_abi_hash = "0x49d5b84f8a5a3c42"
 metal = { path = "metal/riscv32", startup = "runtime.asm", linker = "link.ld" }
 
 [metal]
@@ -73,15 +73,18 @@ policy = "pool-firstfit"       # documentation for reviewers; opaque to toolchai
 [platform.scoped]
 metadata_slots_max = 64        # diagnostic bound; per-word body count must be <=
 
-[[platform.windows]]
+# Datasheet-verified apertures (P8, RP2350 §2.3). The APB aperture covers the
+# 0x40000000-0x41000000 peripheral block; PIO at 0x50200000 and SIO at
+# 0xD0000000 are separate regions; `mmio` is the QEMU/HIL scratch.
+[[platform.apertures]]
 id = 0
 name = "apb"
 kind = "bus"
 bind = "arm-thumb-ldr-literal"
 base = 0x40000000
-size = 0x10000
+size = 0x01000000
 
-[[platform.windows]]
+[[platform.apertures]]
 id = 1
 name = "mmio"                  # QEMU/HIL scratch
 kind = "bus"
@@ -89,19 +92,228 @@ bind = "arm-thumb-ldr-literal"
 base = 0x20000000
 size = 0x1000
 
-# Register maps: the descriptor is the authoritative home for maps a board
-# exposes. Source-side `register-map` declarations must MATCH these rows
-# (name/offset/width/access); the descriptor adds what source cannot say.
-# Full datasheet-verified tables land in P8; this minimal table pins the shape.
+[[platform.apertures]]
+id = 2
+name = "pio"                   # PIO0/PIO1 (0x50200000/0x50300000)
+kind = "bus"
+bind = "arm-thumb-ldr-literal"
+base = 0x50200000
+size = 0x00200000
+
+[[platform.apertures]]
+id = 3
+name = "sio"                   # SIO (0xD0000000)
+kind = "bus"
+bind = "arm-thumb-ldr-literal"
+base = 0xD0000000
+size = 0x1000
+
+# ---- Datasheet-derived device tables (P8) ----------------------------------
+
+# GPIO bank0 ctrl/status block (RP2350 §2.19.3), base 0x40014000.
 [[platform.devices]]
 map = "GPIO"
 instance = "gpio0"
-window = 0
-base_offset = 0xD000
+aperture = 0
+base_offset = 0x14000
 registers = [
-  { offset = 0x000, name = "ctrl", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x004, name = "intr_stat", width = 32, access = "rw", write_kind = "w1c", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x020, name = "fifo", width = 8, access = "rw", write_kind = "plain", read_kind = "effectful", atomic_max = 8 },
+  { offset = 0x000, name = "GPIO0_CTRL", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x004, name = "GPIO0_STATUS", width = 32, access = "ro", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x008, name = "GPIO1_CTRL", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x00C, name = "GPIO1_STATUS", width = 32, access = "ro", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x078, name = "GPIO15_CTRL", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x07C, name = "GPIO15_STATUS", width = 32, access = "ro", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x0CC, name = "INTR0", width = 32, access = "ro", read_kind = "plain", atomic_max = 32, irq = 13 },
+  { offset = 0x0D0, name = "INTR1", width = 32, access = "ro", read_kind = "plain", atomic_max = 32, irq = 13 },
+  { offset = 0x0D4, name = "INTR2", width = 32, access = "ro", read_kind = "plain", atomic_max = 32, irq = 13 },
+  { offset = 0x0D8, name = "INTR3", width = 32, access = "ro", read_kind = "plain", atomic_max = 32, irq = 13 },
+]
+
+# UART0 (RP2350 §4.2), base 0x40034000, UART0_IRQ = 20.
+[[platform.devices]]
+map = "UART"
+instance = "uart0"
+aperture = 0
+base_offset = 0x34000
+registers = [
+  { offset = 0x00, name = "UARTDR", width = 32, access = "rw", write_kind = "plain", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x04, name = "UARTRSR_ECR", width = 32, access = "rw", write_kind = "w1c", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x18, name = "UARTFR", width = 32, access = "ro", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x2C, name = "UARTLCR_H", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x30, name = "UARTCR", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x38, name = "UARTIMSC", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x3C, name = "UARTRIS", width = 32, access = "ro", read_kind = "plain", atomic_max = 32, irq = 20 },
+  { offset = 0x40, name = "UARTMIS", width = 32, access = "ro", read_kind = "plain", atomic_max = 32, irq = 20 },
+  { offset = 0x44, name = "UARTICR", width = 32, access = "rw", write_kind = "w1c", read_kind = "plain", atomic_max = 32, irq = 20 },
+]
+
+# UART1 (RP2350 §4.2), base 0x40038000, UART1_IRQ = 21.
+[[platform.devices]]
+map = "UART"
+instance = "uart1"
+aperture = 0
+base_offset = 0x38000
+registers = [
+  { offset = 0x00, name = "UARTDR", width = 32, access = "rw", write_kind = "plain", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x18, name = "UARTFR", width = 32, access = "ro", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x30, name = "UARTCR", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x3C, name = "UARTRIS", width = 32, access = "ro", read_kind = "plain", atomic_max = 32, irq = 21 },
+  { offset = 0x44, name = "UARTICR", width = 32, access = "rw", write_kind = "w1c", read_kind = "plain", atomic_max = 32, irq = 21 },
+]
+
+# SPI0 (RP2350 §4.3), base 0x4003C000, SPI0_IRQ = 22.
+[[platform.devices]]
+map = "SPI"
+instance = "spi0"
+aperture = 0
+base_offset = 0x3C000
+registers = [
+  { offset = 0x00, name = "SSPCR0", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x04, name = "SSPCR1", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x08, name = "SSPDR", width = 32, access = "rw", write_kind = "plain", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x0C, name = "SSPSR", width = 32, access = "ro", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x18, name = "SSPRIS", width = 32, access = "ro", read_kind = "plain", atomic_max = 32, irq = 22 },
+  { offset = 0x20, name = "SSPICR", width = 32, access = "rw", write_kind = "w1c", read_kind = "plain", atomic_max = 32, irq = 22 },
+]
+
+# SPI1 (RP2350 §4.3), base 0x40040000, SPI1_IRQ = 23.
+[[platform.devices]]
+map = "SPI"
+instance = "spi1"
+aperture = 0
+base_offset = 0x40000
+registers = [
+  { offset = 0x00, name = "SSPCR0", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x08, name = "SSPDR", width = 32, access = "rw", write_kind = "plain", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x18, name = "SSPRIS", width = 32, access = "ro", read_kind = "plain", atomic_max = 32, irq = 23 },
+  { offset = 0x20, name = "SSPICR", width = 32, access = "rw", write_kind = "w1c", read_kind = "plain", atomic_max = 32, irq = 23 },
+]
+
+# I2C0 (RP2350 §4.4), base 0x40044000, I2C0_IRQ = 24.
+[[platform.devices]]
+map = "I2C"
+instance = "i2c0"
+aperture = 0
+base_offset = 0x44000
+registers = [
+  { offset = 0x00, name = "IC_CON", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x04, name = "IC_TAR", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x10, name = "IC_DATA_CMD", width = 32, access = "rw", write_kind = "plain", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x2C, name = "IC_INTR_STAT", width = 32, access = "ro", read_kind = "plain", atomic_max = 32, irq = 24 },
+  { offset = 0x30, name = "IC_INTR_MASK", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x34, name = "IC_RAW_INTR_STAT", width = 32, access = "ro", read_kind = "plain", atomic_max = 32, irq = 24 },
+  { offset = 0x40, name = "IC_CLR_INTR", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32, irq = 24 },
+  { offset = 0x54, name = "IC_CLR_TX_ABRT", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32, irq = 24 },
+  { offset = 0x6C, name = "IC_ENABLE", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x70, name = "IC_STATUS", width = 32, access = "ro", read_kind = "plain", atomic_max = 32 },
+]
+
+# I2C1 (RP2350 §4.4), base 0x40048000, I2C1_IRQ = 25.
+[[platform.devices]]
+map = "I2C"
+instance = "i2c1"
+aperture = 0
+base_offset = 0x48000
+registers = [
+  { offset = 0x00, name = "IC_CON", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x10, name = "IC_DATA_CMD", width = 32, access = "rw", write_kind = "plain", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x2C, name = "IC_INTR_STAT", width = 32, access = "ro", read_kind = "plain", atomic_max = 32, irq = 25 },
+  { offset = 0x40, name = "IC_CLR_INTR", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32, irq = 25 },
+]
+
+# Timer (RP2350 §4.6), base 0x40054000, TIMER_IRQ_0..3 = 0..3.
+[[platform.devices]]
+map = "Timer"
+instance = "timer"
+aperture = 0
+base_offset = 0x54000
+registers = [
+  { offset = 0x08, name = "TIMEHR", width = 32, access = "ro", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x0C, name = "TIMELR", width = 32, access = "ro", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x10, name = "TIMERAWL", width = 32, access = "ro", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x14, name = "TIMERARWH", width = 32, access = "ro", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x20, name = "ALARM0", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x24, name = "ALARM1", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x28, name = "ALARM2", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x2C, name = "ALARM3", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x30, name = "ARMED", width = 32, access = "ro", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x34, name = "TIMERALARM0", width = 32, access = "rw", write_kind = "w1c", read_kind = "plain", atomic_max = 32, irq = 0 },
+  { offset = 0x38, name = "TIMERALARM1", width = 32, access = "rw", write_kind = "w1c", read_kind = "plain", atomic_max = 32, irq = 1 },
+  { offset = 0x3C, name = "TIMERALARM2", width = 32, access = "rw", write_kind = "w1c", read_kind = "plain", atomic_max = 32, irq = 2 },
+  { offset = 0x40, name = "TIMERALARM3", width = 32, access = "rw", write_kind = "w1c", read_kind = "plain", atomic_max = 32, irq = 3 },
+]
+
+# QMI (QSPI, RP2350 §4.10), base 0x40060000, XIP_IRQ = 6.
+[[platform.devices]]
+map = "QMI"
+instance = "qmi"
+aperture = 0
+base_offset = 0x60000
+registers = [
+  { offset = 0x00, name = "FFLAGS", width = 32, access = "ro", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x08, name = "SS_CTRL", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x0C, name = "SS_CMD", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x10, name = "SS_DATA0", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x14, name = "SS_DATA1", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x18, name = "SS_DATA2", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x1C, name = "SS_DATA3", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x58, name = "M0_FIFO", width = 32, access = "rw", write_kind = "plain", read_kind = "effectful", atomic_max = 32, irq = 6 },
+]
+
+# PIO0 (RP2350 §4.8), base 0x50200000, PIO0_IRQ_0 = 7, PIO0_IRQ_1 = 8.
+[[platform.devices]]
+map = "PIO"
+instance = "pio0"
+aperture = 2
+base_offset = 0x00000
+registers = [
+  { offset = 0x00, name = "CTRL", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x04, name = "FSTAT", width = 32, access = "ro", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x08, name = "FLEVEL", width = 32, access = "ro", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x10, name = "TXF0", width = 32, access = "wo", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x20, name = "RXF0", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x24, name = "IRQ", width = 32, access = "rw", write_kind = "w1c", read_kind = "plain", atomic_max = 32, irq = 7 },
+  { offset = 0x40, name = "INSTR_MEM0", width = 16, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 16 },
+  { offset = 0x48, name = "INSTR_MEM2", width = 16, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 16 },
+  { offset = 0xC0, name = "SM0_CLKDIV", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+  { offset = 0xC8, name = "SM0_EXECCTRL", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+  { offset = 0xCC, name = "SM0_SHIFTCTRL", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+  { offset = 0xD4, name = "SM0_INSTR", width = 16, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 16 },
+]
+
+# PIO1 (RP2350 §4.8), base 0x50300000, PIO1_IRQ_0 = 9, PIO1_IRQ_1 = 10.
+[[platform.devices]]
+map = "PIO"
+instance = "pio1"
+aperture = 2
+base_offset = 0x10000
+registers = [
+  { offset = 0x00, name = "CTRL", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x04, name = "FSTAT", width = 32, access = "ro", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x10, name = "TXF0", width = 32, access = "wo", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x20, name = "RXF0", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x24, name = "IRQ", width = 32, access = "rw", write_kind = "w1c", read_kind = "plain", atomic_max = 32, irq = 9 },
+]
+
+# SIO (RP2350 §2.5), base 0xD0000000, SIO_IRQ_PROC0 = 15.
+[[platform.devices]]
+map = "SIO"
+instance = "sio"
+aperture = 3
+base_offset = 0x0000
+registers = [
+  { offset = 0x04, name = "GPIO_IN", width = 32, access = "ro", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x10, name = "GPIO_OUT", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x14, name = "GPIO_OUT_SET", width = 32, access = "rw", write_kind = "w1s", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x18, name = "GPIO_OUT_CLR", width = 32, access = "rw", write_kind = "w1c", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x1C, name = "GPIO_OUT_XOR", width = 32, access = "rw", write_kind = "w1c", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x20, name = "GPIO_OE", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x24, name = "GPIO_OE_SET", width = 32, access = "rw", write_kind = "w1s", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x28, name = "GPIO_OE_CLR", width = 32, access = "rw", write_kind = "w1c", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x50, name = "FIFO_ST", width = 32, access = "ro", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x54, name = "FIFO_WR", width = 32, access = "wo", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x58, name = "FIFO_RD", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x64, name = "IRQ", width = 32, access = "rw", write_kind = "w1c", read_kind = "plain", atomic_max = 32, irq = 15 },
 ]
 
 [platform.metal.trust]         # empty by default; lists asm-backed words

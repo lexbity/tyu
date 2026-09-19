@@ -2,7 +2,7 @@ module MmioStrategiesX86;
 import platform/testio { testio.write-byte };
 
 register-map Strategy
-  0x00 CTRL u32 rw
+  0x00 CTRL u32 rw { ctrl_low 0..8 u16 rw }
   0x04 STATUS u32 rw
   0x08 SETBITS u32 rw
   0x10 FIFO u8 rw
@@ -34,6 +34,10 @@ const seed = StrategySeed @ board.strategy_seed;
   &strategy.STATUS @u32 as i64 0x3 == check
   &!strategy.STATUS 0x0 as u32 !u32
   &strategy.STATUS @u32 as i64 0x3 == check
+
+  # field load/store: the field RMW cell (P5 matrix field-ld/field-st).
+  strategy.CTRL.ctrl_low 0x5 as u16 !
+  strategy.CTRL.ctrl_low @ as i64 0x5 == check
 
   # FIFO effectful read: each @u8 is one access.
   &strategy.FIFO @u8 drop

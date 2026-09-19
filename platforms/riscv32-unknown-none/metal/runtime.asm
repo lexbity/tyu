@@ -394,6 +394,186 @@ w_46f6f74f7859ca64:
     j __lang_fail_exit
 
 # -----------------------------------------------------------------
+# platform.mem.region words — reference bump allocator (P7, D-6 metal.trust)
+#
+# Model matches the ARM/x86 hosted allocators: a static arena
+# `__region_arena` (4096 bytes) in BSS with 16 slots of { base, size, off }.
+# region-create carves a chunk from the arena and records it in a free slot;
+# region-alloc bumps `off` within the slot; region-reset zeroes `off`;
+# region-destroy frees the slot.
+#
+# DS convention (abi-contract): s2 = DS pointer, slot_bytes = 4, upward.
+#   pop i64  = addi s2,s2,-8; lw rX,0(s2); lw rY,4(s2)
+#   push i64 = sw rX,0(s2); addi s2,s2,4; sw rY,0(s2); addi s2,s2,4
+# Trap: a0 = trap_code; j __lang_trap.
+# Exhaustion raises REGION_EXHAUSTED (26).  Register discipline: only a0-a7 /
+# t0-t6 (caller-saved) are used; s0-s11 preserved except s2 (DS pointer).
+# -----------------------------------------------------------------
+
+.globl w_7a5f795caa045668
+.type w_7a5f795caa045668, @function
+w_7a5f795caa045668:
+    addi s2, s2, -8
+    lw a0, 0(s2)                    # a0 = size (low)
+    bnez a0, 1f
+    li a0, 23                       # UNREACHABLE: zero-size region
+    j __lang_trap
+1:
+    addi a0, a0, 7
+    andi a0, a0, -8                 # align to 8
+    li t0, 0                        # slot index
+    la t1, __region_size
+2:
+    li t2, 16
+    bge t0, t2, 3f                  # none free -> use __region_next
+    slli t3, t0, 2
+    add t3, t1, t3
+    lw t4, 0(t3)
+    beqz t4, 4f                     # free slot found
+    addi t0, t0, 1
+    j 2b
+3:
+    la t1, __region_next
+    lw t0, 0(t1)
+    li t2, 16
+    bge t0, t2, 8f                  # all slots in use -> exhausted
+    lw t3, 0(t1)
+    addi t3, t3, 1
+    sw t3, 0(t1)
+4:
+    # t0 = slot, a0 = aligned size
+    la t1, __region_used
+    lw t2, 0(t1)                    # used
+    la t3, __region_arena
+    add t3, t3, t2                  # base
+    add t2, t2, a0                  # new used
+    # end of this slot = base + size; must fit in arena
+    add t4, t3, a0                  # end
+    la t5, __region_arena_end
+    bgt t4, t5, 8f                  # arena overrun -> exhausted
+    la t1, __region_used
+    sw t2, 0(t1)                    # used = new used
+    la t1, __region_base
+    slli t4, t0, 2
+    add t4, t1, t4
+    sw t3, 0(t4)                    # base[slot]
+    la t1, __region_size
+    slli t4, t0, 2
+    add t4, t1, t4
+    sw a0, 0(t4)                    # size[slot]
+    la t1, __region_off
+    slli t4, t0, 2
+    add t4, t1, t4
+    sw zero, 0(t4)                  # off[slot] = 0
+    # return Region handle = slot index
+    mv a0, t0
+    li a1, 0
+    sw a0, 0(s2)
+    addi s2, s2, 4
+    sw a1, 0(s2)
+    addi s2, s2, 4
+    ret
+8:
+    li a0, 26                       # REGION_EXHAUSTED
+    j __lang_trap
+
+.globl w_00433c33168e6701
+.type w_00433c33168e6701, @function
+w_00433c33168e6701:
+    addi s2, s2, -8
+    lw a1, 0(s2)                    # a1 = usize (size, low)
+    addi s2, s2, -8
+    lw a0, 0(s2)                    # a0 = Region handle
+    li t0, 16
+    bge a0, t0, 9f                  # bad handle -> UNREACHABLE
+    la t1, __region_size
+    slli t2, a0, 2
+    add t2, t1, t2
+    lw t3, 0(t2)                    # slot size
+    beqz t3, 9f                     # dead slot -> UNREACHABLE
+    addi a1, a1, 7
+    andi a1, a1, -8                 # align request
+    la t1, __region_off
+    slli t2, a0, 2
+    add t2, t1, t2
+    lw t4, 0(t2)                    # off
+    add t4, t4, a1                  # new off
+    bgt t4, t3, 8f                  # region full -> REGION_EXHAUSTED
+    sw t4, 0(t2)                    # off = new off
+    la t1, __region_base
+    slli t2, a0, 2
+    add t2, t1, t2
+    lw t3, 0(t2)                    # base
+    la t1, __region_off
+    slli t2, a0, 2
+    add t2, t1, t2
+    lw t4, 0(t2)                    # new off
+    sub t4, t4, a1                  # old off
+    add a0, t3, t4                  # ptr
+    li a1, 0
+    sw a0, 0(s2)
+    addi s2, s2, 4
+    sw a1, 0(s2)
+    addi s2, s2, 4
+    ret
+8:
+    li a0, 26                       # REGION_EXHAUSTED
+    j __lang_trap
+9:
+    li a0, 23                       # UNREACHABLE
+    j __lang_trap
+
+.globl w_a52160bb1e22438b
+.type w_a52160bb1e22438b, @function
+w_a52160bb1e22438b:
+    addi s2, s2, -8
+    lw a0, 0(s2)
+    li t0, 16
+    bge a0, t0, 9f
+    la t1, __region_size
+    slli t2, a0, 2
+    add t2, t1, t2
+    lw t3, 0(t2)
+    beqz t3, 9f
+    la t1, __region_off
+    slli t2, a0, 2
+    add t2, t1, t2
+    sw zero, 0(t2)
+    ret
+9:
+    li a0, 23
+    j __lang_trap
+
+.globl w_3dc921382ce34c3e
+.type w_3dc921382ce34c3e, @function
+w_3dc921382ce34c3e:
+    addi s2, s2, -8
+    lw a0, 0(s2)
+    li t0, 16
+    bge a0, t0, 9f
+    la t1, __region_size
+    slli t2, a0, 2
+    add t2, t1, t2
+    lw t3, 0(t2)
+    beqz t3, 9f
+    la t1, __region_base
+    slli t2, a0, 2
+    add t2, t1, t2
+    sw zero, 0(t2)
+    la t1, __region_size
+    slli t2, a0, 2
+    add t2, t1, t2
+    sw zero, 0(t2)
+    la t1, __region_off
+    slli t2, a0, 2
+    add t2, t1, t2
+    sw zero, 0(t2)
+    ret
+9:
+    li a0, 23
+    j __lang_trap
+
+# -----------------------------------------------------------------
 # BSS — DS region, high-water, native stack
 # -----------------------------------------------------------------
 .section .bss
@@ -427,10 +607,33 @@ __lang_time_counter:
 __mmio_mem:
     .space 4096
 
+    # Region allocator arena (P7): 4096-byte bump arena + 16 slot records.
+    .balign 8
+.globl __region_arena
+__region_arena:
+    .space 4096
+.globl __region_arena_end
+__region_arena_end:
+.globl __region_next
+__region_next:
+    .space 4
+.globl __region_used
+__region_used:
+    .space 4
+.globl __region_base
+__region_base:
+    .space 64
+.globl __region_size
+__region_size:
+    .space 64
+.globl __region_off
+__region_off:
+    .space 64
+
 .section .data
 .globl __lang_expected_abi_hash
 __lang_expected_abi_hash:
-    # compute_abi_hash(ARCH_TAG_RISCV=3, slot=4, word=32, MODINFO_VER=3) = 0xf6dd34a3e430bd85, recipe v2
+    # compute_abi_hash(ARCH_TAG_RISCV=3, slot=4, word=32, MODINFO_VER=4) = 0x49d5b84f8a5a3c42, recipe v2
     .word 0xe430bd85
     .word 0xf6dd34a3
 

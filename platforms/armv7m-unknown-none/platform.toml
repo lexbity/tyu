@@ -9,7 +9,7 @@ description = "ARMv7-M bare-metal runtime"
 triple = "armv7m-unknown-none"
 arch = "arm"
 default = true
-expected_abi_hash = "0x5d36b0efe4b2e904"
+expected_abi_hash = "0x4e2b602bb1069843"
 
 [metal]
 path = "metal"
@@ -61,7 +61,7 @@ evidence = "evidence/debug_escalate.md"
 
 # ---- descriptor v2 ---------------------------------------------------------
 
-[[platform.windows]]
+[[platform.apertures]]
 id = 0
 name = "scratch"               # lm3s6965evb SRAM; QEMU MMIO scratch (D-14)
 kind = "bus"
@@ -69,7 +69,7 @@ bind = "arm-thumb-ldr-literal"
 base = 0x20000000
 size = 0x10000
 
-[[platform.windows]]
+[[platform.apertures]]
 id = 1
 name = "systick"               # Cortex-M SysTick SCS region (isr fixtures)
 kind = "bus"
@@ -81,7 +81,7 @@ size = 0x1000
 [[platform.devices]]
 map = "Scratch"
 instance = "scratch"
-window = 0
+aperture = 0
 base_offset = 0x0
 registers = [
   { offset = 0x00, name = "A", width = 32, access = "rw" },
@@ -91,7 +91,7 @@ registers = [
 [[platform.devices]]
 map = "Scratch"
 instance = "ptrscratch"
-window = 0
+aperture = 0
 base_offset = 0x7100
 registers = [
   { offset = 0x00, name = "FIRST", width = 64, access = "rw" },
@@ -101,10 +101,11 @@ registers = [
 [[platform.devices]]
 map = "Scratch"
 instance = "widthscratch"
-window = 0
+aperture = 0
 base_offset = 0x7000
 registers = [
   { offset = 0x00, name = "B", width = 8, access = "rw" },
+  { offset = 0x02, name = "H", width = 16, access = "rw" },
   { offset = 0x04, name = "W", width = 32, access = "rw" },
   { offset = 0x08, name = "D", width = 64, access = "rw" },
 ]
@@ -112,7 +113,7 @@ registers = [
 [[platform.devices]]
 map = "SysTick"
 instance = "systick"
-window = 1
+aperture = 1
 base_offset = 0x0
 registers = [
   { offset = 0x00, name = "CTRL", width = 32, access = "rw" },
@@ -123,7 +124,7 @@ registers = [
 [[platform.devices]]
 map = "Scratch"
 instance = "datascratch"
-window = 0
+aperture = 0
 base_offset = 0x7000
 registers = [
   { offset = 0x00, name = "DATA", width = 64, access = "rw" },
@@ -132,7 +133,7 @@ registers = [
 [[platform.devices]]
 map = "GPIO"
 instance = "gpio"
-window = 0
+aperture = 0
 base_offset = 0x0
 registers = [
   { offset = 0x00, name = "DATA", width = 32, access = "rw" },
@@ -141,7 +142,7 @@ registers = [
 [[platform.devices]]
 map = "Strategy"
 instance = "strategy"
-window = 0
+aperture = 0
 base_offset = 0x6000
 registers = [
   { offset = 0x00, name = "CTRL", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
@@ -156,11 +157,11 @@ registers = [
 [[platform.devices]]
 map = "StrategySeed"
 instance = "strategy_seed"
-window = 0
+aperture = 0
 base_offset = 0x6000
 registers = [
   { offset = 0x04, name = "STATUS", width = 32, access = "rw" },
 ]
 
 [platform.metal.trust]
-words = []
+words = ["platform.mem.region-create", "platform.mem.region-alloc", "platform.mem.region-reset", "platform.mem.region-destroy"]

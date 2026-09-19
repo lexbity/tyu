@@ -41,8 +41,8 @@ pub struct MmioMapDecl {
 pub enum InstanceBase {
     /// Raw absolute address (`MAP @ 0x…`), the legacy descriptor-less path.
     Raw(u64),
-    /// Symbolic board instance (`MAP @ board.<instance>`, P4): window-relative.
-    Symbolic { window: u16, base_offset: u32 },
+    /// Symbolic board instance (`MAP @ board.<instance>`, P4): aperture-relative.
+    Symbolic { aperture: u16, base_offset: u32 },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -103,8 +103,8 @@ pub struct MmioResolvedReg {
     pub reg_ty: TypeAtom,
     pub access: AccessMode,
     pub volatile: bool,
-    /// Window-relative place (P4): the module window-use id + byte offset.
-    pub window: u16,
+    /// Aperture-relative place (P4): the module aperture-use id + byte offset.
+    pub aperture: u16,
     pub offset: u32,
     pub array_len: Option<u32>,
     /// Descriptor access semantics (P5).
@@ -121,7 +121,7 @@ pub struct MmioResolvedField {
     pub reg_access: AccessMode,
     pub field: MmioFieldInfo,
     pub volatile: bool,
-    pub window: u16,
+    pub aperture: u16,
     pub offset: u32,
     pub array_len: Option<u32>,
     /// Descriptor access semantics of the enclosing register (P5).
@@ -143,8 +143,8 @@ pub fn access_can_write(access: AccessMode) -> bool {
     !matches!(access, AccessMode::Ro)
 }
 
-/// Fused per-window access-mask bits for a register access (design doc §5.5).
-pub fn window_access_bits(access: AccessMode) -> u8 {
+/// Fused per-aperture access-mask bits for a register access (design doc §5.5).
+pub fn aperture_access_bits(access: AccessMode) -> u8 {
     use ir::{
         ACCESS_EFFECTFUL_READ, ACCESS_READ, ACCESS_W1C, ACCESS_W1S, ACCESS_WRITE,
     };
@@ -341,7 +341,7 @@ fn resolve_instance_base(
             span: board_span,
         })?;
         return Ok(InstanceBase::Symbolic {
-            window: device.window,
+            aperture: device.aperture,
             base_offset: device.base_offset,
         });
     }
@@ -1100,7 +1100,7 @@ pub fn resolve_mmio_place(
     if let Some(field) = field_info {
         let width = mmio_type_width_bytes(reg_info.reg_ty.as_bytes()).unwrap_or(1) as u64;
         let idx = reg_idx.unwrap_or(0) as u64;
-        let (window, offset) = place_window_offset(inst, reg_info.offset, idx, width);
+        let (aperture, offset) = place_aperture_offset(inst, reg_info.offset, idx, width);
         let meta = reg_access_meta(db, inst.board.unwrap_or(inst.name), reg_info.offset);
         Ok(Some(MmioResolved::Field(MmioResolvedField {
             map: map_decl.name,
@@ -1109,7 +1109,7 @@ pub fn resolve_mmio_place(
             reg_access: reg_info.access,
             field,
             volatile: reg_info.volatile,
-            window,
+            aperture,
             offset,
             array_len: reg_info.array_len,
             meta,
@@ -1118,7 +1118,7 @@ pub fn resolve_mmio_place(
     } else {
         let width = mmio_type_width_bytes(reg_info.reg_ty.as_bytes()).unwrap_or(1) as u64;
         let idx = reg_idx.unwrap_or(0) as u64;
-        let (window, offset) = place_window_offset(inst, reg_info.offset, idx, width);
+        let (aperture, offset) = place_aperture_offset(inst, reg_info.offset, idx, width);
         let meta = reg_access_meta(db, inst.board.unwrap_or(inst.name), reg_info.offset);
         Ok(Some(MmioResolved::Reg(MmioResolvedReg {
             map: map_decl.name,
@@ -1126,7 +1126,7 @@ pub fn resolve_mmio_place(
             reg_ty: reg_info.reg_ty,
             access: reg_info.access,
             volatile: reg_info.volatile,
-            window,
+            aperture,
             offset,
             array_len: reg_info.array_len,
             meta,
@@ -1135,23 +1135,23 @@ pub fn resolve_mmio_place(
     }
 }
 
-/// The window-relative place of a register access (P4): the window id and the
+/// The aperture-relative place of a register access (P4): the aperture id and the
 /// byte offset = instance base offset + register offset + array index stride.
-fn place_window_offset(inst: MmioInstance, reg_offset: u32, idx: u64, width: u64) -> (u16, u32) {
+fn place_aperture_offset(inst: MmioInstance, reg_offset: u32, idx: u64, width: u64) -> (u16, u32) {
     match inst.base {
         InstanceBase::Symbolic {
-            window,
+            aperture,
             base_offset,
         } => {
             let offset = base_offset
                 .wrapping_add(reg_offset)
                 .wrapping_add(idx.wrapping_mul(width) as u32);
-            (window, offset as u32)
+            (aperture, offset as u32)
         }
         InstanceBase::Raw(base_addr) => {
-            // Legacy raw path: window 0 is the module's single raw window and
+            // Legacy raw path: aperture 0 is the module's single raw aperture and
             // the offset is the absolute address (a board-less compile — the
-            // verifier treats window 0 as size-bounded by the descriptor,
+            // verifier treats aperture 0 as size-bounded by the descriptor,
             // which never reaches here; this path is unit-test-only).
             let _ = base_addr;
             (0, base_addr as u32)
@@ -1274,9 +1274,9 @@ mod tests {
     fn desc_with_write_kind(kind: u8) -> codegen_core::compiled_desc::CompiledDescriptor {
         use codegen_core::compiled_desc::{
             CompiledDevice, CompiledDescriptor, CompiledRegister, COMPILED_DESC_DEVICE_CAP,
-            COMPILED_DESC_REGISTER_CAP, COMPILED_DESC_WINDOW_CAP,
+            COMPILED_DESC_REGISTER_CAP, COMPILED_DESC_APERTURE_CAP,
         };
-        use codegen_core::target::MmioWindowSpec;
+        use codegen_core::target::MmioApertureSpec;
         let mut regs = [CompiledRegister::EMPTY; COMPILED_DESC_REGISTER_CAP];
         regs[0] = CompiledRegister {
             offset: 0x00,
@@ -1289,19 +1289,21 @@ mod tests {
             mask: 0,
             reset: 0,
             barrier: 0,
+            interrupt: 0xFFFF,
+            irq: 0xFFFF,
         };
         let mut devs = [CompiledDevice::EMPTY; COMPILED_DESC_DEVICE_CAP];
         devs[0] = CompiledDevice {
             map: ir::Atom::new(b"Strategy").unwrap(),
             instance: ir::Atom::new(b"strategy").unwrap(),
-            window: 0,
+            aperture: 0,
             base_offset: 0,
             registers: regs,
             register_count: 1,
         };
         CompiledDescriptor {
-            windows: [MmioWindowSpec::EMPTY; COMPILED_DESC_WINDOW_CAP],
-            window_count: 0,
+            apertures: [MmioApertureSpec::EMPTY; COMPILED_DESC_APERTURE_CAP],
+            aperture_count: 0,
             devices: devs,
             device_count: 1,
             platform_hash: 0,

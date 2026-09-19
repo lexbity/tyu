@@ -6,9 +6,9 @@
 //! are serialised into the `.lmod` import reloc table.  Each entry describes
 //! one patch site that the loader must fix up at load time.
 //!
-//! P6 binding: a bus window's base is *not* a baked absolute constant. The
+//! P6 binding: a bus aperture's base is *not* a baked absolute constant. The
 //! code carries a relocatable site (a 32-bit little-endian word in `.text`)
-//! that the pack binds to the window base and the on-device loader re-derives
+//! that the pack binds to the aperture base and the on-device loader re-derives
 //! from its descriptor. The per-ISA site patterns live in [`arm`] and
 //! [`riscv`]; the apply/read mechanics are shared here.
 
@@ -20,8 +20,8 @@ pub mod riscv;
 /// Layout: `{ u32 site_off, u64 sym_hash, u8 kind, u8[3] _pad }` = 16 bytes.
 pub const RELOC_ENTRY_SIZE: u32 = 16;
 
-/// Size of a window-base reloc site in bytes (P6): one 32-bit LE word.
-pub const WINDOW_BASE_SITE_SIZE: usize = 4;
+/// Size of a aperture-base reloc site in bytes (P6): one 32-bit LE word.
+pub const APERTURE_BASE_SITE_SIZE: usize = 4;
 
 /// Per-target relocation subset kinds (module-format §3.1).
 ///
@@ -44,10 +44,10 @@ pub enum RelocKind {
     // RISC-V
     RiscV32 = 8,
     RiscVCall = 9,
-    /// Window-base fixup (P6): a code site holding `window_base + offset`
-    /// that the loader patches with the bound window's base. Carries the
-    /// window id in the entry's symbol-hash field.
-    MmioWindowBase = 10,
+    /// Aperture-base fixup (P6): a code site holding `aperture_base + offset`
+    /// that the loader patches with the bound aperture's base. Carries the
+    /// aperture id in the entry's symbol-hash field.
+    MmioApertureBase = 10,
 }
 
 impl RelocKind {
@@ -64,33 +64,33 @@ impl RelocKind {
             7 => Some(Self::ArmRel32),
             8 => Some(Self::RiscV32),
             9 => Some(Self::RiscVCall),
-            10 => Some(Self::MmioWindowBase),
+            10 => Some(Self::MmioApertureBase),
             _ => None,
         }
     }
 
-    /// The window-base relocation kind for a binding-time relocation ISA
-    /// (P6). Every reloc-capable ISA binds the base via `MmioWindowBase`.
+    /// The aperture-base relocation kind for a binding-time relocation ISA
+    /// (P6). Every reloc-capable ISA binds the base via `MmioApertureBase`.
     pub fn kind_for_isa(isa: ir::RelocIsa) -> Self {
         match isa {
-            ir::RelocIsa::ArmThumbLdrLiteral | ir::RelocIsa::RiscVHi20Lo12 => Self::MmioWindowBase,
+            ir::RelocIsa::ArmThumbLdrLiteral | ir::RelocIsa::RiscVHi20Lo12 => Self::MmioApertureBase,
         }
     }
 
-    /// The linker symbol a module's window-base site references before the
-    /// pack binds it (P6): `__lang_window_{id}_base`. The firmware build
+    /// The linker symbol a module's aperture-base site references before the
+    /// pack binds it (P6): `__lang_aperture_{id}_base`. The firmware build
     /// defines these symbols from the descriptor; the loader re-derives the
     /// same bases from them.
-    pub fn window_base_symbol(id: u16) -> alloc::string::String {
-        alloc::format!("__lang_window_{}_base", id)
+    pub fn aperture_base_symbol(id: u16) -> alloc::string::String {
+        alloc::format!("__lang_aperture_{}_base", id)
     }
 
-    /// Write the window base into a reloc site (P6). The site is one 32-bit
+    /// Write the aperture base into a reloc site (P6). The site is one 32-bit
     /// little-endian word; the raw value is written unchanged (the ARM lone
     /// literal and RISC-V literal-load patterns both carry the *address* in
     /// the pool word).
     pub fn apply_base(site: &mut [u8], site_off: usize, base: u32) -> Option<()> {
-        let end = site_off.checked_add(WINDOW_BASE_SITE_SIZE)?;
+        let end = site_off.checked_add(APERTURE_BASE_SITE_SIZE)?;
         if end > site.len() {
             return None;
         }
@@ -98,10 +98,10 @@ impl RelocKind {
         Some(())
     }
 
-    /// Read the window base back from a reloc site (P6). Used by tests and by
-    /// the loader's `check_window_base` (the bound-window validation).
+    /// Read the aperture base back from a reloc site (P6). Used by tests and by
+    /// the loader's `check_aperture_base` (the bound-aperture validation).
     pub fn read_site_base(site: &[u8], site_off: usize) -> Option<u32> {
-        let end = site_off.checked_add(WINDOW_BASE_SITE_SIZE)?;
+        let end = site_off.checked_add(APERTURE_BASE_SITE_SIZE)?;
         if end > site.len() {
             return None;
         }

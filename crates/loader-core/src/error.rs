@@ -41,10 +41,26 @@ pub enum LoadError {
     EncAuthFail,
     /// The encryption header is malformed.
     EncBadHeader,
-    /// A window-base reloc site's bound base does not match the device's
-    /// descriptor-derived base (P6 `check_window_base`): the module was
-    /// packed against a different window geometry than this device binds.
-    WindowBaseMismatch,
+    /// A aperture-base reloc site claims a base that does not match the board's
+    /// descriptor-derived base (P6): the module was built against a different
+    /// aperture geometry than this device binds, or a Tier-2 module forged its
+    /// claim. Defense-in-depth behind the `platform_hash` gate (E5220).
+    ApertureBaseMismatch,
+    /// The module's modinfo `platform_hash` does not match the board's
+    /// compiled-descriptor hash (decision D-5): wrong board (E5220).
+    PlatformHashMismatch,
+    /// A aperture-use entry names a aperture already bound by a live module
+    /// (decision D-9 exclusivity, E5221).
+    ApertureConflict,
+    /// A aperture-use entry names a aperture the board does not expose, or its
+    /// size disagrees with the board's aperture (E5222).
+    ApertureUnresolved,
+    /// The aperture-use table is structurally malformed: bounds, duplicate ids,
+    /// or an access mask outside the board's declared capability (E5223).
+    ApertureTableMalformed,
+    /// The modinfo version is not `MODINFO_VER` (v3 module on a v4 loader,
+    /// decision D-12, E5224). Reject before any allocation — no shim.
+    ModinfoVersionUnsupported,
 }
 
 /// Allow converting from `u32` (legacy platform interface) to `LoadError`.
@@ -89,8 +105,13 @@ impl LoadError {
             Self::EncNoKey => 5215,
             Self::EncAuthFail => 5216,
             Self::EncBadHeader => 5217,
-            Self::StackBoundUnverifiable => 5220,
-            Self::WindowBaseMismatch => 5221,
+            Self::StackBoundUnverifiable => 5218,
+            Self::ApertureBaseMismatch => 5219,
+            Self::PlatformHashMismatch => 5220,
+            Self::ApertureConflict => 5221,
+            Self::ApertureUnresolved => 5222,
+            Self::ApertureTableMalformed => 5223,
+            Self::ModinfoVersionUnsupported => 5224,
         }
     }
 }
@@ -111,6 +132,12 @@ pub const E_RESOURCE_SHARING_MISMATCH: u32 = LoadError::ResourceSharingMismatch.
 pub const E_CONTAINER_ENCRYPTED: u32 = LoadError::ContainerEncrypted.code();
 pub const E_MODULE_ALREADY_LOADED: u32 = LoadError::ModuleAlreadyLoaded.code();
 pub const E_STACK_BOUND_UNVERIFIABLE: u32 = LoadError::StackBoundUnverifiable.code();
+pub const E_APERTURE_BASE_MISMATCH: u32 = LoadError::ApertureBaseMismatch.code();
+pub const E_PLATFORM_HASH_MISMATCH: u32 = LoadError::PlatformHashMismatch.code();
+pub const E_APERTURE_CONFLICT: u32 = LoadError::ApertureConflict.code();
+pub const E_APERTURE_UNRESOLVED: u32 = LoadError::ApertureUnresolved.code();
+pub const E_APERTURE_TABLE_MALFORMED: u32 = LoadError::ApertureTableMalformed.code();
+pub const E_MODINFO_VERSION_UNSUPPORTED: u32 = LoadError::ModinfoVersionUnsupported.code();
 pub const E_ENC_UNSUPPORTED: u32 = LoadError::EncUnsupported.code();
 pub const E_ENC_REQUIRES_SIGNED: u32 = LoadError::EncRequiresSigned.code();
 pub const E_ENC_NO_KEY: u32 = LoadError::EncNoKey.code();
@@ -138,14 +165,25 @@ mod tests {
         assert_eq!(E_ENC_NO_KEY, 5215);
         assert_eq!(E_ENC_AUTH_FAIL, 5216);
         assert_eq!(E_ENC_BAD_HEADER, 5217);
-        assert_eq!(E_STACK_BOUND_UNVERIFIABLE, 5220);
+        assert_eq!(E_STACK_BOUND_UNVERIFIABLE, 5218);
+        assert_eq!(E_APERTURE_BASE_MISMATCH, 5219);
+        assert_eq!(E_PLATFORM_HASH_MISMATCH, 5220);
+        assert_eq!(E_APERTURE_CONFLICT, 5221);
+        assert_eq!(E_APERTURE_UNRESOLVED, 5222);
+        assert_eq!(E_APERTURE_TABLE_MALFORMED, 5223);
+        assert_eq!(E_MODINFO_VERSION_UNSUPPORTED, 5224);
     }
 
     #[test]
     fn load_error_code_matches_legacy() {
         assert_eq!(LoadError::AbiMismatch.code(), 5200);
         assert_eq!(LoadError::BadContainer.code(), 5201);
-        assert_eq!(LoadError::StackBoundUnverifiable.code(), 5220);
+        assert_eq!(LoadError::StackBoundUnverifiable.code(), 5218);
+        assert_eq!(LoadError::PlatformHashMismatch.code(), 5220);
+        assert_eq!(LoadError::ApertureConflict.code(), 5221);
+        assert_eq!(LoadError::ApertureUnresolved.code(), 5222);
+        assert_eq!(LoadError::ApertureTableMalformed.code(), 5223);
+        assert_eq!(LoadError::ModinfoVersionUnsupported.code(), 5224);
     }
 
     #[test]
@@ -167,6 +205,12 @@ mod tests {
             LoadError::EncAuthFail.code(),
             LoadError::EncBadHeader.code(),
             LoadError::StackBoundUnverifiable.code(),
+            LoadError::ApertureBaseMismatch.code(),
+            LoadError::PlatformHashMismatch.code(),
+            LoadError::ApertureConflict.code(),
+            LoadError::ApertureUnresolved.code(),
+            LoadError::ApertureTableMalformed.code(),
+            LoadError::ModinfoVersionUnsupported.code(),
         ];
         let mut sorted = codes.to_vec();
         sorted.sort();

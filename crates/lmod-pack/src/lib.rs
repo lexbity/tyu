@@ -528,10 +528,10 @@ fn import_reloc_kind(machine: u16, r_type: u32) -> Option<u8> {
     }
 }
 
-/// Parse a window-base symbol name (`__lang_window_{N}_base`) into the window
+/// Parse a aperture-base symbol name (`__lang_aperture_{N}_base`) into the aperture
 /// id (P6). Returns `None` for any other symbol.
-fn window_base_id(name: &[u8]) -> Option<u16> {
-    let prefix = b"__lang_window_";
+fn aperture_base_id(name: &[u8]) -> Option<u16> {
+    let prefix = b"__lang_aperture_";
     let suffix = b"_base";
     let name = name.strip_prefix(prefix)?;
     let name = name.strip_suffix(suffix)?;
@@ -552,13 +552,6 @@ fn window_base_id(name: &[u8]) -> Option<u16> {
 // Public API
 // ---------------------------------------------------------------------------
 
-/// A window base available for binding at pack time (P6).
-#[derive(Clone, Copy, Debug)]
-pub struct WindowBind {
-    pub id: u16,
-    pub base: u32,
-}
-
 /// Pack an ELF relocatable object into the `.lmod` container format.
 ///
 /// `input` is the raw bytes of an ELF ET_REL object file (32- or 64-bit,
@@ -571,19 +564,15 @@ pub struct WindowBind {
 ///   for the current codegen, which only emits imports into `.text`, but
 ///   will produce wrong offsets if a future codegen emits import-site
 ///   relocations in `.rodata` or `.data`.
-/// Pack an ELF relocatable object without a descriptor (no window binding —
-/// any `MmioWindowBase` reloc sites are left with the loader to resolve).
-pub fn pack(input: &[u8]) -> Result<Vec<u8>, PackError> {
-    pack_with_windows(input, &[])
-}
-
-/// Pack an ELF relocatable object with the platform's window bases (P6).
 ///
-/// `windows` names the descriptor's `(id, base)` pairs. Window-base reloc
-/// sites (`MmioWindowBase`, kind 10) are bound to these bases at pack time —
-/// the packed `.lmod` is self-contained — and the reloc records are carried
-/// for the on-device loader to re-derive and validate (`check_window_base`).
-pub fn pack_with_windows(input: &[u8], windows: &[WindowBind]) -> Result<Vec<u8>, PackError> {
+/// # P6 aperture-base sites (design doc §5.8, decision D-4)
+///
+/// A `MmioApertureBase` reloc site is *not* bound here: the packed `.lmod` keeps
+/// the site as the assembler emitted it and carries the reloc record (aperture
+/// id in the symbol-hash field). The on-device loader writes the board's base
+/// at load time (FR-15) after enforcing `platform_hash` (E5220). Baking bases
+/// here would make dynamic modules position-dependent on device maps.
+pub fn pack(input: &[u8]) -> Result<Vec<u8>, PackError> {
     let elf = Elf::parse(input)?;
 
     // 1. Extract section data.
@@ -695,14 +684,14 @@ pub fn pack_with_windows(input: &[u8], windows: &[WindowBind]) -> Result<Vec<u8>
             let sym = &symbols[sym_idx];
 
 if sym.shndx == SHN_UNDEF || (sym.name.is_empty() && sym_idx != 0) {
-                // P6: a window-base reference (`__lang_window_{N}_base`) is a
+                // P6: a aperture-base reference (`__lang_aperture_{N}_base`) is a
                 // binding-time reloc, not an ordinary import. It carries the
-                // window id in the symbol-hash field and is bound to the
+                // aperture id in the symbol-hash field and is bound to the
                 // concrete base at pack time.
-                if let Some(window_id) = window_base_id(sym.name.as_bytes()) {
+                if let Some(aperture_id) = aperture_base_id(sym.name.as_bytes()) {
                     let site_base = elf
                         .lmod_section_base(target_idx, &lmod::header::LmodHeader::new());
-                    import_relocs.push((site_base + r_offset, window_id as u64, 10));
+                    import_relocs.push((site_base + r_offset, aperture_id as u64, 10));
                 } else {
                     let kind = import_reloc_kind(elf.machine, r_type)
                         .ok_or(PackError::UnsupportedInternalReloc(r_type))?;
@@ -771,27 +760,11 @@ if sym.shndx == SHN_UNDEF || (sym.name.is_empty() && sym_idx != 0) {
         let off = layout.code_off as usize;
         out[off..off + code_data.len()].copy_from_slice(code_data);
     }
-    // P6: bind window-base reloc sites to the descriptor's concrete bases.
-    // Each kind-10 reloc site is a 32-bit LE word holding the window base;
-    // the raw value is written unchanged (the ARM lone-literal / RISC-V
-    // literal-load patterns carry the *address* in the pool word). The site
-    // offsets are rebased the same way as the final reloc table (step 8).
-    for &(site_base, sym_hash, kind) in &import_relocs {
-        if kind != 10 {
-            continue;
-        }
-        let window_id = sym_hash as u16;
-        let Some(bind) = windows.iter().find(|w| w.id == window_id) else {
-            return Err(PackError::UnsupportedInternalReloc(10));
-        };
-        let site_off = (site_base as usize) + layout.code_off as usize;
-        if lmod::reloc::RelocKind::apply_base(&mut out, site_off, bind.base).is_none() {
-            return Err(PackError::RelocSiteOutOfRange {
-                site: site_off,
-                kind: "MmioWindowBase",
-            });
-        }
-    }
+    // P6 (decision D-4): aperture-base reloc sites are NOT bound here. The
+    // packed `.lmod` keeps the assembler-emitted site bytes (zeros) and the
+    // kind-10 reloc records; the on-device loader writes the board's base at
+    // load time (design doc §5.8 step 5, FR-15) after the `platform_hash`
+    // gate (E5220). No absolute device address is baked into the code section.
     if !rodata_data.is_empty() {
         let off = layout.rodata_off as usize;
         out[off..off + rodata_data.len()].copy_from_slice(rodata_data);

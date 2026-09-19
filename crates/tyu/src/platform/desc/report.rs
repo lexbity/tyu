@@ -1,6 +1,6 @@
 //! Descriptor model rendering — the review artifact for board packs.
 //!
-//! `tyu platform lint` prints this after the pack lint outcome: windows,
+//! `tyu platform lint` prints this after the pack lint outcome: apertures,
 //! device tables, register rows with *effective* semantics (defaults
 //! resolved), allocator span, and the computed `platform_hash` (design doc
 //! §5.11, decision D-14).
@@ -28,8 +28,8 @@ pub fn format_descriptor_report(desc: &Descriptor) -> String {
     );
     let _ = writeln!(&mut out, "platform-hash {}", hash_hex(platform_hash(desc)));
 
-    let _ = writeln!(&mut out, "windows {}", desc.windows.len());
-    for w in &desc.windows {
+    let _ = writeln!(&mut out, "apertures {}", desc.apertures.len());
+    for w in &desc.apertures {
         let base = w
             .base
             .map(|b| format!("{:#x}", b))
@@ -49,10 +49,10 @@ pub fn format_descriptor_report(desc: &Descriptor) -> String {
     for d in &desc.devices {
         let _ = writeln!(
             &mut out,
-            "  {} {} window={} base_offset={:#x} extent={:#x}",
+            "  {} {} aperture={} base_offset={:#x} extent={:#x}",
             d.map,
             d.instance,
-            d.window,
+            d.aperture,
             d.base_offset,
             d.extent()
         );
@@ -71,6 +71,12 @@ pub fn format_descriptor_report(desc: &Descriptor) -> String {
                 r.reset,
                 r.barrier.as_str(),
             );
+            if let Some(n) = r.interrupt {
+                let _ = writeln!(&mut out, "    {} interrupt={n}", r.name);
+            }
+            if let Some(n) = r.irq {
+                let _ = writeln!(&mut out, "    {} irq={n}", r.name);
+            }
         }
     }
 
@@ -119,7 +125,7 @@ mod tests {
 name = "rp2350"
 schema = 2
 family = "rp2350"
-[[platform.windows]]
+[[platform.apertures]]
 id = 0
 name = "apb"
 kind = "bus"
@@ -128,7 +134,7 @@ size = 0x10000
 [[platform.devices]]
 map = "GPIO"
 instance = "gpio0"
-window = 0
+aperture = 0
 base_offset = 0xd000
 registers = [
   { offset = 0x0, name = "ctrl", width = 32, access = "rw" },
@@ -147,10 +153,10 @@ metadata_slots_max = 64
         let report = format_descriptor_report(&desc);
         assert!(report.contains("descriptor rp2350 schema=2 family=rp2350"));
         assert!(report.contains("platform-hash 0x"));
-        assert!(report.contains("windows 1"));
+        assert!(report.contains("apertures 1"));
         assert!(report.contains("[0] apb kind=bus base=0x40000000 size=0x10000"));
         assert!(report.contains("devices 1"));
-        assert!(report.contains("GPIO gpio0 window=0 base_offset=0xd000 extent=0x8"));
+        assert!(report.contains("GPIO gpio0 aperture=0 base_offset=0xd000 extent=0x8"));
         assert!(report.contains("ctrl offset=0x0000 width=32 access=rw write=plain read=plain"));
         assert!(report.contains("intr_stat offset=0x0004 width=32 access=rw write=w1c"));
         assert!(report.contains(

@@ -85,7 +85,7 @@ fn word_with_other_class_scoped_enter() -> Word {
         types,
         type_sizes,
         type_classes,
-        windows: frontend::fixed::FixedVec::new(),
+        apertures: frontend::fixed::FixedVec::new(),
         subtype_bases: FixedVec::new(),
         blocks: {
             let mut blocks: FixedVec<Block, 16> = FixedVec::new();
@@ -234,7 +234,7 @@ fn slice_and_region_ref_classes_still_emit() {
         types,
         type_sizes,
         type_classes,
-        windows: frontend::fixed::FixedVec::new(),
+        apertures: frontend::fixed::FixedVec::new(),
         subtype_bases: FixedVec::new(),
         blocks: {
             let mut blocks: FixedVec<Block, 16> = FixedVec::new();

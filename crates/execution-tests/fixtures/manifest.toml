@@ -172,3 +172,14 @@ axes = ["mmio"]
 requires = []
 targets = ["riscv32-unknown-none"]
 
+
+# ---- P7: platform allocation (reference allocators per target) ----
+# Positive: create/alloc/store/load/destroy round-trip against the real
+# per-target allocator (x86: codegen-inline mmap; arm/riscv: metal.trust
+# bump arena). Fails via testio 'F' byte on any wrong value.
+[[fixture]]
+name = "region_smoke"
+file = "region_smoke.mod"
+axes = ["mmio"]
+requires = []
+targets = ["armv7m-unknown-none", "riscv32-unknown-none"]

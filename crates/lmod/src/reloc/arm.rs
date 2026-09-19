@@ -1,11 +1,11 @@
-//! ARM Thumb window-base reloc site (P6).
+//! ARM Thumb aperture-base reloc site (P6).
 //!
 //! Site pattern: `ldr rN, [pc, #imm]` over a literal-pool word. The reloc
-//! site is that word: the assembler materialises `ldr rN, =__lang_window_N_base`
+//! site is that word: the assembler materialises `ldr rN, =__lang_aperture_N_base`
 //! as a pc-relative load from a pool entry carrying an `R_ARM_ABS32`
 //! relocation against the extern symbol. At pack time the word is bound to
-//! the window base (a plain 32-bit little-endian address); at load time the
-//! loader re-derives the same base from its descriptor (`check_window_base`).
+//! the aperture base (a plain 32-bit little-endian address); at load time the
+//! loader re-derives the same base from its descriptor (`check_aperture_base`).
 //!
 //! `apply_base`/`read_site_base` from the shared `mod` write/read that word
 //! unchanged — the lone literal holds the *address*, not an addend.
@@ -23,14 +23,14 @@ pub fn read_site(site: &[u8], site_off: usize) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::{apply, read_site};
-    use super::super::WINDOW_BASE_SITE_SIZE;
+    use super::super::APERTURE_BASE_SITE_SIZE;
 
     #[test]
     fn arm_site_roundtrip() {
         let mut site = [0u8; 8];
         apply(&mut site, 2, 0x20000000).unwrap();
         assert_eq!(read_site(&site, 2), Some(0x20000000));
-        assert_eq!(WINDOW_BASE_SITE_SIZE, 4);
+        assert_eq!(APERTURE_BASE_SITE_SIZE, 4);
     }
 
     #[test]

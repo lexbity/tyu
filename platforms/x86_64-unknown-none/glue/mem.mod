@@ -4,16 +4,16 @@ type RegionRef;
 type RegionRefMut;
 
 : platform.mem.region-create ( usize -- Region )
-  # bare-metal: stub — wire a static arena to activate
+  # implemented by the codegen-inline allocator (P7, region.rs)
 ;
 : platform.mem.region-alloc ( Region usize -- ptr_mut ) performs {alloc}
-   # bare-metal: stub
+   # implemented by the codegen-inline allocator (P7, region.rs)
 ;
 : platform.mem.region-reset ( Region -- )
-  # bare-metal: stub
+  # implemented by the codegen-inline allocator (P7, region.rs)
 ;
 : platform.mem.region-destroy ( Region -- )
-  # bare-metal: stub
+  # implemented by the codegen-inline allocator (P7, region.rs)
 ;
 
 end;

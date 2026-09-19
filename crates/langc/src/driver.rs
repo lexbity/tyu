@@ -5,7 +5,7 @@ use crate::util::{
 };
 use alloc::vec::Vec;
 use codegen_core::compiled_desc::CompiledDescriptor;
-use codegen_core::{FeatureSet, MmioWindowSpec, Target};
+use codegen_core::{FeatureSet, MmioApertureSpec, Target};
 use frontend::parse::{DeclKind, ModuleAst, Parser};
 use hosted::{diag, fs, process};
 use ir::CapSet;
@@ -154,7 +154,7 @@ pub fn emit_asm_driver(
     input_path: &[u8],
     feature_set: FeatureSet,
     descriptor: Option<&CompiledDescriptor>,
-    mmio_windows: &[MmioWindowSpec],
+    mmio_apertures: &[MmioApertureSpec],
     out: &mut Stdout,
 ) -> i32 {
     let es = match init_env(module, src, search_dirs, target) {
@@ -172,7 +172,7 @@ pub fn emit_asm_driver(
         debug_trap_loc,
         AsmMode::Executable,
     );
-    if let Err(e) = gen_backend.set_mmio_windows(mmio_windows) {
+    if let Err(e) = gen_backend.set_mmio_apertures(mmio_apertures) {
         let _ = diag::error_simple(e.code(), codegen_error_message(e.code()));
         return 2;
     }
@@ -280,7 +280,7 @@ pub fn emit_obj_driver(
     input_path: &[u8],
     feature_set: FeatureSet,
     descriptor: Option<&CompiledDescriptor>,
-    mmio_windows: &[MmioWindowSpec],
+    mmio_apertures: &[MmioApertureSpec],
 ) -> i32 {
     // Library modules have no entry point; only executables require `main`.
     if !is_lib {
@@ -350,6 +350,7 @@ pub fn emit_obj_driver(
     );
 
     // Create target-appropriate backend.
+    let platform_hash = descriptor.map(|d| d.platform_hash).unwrap_or(0);
     let mut gen: Backend = match target {
         Target::X86_64UnknownLinuxGnu | Target::X86_64UnknownNone => {
             let mut bk = codegen_x86_64::X86_64HostedBackend::new(
@@ -359,11 +360,12 @@ pub fn emit_obj_driver(
                 debug_trap_loc,
                 AsmMode::Object,
             );
-            if let Err(e) = bk.set_mmio_windows(mmio_windows) {
+            if let Err(e) = bk.set_mmio_apertures(mmio_apertures) {
                 let _ = diag::error_simple(e.code(), codegen_error_message(e.code()));
                 return 2;
             }
             bk.set_expected_abi_hash(abi_hash_val);
+            bk.set_platform_hash(platform_hash);
             Backend::X86(bk)
         }
         Target::ArmV7MUnknownNone => {
@@ -374,11 +376,12 @@ pub fn emit_obj_driver(
                 debug_trap_loc,
                 AsmMode::Object,
             );
-            if let Err(e) = bk.set_mmio_windows(mmio_windows) {
+            if let Err(e) = bk.set_mmio_apertures(mmio_apertures) {
                 let _ = diag::error_simple(e.code(), codegen_error_message(e.code()));
                 return 2;
             }
             bk.set_expected_abi_hash(abi_hash_val);
+            bk.set_platform_hash(platform_hash);
             Backend::Arm(bk)
         }
         Target::RiscV32UnknownNone => {
@@ -389,11 +392,12 @@ pub fn emit_obj_driver(
                 debug_trap_loc,
                 AsmMode::Object,
             );
-            if let Err(e) = bk.set_mmio_windows(mmio_windows) {
+            if let Err(e) = bk.set_mmio_apertures(mmio_apertures) {
                 let _ = diag::error_simple(e.code(), codegen_error_message(e.code()));
                 return 2;
             }
             bk.set_expected_abi_hash(abi_hash_val);
+            bk.set_platform_hash(platform_hash);
             Backend::RiscV(bk)
         }
     };

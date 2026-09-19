@@ -83,7 +83,7 @@ fn single_block_word(sig: Sig, ops: &[OpKind]) -> Word {
         types: baseline_types(),
         type_sizes: baseline_sizes(),
         type_classes: baseline_classes(),
-        windows: FixedVec::new(),
+        apertures: FixedVec::new(),
         subtype_bases: FixedVec::new(),
         blocks: {
             let mut b = FixedVec::new();

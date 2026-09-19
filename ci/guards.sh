@@ -20,8 +20,17 @@
 #   G13 Host input-derived panic/unreachable sites are retired.
 #   G14 Every discovered platform pack manifest carries the descriptor schema
 #       stamp `schema = 2` (descriptor v2 — platform-descriptor-and-mmio-semantics).
-#   G14b The x86 MMIO emulated-window size is descriptor-sourced; the old
+#   G14b The x86 MMIO emulated-aperture size is descriptor-sourced; the old
 #        hardcoded 0x10000 constant is gone (P3, FR-21).
+#   G15 No raw MMIO base literals remain in product source (P4, FR-23).
+#   G16 ARM on-device loader forces the Thumb bit before `blx` (P5 fix).
+#   G17 P6 platform binding wired end-to-end (descriptor -> board table ->
+#       loader E5220-24 + reloc apply).
+#   G17b Board aperture table embedded (`__lang_platform_desc`) and decoded on-device.
+#   G18 P7 set-payload region protocol + key roster + trap 26 present.
+#   G18b P7 reference allocator words present per bare-metal target
+#        (arm/riscv metal.trust words + x86 __region_* arrays) and trap 26
+#        registered in the diag claim table.
 #
 # Escape hatch: add `# guards: allow-no-tests` as a comment in the
 # package's Cargo.toml to suppress G1/G2 for that package.  This is
@@ -419,7 +428,7 @@ else
     failures=$((failures + 1))
 fi
 
-# --- G14: descriptor schema stamp coverage (Phase P1) ---
+# --- G14: descriptor schema stamp coverage (Phase P1, renewed P8) ---
 # Every discovered platform pack manifest (platforms/<name>/platform.toml and
 # runtime/*.platform.toml) must carry the descriptor v2 stamp `schema = 2`.
 # A pack without the stamp is a legacy pack the compiler cannot consume; a
@@ -440,10 +449,43 @@ else
     failures=$((failures + 1))
 fi
 
-# --- G14b: x86 MMIO window size is descriptor-sourced (P3, FR-21) ---
-# The old hardcoded `0x10000`/`65536` emulated-window constant must not
+# --- G14c: rp2350 datasheet-derived device tables are present (P8) ---
+# The P1-era rp2350 descriptor pinned the *shape* with a single placeholder
+# device. P8 fills the register tables from the RP2350 datasheet; this guard
+# is the renewed baseline: the board's peripheral blocks and their interrupt
+# request numbers must be in the descriptor, not a 3-row stub.
+rp2350_devices=$(grep -c '^\[\[platform.devices\]\]' platforms/rp2350/platform.toml || true)
+rp2350_irqs=$(grep -c 'irq = ' platforms/rp2350/platform.toml || true)
+rp2350_interrupts=$(grep -c 'interrupt = ' platforms/rp2350/platform.toml || true)
+if [ "$rp2350_devices" -ge 10 ] && [ "$rp2350_irqs" -ge 8 ]; then
+    msg $GREEN "  G14c: rp2350 descriptor carries datasheet device tables (devices=$rp2350_devices irq_rows=$rp2350_irqs)"
+else
+    msg $RED "  G14c FAIL: rp2350 datasheet tables incomplete (devices=$rp2350_devices irqs=$rp2350_irqs)"
+    failures=$((failures + 1))
+fi
+
+# --- G14d: mem-width fixture coverage is target-broad (P8, FR-9) ---
+# The memory-width fixture was x86-only (P1); P8 broadens it to arm/riscv and
+# the arm variant exercises @u8/@u16/@u32/@u64. A regression that drops a
+# width class breaks the corresponding fixture's width coverage.
+for f in mem_width_arm mem_width_riscv; do
+    if [ ! -e "crates/execution-tests/fixtures/$f.mod" ]; then
+        msg $RED "  G14d FAIL: missing mem-width fixture $f.mod"
+        failures=$((failures + 1))
+    fi
+done
+arm_widths=$(grep -cE '@u8|@u16|@u32|@i64|!u8|!u16|!u32|!i64' crates/execution-tests/fixtures/mem_width_arm.mod || true)
+if [ "$arm_widths" -ge 4 ]; then
+    msg $GREEN "  G14d: mem-width fixtures cover u8/u16/u32/u64 on arm+riscv (arm_widths=$arm_widths)"
+else
+    msg $RED "  G14d FAIL: mem_width_arm width coverage dropped (arm_widths=$arm_widths)"
+    failures=$((failures + 1))
+fi
+
+# --- G14b: x86 MMIO aperture size is descriptor-sourced (P3, FR-21) ---
+# The old hardcoded `0x10000`/`65536` emulated-aperture constant must not
 # return to the x86 mmio lowering OR the Executable-mode `__mmio_mem` BSS
-# reservation; both sizes now come from the backend's window table (target
+# reservation; both sizes now come from the backend's aperture table (target
 # defaults or the compiled platform descriptor). A reservation smaller than
 # the bounds-checked size admits MMIO past the array (finding F1).
 mmio_const_hits=$(grep -R -n -E '0x10000|65536' \
@@ -453,9 +495,9 @@ mmio_reserve_hits=$(grep -R -n -E '__mmio_mem rb [0-9]' \
 mmio_const_hits="${mmio_const_hits}${mmio_reserve_hits}"
 mmio_const_count=$(printf '%s\n' "$mmio_const_hits" | sed '/^$/d' | wc -l | tr -d ' ')
 if [ "$mmio_const_count" -eq 0 ]; then
-    msg $GREEN "  G14b: x86 MMIO window size is descriptor-sourced (no 0x10000 constant)"
+    msg $GREEN "  G14b: x86 MMIO aperture size is descriptor-sourced (no 0x10000 constant)"
 else
-    msg $RED "  G14b FAIL: hardcoded emulated-window size returned to mmio.rs:"
+    msg $RED "  G14b FAIL: hardcoded emulated-aperture size returned to mmio.rs:"
     printf '%s\n' "$mmio_const_hits" >&2
     failures=$((failures + 1))
 fi
@@ -493,19 +535,33 @@ else
     failures=$((failures + 1))
 fi
 
-# --- G17: P6 window-base binding is wired end-to-end ---
-# The steel thread: bus windows declare a bind; the backends emit the
-# `__lang_window_{id}_base` reloc site; the pack maps+binds it (MmioWindowBase);
-# the loader re-derives + validates (check_window_base). A missing link means a
-# module silently bakes an absolute base and cannot be re-validated on-device.
+# --- G17: P6 platform binding is wired end-to-end ---
+# The steel thread (design doc §5.8): backends emit `__lang_aperture_{id}_base`
+# reloc sites; lmod-pack records MmioApertureBase relocs without baking bases;
+# tyu embeds the board aperture table (`__lang_platform_desc`); the loader
+# enforces platform_hash (E5220), resolves+binds apertures (E5221/22/23), and
+# writes the board base into reloc sites at load (FR-15). A missing link means
+# a module silently binds the wrong geometry or the board identity is dropped.
 bind_decls=$(grep -h -c "bind = \"arm-thumb-ldr-literal\"\|bind = \"riscv-hi20-lo12\"" platforms/*/platform.toml 2>/dev/null | awk '{s+=$1} END {print s+0}')
-backend_sites=$(grep -h -c "__lang_window_" crates/codegen-arm/src/word.rs crates/codegen-riscv/src/word.rs | awk '{s+=$1} END {print s+0}')
-loader_check=$(grep -h -c "WindowBaseMismatch\|window_base(" crates/loader-core/src/load.rs crates/loader-core/src/boot.rs crates/loader-core/src/platform.rs | awk '{s+=$1} END {print s+0}')
-pack_bind=$(grep -h -c "window_base_id\|apply_base" crates/lmod-pack/src/lib.rs | awk '{s+=$1} END {print s+0}')
-if [ "$bind_decls" -ge 2 ] && [ "$backend_sites" -ge 2 ] && [ "$loader_check" -ge 2 ] && [ "$pack_bind" -ge 2 ]; then
-    msg $GREEN "  G17: window-base binding wired end-to-end (descriptor -> pack -> loader check_window_base)"
+backend_sites=$(grep -h -c "__lang_aperture_" crates/codegen-arm/src/word.rs crates/codegen-riscv/src/word.rs | awk '{s+=$1} END {print s+0}')
+board_table=$(grep -h -c "encode_board_table_blob\|__lang_platform_desc\|aperture_capability" crates/tyu/src/build.rs crates/codegen-core/src/compiled_desc.rs | awk '{s+=$1} END {print s+0}')
+loader_bind=$(grep -h -c "bind_apertures\|PlatformHashMismatch\|ApertureConflict\|ApertureUnresolved\|ApertureTableMalformed\|ModinfoVersionUnsupported" crates/loader-core/src/load.rs crates/loader-core/src/apertures.rs crates/loader-core/src/error.rs | awk '{s+=$1} END {print s+0}')
+reloc_apply=$(grep -h -c "apply_base" crates/loader-core/src/load.rs | awk '{s+=$1} END {print s+0}')
+if [ "$bind_decls" -ge 2 ] && [ "$backend_sites" -ge 2 ] && [ "$board_table" -ge 3 ] && [ "$loader_bind" -ge 5 ] && [ "$reloc_apply" -ge 1 ]; then
+    msg $GREEN "  G17: P6 platform binding wired end-to-end (descriptor -> board table -> loader E5220-24 + reloc apply)"
 else
-    msg $RED "  G17 FAIL: P6 window-base binding is incomplete (bind_decls=$bind_decls backend_sites=$backend_sites loader_check=$loader_check pack_bind=$pack_bind)"
+    msg $RED "  G17 FAIL: P6 platform binding incomplete (bind_decls=$bind_decls backend_sites=$backend_sites board_table=$board_table loader_bind=$loader_bind reloc_apply=$reloc_apply)"
+    failures=$((failures + 1))
+fi
+
+# --- G17b: the board table blob is embedded as `__lang_platform_desc` and the
+# device loader decodes it with the shared codec (design doc §5.8) ---
+blob_producer=$(grep -h -c "encode_into(&mut buf, cd.platform_hash" crates/tyu/src/build.rs | awk '{s+=$1} END {print s+0}')
+blob_consumer=$(grep -h -c "decode as decode_board_table\|__lang_platform_desc_start" crates/loader-core/src/boot.rs | awk '{s+=$1} END {print s+0}')
+if [ "$blob_producer" -ge 1 ] && [ "$blob_consumer" -ge 1 ]; then
+    msg $GREEN "  G17b: board aperture table embedded (__lang_platform_desc) and decoded on-device"
+else
+    msg $RED "  G17b FAIL: board table embed/decode broken (producer=$blob_producer consumer=$blob_consumer)"
     failures=$((failures + 1))
 fi
 
@@ -521,6 +577,24 @@ if [ "$region_state" -ge 3 ] && [ "$key_registry" -ge 3 ] && [ "$trap26" -ge 2 ]
     msg $GREEN "  G18: P7 region-with-rollback + key roster + trap 26 (RegionExhausted) present"
 else
     msg $RED "  G18 FAIL: P7 set-payload machinery incomplete (region_state=$region_state key_registry=$key_registry trap26=$trap26)"
+    failures=$((failures + 1))
+fi
+
+# --- G18b: P7 reference allocator words per bare-metal target + diag claim ---
+# The `platform.mem.region-*` words must be real on every QEMU-capable target
+# (x86: codegen-inline mmio/bump; ARM/RISC-V: metal.trust asm words in the metal
+# runtime), and trap 26 must be registered in the diag claim table (not
+# UNKNOWN_TRAP_CODE). This is the "no reference allocator in any target" fix.
+region_words_arm=$(grep -c "w_7a5f795caa045668" platforms/armv7m-unknown-none/metal/runtime.asm runtime/armv7m-unknown-none/runtime.asm | awk -F: '{s+=$2} END {print s+0}')
+region_words_rv=$(grep -c "w_7a5f795caa045668" platforms/riscv32-unknown-none/metal/runtime.asm runtime/riscv32-unknown-none/runtime.asm | awk -F: '{s+=$2} END {print s+0}')
+trust_arm=$(grep -c "platform.mem.region-create" platforms/armv7m-unknown-none/platform.toml | awk '{s+=$1} END {print s+0}')
+trust_rv=$(grep -c "platform.mem.region-create" platforms/riscv32-unknown-none/platform.toml | awk '{s+=$1} END {print s+0}')
+claim26=$(grep -c "26 => \"REGION_EXHAUSTED\"" crates/diag-core/src/claims.rs | awk '{s+=$1} END {print s+0}')
+x86_region=$(grep -c "__region_next" platforms/x86_64-unknown-none/metal/runtime.asm runtime/x86_64-unknown-none/runtime.asm | awk -F: '{s+=$2} END {print s+0}')
+if [ "$region_words_arm" -ge 2 ] && [ "$region_words_rv" -ge 2 ] && [ "$trust_arm" -ge 1 ] && [ "$trust_rv" -ge 1 ] && [ "$claim26" -ge 1 ] && [ "$x86_region" -ge 2 ]; then
+    msg $GREEN "  G18b: P7 reference allocator words present per target (arm=$region_words_arm rv=$region_words_rv trust=$trust_arm/$trust_rv claim26=$claim26 x86=$x86_region)"
+else
+    msg $RED "  G18b FAIL: P7 reference allocator incomplete (arm=$region_words_arm rv=$region_words_rv trust=$trust_arm/$trust_rv claim26=$claim26 x86=$x86_region)"
     failures=$((failures + 1))
 fi
 

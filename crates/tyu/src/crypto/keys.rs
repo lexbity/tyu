@@ -85,7 +85,13 @@ pub fn decode_keys_section(bytes: &[u8]) -> Result<(u8, u32), KeysSectionError> 
     if lane as usize >= SET_KEY_RANGE {
         return Err(KeysSectionError::LaneOutOfRange { lane });
     }
-    let set_id = u32::from_le_bytes(bytes[1..5].try_into().unwrap());
+    let set_id = u32::from_le_bytes(
+        bytes
+            .get(1..5)
+            .ok_or(KeysSectionError::Truncated)?
+            .try_into()
+            .map_err(|_| KeysSectionError::Truncated)?,
+    );
     Ok((lane, set_id))
 }
 

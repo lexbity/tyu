@@ -117,6 +117,10 @@ fn emit_thumb_mov32(out: &mut dyn frontend::parse::Output, reg: u8, val: u32) {
 impl<'a> ArmThumbBackend<'a> {
     pub fn emit_word(&mut self, w: &lir::Word) -> Result<(), CodegenError> {
         self.cur_word_id = fnv1a_u64(w.name.as_bytes());
+        // P6: fuse this word's aperture-use entries into the module table.
+        for wu in w.apertures.iter() {
+            codegen_core::merge_aperture_use(&mut self.mi_apertures, &mut self.mi_aperture_count, wu);
+        }
         self.out.write(b"\n");
 
         if self.mode == AsmMode::Object {
@@ -516,12 +520,12 @@ impl<'a> ArmThumbBackend<'a> {
                 Ok(true)
             }
             lir::OpKind::AddrOf {
-                base: lir::AddrOfBase::Mmio { window, offset },
+                base: lir::AddrOfBase::Mmio { aperture, offset },
                 ..
             } => {
-                // Symbolic MMIO register address: window_base + offset (P4),
+                // Symbolic MMIO register address: aperture_base + offset (P4),
                 // bound through a relocatable literal site (P6).
-                self.emit_mmio_window_addr(window, offset)?;
+                self.emit_mmio_aperture_addr(aperture, offset)?;
                 self.out.write(b"\tstr r0, [r4]\n\tadds r4, r4, #4\n");
                 self.out.write(b"\teors r0, r0\n");
                 self.out.write(b"\tstr r0, [r4]\n\tadds r4, r4, #4\n");
@@ -616,7 +620,7 @@ impl<'a> ArmThumbBackend<'a> {
                         write_u32(self.out, shift_amt as u32);
                         self.out.write(b"\n\tasrs r1, r0, #31\n");
                     } else {
-                        if mask <= 0xFFFF {
+                        if mask <= 0xFF {
                             self.out.write(b"\tands r0, r0, #");
                             write_hex(self.out, mask);
                             self.out.write(b"\n");
@@ -646,7 +650,7 @@ impl<'a> ArmThumbBackend<'a> {
                         write_u32(self.out, shift_amt as u32);
                         self.out.write(b"\n\tasrs r1, r0, #31\n");
                     } else {
-                        if mask <= 0xFFFF {
+                        if mask <= 0xFF {
                             self.out.write(b"\tands r0, r0, #");
                             write_hex(self.out, mask);
                             self.out.write(b"\n");
@@ -768,12 +772,12 @@ impl<'a> ArmThumbBackend<'a> {
                 self.emit_arm_store_field(_w, field_ty, mask, shift, read_kind, barrier)?;
                 Ok(())
             }
-            lir::OpKind::MmioPlace { window, offset, .. } => {
-                // Symbolic place: window_base + offset (P4), bound through a
-                // relocatable literal site (P6). The window is guaranteed
+            lir::OpKind::MmioPlace { aperture, offset, .. } => {
+                // Symbolic place: aperture_base + offset (P4), bound through a
+                // relocatable literal site (P6). The aperture is guaranteed
                 // declared by construction (descriptor resolution); the
                 // lookup is a loud error if it ever is not.
-                self.emit_mmio_window_addr(window, offset)?;
+                self.emit_mmio_aperture_addr(aperture, offset)?;
                 // Push the MMIO address onto DS.
                 self.out.write(b"\tstr r0, [r4]\n\tadds r4, r4, #4\n");
                 self.out.write(b"\teors r0, r0\n");
@@ -876,26 +880,26 @@ impl<'a> ArmThumbBackend<'a> {
         }
     }
 
-    /// Emit the window address of a window-relative place into r0 (P6).
-    /// A bus window with a binding ISA loads the base from a relocatable
-    /// literal site (`ldr r0, =__lang_window_{id}_base`) then adds the
-    /// register offset; an unbound (emulated) window falls back to the
+    /// Emit the aperture address of a aperture-relative place into r0 (P6).
+    /// A bus aperture with a binding ISA loads the base from a relocatable
+    /// literal site (`ldr r0, =__lang_aperture_{id}_base`) then adds the
+    /// register offset; an unbound (emulated) aperture falls back to the
     /// absolute constant.
-    fn emit_mmio_window_addr(&mut self, window: u16, offset: u32) -> Result<(), CodegenError> {
+    fn emit_mmio_aperture_addr(&mut self, aperture: u16, offset: u32) -> Result<(), CodegenError> {
         let mut found = None;
-        for i in 0..self.mmio_window_count {
-            if self.mmio_windows[i].id == window {
-                found = Some(&self.mmio_windows[i]);
+        for i in 0..self.mmio_aperture_count {
+            if self.mmio_apertures[i].id == aperture {
+                found = Some(&self.mmio_apertures[i]);
                 break;
             }
         }
         let Some(spec) = found else {
-            return Err(CodegenError::NoMmioWindow);
+            return Err(CodegenError::NoMmioAperture);
         };
         match spec.reloc_isa {
             Some(codegen_core::RelocIsa::ArmThumbLdrLiteral) => {
-                self.out.write(b"\tldr r0, =__lang_window_");
-                write_u32(self.out, window as u32);
+                self.out.write(b"\tldr r0, =__lang_aperture_");
+                write_u32(self.out, aperture as u32);
                 self.out.write(b"_base\n");
                 self.emit_add_r0_const(offset);
                 Ok(())
@@ -903,7 +907,7 @@ impl<'a> ArmThumbBackend<'a> {
             _ => {
                 let addr = spec
                     .base
-                    .ok_or(CodegenError::NoMmioWindow)?
+                    .ok_or(CodegenError::NoMmioAperture)?
                     .saturating_add(offset as u64);
                 self.emit_const32(addr as u32);
                 Ok(())
@@ -1025,7 +1029,9 @@ impl<'a> ArmThumbBackend<'a> {
                 self.out.write(load);
                 match bits {
                     8 => self.out.write(b"\tands r0, r0, #255\n"),
-                    16 => self.out.write(b"\tands r0, r0, #65535\n"),
+                    // #65535 is not a representable Thumb rotated immediate;
+                    // zero-extend the low halfword via lsls+lsrs instead.
+                    16 => self.out.write(b"\tlsls r0, r0, #16\n\tlsrs r0, r0, #16\n"),
                     _ => {}
                 }
                 match write_kind {
@@ -1082,7 +1088,7 @@ impl<'a> ArmThumbBackend<'a> {
             self.out.write(b"\n");
         }
         if mask != 0 && mask != u64::MAX {
-            if mask <= 0xFFFF {
+            if mask <= 0xFF {
                 self.out.write(b"\tands r0, r0, #");
                 write_hex(self.out, mask);
                 self.out.write(b"\n");
@@ -1137,7 +1143,7 @@ impl<'a> ArmThumbBackend<'a> {
         self.out.write(b"\tldr r3, [r2]\n");
         let shifted_mask = mask.wrapping_shl(shift as u32) & 0xFFFFFFFF;
         let clear = (!shifted_mask) & 0xFFFFFFFF;
-        if clear <= 0xFFFF {
+        if clear <= 0xFF {
             self.out.write(b"\tands r3, r3, #");
             write_hex(self.out, clear);
             self.out.write(b"\n");

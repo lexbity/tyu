@@ -100,6 +100,7 @@ impl DeployArgs {
             metal_sign_key: None,
             metal_kek: None,
             metal_encrypt_mode: None,
+            verbose: false,
         }
     }
 }
@@ -122,6 +123,8 @@ pub struct BuildArgs {
     pub metal_sign_key: Option<String>,
     pub metal_kek: Option<String>,
     pub metal_encrypt_mode: Option<EncryptMode>,
+    /// `-v`/`--verbose`: report per-module platform_hash + aperture table.
+    pub verbose: bool,
 }
 
 /// Arguments for the `run` subcommand.
@@ -142,6 +145,7 @@ pub struct RunArgs {
     pub metal_sign_key: Option<String>,
     pub metal_kek: Option<String>,
     pub metal_encrypt_mode: Option<EncryptMode>,
+    pub verbose: bool,
 }
 
 impl RunArgs {
@@ -160,6 +164,7 @@ impl RunArgs {
             metal_sign_key: self.metal_sign_key.clone(),
             metal_kek: self.metal_kek.clone(),
             metal_encrypt_mode: self.metal_encrypt_mode,
+            verbose: false,
         }
     }
 }
@@ -284,11 +289,14 @@ fn parse_common(args: &[String], extra_known: &[&str]) -> Result<CommonArgs, ()>
     let mut metal_sign_key: Option<String> = None;
     let mut metal_kek: Option<String> = None;
     let mut metal_encrypt_mode: Option<EncryptMode> = None;
+    let mut verbose = false;
 
     let mut i = 0;
     while i < args.len() {
         let a = &args[i];
-        if let Some(val) = a.strip_prefix("--target=") {
+        if a == "-v" || a == "--verbose" {
+            verbose = true;
+        } else if let Some(val) = a.strip_prefix("--target=") {
             let tb = val.as_bytes();
             target = Target::parse(tb);
             if target.is_none() {
@@ -371,6 +379,7 @@ fn parse_common(args: &[String], extra_known: &[&str]) -> Result<CommonArgs, ()>
     });
 
     Ok(CommonArgs {
+        verbose,
         target,
         platform,
         isa,
@@ -411,6 +420,7 @@ struct CommonArgs {
     metal_sign_key: Option<String>,
     metal_kek: Option<String>,
     metal_encrypt_mode: Option<EncryptMode>,
+    verbose: bool,
 }
 
 fn parse_build(args: &[String]) -> Command {
@@ -439,6 +449,7 @@ fn parse_build(args: &[String]) -> Command {
         metal_sign_key: common.metal_sign_key,
         metal_kek: common.metal_kek,
         metal_encrypt_mode: common.metal_encrypt_mode,
+        verbose: common.verbose,
     })
 }
 
@@ -492,6 +503,7 @@ fn parse_run(args: &[String]) -> Command {
         metal_sign_key: common.metal_sign_key,
         metal_kek: common.metal_kek,
         metal_encrypt_mode: common.metal_encrypt_mode,
+        verbose: common.verbose,
     })
 }
 

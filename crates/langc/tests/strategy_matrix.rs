@@ -1,5 +1,5 @@
 //! Strategy-matrix golden (design doc §5.6, P5): each backend's exhaustive
-//! `(strategy, window-kind, op)` classification rendered and diffed against a
+//! `(strategy, aperture-kind, op)` classification rendered and diffed against a
 //! committed artifact. A cell changing without its golden changing is
 //! impossible. Every `Supported(pattern)` row maps to a QEMU fixture that
 //! exercises it (see the per-target `mmio_strategies_*` fixtures).
@@ -8,7 +8,7 @@
 //! backends, and codegen-core cannot depend on them (cycle).
 
 use codegen_core::strategy::{render_strategy_matrix, MmioOp, StrategyCell};
-use ir::{WindowKind, WriteKind};
+use ir::{ApertureKind, WriteKind};
 
 fn golden_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/goldens")
@@ -43,7 +43,7 @@ fn strategy_matrices_match_golden() {
 #[test]
 fn matrix_cells_are_exhaustive() {
     for strategy in [WriteKind::Plain, WriteKind::W1s, WriteKind::W1c] {
-        for kind in [WindowKind::Bus, WindowKind::Emulated] {
+        for kind in [ApertureKind::Bus, ApertureKind::Emulated] {
             for op in [MmioOp::Load, MmioOp::Store, MmioOp::LoadField, MmioOp::StoreField] {
                 let _ = codegen_arm::mmio_cell(strategy, kind, op);
                 let _ = codegen_riscv::mmio_cell(strategy, kind, op);

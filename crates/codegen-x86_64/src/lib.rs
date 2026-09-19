@@ -9,7 +9,7 @@
 
 extern crate alloc;
 
-use codegen_core::{AsmMode, CodegenBackend, CodegenError, MmioWindowSpec};
+use codegen_core::{AsmMode, CodegenBackend, CodegenError, MmioApertureSpec};
 use frontend::{
     parse::{AttrAst, DeclKind, ModuleAst, Output},
     span::Span,
@@ -78,12 +78,12 @@ pub struct X86_64HostedBackend<'a> {
     pub scoped_slots: u32,
     pub scoped_next: u32,
 
-    // --- P3: descriptor-sourced MMIO windows (D-7) ---
-    /// Windows the board/runtime declares, copied from the langc driver
+    // --- P3: descriptor-sourced MMIO apertures (D-7) ---
+    /// Apertures the board/runtime declares, copied from the langc driver
     /// (compiled platform descriptor, or the target's static defaults).
-    /// Index `mmio_window_count` and beyond are `EMPTY`.
-    pub mmio_windows: [MmioWindowSpec; 8],
-    pub mmio_window_count: usize,
+    /// Index `mmio_aperture_count` and beyond are `EMPTY`.
+    pub mmio_apertures: [MmioApertureSpec; 8],
+    pub mmio_aperture_count: usize,
 
     // --- S2 Phase 1: modinfo collection ---
     pub(crate) mi_exports: [ModInfoExport; 64],
@@ -95,6 +95,14 @@ pub struct X86_64HostedBackend<'a> {
     /// Module-level ABI compatibility hash.  Set by the driver before
     /// `emit_postlude` is called (meaningless in Executable mode).
     pub expected_abi_hash: u64,
+
+    // --- P6: platform identity + aperture-use table (modinfo v4, D-5/§5.5) ---
+    /// The compiled descriptor's `platform_hash`, stamped into the modinfo
+    /// header (0 = unplatformed module).
+    pub platform_hash: u64,
+    /// The module's aperture-use table, fused across words during `emit_word`.
+    pub mi_apertures: [lir::ApertureUse; 8],
+    pub mi_aperture_count: usize,
 }
 
 impl<'a> X86_64HostedBackend<'a> {
@@ -147,37 +155,48 @@ impl<'a> X86_64HostedBackend<'a> {
             }; 64],
             mi_import_count: 0,
             expected_abi_hash: 0,
-            mmio_windows: [MmioWindowSpec::EMPTY; 8],
-            mmio_window_count: 0,
+            platform_hash: 0,
+            mi_apertures: [lir::ApertureUse {
+                id: 0,
+                name: lir::AT_EMPTY,
+                kind: lir::ApertureKind::Bus,
+                base: None,
+                size: 0,
+                access_mask: 0,
+                bind: lir::BindKind::None,
+            }; 8],
+            mi_aperture_count: 0,
+            mmio_apertures: [MmioApertureSpec::EMPTY; 8],
+            mmio_aperture_count: 0,
         }
     }
 
-    /// Set the MMIO windows this backend lowers against (P3, D-7). The langc
+    /// Set the MMIO apertures this backend lowers against (P3, D-7). The langc
     /// driver supplies either the target's static defaults or the compiled
-    /// platform descriptor's windows.
-    pub fn set_mmio_windows(&mut self, windows: &[MmioWindowSpec]) -> Result<(), CodegenError> {
-        if windows.len() > 8 {
-            return Err(CodegenError::TooManyMmioWindows);
+    /// platform descriptor's apertures.
+    pub fn set_mmio_apertures(&mut self, apertures: &[MmioApertureSpec]) -> Result<(), CodegenError> {
+        if apertures.len() > 8 {
+            return Err(CodegenError::TooManyMmioApertures);
         }
-        self.mmio_window_count = windows.len();
-        self.mmio_windows = [MmioWindowSpec::EMPTY; 8];
-        for (i, w) in windows.iter().enumerate() {
-            self.mmio_windows[i] = *w;
+        self.mmio_aperture_count = apertures.len();
+        self.mmio_apertures = [MmioApertureSpec::EMPTY; 8];
+        for (i, w) in apertures.iter().enumerate() {
+            self.mmio_apertures[i] = *w;
         }
         Ok(())
     }
 
-    /// The absolute address of a window-relative place (P4): `base + offset`,
-    /// or `offset` alone when the window base is a link-time symbol (the
-    /// emulated window — `__mmio_mem` is indexed by the offset directly).
-    pub fn mmio_window_addr(&self, window: u16, offset: u32) -> Result<u64, CodegenError> {
-        for i in 0..self.mmio_window_count {
-            let w = &self.mmio_windows[i];
-            if w.id == window {
+    /// The absolute address of a aperture-relative place (P4): `base + offset`,
+    /// or `offset` alone when the aperture base is a link-time symbol (the
+    /// emulated aperture — `__mmio_mem` is indexed by the offset directly).
+    pub fn mmio_aperture_addr(&self, aperture: u16, offset: u32) -> Result<u64, CodegenError> {
+        for i in 0..self.mmio_aperture_count {
+            let w = &self.mmio_apertures[i];
+            if w.id == aperture {
                 return Ok(w.base.unwrap_or(0).saturating_add(offset as u64));
             }
         }
-        Err(CodegenError::NoMmioWindow)
+        Err(CodegenError::NoMmioAperture)
     }
 
     pub fn fresh_label(&mut self) -> u32 {
@@ -227,6 +246,26 @@ impl<'a> X86_64HostedBackend<'a> {
             import_entries[i] = lmod::modinfo::ImportEntry { sym_hash, name };
         }
 
+        // Build aperture-use entries for the encoder (P6 §5.5): name_hash +
+        // size + aperture_id + fused access mask, in the module's canonical
+        // (first-use) order.
+        let mut aperture_entries: [lmod::modinfo::ApertureUseEntry; 8] =
+            [lmod::modinfo::ApertureUseEntry {
+                name_hash: 0,
+                size: 0,
+                aperture_id: 0,
+                access_mask: 0,
+            }; 8];
+        for i in 0..self.mi_aperture_count {
+            let wu = &self.mi_apertures[i];
+            aperture_entries[i] = lmod::modinfo::ApertureUseEntry {
+                name_hash: lmod::hash::fnv1a_u64(wu.name.as_bytes()),
+                size: wu.size,
+                aperture_id: wu.id,
+                access_mask: wu.access_mask,
+            };
+        }
+
         let module_name = util::slice_span(self.src, self.module.name);
 
         // Encode into a fixed-size stack buffer.
@@ -249,6 +288,8 @@ impl<'a> X86_64HostedBackend<'a> {
                 0
             },
             &[], // res_metas (no resources in current modules)
+            self.platform_hash,
+            &aperture_entries[..self.mi_aperture_count],
         ) {
             Some(s) => s,
             None => return Err(CodegenError::ModInfoTooLarge),
@@ -335,23 +376,27 @@ impl<'a> CodegenBackend for X86_64HostedBackend<'a> {
     fn set_expected_abi_hash(&mut self, hash: u64) {
         self.expected_abi_hash = hash;
     }
+
+    fn set_platform_hash(&mut self, hash: u64) {
+        self.platform_hash = hash;
+    }
 }
 
-/// Classify every `(strategy, window-kind, op)` MMIO combination for the
-/// x86 backend (design doc §5.6 matrix). x86 has only the emulated window;
-/// bus-window combos are structurally `Unsupported`.
+/// Classify every `(strategy, aperture-kind, op)` MMIO combination for the
+/// x86 backend (design doc §5.6 matrix). x86 has only the emulated aperture;
+/// bus-aperture combos are structurally `Unsupported`.
 pub fn mmio_cell(
     strategy: lir::WriteKind,
-    kind: lir::WindowKind,
+    kind: lir::ApertureKind,
     op: codegen_core::strategy::MmioOp,
 ) -> codegen_core::strategy::StrategyCell {
     use codegen_core::strategy::{MmioOp, StrategyCell};
-    use lir::{WindowKind, WriteKind};
+    use lir::{ApertureKind, WriteKind};
     match kind {
-        WindowKind::Bus => StrategyCell::Unsupported {
-            reason: "no bus windows on x86 targets today",
+        ApertureKind::Bus => StrategyCell::Unsupported {
+            reason: "no bus apertures on x86 targets today",
         },
-        WindowKind::Emulated => match op {
+        ApertureKind::Emulated => match op {
             MmioOp::Load | MmioOp::LoadField => StrategyCell::Supported { pattern: "mov" },
             MmioOp::Store => match strategy {
                 WriteKind::Plain => StrategyCell::Supported { pattern: "mov" },

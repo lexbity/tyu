@@ -10,7 +10,7 @@
 //! skips the disk-backed rule.
 
 use super::{
-    AccessKind, Descriptor, DescriptorError, DeviceMap, E_DESC_INVALID, RegisterRow, WindowKind,
+    AccessKind, Descriptor, DescriptorError, DeviceMap, E_DESC_INVALID, RegisterRow, ApertureKind,
     WriteKind, full_mask,
 };
 use std::path::Path;
@@ -19,7 +19,7 @@ use std::path::Path;
 pub fn validate(desc: &Descriptor, pack_root: Option<&Path>) -> Vec<DescriptorError> {
     let mut errors = Vec::new();
 
-    validate_windows(desc, &mut errors);
+    validate_apertures(desc, &mut errors);
     validate_devices(desc, &mut errors);
     validate_allocator(desc, &mut errors);
     validate_metal_trust(desc, pack_root, &mut errors);
@@ -31,56 +31,56 @@ fn err(detail: impl Into<String>) -> DescriptorError {
     DescriptorError::new(E_DESC_INVALID, detail)
 }
 
-fn validate_windows(desc: &Descriptor, errors: &mut Vec<DescriptorError>) {
-    // Rule: window ids unique and densely numbered from 0.
-    let mut ids: Vec<u16> = desc.windows.iter().map(|w| w.id).collect();
+fn validate_apertures(desc: &Descriptor, errors: &mut Vec<DescriptorError>) {
+    // Rule: aperture ids unique and densely numbered from 0.
+    let mut ids: Vec<u16> = desc.apertures.iter().map(|w| w.id).collect();
     ids.sort_unstable();
     for (index, &id) in ids.iter().enumerate() {
         if id as usize != index {
             errors.push(err(format!(
-                "window ids must be unique and densely numbered from 0 (found id {id} at index {index})"
+                "aperture ids must be unique and densely numbered from 0 (found id {id} at index {index})"
             )));
             break;
         }
     }
 
-    // Rule: window size > 0.
-    for w in &desc.windows {
+    // Rule: aperture size > 0.
+    for w in &desc.apertures {
         if w.size == 0 {
             errors.push(err(format!(
-                "window [{}] '{}': size must be > 0",
+                "aperture [{}] '{}': size must be > 0",
                 w.id, w.name
             )));
         }
     }
 
-    // Rule: window names are the stable identity a module binds on — they
+    // Rule: aperture names are the stable identity a module binds on — they
     // must be unique within a descriptor.
-    let mut names: Vec<&str> = desc.windows.iter().map(|w| w.name.as_str()).collect();
+    let mut names: Vec<&str> = desc.apertures.iter().map(|w| w.name.as_str()).collect();
     names.sort_unstable();
     for pair in names.windows(2) {
         if pair[0] == pair[1] {
-            errors.push(err(format!("window names must be unique (duplicate '{}')", pair[0])));
+            errors.push(err(format!("aperture names must be unique (duplicate '{}')", pair[0])));
         }
     }
 
-    // Rule (P6 binding): an emulated window's base is a link-time symbol with
+    // Rule (P6 binding): an emulated aperture's base is a link-time symbol with
     // runtime-dynamic addressing — it has no binding-time relocation. A bind
-    // on an emulated window is a contradiction.
-    for w in &desc.windows {
-        if w.kind == WindowKind::Emulated && w.reloc_isa.is_some() {
+    // on an emulated aperture is a contradiction.
+    for w in &desc.apertures {
+        if w.kind == ApertureKind::Emulated && w.reloc_isa.is_some() {
             errors.push(err(format!(
-                "window [{}] '{}': an emulated window must not declare a bind (its addressing is runtime-dynamic)",
+                "aperture [{}] '{}': an emulated aperture must not declare a bind (its addressing is runtime-dynamic)",
                 w.id, w.name
             )));
         }
     }
 
-    // Rule: two windows with absolute bases must not overlap address space.
-    // Emulated windows (link-time base) are excluded — their placement is a
+    // Rule: two apertures with absolute bases must not overlap address space.
+    // Emulated apertures (link-time base) are excluded — their placement is a
     // link decision, not a board fact.
     let mut ranged: Vec<(u64, u64)> = desc
-        .windows
+        .apertures
         .iter()
         .filter_map(|w| w.base.map(|b| (b, b.saturating_add(w.size as u64))))
         .collect();
@@ -88,7 +88,7 @@ fn validate_windows(desc: &Descriptor, errors: &mut Vec<DescriptorError>) {
     for pair in ranged.windows(2) {
         if pair[0].1 > pair[1].0 {
             errors.push(err(format!(
-                "windows at base 0x{:x} and 0x{:x} overlap",
+                "apertures at base 0x{:x} and 0x{:x} overlap",
                 pair[0].0, pair[1].0
             )));
         }
@@ -113,10 +113,10 @@ fn validate_devices(desc: &Descriptor, errors: &mut Vec<DescriptorError>) {
     }
 
     for d in &desc.devices {
-        let Some(window) = desc.window(d.window) else {
+        let Some(aperture) = desc.aperture(d.aperture) else {
             errors.push(err(format!(
-                "device {} '{}': references unknown window id {}",
-                d.map, d.instance, d.window
+                "device {} '{}': references unknown aperture id {}",
+                d.map, d.instance, d.aperture
             )));
             continue;
         };
@@ -137,12 +137,12 @@ fn validate_devices(desc: &Descriptor, errors: &mut Vec<DescriptorError>) {
             validate_register(d, r, errors);
         }
 
-        // Rule: base_offset + map extent ≤ window.size.
+        // Rule: base_offset + map extent ≤ aperture.size.
         let extent = d.extent();
-        if extent > 0 && d.base_offset.saturating_add(extent) > window.size {
+        if extent > 0 && d.base_offset.saturating_add(extent) > aperture.size {
             errors.push(err(format!(
-                "device {} '{}': base_offset 0x{:x} + extent 0x{:x} > window [{}] '{}' size 0x{:x}",
-                d.map, d.instance, d.base_offset, extent, window.id, window.name, window.size
+                "device {} '{}': base_offset 0x{:x} + extent 0x{:x} > aperture [{}] '{}' size 0x{:x}",
+                d.map, d.instance, d.base_offset, extent, aperture.id, aperture.name, aperture.size
             )));
         }
     }
@@ -178,6 +178,18 @@ fn validate_register(d: &DeviceMap, r: &RegisterRow, errors: &mut Vec<Descriptor
             "device {} '{}' register '{}': atomic_max {} not in {{8,16,32,64}}",
             d.map, d.instance, r.name, r.atomic_max
         )));
+    }
+
+    // Rule (P8): datasheet IRQ numbers fit an NVIC IRQ (0..=64 on Cortex-M).
+    for (label, irq) in [("interrupt", r.interrupt), ("irq", r.irq)] {
+        if let Some(n) = irq {
+            if n > 64 {
+                errors.push(err(format!(
+                    "device {} '{}' register '{}': {label} {} out of NVIC range 0..=64",
+                    d.map, d.instance, r.name, n
+                )));
+            }
+        }
     }
 
     // Rule: access = ro forbids write_kind ≠ plain (a store to a ro register
@@ -317,17 +329,17 @@ mod tests {
     }
 
     #[test]
-    fn dense_window_ids_pass() {
+    fn dense_aperture_ids_pass() {
         let text = r#"
 [platform]
 name = "demo"
 schema = 2
-[[platform.windows]]
+[[platform.apertures]]
 id = 0
 name = "a"
 kind = "bus"
 size = 0x1000
-[[platform.windows]]
+[[platform.apertures]]
 id = 1
 name = "b"
 kind = "bus"
@@ -337,17 +349,17 @@ size = 0x1000
     }
 
     #[test]
-    fn window_id_gap_rejected() {
+    fn aperture_id_gap_rejected() {
         let text = r#"
 [platform]
 name = "demo"
 schema = 2
-[[platform.windows]]
+[[platform.apertures]]
 id = 0
 name = "a"
 kind = "bus"
 size = 0x1000
-[[platform.windows]]
+[[platform.apertures]]
 id = 2
 name = "b"
 kind = "bus"
@@ -359,12 +371,12 @@ size = 0x1000
     }
 
     #[test]
-    fn zero_size_window_rejected() {
+    fn zero_size_aperture_rejected() {
         let text = r#"
 [platform]
 name = "demo"
 schema = 2
-[[platform.windows]]
+[[platform.apertures]]
 id = 0
 name = "a"
 kind = "bus"
@@ -375,12 +387,12 @@ size = 0
     }
 
     #[test]
-    fn device_overflowing_window_rejected() {
+    fn device_overflowing_aperture_rejected() {
         let text = r#"
 [platform]
 name = "demo"
 schema = 2
-[[platform.windows]]
+[[platform.apertures]]
 id = 0
 name = "a"
 kind = "bus"
@@ -388,7 +400,7 @@ size = 0x100
 [[platform.devices]]
 map = "G"
 instance = "g"
-window = 0
+aperture = 0
 base_offset = 0x100
 registers = [
   { offset = 0x0, name = "r", width = 32, access = "rw" },
@@ -397,7 +409,7 @@ registers = [
         let errors = validate(&parse(text), None);
         assert!(errors
             .iter()
-            .any(|e| e.detail.contains("> window")), "{:?}", errors);
+            .any(|e| e.detail.contains("> aperture")), "{:?}", errors);
     }
 
     #[test]
@@ -406,7 +418,7 @@ registers = [
 [platform]
 name = "demo"
 schema = 2
-[[platform.windows]]
+[[platform.apertures]]
 id = 0
 name = "a"
 kind = "bus"
@@ -414,7 +426,7 @@ size = 0x1000
 [[platform.devices]]
 map = "G"
 instance = "g"
-window = 0
+aperture = 0
 base_offset = 0
 registers = [
   { offset = 0x1, name = "r", width = 32, access = "rw" },
@@ -430,7 +442,7 @@ registers = [
 [platform]
 name = "demo"
 schema = 2
-[[platform.windows]]
+[[platform.apertures]]
 id = 0
 name = "a"
 kind = "bus"
@@ -438,7 +450,7 @@ size = 0x1000
 [[platform.devices]]
 map = "G"
 instance = "g"
-window = 0
+aperture = 0
 base_offset = 0
 registers = [
   { offset = 0x0, name = "r", width = 32, access = "rw", atomic_max = 64 },
@@ -456,7 +468,7 @@ registers = [
 [platform]
 name = "demo"
 schema = 2
-[[platform.windows]]
+[[platform.apertures]]
 id = 0
 name = "a"
 kind = "bus"
@@ -464,7 +476,7 @@ size = 0x1000
 [[platform.devices]]
 map = "G"
 instance = "g"
-window = 0
+aperture = 0
 base_offset = 0
 registers = [
   { offset = 0x0, name = "r", width = 32, access = "ro", write_kind = "w1c" },
@@ -484,7 +496,7 @@ registers = [
 [platform]
 name = "demo"
 schema = 2
-[[platform.windows]]
+[[platform.apertures]]
 id = 0
 name = "a"
 kind = "bus"
@@ -492,7 +504,7 @@ size = 0x1000
 [[platform.devices]]
 map = "G"
 instance = "g"
-window = 0
+aperture = 0
 base_offset = 0
 registers = [
   { offset = 0x0, name = "status", width = 32, access = "ro", read_kind = "effectful" },
@@ -584,7 +596,7 @@ length = 0x1000
 [platform]
 name = "demo"
 schema = 2
-[[platform.windows]]
+[[platform.apertures]]
 id = 0
 name = "a"
 kind = "bus"
@@ -592,7 +604,7 @@ size = 0x100
 [[platform.devices]]
 map = "G"
 instance = "g"
-window = 0
+aperture = 0
 base_offset = 0xf0
 registers = [
   { offset = 0x1, name = "r", width = 32, access = "ro", write_kind = "w1c", atomic_max = 64 },

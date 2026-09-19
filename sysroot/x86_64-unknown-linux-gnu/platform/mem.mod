@@ -4,16 +4,16 @@ type RegionRef;
 type RegionRefMut;
 
 : platform.mem.region-create ( usize -- Region )
-  # hosted: runtime-provided (region allocator)
+  # implemented by the codegen-inline mmap allocator (P7, region.rs)
 ;
 : platform.mem.region-alloc ( Region usize -- ptr_mut ) performs {alloc}
-  # hosted: runtime-provided (region allocator)
+  # implemented by the codegen-inline mmap allocator (P7, region.rs)
 ;
 : platform.mem.region-reset ( Region -- )
-  # hosted: runtime-provided (region allocator)
+  # implemented by the codegen-inline mmap allocator (P7, region.rs)
 ;
 : platform.mem.region-destroy ( Region -- )
-  # hosted: runtime-provided (region allocator)
+  # implemented by the codegen-inline mmap allocator (P7, region.rs)
 ;
 
 end;

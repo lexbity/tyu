@@ -1,7 +1,7 @@
 //! `--emit=ir` stability (NFR-1 / FR-22): identical inputs produce
 //! byte-identical IR, and the IR is independent of descriptor *formatting*
 //! (the platform hash flows through, but the IR text reflects the resolved
-//! windows, which are formatting-invariant). Also pins the `format_ver`
+//! apertures, which are formatting-invariant). Also pins the `format_ver`
 //! header (D-8 / FR-6).
 
 use std::fs;
@@ -83,7 +83,7 @@ fn ir_emit_is_byte_stable_and_versioned() {
         "identical inputs must produce byte-identical --emit=ir (NFR-1/FR-22)"
     );
 
-    // D-8 / FR-6: the first line is `format_ver 4` and the window section is
+    // D-8 / FR-6: the first line is `format_ver 4` and the aperture section is
     // present; no absolute MMIO address may appear anywhere in the text.
     assert!(
         ir_a.starts_with("format_ver 6\n"),
@@ -91,17 +91,17 @@ fn ir_emit_is_byte_stable_and_versioned() {
         &ir_a[..ir_a.find('\n').unwrap_or(0)]
     );
     assert!(
-        ir_a.contains("\nwindows 1\nwindow 0 mmio emulated bind=none link 0x10000\n"),
-        "IR must carry the windows section, got:\n{ir_a}"
+        ir_a.contains("\napertures 1\naperture 0 mmio emulated bind=none link 0x10000\n"),
+        "IR must carry the apertures section, got:\n{ir_a}"
     );
     assert!(
         !ir_a.contains("addr="),
         "no absolute MMIO address may remain in IR text (P4), got:\n{ir_a}"
     );
     assert!(
-        ir_a.contains("mmio_place scratch.A window=0 offset=0x0")
-            || ir_a.contains("addr_of scratch.A window=0 offset=0x0"),
-        "IR must carry window-relative symbolic places, got:\n{ir_a}"
+        ir_a.contains("mmio_place scratch.A aperture=0 offset=0x0")
+            || ir_a.contains("addr_of scratch.A aperture=0 offset=0x0"),
+        "IR must carry aperture-relative symbolic places, got:\n{ir_a}"
     );
 
     let _ = fs::remove_dir_all(&a);
@@ -110,7 +110,7 @@ fn ir_emit_is_byte_stable_and_versioned() {
 
 #[test]
 fn ir_emit_is_independent_of_descriptor_formatting() {
-    // The descriptor's canonical content resolves the windows; reformatting
+    // The descriptor's canonical content resolves the apertures; reformatting
     // the TOML (comments, key order) must not change the emitted IR.
     let a = temp_dir("fa");
     let b = temp_dir("fb");

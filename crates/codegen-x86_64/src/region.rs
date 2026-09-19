@@ -54,8 +54,10 @@ pub fn emit_region_create(gen: &mut X86_64HostedBackend<'_>) {
     gen.out.write(b"  jb .region_setup_");
     write_u32(gen.out, scan_loop);
     gen.out.write(b"\n");
+    // All 16 region slots are in use: the region store is exhausted. This is
+    // the allocation-exhaustion trap (D-6 / P7), not a compiler bug.
     gen.out.write(b"  mov rdi, ");
-    write_u32(gen.out, lir::trap_code_u32(lir::TrapCode::Unreachable));
+    write_u32(gen.out, lir::trap_code_u32(lir::TrapCode::RegionExhausted));
     gen.out.write(b"\n");
     gen.out.write(b"  jmp __lang_trap\n");
     gen.out.write(b".region_setup_");
@@ -157,8 +159,9 @@ pub fn emit_region_alloc(gen: &mut X86_64HostedBackend<'_>) {
     gen.out.write(b"  jbe .region_alloc_space_");
     write_u32(gen.out, space_ok);
     gen.out.write(b"\n");
+    // The region has no room for this allocation: raise REGION_EXHAUSTED (26).
     gen.out.write(b"  mov rdi, ");
-    write_u32(gen.out, lir::trap_code_u32(lir::TrapCode::Unreachable));
+    write_u32(gen.out, lir::trap_code_u32(lir::TrapCode::RegionExhausted));
     gen.out.write(b"\n");
     gen.out.write(b"  jmp __lang_trap\n");
     gen.out.write(b".region_alloc_space_");

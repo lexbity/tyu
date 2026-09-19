@@ -4,6 +4,7 @@
 
 use crate::{c, mem};
 use core::ffi::c_void;
+use lmod::board_table::BoardAperture;
 use loader_core::platform::{LoaderPlatform, Region, Rw, Rx, TrustLevel};
 
 /// Load error codes.
@@ -17,6 +18,12 @@ pub struct HostedLoaderPlatform {
     key_len: usize,
     trust_level: TrustLevel,
     kek: [u8; 32],
+    /// Board identity (P6, D-5): the platform_hash of the descriptor this
+    /// host claims to be, or `None` (no descriptor → unplatformed loads only).
+    platform_hash: Option<u64>,
+    /// The board's MMIO aperture table (P6 §5.8), populated via `with_board`.
+    apertures: [BoardAperture; 8],
+    aperture_count: usize,
     /// Optional single-block reservation for adjacent allocations.
     /// When `Some`, all `alloc_*` calls carve from this block instead
     /// of calling `mmap`.  This guarantees PC-relative proximity.
@@ -37,8 +44,35 @@ impl HostedLoaderPlatform {
             key_len: 0,
             trust_level: TrustLevel::Zero,
             kek: [0u8; 32],
+            platform_hash: None,
+            apertures: [BoardAperture {
+                name_hash: 0,
+                base: 0,
+                size: 0,
+                capability: 0,
+            }; 8],
+            aperture_count: 0,
             block: None,
         }
+    }
+
+    /// Bind this host to a board's compiled-descriptor identity (P6, D-5).
+    /// `platform_hash` is the descriptor's canonical hash; `apertures` is its
+    /// aperture table. Without this, the host carries no board identity and can
+    /// only load unplatformed (hash-0) modules.
+    pub fn with_board(mut self, platform_hash: u64, apertures: &[BoardAperture]) -> Self {
+        self.platform_hash = Some(platform_hash);
+        self.aperture_count = apertures.len().min(8);
+        self.apertures = [BoardAperture {
+            name_hash: 0,
+            base: 0,
+            size: 0,
+            capability: 0,
+        }; 8];
+        for (i, w) in apertures.iter().take(self.aperture_count).enumerate() {
+            self.apertures[i] = *w;
+        }
+        self
     }
 
     /// Configure for TrustLevel One operation with an HMAC key.
@@ -179,6 +213,14 @@ impl LoaderPlatform for HostedLoaderPlatform {
 
     fn expected_abi_hash(&self) -> u64 {
         self.expected_abi_hash
+    }
+
+    fn platform_hash(&self) -> Option<u64> {
+        self.platform_hash
+    }
+
+    fn aperture_table(&self) -> &[BoardAperture] {
+        &self.apertures[..self.aperture_count]
     }
 
     fn trust_level(&self) -> TrustLevel {

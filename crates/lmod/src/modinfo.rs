@@ -8,14 +8,38 @@
 // ---------------------------------------------------------------------------
 
 pub const LMOD_MAGIC: u32 = 0x4c4d4f44; // "LMOD"
-pub const MODINFO_VER: u16 = 3;
 
-pub const MODINFO_HEADER_SIZE: u32 = 32;
+/// Version of the `LangModInfo` struct (design doc §5.5, decision D-12).
+///
+/// v4 (P6): the header grows 32 → 48 bytes with `aperture_count`,
+/// `res_meta_count`, and `platform_hash`, and a aperture-use table follows the
+/// res-meta entries. `abi_hash` folds this version (abi_hash.rs), so a v3
+/// module never decodes as v4 — the loader rejects it up front (E5224).
+pub const MODINFO_VER: u16 = 4;
+
+pub const MODINFO_HEADER_SIZE: u32 = 48;
 
 pub const EXPORT_ENTRY_SIZE: u32 = 16; // u64 sym_hash + u32 name_off + u32 value_off
 pub const IMPORT_ENTRY_SIZE: u32 = 12; // u64 sym_hash + u32 name_off
 pub const WORD_META_SIZE: u32 = 16; // u64 sym_hash + u16 effects + u16 requires_caps + u32 stack_bound
 pub const RES_META_SIZE: u32 = 16; // u64 res_hash + u8 sharing_class + u8[3] _pad + u32 lock_prim
+pub const APERTURE_USE_ENTRY_SIZE: u32 = 16; // u64 name_hash + u32 size + u16 aperture_id + u8 access_mask + u8 _pad
+
+/// Fused per-aperture access-mask bits (design doc §5.5). One source of truth:
+/// these are re-exported from `ir` so the module format, the compiler, and the
+/// loader all agree on the wire bits.
+pub use ir::{
+    ACCESS_EFFECTFUL_READ as ACCESS_EFFECTFUL_READ, ACCESS_READ as ACCESS_READ,
+    ACCESS_W1C as ACCESS_W1C, ACCESS_W1S as ACCESS_W1S, ACCESS_WRITE as ACCESS_WRITE,
+};
+
+/// Fixed header field offsets (little-endian). v4 header = 48 bytes:
+/// `0 magic · 4 modinfo_ver · 6 flags · 8 abi_hash · 16 name_off · 20 name_len
+///  · 24 export_count · 28 import_count · 32 aperture_count · 34 res_meta_count
+///  · 36 platform_hash · 44 _pad`.
+pub const HDR_APERTURE_COUNT_OFF: usize = 32;
+pub const HDR_RES_META_COUNT_OFF: usize = 34;
+pub const HDR_PLATFORM_HASH_OFF: usize = 36;
 
 /// Flags for the `LangModInfo.flags` field.
 pub const MODINFO_FLAG_HAS_ISR: u16 = 0x0001;
@@ -44,11 +68,27 @@ pub struct ImportEntry<'a> {
 }
 
 /// A resource sharing-class entry, as passed to the encoder.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ResMetaEntry {
     pub res_hash: u64,
     pub sharing_class: u8,
     pub lock_prim: u32,
+}
+
+/// A aperture-use table entry (design doc §5.5): one aperture the module touches.
+///
+/// `name_hash` is FNV-1a-64 of the aperture's board name — the stable identity
+/// the loader matches against its board's aperture table. `aperture_id` is the
+/// module's local id for this aperture (equal to the descriptor aperture id, which
+/// the compiler uses in `MmioPlace` and relocations). `size` is the aperture
+/// size the module was compiled against; `access_mask` fuses the accesses the
+/// module performs (bits in `ACCESS_*`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ApertureUseEntry {
+    pub name_hash: u64,
+    pub size: u32,
+    pub aperture_id: u16,
+    pub access_mask: u8,
 }
 
 // ---------------------------------------------------------------------------
@@ -97,6 +137,8 @@ pub fn encode_into<'a>(
     abi_hash_val: u64,
     flags: u16,
     res_metas: &[ResMetaEntry],
+    platform_hash: u64,
+    apertures: &[ApertureUseEntry],
 ) -> Option<usize> {
     let export_count = exports.len() as u32;
     let import_count = imports.len() as u32;
@@ -105,8 +147,12 @@ pub fn encode_into<'a>(
     if export_count > 64 || import_count > 64 {
         return None;
     }
+    if apertures.len() > 8 {
+        return None;
+    }
 
     let res_count = res_metas.len() as u32;
+    let aperture_count = apertures.len() as u32;
 
     // --- Compute total size ---
     let mut total = MODINFO_HEADER_SIZE;
@@ -125,6 +171,7 @@ pub fn encode_into<'a>(
     total += import_count * IMPORT_ENTRY_SIZE;
     total += export_count * WORD_META_SIZE;
     total += res_count * RES_META_SIZE;
+    total += aperture_count * APERTURE_USE_ENTRY_SIZE;
 
     if (total as usize) > buf.len() {
         return None;
@@ -137,7 +184,7 @@ pub fn encode_into<'a>(
 
     let mut off: usize = 0;
 
-    // 1. Fixed header (32 bytes)
+    // 1. Fixed header (48 bytes)
     poke_u32(buf, off, LMOD_MAGIC);
     off += 4;
     poke_u16(buf, off, MODINFO_VER);
@@ -156,7 +203,15 @@ pub fn encode_into<'a>(
     off += 4;
     poke_u32(buf, off, import_count);
     off += 4;
-    // header = 32 bytes
+    // v4 additions (design doc §5.5)
+    poke_u16(buf, off, aperture_count as u16);
+    off += 2;
+    poke_u16(buf, off, res_count as u16);
+    off += 2;
+    poke_u64(buf, off, platform_hash);
+    off += 8;
+    off += 4; // _pad (reserved)
+    // header = 48 bytes
 
     // 2. Name table — module name
     let module_name_off = off as u32;
@@ -233,6 +288,20 @@ pub fn encode_into<'a>(
         off += 4;
     }
 
+    // 5c. Aperture-use entries (design doc §5.5)
+    for w in apertures.iter() {
+        poke_u64(buf, off, w.name_hash);
+        off += 8;
+        poke_u32(buf, off, w.size);
+        off += 4;
+        poke_u16(buf, off, w.aperture_id);
+        off += 2;
+        buf[off] = w.access_mask;
+        off += 1;
+        buf[off] = 0; // _pad
+        off += 1;
+    }
+
     // 6. Patch header offsets
     poke_u32(buf, name_off_pos, module_name_off);
     poke_u32(buf, name_len_pos, module_name.len() as u32);
@@ -253,6 +322,15 @@ pub struct ModInfo<'a> {
     pub import_count: u32,
     pub abi_hash: u64,
     pub flags: u16,
+    /// `MODINFO_VER` as encoded in the artifact (v4). The loader rejects
+    /// anything else up front (E5224) — never decodes across versions.
+    pub modinfo_ver: u16,
+    /// Number of aperture-use entries (design doc §5.5).
+    pub aperture_count: u32,
+    /// Number of resource-meta entries.
+    pub res_meta_count: u32,
+    /// The module's `platform_hash` (0 = unplatformed module; E5220 check).
+    pub platform_hash: u64,
 }
 
 impl ModInfo<'_> {
@@ -274,12 +352,19 @@ pub fn decode(data: &[u8]) -> Option<ModInfo<'_>> {
     if magic != LMOD_MAGIC {
         return None;
     }
+    let modinfo_ver = u16::from_le_bytes(data[4..6].try_into().ok()?);
     let flags = u16::from_le_bytes(data[6..8].try_into().ok()?);
     let abi_hash = u64::from_le_bytes(data[8..16].try_into().ok()?);
     let name_off = u32::from_le_bytes(data[16..20].try_into().ok()?) as usize;
     let name_len = u32::from_le_bytes(data[20..24].try_into().ok()?) as usize;
     let export_count = u32::from_le_bytes(data[24..28].try_into().ok()?);
     let import_count = u32::from_le_bytes(data[28..32].try_into().ok()?);
+    // v4 fields (design doc §5.5). A v3 artifact is exactly 32 bytes of header
+    // with different semantics at these offsets — we still read them, but the
+    // loader's version gate (E5224) runs before any structural use.
+    let aperture_count = u16::from_le_bytes(data[32..34].try_into().ok()?) as u32;
+    let res_meta_count = u16::from_le_bytes(data[34..36].try_into().ok()?) as u32;
+    let platform_hash = u64::from_le_bytes(data[36..44].try_into().ok()?);
 
     if name_off + name_len > data.len() {
         return None;
@@ -293,6 +378,10 @@ pub fn decode(data: &[u8]) -> Option<ModInfo<'_>> {
         import_count,
         abi_hash,
         flags,
+        modinfo_ver,
+        aperture_count,
+        res_meta_count,
+        platform_hash,
     })
 }
 
@@ -369,12 +458,11 @@ pub fn read_export<'a>(data: &'a [u8], index: u32) -> Option<ParsedExport<'a>> {
 ///
 /// Returns `None` if the index is out of range or the data is truncated.
 pub fn read_res_meta(data: &[u8], index: u32) -> Option<ResMetaEntry> {
-    let entries_off = res_meta_offset(data)?;
-    let remaining = data.len() - entries_off;
-    let count = (remaining / RES_META_SIZE as usize) as u32;
-    if index >= count {
+    let hdr = decode(data)?;
+    if index >= hdr.res_meta_count {
         return None;
     }
+    let entries_off = res_meta_offset(data)?;
     let entry_off = entries_off + (index as usize) * RES_META_SIZE as usize;
     Some(ResMetaEntry {
         res_hash: u64::from_le_bytes(data[entry_off..entry_off + 8].try_into().ok()?),
@@ -395,11 +483,39 @@ fn res_meta_offset(data: &[u8]) -> Option<usize> {
     if word_meta_end > data.len() {
         return None;
     }
-    let remaining = data.len() - word_meta_end;
-    if remaining == 0 || remaining % (RES_META_SIZE as usize) != 0 {
+    Some(word_meta_end)
+}
+
+/// Compute the byte offset of the aperture-use entries array (design doc §5.5),
+/// or `None` if the data is truncated.
+pub fn aperture_use_offset(data: &[u8]) -> Option<usize> {
+    let hdr = decode(data)?;
+    let res_meta_end = res_meta_offset(data)? + (hdr.res_meta_count as usize) * RES_META_SIZE as usize;
+    if res_meta_end + (hdr.aperture_count as usize) * APERTURE_USE_ENTRY_SIZE as usize > data.len() {
         return None;
     }
-    Some(word_meta_end)
+    Some(res_meta_end)
+}
+
+/// Read one aperture-use entry by index.
+///
+/// Returns `None` if the index is out of range or the data is truncated.
+pub fn read_aperture_use(data: &[u8], index: u32) -> Option<ApertureUseEntry> {
+    let hdr = decode(data)?;
+    if index >= hdr.aperture_count {
+        return None;
+    }
+    let entries_off = aperture_use_offset(data)?;
+    let entry_off = entries_off + (index as usize) * APERTURE_USE_ENTRY_SIZE as usize;
+    let name_hash = u64::from_le_bytes(data[entry_off..entry_off + 8].try_into().ok()?);
+    let size = u32::from_le_bytes(data[entry_off + 8..entry_off + 12].try_into().ok()?);
+    let aperture_id = u16::from_le_bytes(data[entry_off + 12..entry_off + 14].try_into().ok()?);
+    Some(ApertureUseEntry {
+        name_hash,
+        size,
+        aperture_id,
+        access_mask: data[entry_off + 14],
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -419,12 +535,15 @@ mod tests {
     fn encode_roundtrip_minimal() {
         let mut buf = [0u8; 256];
         let ah = test_abi_hash();
-        let n = encode_into(&mut buf, b"TestMod", &[], &[], ah, 0, &[]).unwrap();
+        let n = encode_into(&mut buf, b"TestMod", &[], &[], ah, 0, &[], 0, &[]).unwrap();
         let decoded = decode(&buf[..n]).unwrap();
         assert_eq!(decoded.module_name, b"TestMod");
         assert_eq!(decoded.export_count, 0);
         assert_eq!(decoded.import_count, 0);
         assert_eq!(decoded.abi_hash, ah);
+        assert_eq!(decoded.modinfo_ver, MODINFO_VER);
+        assert_eq!(decoded.aperture_count, 0);
+        assert_eq!(decoded.platform_hash, 0);
     }
 
     #[test]
@@ -442,7 +561,7 @@ mod tests {
         }];
         let mut buf = [0u8; 512];
         let ah = test_abi_hash();
-        let n = encode_into(&mut buf, b"M", &exports, &imports, ah, 0, &[]).unwrap();
+        let n = encode_into(&mut buf, b"M", &exports, &imports, ah, 0, &[], 0, &[]).unwrap();
         let decoded = decode(&buf[..n]).unwrap();
         assert_eq!(decoded.module_name, b"M");
         assert_eq!(decoded.export_count, 1);
@@ -460,23 +579,96 @@ mod tests {
             stack_bound: 0,
         }];
         let mut buf = [0u8; 16];
-        assert!(encode_into(&mut buf, b"X", &exports, &[], 42, 0, &[]).is_none());
+        assert!(encode_into(&mut buf, b"X", &exports, &[], 42, 0, &[], 0, &[]).is_none());
     }
 
     #[test]
     fn encode_header_fields_are_little_endian() {
         let mut buf = [0u8; 256];
         let ah = test_abi_hash();
-        let n = encode_into(&mut buf, b"Abc", &[], &[], ah, 0, &[]).unwrap();
+        let n = encode_into(&mut buf, b"Abc", &[], &[], ah, 0, &[], 0, &[]).unwrap();
         let data = &buf[..n];
         assert_eq!(data[0..4], [0x44, 0x4f, 0x4d, 0x4c]); // "LMOD" LE
-        assert_eq!(data[4..6], [3, 0]); // version
+        assert_eq!(data[4..6], [4, 0]); // version (v4)
         assert_eq!(data[6..8], [0, 0]); // flags
                                         // abi_hash lives at [8..16]; skip byte-checking it (varies).
-        assert_eq!(data[16..20], [32, 0, 0, 0]); // name_off = 32 (header size)
+        assert_eq!(data[16..20], [48, 0, 0, 0]); // name_off = 48 (header size)
         assert_eq!(data[20..24], [3, 0, 0, 0]); // name_len = 3
         assert_eq!(data[24..28], [0, 0, 0, 0]); // export_count = 0
         assert_eq!(data[28..32], [0, 0, 0, 0]); // import_count = 0
+        assert_eq!(data[32..34], [0, 0]); // aperture_count = 0
+        assert_eq!(data[34..36], [0, 0]); // res_meta_count = 0
+        assert_eq!(data[36..44], [0u8; 8]); // platform_hash = 0
+    }
+
+    #[test]
+    fn encode_aperture_use_table_roundtrip() {
+        let apertures = [
+            ApertureUseEntry {
+                name_hash: 0x1111_2222_3333_4444,
+                size: 0x1000,
+                aperture_id: 0,
+                access_mask: ACCESS_READ | ACCESS_WRITE | ACCESS_W1C,
+            },
+            ApertureUseEntry {
+                name_hash: 0xaaaa_bbbb_cccc_dddd,
+                size: 0x10000,
+                aperture_id: 2,
+                access_mask: ACCESS_READ | ACCESS_EFFECTFUL_READ,
+            },
+        ];
+        let mut buf = [0u8; 512];
+        let ah = test_abi_hash();
+        let n = encode_into(&mut buf, b"W", &[], &[], ah, 0, &[], 0xdead_beef_cafe_f00du64, &apertures)
+            .unwrap();
+        let decoded = decode(&buf[..n]).unwrap();
+        assert_eq!(decoded.aperture_count, 2);
+        assert_eq!(decoded.platform_hash, 0xdead_beef_cafe_f00du64);
+        for (i, expect) in apertures.iter().enumerate() {
+            let got = read_aperture_use(&buf[..n], i as u32).unwrap();
+            assert_eq!(got, *expect, "aperture-use entry {i} must survive roundtrip");
+        }
+        assert!(read_aperture_use(&buf[..n], 2).is_none(), "index past count must be None");
+    }
+
+    #[test]
+    fn encode_aperture_use_more_than_8_rejected() {
+        let apertures = [ApertureUseEntry {
+            name_hash: 1,
+            size: 0x1000,
+            aperture_id: 0,
+            access_mask: ACCESS_READ,
+        }; 9];
+        let mut buf = [0u8; 2048];
+        let result = encode_into(&mut buf, b"M", &[], &[], 0, 0, &[], 0, &apertures);
+        assert!(result.is_none(), ">8 apertures must return None, not panic");
+    }
+
+    #[test]
+    fn encode_res_meta_and_apertures_coexist() {
+        let res = [ResMetaEntry {
+            res_hash: 7,
+            sharing_class: 1,
+            lock_prim: 2,
+        }];
+        let apertures = [ApertureUseEntry {
+            name_hash: 9,
+            size: 0x400,
+            aperture_id: 1,
+            access_mask: ACCESS_WRITE,
+        }];
+        let mut buf = [0u8; 512];
+        let n = encode_into(&mut buf, b"R", &[], &[], 42, 0, &res, 0x1234, &apertures).unwrap();
+        let decoded = decode(&buf[..n]).unwrap();
+        assert_eq!(decoded.res_meta_count, 1);
+        assert_eq!(decoded.aperture_count, 1);
+        assert_eq!(read_res_meta(&buf[..n], 0).unwrap(), res[0]);
+        assert_eq!(read_aperture_use(&buf[..n], 0).unwrap(), apertures[0]);
+        // The aperture-use table must sit immediately after the res-meta entries.
+        let res_end = aperture_use_offset(&buf[..n]).unwrap();
+        let res_start = res_end - RES_META_SIZE as usize;
+        assert_eq!(read_res_meta(&buf[..n], 0).unwrap().res_hash, 7);
+        assert!(res_start >= 48, "res_meta must start after the v4 header");
     }
 
     #[test]
@@ -503,7 +695,7 @@ mod tests {
         }];
         let mut buf = [0u8; 1024];
         let ah = test_abi_hash();
-        let n = encode_into(&mut buf, b"Calc", &exports, &imports, ah, 0, &[]).unwrap();
+        let n = encode_into(&mut buf, b"Calc", &exports, &imports, ah, 0, &[], 0, &[]).unwrap();
         let decoded = decode(&buf[..n]).unwrap();
         assert_eq!(decoded.module_name, b"Calc");
         assert_eq!(decoded.export_count, 2);
@@ -523,8 +715,8 @@ mod tests {
         let mut buf_a = [0u8; 512];
         let mut buf_b = [0u8; 512];
         let ah = test_abi_hash();
-        let n_a = encode_into(&mut buf_a, b"M", &e, &[], ah, 0, &[]).unwrap();
-        let n_b = encode_into(&mut buf_b, b"M", &e, &[], ah, 0, &[]).unwrap();
+        let n_a = encode_into(&mut buf_a, b"M", &e, &[], ah, 0, &[], 0, &[]).unwrap();
+        let n_b = encode_into(&mut buf_b, b"M", &e, &[], ah, 0, &[], 0, &[]).unwrap();
         assert_eq!(n_a, n_b);
         assert_eq!(&buf_a[..n_a], &buf_b[..n_b]);
     }
@@ -544,7 +736,7 @@ mod tests {
     fn decode_retrieves_abi_hash() {
         let mut buf = [0u8; 256];
         let expected = 0xdeadbeefcafebabeu64;
-        let n = encode_into(&mut buf, b"X", &[], &[], expected, 0, &[]).unwrap();
+        let n = encode_into(&mut buf, b"X", &[], &[], expected, 0, &[], 0, &[]).unwrap();
         let decoded = decode(&buf[..n]).unwrap();
         assert_eq!(decoded.abi_hash, expected);
     }
@@ -562,7 +754,7 @@ mod tests {
         };
         let exports = [e; 65];
         let mut buf = [0u8; 4096];
-        let result = encode_into(&mut buf, b"M", &exports, &[], 42, 0, &[]);
+        let result = encode_into(&mut buf, b"M", &exports, &[], 42, 0, &[], 0, &[]);
         assert!(result.is_none(), ">64 exports must return None, not panic");
     }
 
@@ -574,7 +766,7 @@ mod tests {
         };
         let imports = [imp; 65];
         let mut buf = [0u8; 4096];
-        let result = encode_into(&mut buf, b"M", &[], &imports, 42, 0, &[]);
+        let result = encode_into(&mut buf, b"M", &[], &imports, 42, 0, &[], 0, &[]);
         assert!(result.is_none(), ">64 imports must return None, not panic");
     }
 
@@ -593,7 +785,7 @@ mod tests {
         };
         let exports = [export];
         let encoded_len =
-            encode_into(&mut buf, b"M", &exports, &[], 0, 0, &[]).expect("encode minimal module");
+            encode_into(&mut buf, b"M", &exports, &[], 0, 0, &[], 0, &[]).expect("encode minimal module");
 
         // Word meta starts after header + module name strings +
         // 1 export entry (16 bytes) + 0 import entries.
@@ -620,7 +812,7 @@ mod tests {
             stack_bound: 0,
         };
         let mut buf2 = [0u8; 1024];
-        let len2 = encode_into(&mut buf2, b"M", &[export2], &[], 0, 0, &[])
+        let len2 = encode_into(&mut buf2, b"M", &[export2], &[], 0, 0, &[], 0, &[])
             .expect("encode zero-effects module");
         let hdr2 = decode(&buf2[..len2]).unwrap();
         let export_off2 = export_entries_offset(&buf2[..len2]).unwrap();

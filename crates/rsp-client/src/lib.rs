@@ -32,7 +32,7 @@ const CONNECT_RETRY_INTERVAL: Duration = Duration::from_millis(50);
 /// Bind to `:0` to get an ephemeral port, drop the listener, and return
 /// the port number.  The port is free to be reused by a subsequent bind.
 ///
-/// There is a TOCTOU window between dropping the listener and the caller
+/// There is a TOCTOU aperture between dropping the listener and the caller
 /// using the port — connect_retry handles this by retrying on failure.
 pub fn ephemeral_port() -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("ephemeral_port: bind to :0 failed");

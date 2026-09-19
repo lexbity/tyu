@@ -17,20 +17,20 @@ pub mod strings;
 pub mod target;
 pub mod tier;
 
-pub use backend::CodegenBackend;
+pub use backend::{merge_aperture_use, CodegenBackend};
 pub use compiled_desc::{
     CompiledDescError, CompiledDescriptor, CompiledDevice, CompiledRegister,
     COMPILED_DESC_DEVICE_CAP, COMPILED_DESC_MAX_BYTES, COMPILED_DESC_REGISTER_CAP,
-    COMPILED_DESC_WINDOW_CAP, REG_ACCESS_RO, REG_ACCESS_RW, REG_ACCESS_WO, REG_BARRIER_AFTER,
+    COMPILED_DESC_APERTURE_CAP, REG_ACCESS_RO, REG_ACCESS_RW, REG_ACCESS_WO, REG_BARRIER_AFTER,
     REG_BARRIER_BEFORE, REG_BARRIER_BOTH, REG_BARRIER_NONE, REG_READ_EFFECTFUL, REG_READ_PLAIN,
     REG_WRITE_PLAIN, REG_WRITE_W1C, REG_WRITE_W1S, decode_compiled_desc, encode_compiled_desc,
-    validate_compiled_desc,
+    validate_compiled_desc, aperture_capability,
 };
 pub use emit_mode::{AsmMode, EmitMode};
 pub use error::CodegenError;
 pub use target::{
     AssemblerKind, CallingConv, Endian, Feature, FeatureSet, InterruptSource, MmioScratch,
-    MmioWindowKind, MmioWindowSpec, OutputFormat, PlatformCapability, QemuExitConvention, QemuSpec,
+    MmioApertureKind, MmioApertureSpec, OutputFormat, PlatformCapability, QemuExitConvention, QemuSpec,
     RelocIsa, ScratchBacking, Target, TargetSpec,
 };
 

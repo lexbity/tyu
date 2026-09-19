@@ -1,6 +1,6 @@
 //! Negative: the `--platform` descriptor path rejects an invalid compiled
-//! descriptor with E3647 (P3). A malformed `platform.desc` (window size 0, or
-//! overlapping bus windows) must be a loud compile-stop — the descriptor is
+//! descriptor with E3647 (P3). A malformed `platform.desc` (aperture size 0, or
+//! overlapping bus apertures) must be a loud compile-stop — the descriptor is
 //! the board claim, and a bad one is never silently compiled around.
 
 use std::fs;
@@ -11,7 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use codegen_core::compiled_desc::{
     CompiledDescriptor, COMPILED_DESC_MAX_BYTES, encode_compiled_desc,
 };
-use codegen_core::{MmioWindowKind, MmioWindowSpec};
+use codegen_core::{MmioApertureKind, MmioApertureSpec};
 
 fn atom(bytes: &[u8]) -> ir::Atom {
     ir::Atom::new(bytes).unwrap()
@@ -70,17 +70,17 @@ fn run_langc(dir: &PathBuf) -> String {
     stderr
 }
 
-/// P6 (E3648): a register-map reference to a *bus* window with no absolute
+/// P6 (E3648): a register-map reference to a *bus* aperture with no absolute
 /// base cannot be bound into a relocatable site — the reference is rejected.
 #[test]
-fn e3648_unbindable_bus_window() {
+fn e3648_unbindable_bus_aperture() {
     let dir = temp_platform("unbindable");
     let mut cd = CompiledDescriptor::default();
-    cd.window_count = 1;
-    cd.windows[0] = MmioWindowSpec {
+    cd.aperture_count = 1;
+    cd.apertures[0] = MmioApertureSpec {
         id: 0,
         name: atom(b"bus"),
-        kind: MmioWindowKind::Bus,
+        kind: MmioApertureKind::Bus,
         base: None,
         size: 0x10000,
         reloc_isa: Some(codegen_core::RelocIsa::ArmThumbLdrLiteral),
@@ -89,7 +89,7 @@ fn e3648_unbindable_bus_window() {
     cd.devices[0] = codegen_core::compiled_desc::CompiledDevice {
         map: atom(b"BusMap"),
         instance: atom(b"bus"),
-        window: 0,
+        aperture: 0,
         base_offset: 0,
         registers: [codegen_core::compiled_desc::CompiledRegister::EMPTY; 32],
         register_count: 1,
@@ -105,6 +105,8 @@ fn e3648_unbindable_bus_window() {
         mask: 0,
         reset: 0,
         barrier: 0,
+        interrupt: 0xFFFF,
+        irq: 0xFFFF,
     };
     write_desc(&dir, &cd);
     fs::write(
@@ -141,20 +143,20 @@ fn e3648_unbindable_bus_window() {
     let _ = fs::remove_dir_all(&out);
     assert!(
         stderr.contains("E3648"),
-        "bus window with no base must be E3648 (unbindable), got: {stderr}"
+        "bus aperture with no base must be E3648 (unbindable), got: {stderr}"
     );
     let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
-fn size_zero_window_desc_is_e3647() {
+fn size_zero_aperture_desc_is_e3647() {
     let dir = temp_platform("size-zero");
     let mut cd = CompiledDescriptor::default();
-    cd.window_count = 1;
-    cd.windows[0] = MmioWindowSpec {
+    cd.aperture_count = 1;
+    cd.apertures[0] = MmioApertureSpec {
         id: 0,
         name: atom(b"mmio"),
-        kind: MmioWindowKind::Emulated,
+        kind: MmioApertureKind::Emulated,
         base: None,
         size: 0,
         reloc_isa: None,
@@ -163,29 +165,29 @@ fn size_zero_window_desc_is_e3647() {
 
     let stderr = run_langc(&dir);
     assert!(
-        stderr.contains("E3647") && stderr.contains("window size must be > 0"),
+        stderr.contains("E3647") && stderr.contains("aperture size must be > 0"),
         "size-zero descriptor must be E3647, got: {stderr}"
     );
     let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
-fn overlapping_windows_desc_is_e3647() {
+fn overlapping_apertures_desc_is_e3647() {
     let dir = temp_platform("overlap");
     let mut cd = CompiledDescriptor::default();
-    cd.window_count = 2;
-    cd.windows[0] = MmioWindowSpec {
+    cd.aperture_count = 2;
+    cd.apertures[0] = MmioApertureSpec {
         id: 0,
         name: atom(b"a"),
-        kind: MmioWindowKind::Bus,
+        kind: MmioApertureKind::Bus,
         base: Some(0x40000000),
         size: 0x1000,
         reloc_isa: Some(codegen_core::RelocIsa::ArmThumbLdrLiteral),
     };
-    cd.windows[1] = MmioWindowSpec {
+    cd.apertures[1] = MmioApertureSpec {
         id: 1,
         name: atom(b"b"),
-        kind: MmioWindowKind::Bus,
+        kind: MmioApertureKind::Bus,
         base: Some(0x40000800),
         size: 0x1000,
         reloc_isa: Some(codegen_core::RelocIsa::ArmThumbLdrLiteral),
@@ -194,7 +196,7 @@ fn overlapping_windows_desc_is_e3647() {
 
     let stderr = run_langc(&dir);
     assert!(
-        stderr.contains("E3647") && stderr.contains("bus windows overlap"),
+        stderr.contains("E3647") && stderr.contains("bus apertures overlap"),
         "overlapping descriptor must be E3647, got: {stderr}"
     );
     let _ = fs::remove_dir_all(&dir);

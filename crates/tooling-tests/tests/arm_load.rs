@@ -12,6 +12,7 @@ use lmod::header::{compute_layout, encode_header, LmodHeader};
 use lmod::modinfo::{self, ExportEntry, ImportEntry};
 use lmod::validate::Container;
 use loader_core::load::{load_module, LoadedSet};
+use loader_core::apertures::ApertureRegistry;
 use loader_core::symbols::SymMap;
 
 /// ARM Thumb code containing `adds r4, r4, #4` — detectable by Arch scanner.
@@ -32,7 +33,7 @@ const ARM_ABS32_IMPORT_CODE: &[u8] = &[
     0x70, 0x47, // bx lr
 ];
 
-const ARM_ABI_HASH: u64 = 0x5d36b0efe4b2e904; // compute_abi_hash(ARCH_TAG_ARM, 4, 32, 3)
+const ARM_ABI_HASH: u64 = 0x4e2b602bb1069843; // compute_abi_hash(ARCH_TAG_ARM, 4, 32, 4)
 
 fn make_arm_lmod(code: &[u8], imports: &[(&str, u8)]) -> Vec<u8> {
     let modinfo_bytes = make_arm_modinfo(imports);
@@ -85,6 +86,8 @@ fn make_arm_modinfo(imports: &[(&str, u8)]) -> Vec<u8> {
         ARM_ABI_HASH,
         0,
         &[],
+        0,
+        &[],
     )
     .unwrap();
     buf[..size].to_vec()
@@ -107,7 +110,7 @@ fn arm_load_no_imports() {
     register_test_runtime_symtab(&mut global_map, ds_high);
     let mut loaded_set = LoadedSet::<64>::new();
 
-    let result = load_module(&container, &mut plat, &mut global_map, &mut loaded_set);
+    let result = load_module(&container, &mut plat, &mut global_map, &mut loaded_set, &mut ApertureRegistry::new());
     assert!(result.is_ok(), "ARM no-import load failed: {:?}", result);
 }
 
@@ -124,7 +127,7 @@ fn arm_load_with_import() {
     register_test_runtime_symtab(&mut global_map, ds_high);
     let mut loaded_set = LoadedSet::<64>::new();
 
-    let loaded = load_module(&container, &mut plat, &mut global_map, &mut loaded_set)
+    let loaded = load_module(&container, &mut plat, &mut global_map, &mut loaded_set, &mut ApertureRegistry::new())
         .expect("ARM import load with ABS32 should succeed");
 
     // Verify that the relocation was applied: the first 4 bytes of the loaded
@@ -156,7 +159,7 @@ fn arm_load_abi_hash_mismatch_rejected() {
     register_test_runtime_symtab(&mut global_map, ds_high);
     let mut loaded_set = LoadedSet::<64>::new();
 
-    let result = load_module(&container, &mut plat, &mut global_map, &mut loaded_set);
+    let result = load_module(&container, &mut plat, &mut global_map, &mut loaded_set, &mut ApertureRegistry::new());
     assert_eq!(result.unwrap_err(), 5200, "expected E_ABI_MISMATCH");
 }
 

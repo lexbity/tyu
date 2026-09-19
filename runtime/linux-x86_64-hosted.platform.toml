@@ -9,7 +9,7 @@ description = "x86_64 hosted runtime"
 triple = "x86_64-unknown-linux-gnu"
 arch = "x86_64"
 default = true
-expected_abi_hash = "0x41f05b8b1adab0ab"
+expected_abi_hash = "0x50fbac4f4e87016c"
 
 [metal]
 path = "."
@@ -34,7 +34,7 @@ rung = "untested"
 
 # ---- descriptor v2 ---------------------------------------------------------
 
-[[platform.windows]]
+[[platform.apertures]]
 id = 0
 name = "mmio"                  # the in-guest-RAM `__mmio_mem` array (D-7)
 kind = "emulated"              # RAM the runtime owns; base is a link-time symbol
@@ -44,7 +44,7 @@ size = 0x10000
 [[platform.devices]]
 map = "GPIO"
 instance = "gpio"
-window = 0
+aperture = 0
 base_offset = 0x0
 registers = [
   { offset = 0x00, name = "DATA", width = 32, access = "rw" },
@@ -53,7 +53,7 @@ registers = [
 [[platform.devices]]
 map = "GPIO"
 instance = "gpio_io"
-window = 0
+aperture = 0
 base_offset = 0x1000
 registers = [
   { offset = 0x00, name = "OUT_SET", width = 32, access = "wo" },
@@ -63,7 +63,7 @@ registers = [
 [[platform.devices]]
 map = "UART"
 instance = "uart"
-window = 0
+aperture = 0
 base_offset = 0x2000
 registers = [
   { offset = 0x00, name = "CTRL", width = 32, access = "rw" },
@@ -72,7 +72,7 @@ registers = [
 [[platform.devices]]
 map = "GPIO"
 instance = "gpio_outin"
-window = 0
+aperture = 0
 base_offset = 0x1000
 registers = [
   { offset = 0x00, name = "OUT", width = 32, access = "wo" },
@@ -82,7 +82,7 @@ registers = [
 [[platform.devices]]
 map = "GPIO"
 instance = "gpio_pincfg"
-window = 0
+aperture = 0
 base_offset = 0x1000
 registers = [
   { offset = 0x200, name = "PINCFG", width = 32, access = "rw" },
@@ -91,7 +91,7 @@ registers = [
 [[platform.devices]]
 map = "GPIO"
 instance = "gpio_data10"
-window = 0
+aperture = 0
 base_offset = 0x100
 registers = [
   { offset = 0x10, name = "DATA", width = 32, access = "rw" },
@@ -100,7 +100,7 @@ registers = [
 [[platform.devices]]
 map = "Strategy"
 instance = "strategy"
-window = 0
+aperture = 0
 base_offset = 0x0
 registers = [
   { offset = 0x00, name = "CTRL", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
@@ -115,7 +115,7 @@ registers = [
 [[platform.devices]]
 map = "StrategySeed"
 instance = "strategy_seed"
-window = 0
+aperture = 0
 base_offset = 0x0
 registers = [
   { offset = 0x04, name = "STATUS", width = 32, access = "rw" },

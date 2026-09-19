@@ -68,11 +68,11 @@ pub fn emit_ir(
         allow_raw_casts,
     )?;
 
-    // P4: buffer the word text and collect the module's window-use union so
-    // the `format_ver`/`module`/`windows` header precedes the words, exactly
+    // P4: buffer the word text and collect the module's aperture-use union so
+    // the `format_ver`/`module`/`apertures` header precedes the words, exactly
     // matching `ir::write_module`.
     let mut words_buf = VecOut(Vec::new());
-    let mut windows: FixedVec<lir::WindowUse, 8> = FixedVec::new();
+    let mut apertures: FixedVec<lir::ApertureUse, 8> = FixedVec::new();
 
     for decl in module.decls.iter() {
         if decl.kind != DeclKind::Word {
@@ -135,55 +135,55 @@ pub fn emit_ir(
             code: e.code(),
             span: e.span(),
         })?;
-        merge_windows(&mut windows, out_words.word);
+        merge_apertures(&mut apertures, out_words.word);
         lir::write_word(&mut words_buf, out_words.word);
         for w in out_words.extra_words.iter() {
             lir::verify_word(w).map_err(|e| TcError::InternalError {
                 code: e.code(),
                 span: e.span(),
             })?;
-            merge_windows(&mut windows, w);
+            merge_apertures(&mut apertures, w);
             lir::write_word(&mut words_buf, w);
         }
     }
 
-    // Header: format_ver, module, windows — then the buffered words.
+    // Header: format_ver, module, apertures — then the buffered words.
     out.write(b"format_ver ");
     write_u32(out, lir::FORMAT_VER);
     out.write(b"\n");
     out.write(b"module ");
     out.write(slice_span(src, module.name));
     out.write(b"\n");
-    write_windows(out, &windows);
+    write_apertures(out, &apertures);
     out.write(words_buf.0.as_slice());
     Ok(())
 }
 
-/// Union `w`'s window-use entries into the module table.
-fn merge_windows(module_windows: &mut FixedVec<lir::WindowUse, 8>, w: &lir::Word) {
-    for wu in w.windows.iter() {
-        if let Some(existing) = module_windows.iter_mut().find(|e| e.id == wu.id) {
+/// Union `w`'s aperture-use entries into the module table.
+fn merge_apertures(module_apertures: &mut FixedVec<lir::ApertureUse, 8>, w: &lir::Word) {
+    for wu in w.apertures.iter() {
+        if let Some(existing) = module_apertures.iter_mut().find(|e| e.id == wu.id) {
             existing.access_mask |= wu.access_mask;
         } else {
-            let _ = module_windows.push(*wu);
+            let _ = module_apertures.push(*wu);
         }
     }
 }
 
-/// Emit the `windows N` section (design doc §5.4).
-fn write_windows(out: &mut impl Output, windows: &FixedVec<lir::WindowUse, 8>) {
-    out.write(b"windows ");
-    write_u32(out, windows.len() as u32);
+/// Emit the `apertures N` section (design doc §5.4).
+fn write_apertures(out: &mut impl Output, apertures: &FixedVec<lir::ApertureUse, 8>) {
+    out.write(b"apertures ");
+    write_u32(out, apertures.len() as u32);
     out.write(b"\n");
-    for wu in windows.iter() {
-        out.write(b"window ");
+    for wu in apertures.iter() {
+        out.write(b"aperture ");
         write_u32(out, wu.id as u32);
         out.write(b" ");
         out.write(wu.name.as_bytes());
         out.write(b" ");
         out.write(match wu.kind {
-            lir::WindowKind::Bus => b"bus",
-            lir::WindowKind::Emulated => b"emulated",
+            lir::ApertureKind::Bus => b"bus",
+            lir::ApertureKind::Emulated => b"emulated",
         });
         out.write(b" bind=");
         out.write(match wu.bind {

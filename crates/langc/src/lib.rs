@@ -14,7 +14,7 @@ pub mod iface;
 pub mod util;
 
 use codegen_core::compiled_desc::{decode_compiled_desc, validate_compiled_desc, CompiledDescriptor};
-use codegen_core::{EmitMode, MmioWindowSpec, Target};
+use codegen_core::{EmitMode, MmioApertureSpec, Target};
 use frontend::parse::{DeclKind, ModuleAst, Parser};
 use hosted::{diag, fs};
 
@@ -30,7 +30,7 @@ pub unsafe fn run(argc: isize, argv: *const *const hosted::c::c_char) -> i32 {
 
     let target = cfg.target.unwrap_or(Target::X86_64UnknownLinuxGnu);
 
-    // Effective MMIO windows: the compiled platform descriptor when
+    // Effective MMIO apertures: the compiled platform descriptor when
     // `--platform` is present (P3/P4, D-1), otherwise the target's static
     // defaults. Loaded once, before any emit that needs them.
     let mut compiled = CompiledDescriptor::default();
@@ -40,9 +40,9 @@ pub unsafe fn run(argc: isize, argv: *const *const hosted::c::c_char) -> i32 {
             Ok(None) => None,
             Err(code) => return code,
         };
-    let mmio_windows: &[MmioWindowSpec] = match descriptor {
-        Some(cd) => cd.windows(),
-        None => target.spec().mmio_windows,
+    let mmio_apertures: &[MmioApertureSpec] = match descriptor {
+        Some(cd) => cd.apertures(),
+        None => target.spec().mmio_apertures,
     };
 
     let buf = match fs::read_file(cfg.input) {
@@ -143,7 +143,7 @@ pub unsafe fn run(argc: isize, argv: *const *const hosted::c::c_char) -> i32 {
             cfg.input,
             cfg.features,
             descriptor,
-            mmio_windows,
+            mmio_apertures,
             &mut out,
         ),
         EmitMode::Obj => {
@@ -161,7 +161,7 @@ pub unsafe fn run(argc: isize, argv: *const *const hosted::c::c_char) -> i32 {
                 cfg.input,
                 cfg.features,
                 descriptor,
-                mmio_windows,
+                mmio_apertures,
             )
         }
     }

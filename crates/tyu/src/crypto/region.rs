@@ -12,7 +12,7 @@
 //! A set payload (wire v2) carries a set-table that routes a *key lane* and
 //! the *low nibble of the set id* to a slot — per-key and per-bit routing.
 
-use super::keys::{decode_keys_section, keys_to_region_request, region_request_to_keys};
+use super::keys::{decode_keys_section, keys_to_region_request};
 use super::registry::{SET_PAYLOAD_MAGIC, SET_KEY_BITS};
 
 /// The region state machine (P7).
@@ -119,13 +119,34 @@ pub fn parse_set_table(payload: &[u8]) -> Result<SetTable, RegionError> {
     if payload.len() < 12 || &payload[..4] != SET_PAYLOAD_MAGIC {
         return Err(RegionError::BadMagic);
     }
-    let set_id = u32::from_le_bytes(payload[4..8].try_into().unwrap());
+    // G10 discipline: every slice read is length-guarded AND the `try_into`
+    // is checked (never `.unwrap()` on host-derived bytes) so a malformed
+    // payload can only yield a parse error, never a panic.
+    let set_id = u32::from_le_bytes(
+        payload
+            .get(4..8)
+            .ok_or(RegionError::BadSetTable)?
+            .try_into()
+            .map_err(|_| RegionError::BadSetTable)?,
+    );
     let mut p = 17usize; // 12 header + 5 keys section
     if payload.len() < p + 4 {
         return Err(RegionError::BadSetTable);
     }
-    let slot_count = u16::from_le_bytes(payload[p..p + 2].try_into().unwrap());
-    let route_count = u16::from_le_bytes(payload[p + 2..p + 4].try_into().unwrap());
+    let slot_count = u16::from_le_bytes(
+        payload
+            .get(p..p + 2)
+            .ok_or(RegionError::BadSetTable)?
+            .try_into()
+            .map_err(|_| RegionError::BadSetTable)?,
+    );
+    let route_count = u16::from_le_bytes(
+        payload
+            .get(p + 2..p + 4)
+            .ok_or(RegionError::BadSetTable)?
+            .try_into()
+            .map_err(|_| RegionError::BadSetTable)?,
+    );
     p += 4;
     let mut routes = Vec::with_capacity(route_count as usize);
     for _ in 0..route_count {
@@ -134,7 +155,13 @@ pub fn parse_set_table(payload: &[u8]) -> Result<SetTable, RegionError> {
         }
         let lane = payload[p];
         let bit_mask = payload[p + 1];
-        let slot = u16::from_le_bytes(payload[p + 2..p + 4].try_into().unwrap());
+        let slot = u16::from_le_bytes(
+            payload
+                .get(p + 2..p + 4)
+                .ok_or(RegionError::BadSetTable)?
+                .try_into()
+                .map_err(|_| RegionError::BadSetTable)?,
+        );
         if slot >= slot_count {
             return Err(RegionError::BadSetTable);
         }
@@ -392,6 +419,7 @@ pub const MAX_ROUTABLE_SLOTS: u16 = (1 << (SET_KEY_BITS * 2)) as u16;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto::keys::region_request_to_keys;
 
     fn payload(set_id: u32, lanes: &[(u8, u8, u16)], slots: u16) -> Vec<u8> {
         let mut v = Vec::new();
@@ -483,5 +511,27 @@ mod tests {
     fn keys_to_region_request_roundtrip() {
         let req = keys_to_region_request(2, 0x5, RegionState::Naked).unwrap();
         assert_eq!(region_request_to_keys(&req), (2, 0x5));
+    }
+
+    /// G10 no-panic audit (host-input paths): every byte pattern up to a
+    /// modest length must be handled by `parse_set_table`/`decode_region_msg`
+    /// with an `Err`/`None`, never a panic.
+    #[test]
+    fn host_input_parse_paths_never_panic() {
+        for len in 0..64usize {
+            for mut seed in 0..=255u8 {
+                let bytes: Vec<u8> = (0..len).map(|i| seed.wrapping_add(i as u8)).collect();
+                let _ = parse_set_table(&bytes);
+                let _ = decode_region_msg(&bytes);
+                seed = seed.wrapping_mul(131);
+            }
+        }
+        // A valid-but-hostile truncated payload must error, not panic.
+        let mut payload = payload(0x5, &[(0, 0x1, 1)], 4);
+        let full_len = payload.len();
+        for cut in 0..full_len {
+            payload.truncate(cut);
+            assert!(parse_set_table(&payload).is_err());
+        }
     }
 }

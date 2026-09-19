@@ -1,8 +1,8 @@
 //! Compiled-descriptor sync (P3): every discovered platform pack's committed
 //! `platform.desc` must match its `platform.toml` descriptor.
 //!
-//! `langc --platform=<dir>` reads `<dir>/platform.desc` for MMIO window facts,
-//! so a stale compiled form would silently source wrong windows. This test
+//! `langc --platform=<dir>` reads `<dir>/platform.desc` for MMIO aperture facts,
+//! so a stale compiled form would silently source wrong apertures. This test
 //! re-compiles each descriptor (validating it — E3646/E3647) and asserts the
 //! on-disk file matches; `ensure_compiled_descriptor` rewrites it when stale,
 //! making this test the generator for the committed artifacts.
@@ -56,8 +56,8 @@ fn every_pack_compiled_descriptor_is_in_sync() {
             pack.name()
         );
         assert_eq!(
-            decoded.windows(), compiled.windows(),
-            "{} compiled descriptor windows drifted from its platform.toml",
+            decoded.apertures(), compiled.apertures(),
+            "{} compiled descriptor apertures drifted from its platform.toml",
             pack.name()
         );
         checked += 1;

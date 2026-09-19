@@ -43,6 +43,10 @@ fn line_col(src: &[u8], offset: usize) -> (u32, u32) {
 impl<'a> RiscVBackend<'a> {
     pub fn emit_word(&mut self, w: &lir::Word) -> Result<(), CodegenError> {
         self.cur_word_id = fnv1a_u64(w.name.as_bytes());
+        // P6: fuse this word's aperture-use entries into the module table.
+        for wu in w.apertures.iter() {
+            codegen_core::merge_aperture_use(&mut self.mi_apertures, &mut self.mi_aperture_count, wu);
+        }
         self.out.write(b"\n");
         if self.mode == AsmMode::Object {
             if is_exported(self.module, self.src, w.name.as_bytes()) {
@@ -342,7 +346,11 @@ impl<'a> RiscVBackend<'a> {
                     (16, false) => self.out.write(b"\tlhu a0, 0(a0)\n"),
                     (32, _) => self.out.write(b"\tlw a0, 0(a0)\n"),
                     (64, _) => {
-                        self.out.write(b"\tlw a0, 0(a0)\n\tlw a1, 4(a0)\n");
+                        // Keep the base in a caller-saved temp: the first `lw`
+                        // overwrites a0, so a second `lw a1, 4(a0)` would use
+                        // the loaded *value* as the base (reads 4(value)).
+                        self.out.write(b"\tmv t0, a0\n");
+                        self.out.write(b"\tlw a0, 0(t0)\n\tlw a1, 4(t0)\n");
                     }
                     _ => return Err(CodegenError::UnsupportedOp { op_name: b"Load" }),
                 }
@@ -378,11 +386,11 @@ impl<'a> RiscVBackend<'a> {
                 Ok(true)
             }
             lir::OpKind::AddrOf {
-                base: lir::AddrOfBase::Mmio { window, offset },
+                base: lir::AddrOfBase::Mmio { aperture, offset },
                 ..
             } => {
-                // P6: window_base + offset through a relocatable literal site.
-                self.emit_mmio_window_addr(window, offset)?;
+                // P6: aperture_base + offset through a relocatable literal site.
+                self.emit_mmio_aperture_addr(aperture, offset)?;
                 self.out.write(b"\tsw a0, 0(s2)\n\taddi s2, s2, 4\n");
                 self.out.write(b"\tli a1, 0\n\tsw a1, 0(s2)\n\taddi s2, s2, 4\n");
                 self.emit_ds_high_update();
@@ -587,11 +595,11 @@ impl<'a> RiscVBackend<'a> {
                 }
                 Ok(())
             }
-            lir::OpKind::MmioPlace { window, offset, .. } => {
-                // Symbolic place: window_base + offset (P4), bound through a
-                // relocatable literal site (P6). The window is guaranteed
+            lir::OpKind::MmioPlace { aperture, offset, .. } => {
+                // Symbolic place: aperture_base + offset (P4), bound through a
+                // relocatable literal site (P6). The aperture is guaranteed
                 // declared by construction (descriptor resolution).
-                self.emit_mmio_window_addr(window, offset)?;
+                self.emit_mmio_aperture_addr(aperture, offset)?;
                 self.out.write(b"\tsw a0, 0(s2)\n\taddi s2, s2, 4\n");
                 self.out.write(b"\tli a1, 0\n\tsw a1, 0(s2)\n\taddi s2, s2, 4\n");
                 self.emit_ds_high_update();
@@ -616,7 +624,10 @@ impl<'a> RiscVBackend<'a> {
                     16 => self.out.write(b"\tlhu a0, 0(a0)\n"),
                     32 => self.out.write(b"\tlw a0, 0(a0)\n"),
                     64 => {
-                        self.out.write(b"\tlw a0, 0(a0)\n\tlw a1, 4(a0)\n");
+                        // Keep base in a temp: the first `lw` overwrites a0, so
+                        // a second `lw a1, 4(a0)` would read 4(value).
+                        self.out.write(b"\tmv t0, a0\n");
+                        self.out.write(b"\tlw a0, 0(t0)\n\tlw a1, 4(t0)\n");
                     }
                     _ => {
                         return Err(CodegenError::UnsupportedOp {
@@ -835,21 +846,21 @@ impl<'a> RiscVBackend<'a> {
         self.out.write(b":\n");
     }
 
-    /// Emit the window address of a window-relative place into a0 (P6).
-    /// A bus window with a binding ISA loads the base from a relocatable
-    /// literal site (`auipc` + `lw` over `__lang_window_{id}_base`) then adds
-    /// the register offset; an unbound (emulated) window falls back to the
+    /// Emit the aperture address of a aperture-relative place into a0 (P6).
+    /// A bus aperture with a binding ISA loads the base from a relocatable
+    /// literal site (`auipc` + `lw` over `__lang_aperture_{id}_base`) then adds
+    /// the register offset; an unbound (emulated) aperture falls back to the
     /// absolute constant.
-    fn emit_mmio_window_addr(&mut self, window: u16, offset: u32) -> Result<(), CodegenError> {
+    fn emit_mmio_aperture_addr(&mut self, aperture: u16, offset: u32) -> Result<(), CodegenError> {
         let mut found = None;
-        for i in 0..self.mmio_window_count {
-            if self.mmio_windows[i].id == window {
-                found = Some(&self.mmio_windows[i]);
+        for i in 0..self.mmio_aperture_count {
+            if self.mmio_apertures[i].id == aperture {
+                found = Some(&self.mmio_apertures[i]);
                 break;
             }
         }
         let Some(spec) = found else {
-            return Err(CodegenError::NoMmioWindow);
+            return Err(CodegenError::NoMmioAperture);
         };
         match spec.reloc_isa {
             Some(codegen_core::RelocIsa::RiscVHi20Lo12) => {
@@ -864,8 +875,8 @@ impl<'a> RiscVBackend<'a> {
                 write_u32(self.out, id);
                 self.out.write(b"\n\t.balign 4\n.Lmmio_word_");
                 write_u32(self.out, id);
-                self.out.write(b":\n\t.word __lang_window_");
-                write_u32(self.out, window as u32);
+                self.out.write(b":\n\t.word __lang_aperture_");
+                write_u32(self.out, aperture as u32);
                 self.out.write(b"_base\n.Lmmio_after_");
                 write_u32(self.out, id);
                 self.out.write(b":\n");
@@ -875,7 +886,7 @@ impl<'a> RiscVBackend<'a> {
             _ => {
                 let addr = spec
                     .base
-                    .ok_or(CodegenError::NoMmioWindow)?
+                    .ok_or(CodegenError::NoMmioAperture)?
                     .saturating_add(offset as u64);
                 self.emit_const32(addr as u32);
                 Ok(())
@@ -920,7 +931,10 @@ impl<'a> RiscVBackend<'a> {
         self.out.write(b"\taddi s2, s2, -8\n\tlw a0, 0(s2)\n");
         match rbits {
             32 => self.out.write(b"\tlw a0, 0(a0)\n"),
-            64 => self.out.write(b"\tlw a0, 0(a0)\n\tlw a1, 4(a0)\n"),
+            64 => {
+                self.out.write(b"\tmv t0, a0\n");
+                self.out.write(b"\tlw a0, 0(t0)\n\tlw a1, 4(t0)\n");
+            }
             _ => {
                 return Err(CodegenError::UnsupportedOp {
                     op_name: b"MmioVolLoadField",

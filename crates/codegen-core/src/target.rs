@@ -304,51 +304,51 @@ pub enum ScratchBacking {
     Device,
 }
 
-/// How a memory-mapped window is backed (decision D-7, design doc §5.2).
+/// How a memory-mapped aperture is backed (decision D-7, design doc §5.2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MmioWindowKind {
+pub enum MmioApertureKind {
     /// Real device address space.
     Bus,
     /// RAM the runtime owns (the hosted `__mmio_mem` fiction on x86).
     Emulated,
 }
 
-/// A memory-mapped window a target or board exposes.
+/// A memory-mapped aperture a target or board exposes.
 ///
 /// This is the shared representation the backends consume; tyu derives it
 /// from the platform descriptor (`platform_desc::compile`), and the static
 /// per-target tables here are the defaults when no descriptor is supplied.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct MmioWindowSpec {
+pub struct MmioApertureSpec {
     pub id: u16,
     pub name: ir::Atom,
-    pub kind: MmioWindowKind,
+    pub kind: MmioApertureKind,
     /// Absolute base address. `None` means the base is a link-time symbol
-    /// (the emulated window on hosted/x86, D-7).
+    /// (the emulated aperture on hosted/x86, D-7).
     pub base: Option<u64>,
     pub size: u32,
-    /// The binding-time relocation ISA for this window's base (P6). `None`
-    /// for emulated windows (runtime-dynamic addressing) — bus windows on a
+    /// The binding-time relocation ISA for this aperture's base (P6). `None`
+    /// for emulated apertures (runtime-dynamic addressing) — bus apertures on a
     /// reloc-capable target carry their ISA.
     pub reloc_isa: Option<RelocIsa>,
 }
 
-impl MmioWindowSpec {
+impl MmioApertureSpec {
     pub const EMPTY: Self = Self {
         id: 0,
         name: ir::AT_EMPTY,
-        kind: MmioWindowKind::Bus,
+        kind: MmioApertureKind::Bus,
         base: None,
         size: 0,
         reloc_isa: None,
     };
 }
 
-/// Const-construct an `ir::Atom` window name. Every caller passes a compile-
+/// Const-construct an `ir::Atom` aperture name. Every caller passes a compile-
 /// time literal ≤ 32 bytes, so the `None` arm (which would mean a > 32-byte
 /// name) is unreachable; `AT_EMPTY` is the neutral fallback (no panic in
 /// const — G13).
-const fn window_atom(bytes: &[u8]) -> ir::Atom {
+const fn aperture_atom(bytes: &[u8]) -> ir::Atom {
     match ir::Atom::new(bytes) {
         Some(a) => a,
         None => ir::AT_EMPTY,
@@ -440,14 +440,14 @@ pub struct TargetSpec {
     /// QEMU system-mode parameters. `None` for host-native targets.
     pub qemu: Option<&'static QemuSpec>,
 
-    /// The MMIO windows this target exposes by default (no descriptor
+    /// The MMIO apertures this target exposes by default (no descriptor
     /// supplied). The langc driver overrides these with the compiled
-    /// platform descriptor's windows when `--platform` is given (P3).
-    pub mmio_windows: &'static [MmioWindowSpec],
+    /// platform descriptor's apertures when `--platform` is given (P3).
+    pub mmio_apertures: &'static [MmioApertureSpec],
 
     /// The binding-time relocation ISA this target's instruction selection
-    /// uses for bus-window bases (P6). `None` for targets whose addressing is
-    /// runtime-dynamic (x86's emulated window). The default each bus window
+    /// uses for bus-aperture bases (P6). `None` for targets whose addressing is
+    /// runtime-dynamic (x86's emulated aperture). The default each bus aperture
     /// inherits when its descriptor row does not override it.
     pub reloc_isa: Option<RelocIsa>,
 
@@ -488,7 +488,7 @@ static X86_64_UNKNOWN_LINUX_GNU: TargetSpec = TargetSpec {
     native_int_ty: b"i64",
     slot_bytes: 8,
     qemu: None,
-    mmio_windows: &X86_64_EMULATED_MMIO_WINDOW,
+    mmio_apertures: &X86_64_EMULATED_MMIO_APERTURE,
     reloc_isa: None,
     linker: b"ld",
 };
@@ -538,54 +538,54 @@ static X86_64_UNKNOWN_NONE: TargetSpec = TargetSpec {
     native_int_ty: b"i64",
     slot_bytes: 8,
     qemu: Some(&X86_64_UNKNOWN_NONE_QEMU),
-    mmio_windows: &X86_64_EMULATED_MMIO_WINDOW,
+    mmio_apertures: &X86_64_EMULATED_MMIO_APERTURE,
     reloc_isa: None,
     linker: b"ld",
 };
 
 // ---------------------------------------------------------------------------
-// Per-target default MMIO windows
+// Per-target default MMIO apertures
 // ---------------------------------------------------------------------------
 
-/// x86 hosted/bare: one emulated RAM window (`__mmio_mem`), base is a
+/// x86 hosted/bare: one emulated RAM aperture (`__mmio_mem`), base is a
 /// link-time symbol, size matches the legacy constant (D-7).
-static X86_64_EMULATED_MMIO_WINDOW: [MmioWindowSpec; 1] = [MmioWindowSpec {
+static X86_64_EMULATED_MMIO_APERTURE: [MmioApertureSpec; 1] = [MmioApertureSpec {
     id: 0,
-    name: window_atom(b"mmio"),
-    kind: MmioWindowKind::Emulated,
+    name: aperture_atom(b"mmio"),
+    kind: MmioApertureKind::Emulated,
     base: None,
     size: 0x10000,
     reloc_isa: None,
 }];
 
-/// ARMv7-M (lm3s6965evb QEMU): RAM-backed scratch window covering the SRAM
+/// ARMv7-M (lm3s6965evb QEMU): RAM-backed scratch aperture covering the SRAM
 /// the MMIO fixtures use, plus the Cortex-M SysTick SCS region (design doc
 /// D-14 runtime descriptor).
-static ARM_V7M_BUS_MMIO_WINDOW: [MmioWindowSpec; 2] = [
-    MmioWindowSpec {
+static ARM_V7M_BUS_MMIO_APERTURE: [MmioApertureSpec; 2] = [
+    MmioApertureSpec {
         id: 0,
-        name: window_atom(b"scratch"),
-        kind: MmioWindowKind::Bus,
+        name: aperture_atom(b"scratch"),
+        kind: MmioApertureKind::Bus,
         base: Some(0x20000000),
         size: 0x10000,
         reloc_isa: Some(RelocIsa::ArmThumbLdrLiteral),
     },
-    MmioWindowSpec {
+    MmioApertureSpec {
         id: 1,
-        name: window_atom(b"systick"),
-        kind: MmioWindowKind::Bus,
+        name: aperture_atom(b"systick"),
+        kind: MmioApertureKind::Bus,
         base: Some(0xE000E010),
         size: 0x1000,
         reloc_isa: Some(RelocIsa::ArmThumbLdrLiteral),
     },
 ];
 
-/// RV32 (virt QEMU): DRAM-backed scratch window (0x80000000..0x88000000)
+/// RV32 (virt QEMU): DRAM-backed scratch aperture (0x80000000..0x88000000)
 /// for the MMIO fixtures.
-static RISCV32_BUS_MMIO_WINDOW: [MmioWindowSpec; 1] = [MmioWindowSpec {
+static RISCV32_BUS_MMIO_APERTURE: [MmioApertureSpec; 1] = [MmioApertureSpec {
     id: 0,
-    name: window_atom(b"scratch"),
-    kind: MmioWindowKind::Bus,
+    name: aperture_atom(b"scratch"),
+    kind: MmioApertureKind::Bus,
     base: Some(0x80000000),
     size: 0x08000000,
     reloc_isa: Some(RelocIsa::RiscVHi20Lo12),
@@ -631,7 +631,7 @@ static RISCV32_UNKNOWN_NONE: TargetSpec = TargetSpec {
     native_int_ty: b"i64",
     slot_bytes: 4,
     qemu: Some(&RISCV32_NONE_QEMU),
-    mmio_windows: &RISCV32_BUS_MMIO_WINDOW,
+    mmio_apertures: &RISCV32_BUS_MMIO_APERTURE,
     reloc_isa: Some(RelocIsa::RiscVHi20Lo12),
     linker: b"riscv32-elf-ld",
 };
@@ -671,7 +671,7 @@ static ARM_V7M_UNKNOWN_NONE: TargetSpec = TargetSpec {
     native_int_ty: b"i64",
     slot_bytes: 4,
     qemu: Some(&ARM_V7M_NONE_QEMU),
-    mmio_windows: &ARM_V7M_BUS_MMIO_WINDOW,
+    mmio_apertures: &ARM_V7M_BUS_MMIO_APERTURE,
     reloc_isa: Some(RelocIsa::ArmThumbLdrLiteral),
     linker: b"arm-none-eabi-ld",
 };

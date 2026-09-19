@@ -7,6 +7,8 @@
 
 use core::marker::PhantomData;
 
+pub use lmod::board_table::{BoardTable, BoardAperture};
+
 // ---------------------------------------------------------------------------
 // Region — a slab of mapped memory
 // ---------------------------------------------------------------------------
@@ -182,10 +184,21 @@ pub trait LoaderPlatform {
         u32::MAX
     }
 
-    /// The device's bound base for an MMIO window id (P6 `check_window_base`).
-    /// Returns `None` if the window id is not in the device's binding table.
-    fn window_base(&self, _id: u16) -> Option<u32> {
+    /// The device's board `platform_hash` (P6, decision D-5): the canonical
+    /// hash of the compiled descriptor the firmware was built against.
+    /// `None` when the runtime embeds no descriptor (a module claiming a
+    /// nonzero platform_hash is rejected E5220; an unplatformed module with
+    /// hash 0 loads anywhere).
+    fn platform_hash(&self) -> Option<u64> {
         None
+    }
+
+    /// The board's MMIO aperture table (P6 binding pass, §5.8). Derived from
+    /// the compiled descriptor the firmware embeds; empty when none. The
+    /// loader matches a module's aperture-use entries against this table by
+    /// `name_hash` (stable identity) and resolves bases/sizes from it.
+    fn aperture_table(&self) -> &[BoardAperture] {
+        &[]
     }
 
     /// The trust level this platform operates at.

@@ -1,10 +1,10 @@
 format_ver 6
 module Main
-windows 1
-window 0 mmio emulated bind=none link 0x10000
+apertures 1
+aperture 0 mmio emulated bind=none link 0x10000
 word read (  -- u32 )
   block b0 ()
-    addr_of gpio.DATA window=0 offset=0x0
+    addr_of gpio.DATA aperture=0 offset=0x0
     vol_load u32 gpio.DATA atomic=32
     local_set 1
     local_get 1

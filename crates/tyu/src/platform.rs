@@ -21,8 +21,8 @@ pub use lint::{
 };
 pub use desc::{
     load_descriptor, AccessKind, AllocatorSpec, BarrierKind, Descriptor, DescriptorError,
-    DeviceMap, MemoryModel, MemoryRegionSpec, MmioWindow, ReadKind, RegisterRow, ScopedSpec,
-    WindowKind, WriteKind, DESCRIPTOR_SCHEMA, E_DESC_INVALID, E_DESC_UNKNOWN_KIND, MMIO_SEM_VER,
+    DeviceMap, MemoryModel, MemoryRegionSpec, MmioAperture, ReadKind, RegisterRow, ScopedSpec,
+    ApertureKind, WriteKind, DESCRIPTOR_SCHEMA, E_DESC_INVALID, E_DESC_UNKNOWN_KIND, MMIO_SEM_VER,
     full_mask,
 };
 pub use desc::compile::{

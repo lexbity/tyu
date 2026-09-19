@@ -3,20 +3,20 @@
 //! The descriptor is parsed from the *same* `platform.toml` the v1 manifest
 //! reader consumes, but as an independent serde model: the v1
 //! `PlatformManifest` keeps its fields, and this module reads the v2 sections
-//! (`[platform] schema/family`, `[[platform.windows]]`, `[[platform.devices]]`,
+//! (`[platform] schema/family`, `[[platform.apertures]]`, `[[platform.devices]]`,
 //! `[platform.allocator]`, `[platform.scoped]`, `[platform.metal.trust]`) plus
 //! the `[memory]` sections the allocator validation needs.
 //!
 //! Unknown keys inside the *new* v2 sections are hard parse errors (E3647) —
 //! a typo'd `write_knd` must never be silently ignored, because that would
 //! change the descriptor's hash and therefore its identity (decision D-5).
-//! Unknown *kind names* (window/access/write/read/barrier) are E3646 with the
+//! Unknown *kind names* (aperture/access/write/read/barrier) are E3646 with the
 //! supported set listed (decision D-2 registry rule).
 
 use super::{
     full_mask, AccessKind, AllocatorSpec, BarrierKind, Descriptor, DescriptorError, DeviceMap,
-    E_DESC_INVALID, E_DESC_UNKNOWN_KIND, MmioWindow, MemoryModel, MemoryRegionSpec, ReadKind,
-    RegisterRow, ScopedSpec, WindowKind, WriteKind,
+    E_DESC_INVALID, E_DESC_UNKNOWN_KIND, MmioAperture, MemoryModel, MemoryRegionSpec, ReadKind,
+    RegisterRow, ScopedSpec, ApertureKind, WriteKind,
 };
 
 /// Parse a platform.toml text into a validated-at-parse descriptor.
@@ -31,7 +31,7 @@ pub fn parse_descriptor(text: &str) -> Result<Option<Descriptor>, DescriptorErro
     };
 
     let has_v2 = platform.schema.is_some()
-        || !platform.windows.is_empty()
+        || !platform.apertures.is_empty()
         || !platform.devices.is_empty()
         || platform.allocator.is_some()
         || platform.scoped.is_some()
@@ -58,14 +58,14 @@ pub fn parse_descriptor(text: &str) -> Result<Option<Descriptor>, DescriptorErro
         ));
     }
 
-    let windows = platform
-        .windows
+    let apertures = platform
+        .apertures
         .iter()
         .map(|w| {
-            Ok(MmioWindow {
+            Ok(MmioAperture {
                 id: w.id,
                 name: w.name.clone(),
-                kind: parse_window_kind(&w.kind)?,
+                kind: parse_aperture_kind(&w.kind)?,
                 base: w.base,
                 size: w.size,
                 reloc_isa: w.bind.as_deref().map(parse_reloc_isa).transpose()?,
@@ -85,7 +85,7 @@ pub fn parse_descriptor(text: &str) -> Result<Option<Descriptor>, DescriptorErro
             Ok(DeviceMap {
                 map: d.map.clone(),
                 instance: d.instance.clone(),
-                window: d.window,
+                aperture: d.aperture,
                 base_offset: d.base_offset,
                 registers,
             })
@@ -119,7 +119,7 @@ pub fn parse_descriptor(text: &str) -> Result<Option<Descriptor>, DescriptorErro
         name: platform.name,
         family: platform.family.unwrap_or_default(),
         description: platform.description,
-        windows,
+        apertures,
         devices,
         allocator,
         scoped,
@@ -144,6 +144,8 @@ fn parse_register(r: &RawRegister) -> Result<RegisterRow, DescriptorError> {
         mask: r.mask.unwrap_or_else(|| full_mask(r.width)),
         reset: r.reset.unwrap_or(0),
         barrier,
+        interrupt: r.interrupt,
+        irq: r.irq,
     })
 }
 
@@ -181,17 +183,17 @@ fn parse_reloc_isa(s: &str) -> Result<codegen_core::RelocIsa, DescriptorError> {
         other => Err(DescriptorError::new(
             E_DESC_INVALID,
             format!(
-                "unknown window bind '{other}' (supported: arm-thumb-ldr-literal, riscv-hi20-lo12)"
+                "unknown aperture bind '{other}' (supported: arm-thumb-ldr-literal, riscv-hi20-lo12)"
             ),
         )),
     }
 }
 
-fn parse_window_kind(s: &str) -> Result<WindowKind, DescriptorError> {
+fn parse_aperture_kind(s: &str) -> Result<ApertureKind, DescriptorError> {
     match s {
-        "bus" => Ok(WindowKind::Bus),
-        "emulated" => Ok(WindowKind::Emulated),
-        other => Err(unknown_kind("window kind", other, &["bus", "emulated"])),
+        "bus" => Ok(ApertureKind::Bus),
+        "emulated" => Ok(ApertureKind::Emulated),
+        other => Err(unknown_kind("aperture kind", other, &["bus", "emulated"])),
     }
 }
 
@@ -289,7 +291,7 @@ struct RawPlatformSection {
     #[serde(default)]
     isa: Vec<toml::Value>,
     #[serde(default)]
-    windows: Vec<RawWindow>,
+    apertures: Vec<RawAperture>,
     #[serde(default)]
     devices: Vec<RawDevice>,
     #[serde(default)]
@@ -302,7 +304,7 @@ struct RawPlatformSection {
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RawWindow {
+struct RawAperture {
     id: u16,
     name: String,
     kind: String,
@@ -319,7 +321,7 @@ struct RawWindow {
 struct RawDevice {
     map: String,
     instance: String,
-    window: u16,
+    aperture: u16,
     base_offset: u32,
     #[serde(default)]
     registers: Vec<RawRegister>,
@@ -344,6 +346,12 @@ struct RawRegister {
     reset: Option<u64>,
     #[serde(default)]
     barrier: Option<String>,
+    /// Datasheet NVIC IRQ number for an `@interrupt` binding (P8).
+    #[serde(default)]
+    interrupt: Option<u16>,
+    /// Datasheet interrupt request number (P8).
+    #[serde(default)]
+    irq: Option<u16>,
 }
 
 #[derive(serde::Deserialize)]
@@ -436,7 +444,7 @@ family = "demo"
         assert_eq!(desc.schema, 2);
         assert_eq!(desc.name, "demo");
         assert_eq!(desc.family, "demo");
-        assert!(desc.windows.is_empty());
+        assert!(desc.apertures.is_empty());
         assert!(desc.devices.is_empty());
         assert!(desc.allocator.is_none());
         assert!(desc.metal_trust.is_empty());
@@ -450,7 +458,7 @@ name = "demo"
 schema = 2
 family = "demo"
 
-[[platform.windows]]
+[[platform.apertures]]
 id = 0
 name = "mmio"
 kind = "bus"
@@ -460,7 +468,7 @@ size = 0x1000
 [[platform.devices]]
 map = "Scratch"
 instance = "scratch"
-window = 0
+aperture = 0
 base_offset = 0x0
 registers = [
   { offset = 0x0, name = "A", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
@@ -471,7 +479,7 @@ registers = [
 name = "demo"
 schema = 2
 family = "demo"
-[[platform.windows]]
+[[platform.apertures]]
 id = 0
 name = "mmio"
 kind = "bus"
@@ -479,7 +487,7 @@ size = 0x1000
 [[platform.devices]]
 map = "Scratch"
 instance = "scratch"
-window = 0
+aperture = 0
 base_offset = 0
 registers = [
   { offset = 0x0, name = "A", width = 32, access = "rw" },
@@ -506,7 +514,7 @@ schema = 2
 [[platform.devices]]
 map = "G"
 instance = "g"
-window = 0
+aperture = 0
 base_offset = 0
 registers = [
   { offset = 0x0, name = "r", width = 32, access = "rw", write_kind = "w1x" },
@@ -524,7 +532,7 @@ registers = [
 [platform]
 name = "demo"
 schema = 2
-[[platform.windows]]
+[[platform.apertures]]
 id = 0
 name = "mmio"
 kind = "bus"
@@ -541,7 +549,7 @@ siz = 0x2000
         let text = r#"
 [platform]
 name = "demo"
-[[platform.windows]]
+[[platform.apertures]]
 id = 0
 name = "mmio"
 kind = "bus"

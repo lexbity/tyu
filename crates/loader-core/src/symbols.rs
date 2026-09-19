@@ -398,7 +398,7 @@ mod tests {
         ];
         let mut buf = [0u8; 768];
         let size =
-            lmod::modinfo::encode_into(&mut buf, b"MyMod", &exports, &[], 42, 0, &[]).unwrap();
+            lmod::modinfo::encode_into(&mut buf, b"MyMod", &exports, &[], 42, 0, &[], 0, &[]).unwrap();
         let modinfo = &buf[..size];
 
         let mut map: SymMap<'_, 8> = SymMap::new();
@@ -426,7 +426,7 @@ mod tests {
             stack_bound: 0,
         }];
         let mut buf = [0u8; 256];
-        let size = lmod::modinfo::encode_into(&mut buf, b"M", &exports, &[], 0, 0, &[]).unwrap();
+        let size = lmod::modinfo::encode_into(&mut buf, b"M", &exports, &[], 0, 0, &[], 0, &[]).unwrap();
 
         let mut map: SymMap<'_, 4> = SymMap::new();
         map.register(b"dup", 0x100).unwrap();

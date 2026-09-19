@@ -47,12 +47,12 @@ pub enum CodegenError {
     /// export/import arrays or fixed-size buffer too small).
     ModInfoTooLarge,
 
-    /// MMIO lowering requires a declared window of the needed kind (e.g. an
-    /// emulated window on x86), but the backend has none (P3, D-7).
-    NoMmioWindow,
+    /// MMIO lowering requires a declared aperture of the needed kind (e.g. an
+    /// emulated aperture on x86), but the backend has none (P3, D-7).
+    NoMmioAperture,
 
-    /// `set_mmio_windows` received more than the 8-window capacity.
-    TooManyMmioWindows,
+    /// `set_mmio_apertures` received more than the 8-aperture capacity.
+    TooManyMmioApertures,
 }
 
 impl CodegenError {
@@ -74,8 +74,8 @@ impl CodegenError {
             Self::StringLiteralCapacityExceeded => 8011,
             Self::ScopedAllocationOverflow => 8012,
             Self::ModInfoTooLarge => 8013,
-            Self::NoMmioWindow => 8014,
-            Self::TooManyMmioWindows => 8015,
+            Self::NoMmioAperture => 8014,
+            Self::TooManyMmioApertures => 8015,
         }
     }
 }

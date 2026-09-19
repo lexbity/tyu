@@ -1,10 +1,10 @@
-# E3647: window size must be > 0.
+# E3647: aperture size must be > 0.
 [platform]
 name = "bad"
 schema = 2
 family = "bad"
 
-[[platform.windows]]
+[[platform.apertures]]
 id = 0
 name = "a"
 kind = "bus"

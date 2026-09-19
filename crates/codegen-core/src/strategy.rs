@@ -1,6 +1,6 @@
 //! MMIO lowering classification matrix (design doc §5.6, decision D-3/D-9).
 //!
-//! Each backend classifies every `(strategy, window-kind, op)` combination as
+//! Each backend classifies every `(strategy, aperture-kind, op)` combination as
 //! either `Supported(pattern-name)` or `Unsupported(reason)` via an exhaustive
 //! `fn mmio_cell`. `codegen-core` renders the three tables and diffs them
 //! against a checked-in golden (`strategy_matrix.rs`) — a cell changing
@@ -12,7 +12,7 @@ use alloc::string::String;
 use alloc::string::ToString;
 use core::fmt::Write;
 
-use ir::{WindowKind, WriteKind};
+use ir::{ApertureKind, WriteKind};
 
 /// The MMIO op being classified.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -34,7 +34,7 @@ impl MmioOp {
     }
 }
 
-/// The classification of a `(strategy, window-kind, op)` cell.
+/// The classification of a `(strategy, aperture-kind, op)` cell.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StrategyCell {
     /// The backend lowers this combination; the name is the asm pattern.
@@ -46,12 +46,12 @@ pub enum StrategyCell {
 /// Render one backend's full matrix table.
 pub fn render_strategy_matrix(
     backend: &str,
-    cell: impl Fn(WriteKind, WindowKind, MmioOp) -> StrategyCell,
+    cell: impl Fn(WriteKind, ApertureKind, MmioOp) -> StrategyCell,
 ) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "# {backend} MMIO strategy matrix (design doc §5.6)");
     for strategy in [WriteKind::Plain, WriteKind::W1s, WriteKind::W1c] {
-        for kind in [WindowKind::Bus, WindowKind::Emulated] {
+        for kind in [ApertureKind::Bus, ApertureKind::Emulated] {
             for op in [MmioOp::Load, MmioOp::Store, MmioOp::LoadField, MmioOp::StoreField] {
                 let cell = cell(strategy, kind, op);
                 let rendered = match cell {
@@ -75,7 +75,7 @@ pub fn render_strategy_matrix(
 }
 
 /// The compile-time guard rows (R1/R2), rendered after every backend table.
-pub const GUARD_ROWS: &str = "# compile-time guards (all backends, any strategy / window kind)\n\
+pub const GUARD_ROWS: &str = "# compile-time guards (all backends, any strategy / aperture kind)\n\
 any any field-st-on-effectful E3642 phantom-read (R1)\n\
 any any access-over-atomic_max E3643 over-wide (R2)\n\
 ";
@@ -102,10 +102,10 @@ fn strategy_str(s: WriteKind) -> &'static str {
     }
 }
 
-fn kind_str(k: WindowKind) -> &'static str {
+fn kind_str(k: ApertureKind) -> &'static str {
     match k {
-        WindowKind::Bus => "bus",
-        WindowKind::Emulated => "emulated",
+        ApertureKind::Bus => "bus",
+        ApertureKind::Emulated => "emulated",
     }
 }
 

@@ -105,6 +105,31 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
         None
     };
 
+    // P6 observability (§5.11): `-v` reports the board identity and aperture
+    // table the loader will enforce against.
+    if args.verbose {
+        match &platform_selection {
+            Some(sel) => {
+                let cd = desc::ensure_compiled_descriptor(
+                    &sel.pack.manifest_path,
+                    sel.pack.pack_root(),
+                )?;
+                eprintln!("tyu: platform={} platform_hash=0x{:016x}", sel.pack.name(), cd.platform_hash);
+                for w in cd.apertures() {
+                    eprintln!(
+                        "tyu:   aperture id={} name={} kind={} base={:#x} size={:#x}",
+                        w.id,
+                        String::from_utf8_lossy(w.name.as_bytes()),
+                        if w.kind == codegen_core::target::MmioApertureKind::Bus { "bus" } else { "emulated" },
+                        w.base.unwrap_or(0),
+                        w.size
+                    );
+                }
+            }
+            None => eprintln!("tyu: no platform selection (modules are unplatformed)"),
+        }
+    }
+
     // Compute compiler fingerprint (stable per build invocation). The
     // platform hash is folded in so a descriptor change invalidates cached
     // artifacts exactly as a source change would.
@@ -198,8 +223,7 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
             let root_obj = module_objs
                 .get(module_count.saturating_sub(1))
                 .ok_or_else(|| TyuError::Build("no root module object to pack".into()))?;
-            let binds = window_binds(platform_selection.as_ref())?;
-            pack_final_lmod(root_obj, &out_dir, modules.last().map(|m| m.name.as_str()), &binds)?
+            pack_final_lmod(root_obj, &out_dir, modules.last().map(|m| m.name.as_str()))?
         };
         (final_image, exec_image)
     };
@@ -237,8 +261,7 @@ fn build_dynamic_image(
     let root_obj = module_objs
         .last()
         .ok_or_else(|| TyuError::Build("no root module object to pack".into()))?;
-    let binds = window_binds(ctx.platform_selection.as_ref())?;
-    let app_lmod = pack_final_lmod(root_obj, &ctx.out_dir, root_module.map(|m| m.name.as_str()), &binds)?;
+    let app_lmod = pack_final_lmod(root_obj, &ctx.out_dir, root_module.map(|m| m.name.as_str()))?;
     let sign_key = resolve_metal_sign_key(metal_sign_key)?;
     let kek = resolve_metal_kek(metal_kek)?;
     if kek.is_some() && sign_key.is_none() {
@@ -388,12 +411,39 @@ fn maybe_apply_test_lmod_mutation(lmod_path: &Path) -> Result<(), TyuError> {
             bytes[reloc_sym_hash..reloc_sym_hash + 8]
                 .copy_from_slice(&0xfeed_dead_beef_cafeu64.to_le_bytes());
         }
-        "window-base-mismatch" => {
-            // Flip the first MmioWindowBase reloc site's bound base so the
-            // loader's `check_window_base` rejects it (P6).
-            let site = lmod_first_window_base_site_offset(&bytes)?;
+        "aperture-base-mismatch" => {
+            // Flip the first MmioApertureBase reloc site so the loader's
+            // defense-in-depth `check` (E5219, behind the E5220 gate) rejects
+            // a module whose site claims a foreign geometry (P6).
+            let site = lmod_first_aperture_base_site_offset(&bytes)?;
             let orig = u32::from_le_bytes(bytes[site..site + 4].try_into().unwrap());
             bytes[site..site + 4].copy_from_slice(&(orig ^ 0x1000).to_le_bytes());
+        }
+        "platform-hash-mismatch" => {
+            // Flip the modinfo `platform_hash` so the loader's board-identity
+            // gate rejects with E5220 (decision D-5).
+            let mi = lmod_modinfo_off(&bytes)?;
+            let orig = u64::from_le_bytes(bytes[mi + 36..mi + 44].try_into().unwrap());
+            bytes[mi + 36..mi + 44].copy_from_slice(&(orig ^ 1).to_le_bytes());
+        }
+        "modinfo-version" => {
+            // Downgrade the modinfo version to 3 → E5224 (no shim).
+            let mi = lmod_modinfo_off(&bytes)?;
+            bytes[mi + 4..mi + 6].copy_from_slice(&3u16.to_le_bytes());
+        }
+        "aperture-name-hash" => {
+            // Corrupt the first aperture-use entry's name_hash → E5222.
+            let mi = lmod_modinfo_off(&bytes)?;
+            let wu = lmod::modinfo::aperture_use_offset(&bytes[mi..])
+                .ok_or_else(|| TyuError::Build("no aperture-use table to mutate".into()))?
+                + mi;
+            let orig = u64::from_le_bytes(bytes[wu..wu + 8].try_into().unwrap());
+            bytes[wu..wu + 8].copy_from_slice(&(orig ^ 0xdead_beef).to_le_bytes());
+        }
+        "aperture-table-malformed" => {
+            // Corrupt the modinfo aperture_count → E5223.
+            let mi = lmod_modinfo_off(&bytes)?;
+            bytes[mi + 32..mi + 34].copy_from_slice(&99u16.to_le_bytes());
         }
         other => {
             return Err(TyuError::Build(format!(
@@ -406,23 +456,28 @@ fn maybe_apply_test_lmod_mutation(lmod_path: &Path) -> Result<(), TyuError> {
 }
 
 fn lmod_modinfo_flags_offset(bytes: &[u8]) -> Result<usize, TyuError> {
+    let mi = lmod_modinfo_off(bytes)?;
+    Ok(mi + 6)
+}
+
+/// The `.lmod` byte offset of the modinfo section (container header fields at
+/// bytes 20..24), validated as a v4 modinfo header.
+fn lmod_modinfo_off(bytes: &[u8]) -> Result<usize, TyuError> {
     if bytes.len() < lmod::header::HEADER_SIZE as usize {
-        return Err(TyuError::Build(
-            "test lmod mutation: header too short".into(),
-        ));
+        return Err(TyuError::Build("test lmod mutation: header too short".into()));
     }
     let modinfo_off = u32::from_le_bytes(bytes[20..24].try_into().unwrap()) as usize;
     let modinfo_len = u32::from_le_bytes(bytes[24..28].try_into().unwrap()) as usize;
-    if modinfo_len < 8
+    if modinfo_len < lmod::modinfo::MODINFO_HEADER_SIZE as usize
         || modinfo_off
-            .checked_add(8)
+            .checked_add(lmod::modinfo::MODINFO_HEADER_SIZE as usize)
             .is_none_or(|end| end > bytes.len())
     {
         return Err(TyuError::Build(
-            "test lmod mutation: modinfo flags out of range".into(),
+            "test lmod mutation: modinfo out of range".into(),
         ));
     }
-    Ok(modinfo_off + 6)
+    Ok(modinfo_off)
 }
 
 fn lmod_first_reloc_kind_offset(bytes: &[u8]) -> Result<usize, TyuError> {
@@ -459,9 +514,9 @@ fn lmod_first_reloc_offset(bytes: &[u8]) -> Result<usize, TyuError> {
     Ok(reloc_off)
 }
 
-/// The .lmod offset of the first `MmioWindowBase` reloc site (P6), for the
-/// `window-base-mismatch` test mutation.
-fn lmod_first_window_base_site_offset(bytes: &[u8]) -> Result<usize, TyuError> {
+/// The .lmod offset of the first `MmioApertureBase` reloc site (P6), for the
+/// `aperture-base-mismatch` test mutation.
+fn lmod_first_aperture_base_site_offset(bytes: &[u8]) -> Result<usize, TyuError> {
     if bytes.len() < lmod::header::HEADER_SIZE as usize {
         return Err(TyuError::Build(
             "test lmod mutation: header too short".into(),
@@ -478,17 +533,17 @@ fn lmod_first_window_base_site_offset(bytes: &[u8]) -> Result<usize, TyuError> {
         }
         let site = u32::from_le_bytes(bytes[off..off + 4].try_into().unwrap()) as usize;
         let kind = bytes[off + 12];
-        if kind == lmod::reloc::RelocKind::MmioWindowBase as u8 {
+        if kind == lmod::reloc::RelocKind::MmioApertureBase as u8 {
             if site + 4 > bytes.len() {
                 return Err(TyuError::Build(
-                    "test lmod mutation: window-base site out of range".into(),
+                    "test lmod mutation: aperture-base site out of range".into(),
                 ));
             }
             return Ok(site);
         }
     }
     Err(TyuError::Build(
-        "test lmod mutation needs a window-base reloc".into(),
+        "test lmod mutation needs a aperture-base reloc".into(),
     ))
 }
 
@@ -534,7 +589,6 @@ fn pack_final_lmod(
     obj_path: &Path,
     out_dir: &Path,
     module_name: Option<&str>,
-    window_binds: &[lmod_pack::WindowBind],
 ) -> Result<PathBuf, TyuError> {
     let lmod_name = match module_name {
         Some(name) if !name.is_empty() => format!("{}.lmod", name),
@@ -543,30 +597,13 @@ fn pack_final_lmod(
     let lmod_path = out_dir.join(lmod_name);
     let obj_bytes = std::fs::read(obj_path)
         .map_err(|e| TyuError::Build(format!("reading '{}': {}", obj_path.display(), e)))?;
-    let packed = lmod_pack::pack_with_windows(&obj_bytes, window_binds)
+    // P6 (decision D-4): the pack records `MmioApertureBase` relocs but binds no
+    // bases; the loader writes the board's aperture bases at load time.
+    let packed = lmod_pack::pack(&obj_bytes)
         .map_err(|e| TyuError::Build(format!("lmod-pack: {}", e)))?;
     std::fs::write(&lmod_path, &packed)
         .map_err(|e| TyuError::Build(format!("writing '{}': {}", lmod_path.display(), e)))?;
     Ok(lmod_path)
-}
-
-/// The window binds for a platform selection (P6): the descriptor's windows
-/// with an absolute base, as `(id, base)` pairs the pack binds window-base
-/// reloc sites against. `None` selection (no descriptor) → no binds.
-fn window_binds(selection: Option<&ResolvedPlatformSelection>) -> Result<Vec<lmod_pack::WindowBind>, TyuError> {
-    let Some(selection) = selection else {
-        return Ok(Vec::new());
-    };
-    let compiled = desc::ensure_compiled_descriptor(&selection.pack.manifest_path, selection.pack.pack_root())?;
-    let binds = compiled
-        .windows()
-        .iter()
-        .filter_map(|w| w.base.map(|b| lmod_pack::WindowBind {
-            id: w.id,
-            base: b as u32,
-        }))
-        .collect();
-    Ok(binds)
 }
 
 fn assemble_image_def(
@@ -1175,8 +1212,8 @@ fn assemble_runtime_with_mode(
         objs.push(entry_obj);
     }
 
-    // P6: the MMIO window-base table the on-device loader re-derives against.
-    objs.push(assemble_mmio_windows_object(target, out_dir, platform_selection)?);
+    // P6: the MMIO aperture-base table the on-device loader re-derives against.
+    objs.push(assemble_mmio_apertures_object(target, out_dir, platform_selection)?);
 
     // Feature-specific runtime units: assemble each stem that maps to
     // an enabled feature.  `assemble_unit` returns an error for missing
@@ -1241,65 +1278,108 @@ fn generate_runtime_symtab(
     Ok(obj_path)
 }
 
-/// Assemble the firmware's MMIO window-base table (P6). The on-device loader
-/// re-derives window bases from this table (`__lang_mmio_window_bases`) and
-/// validates each module's packed bases against it (`check_window_base`).
-/// Assemble the firmware's MMIO window-base table (P6). The on-device loader
-/// re-derives window bases from this table and validates each module's packed
-/// bases against it (`check_window_base`). Emitted unconditionally (a zero
-/// table when no platform selection or no absolute bases) so the loader's
-/// table symbols always resolve.
-fn assemble_mmio_windows_object(
+/// Assemble the firmware's board identity + MMIO aperture table (P6, design doc
+/// §5.8). The compiled descriptor's projection (`encode_board_table`) is
+/// embedded as `__lang_platform_desc`; the on-device loader decodes it with
+/// the shared codec and enforces `platform_hash` (E5220) + aperture binding.
+/// The per-aperture `__lang_aperture_{id}_base` symbols remain so statically-
+/// linked modules' reloc sites resolve at link time. Emitted unconditionally
+/// (an empty table when no platform selection) so the loader's symbols always
+/// resolve.
+fn assemble_mmio_apertures_object(
     target: Target,
     out_dir: &Path,
     selection: Option<&platform::ResolvedPlatformSelection>,
 ) -> Result<PathBuf, TyuError> {
-    let bases: Vec<u32> = match selection {
-        Some(sel) => desc::ensure_compiled_descriptor(&sel.pack.manifest_path, sel.pack.pack_root())?
-            .windows()
-            .iter()
-            .filter_map(|w| w.base.map(|b| b as u32))
-            .collect(),
-        None => Vec::new(),
+    let compiled = match selection {
+        Some(sel) => Some(desc::ensure_compiled_descriptor(
+            &sel.pack.manifest_path,
+            sel.pack.pack_root(),
+        )?),
+        None => None,
     };
-    let asm_path = out_dir.join("mmio_windows_generated.asm");
-    let obj_path = out_dir.join("mmio_windows_generated.o");
-    let asm = render_mmio_windows_asm(target, &bases);
+    let asm_path = out_dir.join("mmio_apertures_generated.asm");
+    let obj_path = out_dir.join("mmio_apertures_generated.o");
+    let asm = render_mmio_apertures_asm(target, compiled.as_ref());
     fs::write(&asm_path, asm).map_err(TyuError::Io)?;
-    assemble_asm_file(target, &asm_path, &obj_path, Some(out_dir), "mmio_windows")?;
+    assemble_asm_file(target, &asm_path, &obj_path, Some(out_dir), "mmio_apertures")?;
     Ok(obj_path)
 }
 
-fn render_mmio_windows_asm(target: Target, bases: &[u32]) -> String {
-    let count = bases.len().min(8);
-    let words: Vec<String> = bases
+/// Encode the board aperture table blob (P6, design doc §5.8) from a compiled
+/// descriptor: `platform_hash` + per-aperture (`name_hash`, `base`, `size`,
+/// capability) via the shared `lmod::board_table` codec. Deterministic.
+fn encode_board_table_blob(cd: &codegen_core::compiled_desc::CompiledDescriptor) -> Vec<u8> {
+    let apertures: Vec<lmod::board_table::BoardAperture> = cd
+        .apertures()
         .iter()
-        .take(count)
-        .chain(core::iter::repeat(&0u32))
-        .take(8)
-        .map(|b| format!("{:#x}", b))
+        .map(|w| lmod::board_table::BoardAperture {
+            name_hash: lmod::hash::fnv1a_u64(w.name.as_bytes()),
+            base: w.base.unwrap_or(0) as u32,
+            size: w.size,
+            capability: codegen_core::compiled_desc::aperture_capability(cd, w.id),
+        })
         .collect();
+    let mut buf = [0u8; lmod::board_table::BOARD_TABLE_ENCODED_SIZE];
+    let n = lmod::board_table::encode_into(&mut buf, cd.platform_hash, &apertures)
+        .expect("board table encode into fixed buffer");
+    buf[..n].to_vec()
+}
+
+fn render_mmio_apertures_asm(
+    target: Target,
+    compiled: Option<&codegen_core::compiled_desc::CompiledDescriptor>,
+) -> String {
+    let bytes = compiled.map(encode_board_table_blob).unwrap_or_default();
+    let bases: Vec<u32> = compiled
+        .map(|cd| {
+            cd.apertures()
+                .iter()
+                .filter_map(|w| w.base.map(|b| b as u32))
+                .collect()
+        })
+        .unwrap_or_default();
+    let count = bases.len().min(8);
     match target.spec().assembler {
-        AssemblerKind::Fasm => format!(
-            "format ELF64\n\nsection '.rodata' writeable\n    align 4\n    public __lang_mmio_window_bases\n__lang_mmio_window_bases:\n    dd {}\n    public __lang_mmio_window_count\n__lang_mmio_window_count:\n    dd {}\n",
-            words.join(", "),
-            count
-        ),
-        _ => {
-            // Per-window absolute symbols (`__lang_window_{id}_base`) so a
-            // statically-linked module's literal sites resolve at link time;
-            // plus the table the on-device loader re-derives against (P6).
+        AssemblerKind::Fasm => {
+            // fasm: `db` data section carrying the board table blob.
             let mut out = String::new();
-            out.push_str(".section .rodata, \"a\", %progbits\n.balign 4\n.global __lang_mmio_window_bases\n__lang_mmio_window_bases:\n  .word ");
-            out.push_str(&words.join("\n  .word "));
-            out.push_str(&format!("\n.global __lang_mmio_window_count\n__lang_mmio_window_count:\n  .word {}\n", count));
+            out.push_str("format ELF64\n\nsection '.rodata' writeable\n    align 4\n    public __lang_platform_desc_start\n__lang_platform_desc_start:\n");
+            if !bytes.is_empty() {
+                out.push_str("    db ");
+                for (i, b) in bytes.iter().enumerate() {
+                    if i != 0 {
+                        out.push(',');
+                    }
+                    out.push_str(&format!("{:#x}", b));
+                }
+                out.push('\n');
+            }
+            out.push_str("    public __lang_platform_desc_end\n__lang_platform_desc_end:\n");
+            out
+        }
+        _ => {
+            // gas: `.byte` blob + per-aperture absolute symbols for static links.
+            let mut out = String::new();
+            out.push_str(".section .rodata, \"a\", %progbits\n.balign 4\n.global __lang_platform_desc_start\n__lang_platform_desc_start:\n");
+            if !bytes.is_empty() {
+                out.push_str("  .byte ");
+                for (i, b) in bytes.iter().enumerate() {
+                    if i != 0 {
+                        out.push(',');
+                    }
+                    out.push_str(&format!("{}", b));
+                }
+                out.push('\n');
+            }
+            out.push_str(".global __lang_platform_desc_end\n__lang_platform_desc_end:\n");
+            out.push_str(".section .note.GNU-stack, \"\", %progbits\n");
             for (id, base) in bases.iter().take(count).enumerate() {
                 out.push_str(&format!(
-                    ".global __lang_window_{}_base\n.set __lang_window_{}_base, {:#x}\n",
+                    ".global __lang_aperture_{}_base\n.set __lang_aperture_{}_base, {:#x}\n",
                     id, id, base
                 ));
             }
-            out.push_str(".section .note.GNU-stack, \"\", %progbits\n");
             out
         }
     }

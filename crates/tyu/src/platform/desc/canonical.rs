@@ -12,7 +12,7 @@
 //! as a board match.
 
 use super::{
-    AccessKind, BarrierKind, Descriptor, DESCRIPTOR_SCHEMA, MMIO_SEM_VER, ReadKind, WindowKind,
+    AccessKind, BarrierKind, Descriptor, DESCRIPTOR_SCHEMA, MMIO_SEM_VER, ReadKind, ApertureKind,
     WriteKind,
 };
 
@@ -36,20 +36,20 @@ pub fn canonical_bytes(desc: &Descriptor) -> Vec<u8> {
     encode_str(&mut out, &desc.name);
     encode_str(&mut out, &desc.family);
 
-    // Windows sorted by id: {id, name, kind, bind, base, size}.
-    let mut windows = desc.windows.clone();
-    windows.sort_by_key(|w| w.id);
-    encode_u32(&mut out, windows.len() as u32);
-    for w in &windows {
+    // Apertures sorted by id: {id, name, kind, bind, base, size}.
+    let mut apertures = desc.apertures.clone();
+    apertures.sort_by_key(|w| w.id);
+    encode_u32(&mut out, apertures.len() as u32);
+    for w in &apertures {
         encode_u16(&mut out, w.id);
         encode_str(&mut out, &w.name);
-        encode_u8(&mut out, window_kind_disc(w.kind));
+        encode_u8(&mut out, aperture_kind_disc(w.kind));
         encode_u8(&mut out, reloc_isa_disc(w.reloc_isa));
         encode_u64(&mut out, w.base.unwrap_or(0));
         encode_u32(&mut out, w.size);
     }
 
-    // Devices sorted by (map, instance): {map, instance, window, base_offset,
+    // Devices sorted by (map, instance): {map, instance, aperture, base_offset,
     // [registers sorted by offset]}.
     let mut devices = desc.devices.clone();
     devices.sort_by(|a, b| a.map.cmp(&b.map).then_with(|| a.instance.cmp(&b.instance)));
@@ -57,7 +57,7 @@ pub fn canonical_bytes(desc: &Descriptor) -> Vec<u8> {
     for d in &devices {
         encode_str(&mut out, &d.map);
         encode_str(&mut out, &d.instance);
-        encode_u16(&mut out, d.window);
+        encode_u16(&mut out, d.aperture);
         encode_u32(&mut out, d.base_offset);
         let mut registers = d.registers.clone();
         registers.sort_by_key(|r| r.offset);
@@ -73,6 +73,8 @@ pub fn canonical_bytes(desc: &Descriptor) -> Vec<u8> {
             encode_u64(&mut out, r.mask);
             encode_u64(&mut out, r.reset);
             encode_u8(&mut out, barrier_disc(r.barrier));
+            encode_u16(&mut out, r.interrupt.unwrap_or(0xFFFF));
+            encode_u16(&mut out, r.irq.unwrap_or(0xFFFF));
         }
     }
 
@@ -141,10 +143,10 @@ fn encode_str(out: &mut Vec<u8>, s: &str) {
 // Enum discriminants — permanent part of the canonical form (never renumber).
 // ---------------------------------------------------------------------------
 
-fn window_kind_disc(k: WindowKind) -> u8 {
+fn aperture_kind_disc(k: ApertureKind) -> u8 {
     match k {
-        WindowKind::Bus => 0,
-        WindowKind::Emulated => 1,
+        ApertureKind::Bus => 0,
+        ApertureKind::Emulated => 1,
     }
 }
 
@@ -219,7 +221,7 @@ name = "demo"
 schema = 2
 family = "demo-fam"
 
-[[platform.windows]]
+[[platform.apertures]]
 id = 0
 name = "apb"
 kind = "bus"
@@ -229,7 +231,7 @@ size = 0x10000
 [[platform.devices]]
 map = "GPIO"
 instance = "gpio0"
-window = 0
+aperture = 0
 base_offset = 0xd000
 registers = [
   { offset = 0x0, name = "ctrl", width = 32, access = "rw" },
@@ -265,7 +267,7 @@ words = ["platform.boot.enter_xip"]
 name = "demo"
 schema = 2
 family = "demo-fam"
-[[platform.windows]]
+[[platform.apertures]]
 id = 0
 name = "apb"
 kind = "bus"
@@ -274,7 +276,7 @@ size = 0x10000
 [[platform.devices]]
 map = "GPIO"
 instance = "gpio0"
-window = 0
+aperture = 0
 base_offset = 0xd000
 registers = [
   { offset = 0x4, name = "intr", width = 32, access = "rw", write_kind = "w1c" },

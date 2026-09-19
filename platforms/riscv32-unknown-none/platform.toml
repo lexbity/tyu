@@ -9,7 +9,7 @@ description = "RV32 bare-metal runtime"
 triple = "riscv32-unknown-none"
 arch = "riscv"
 default = true
-expected_abi_hash = "0xf6dd34a3e430bd85"
+expected_abi_hash = "0x49d5b84f8a5a3c42"
 
 [metal]
 path = "metal"
@@ -60,7 +60,7 @@ evidence = "evidence/debug_escalate.md"
 
 # ---- descriptor v2 ---------------------------------------------------------
 
-[[platform.windows]]
+[[platform.apertures]]
 id = 0
 name = "scratch"               # virt DRAM; QEMU MMIO scratch (D-14)
 kind = "bus"
@@ -72,7 +72,7 @@ size = 0x08000000
 [[platform.devices]]
 map = "Scratch"
 instance = "scratch"
-window = 0
+aperture = 0
 base_offset = 0x0
 registers = [
   { offset = 0x00, name = "A", width = 32, access = "rw" },
@@ -82,7 +82,7 @@ registers = [
 [[platform.devices]]
 map = "Scratch"
 instance = "ptrscratch"
-window = 0
+aperture = 0
 base_offset = 0x100100
 registers = [
   { offset = 0x00, name = "FIRST", width = 32, access = "rw" },
@@ -92,7 +92,7 @@ registers = [
 [[platform.devices]]
 map = "Scratch"
 instance = "widthscratch"
-window = 0
+aperture = 0
 base_offset = 0x100000
 registers = [
   { offset = 0x00, name = "B", width = 8, access = "rw" },
@@ -103,7 +103,7 @@ registers = [
 [[platform.devices]]
 map = "Strategy"
 instance = "strategy"
-window = 0
+aperture = 0
 base_offset = 0x400000
 registers = [
   { offset = 0x00, name = "CTRL", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
@@ -118,11 +118,11 @@ registers = [
 [[platform.devices]]
 map = "StrategySeed"
 instance = "strategy_seed"
-window = 0
+aperture = 0
 base_offset = 0x400000
 registers = [
   { offset = 0x04, name = "STATUS", width = 32, access = "rw" },
 ]
 
 [platform.metal.trust]
-words = []
+words = ["platform.mem.region-create", "platform.mem.region-alloc", "platform.mem.region-reset", "platform.mem.region-destroy"]

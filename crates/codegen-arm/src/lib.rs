@@ -6,7 +6,7 @@
 //! The public surface is centered on `ArmThumbBackend`, with support modules
 //! in `ophelpers`, `postlude`, `prelude`, and `word`.
 
-use codegen_core::{AsmMode, CodegenBackend, CodegenError, MmioWindowSpec};
+use codegen_core::{AsmMode, CodegenBackend, CodegenError, MmioApertureSpec};
 use frontend::{
     parse::{AttrAst, DeclKind, ModuleAst, Output},
     span::Span,
@@ -54,6 +54,13 @@ pub struct ArmThumbBackend<'a> {
     // --- S2 Phase 2: abi_hash ---
     pub expected_abi_hash: u64,
 
+    // --- P6: platform identity + aperture-use table (modinfo v4, D-5/§5.5) ---
+    /// The compiled descriptor's `platform_hash` (0 = unplatformed module).
+    pub platform_hash: u64,
+    /// The module's aperture-use table, fused across words during `emit_word`.
+    pub mi_apertures: [lir::ApertureUse; 8],
+    pub mi_aperture_count: usize,
+
     // --- Slice 8: concurrency flag ---
     pub uses_tasks: bool,
 
@@ -62,11 +69,11 @@ pub struct ArmThumbBackend<'a> {
     pub scoped_slots: u32,
     pub scoped_next: u32,
 
-    // --- P3: descriptor-sourced MMIO windows (D-7) ---
-    /// Windows the board/runtime declares, copied from the langc driver
+    // --- P3: descriptor-sourced MMIO apertures (D-7) ---
+    /// Apertures the board/runtime declares, copied from the langc driver
     /// (compiled platform descriptor, or the target's static defaults).
-    pub mmio_windows: [MmioWindowSpec; 8],
-    pub mmio_window_count: usize,
+    pub mmio_apertures: [MmioApertureSpec; 8],
+    pub mmio_aperture_count: usize,
 }
 
 impl<'a> ArmThumbBackend<'a> {
@@ -109,26 +116,37 @@ impl<'a> ArmThumbBackend<'a> {
             }; 64],
             mi_import_count: 0,
             expected_abi_hash: 0,
+            platform_hash: 0,
+            mi_apertures: [lir::ApertureUse {
+                id: 0,
+                name: lir::AT_EMPTY,
+                kind: lir::ApertureKind::Bus,
+                base: None,
+                size: 0,
+                access_mask: 0,
+                bind: lir::BindKind::None,
+            }; 8],
+            mi_aperture_count: 0,
             uses_tasks: false,
             scoped_base: 0,
             scoped_slots: 0,
             scoped_next: 0,
-            mmio_windows: [MmioWindowSpec::EMPTY; 8],
-            mmio_window_count: 0,
+            mmio_apertures: [MmioApertureSpec::EMPTY; 8],
+            mmio_aperture_count: 0,
         }
     }
 
-    /// Set the MMIO windows this backend lowers against (P3, D-7). The langc
+    /// Set the MMIO apertures this backend lowers against (P3, D-7). The langc
     /// driver supplies either the target's static defaults or the compiled
-    /// platform descriptor's windows.
-    pub fn set_mmio_windows(&mut self, windows: &[MmioWindowSpec]) -> Result<(), CodegenError> {
-        if windows.len() > 8 {
-            return Err(CodegenError::TooManyMmioWindows);
+    /// platform descriptor's apertures.
+    pub fn set_mmio_apertures(&mut self, apertures: &[MmioApertureSpec]) -> Result<(), CodegenError> {
+        if apertures.len() > 8 {
+            return Err(CodegenError::TooManyMmioApertures);
         }
-        self.mmio_window_count = windows.len();
-        self.mmio_windows = [MmioWindowSpec::EMPTY; 8];
-        for (i, w) in windows.iter().enumerate() {
-            self.mmio_windows[i] = *w;
+        self.mmio_aperture_count = apertures.len();
+        self.mmio_apertures = [MmioApertureSpec::EMPTY; 8];
+        for (i, w) in apertures.iter().enumerate() {
+            self.mmio_apertures[i] = *w;
         }
         Ok(())
     }
@@ -139,18 +157,18 @@ impl<'a> ArmThumbBackend<'a> {
         id
     }
 
-    /// The absolute address of a window-relative place (P4): `base + offset`.
-    /// A window base that is a link-time symbol is not a bus address and is
-    /// unreachable on this backend (no emulated windows here).
-    pub fn mmio_window_addr(&self, window: u16, offset: u32) -> Result<u64, CodegenError> {
-        for i in 0..self.mmio_window_count {
-            let w = &self.mmio_windows[i];
-            if w.id == window {
-                let base = w.base.ok_or(CodegenError::NoMmioWindow)?;
+    /// The absolute address of a aperture-relative place (P4): `base + offset`.
+    /// A aperture base that is a link-time symbol is not a bus address and is
+    /// unreachable on this backend (no emulated apertures here).
+    pub fn mmio_aperture_addr(&self, aperture: u16, offset: u32) -> Result<u64, CodegenError> {
+        for i in 0..self.mmio_aperture_count {
+            let w = &self.mmio_apertures[i];
+            if w.id == aperture {
+                let base = w.base.ok_or(CodegenError::NoMmioAperture)?;
                 return Ok(base.saturating_add(offset as u64));
             }
         }
-        Err(CodegenError::NoMmioWindow)
+        Err(CodegenError::NoMmioAperture)
     }
 
     pub(crate) fn emit_modinfo_section(&mut self) -> Result<(), CodegenError> {
@@ -192,6 +210,24 @@ impl<'a> ArmThumbBackend<'a> {
 
         let module_name = ophelpers::slice_span(self.src, self.module.name);
 
+        // Build aperture-use entries (P6 §5.5).
+        let mut aperture_entries: [lmod::modinfo::ApertureUseEntry; 8] =
+            [lmod::modinfo::ApertureUseEntry {
+                name_hash: 0,
+                size: 0,
+                aperture_id: 0,
+                access_mask: 0,
+            }; 8];
+        for i in 0..self.mi_aperture_count {
+            let wu = &self.mi_apertures[i];
+            aperture_entries[i] = lmod::modinfo::ApertureUseEntry {
+                name_hash: lmod::hash::fnv1a_u64(wu.name.as_bytes()),
+                size: wu.size,
+                aperture_id: wu.id,
+                access_mask: wu.access_mask,
+            };
+        }
+
         let mut buf = [0u8; 8192];
         let abi_hash = if self.expected_abi_hash != 0 {
             self.expected_abi_hash
@@ -210,6 +246,8 @@ impl<'a> ArmThumbBackend<'a> {
                 0
             },
             &[],
+            self.platform_hash,
+            &aperture_entries[..self.mi_aperture_count],
         ) {
             Some(s) => s,
             None => return Err(CodegenError::ModInfoTooLarge),
@@ -249,24 +287,28 @@ impl<'a> CodegenBackend for ArmThumbBackend<'a> {
     fn set_expected_abi_hash(&mut self, hash: u64) {
         self.expected_abi_hash = hash;
     }
+
+    fn set_platform_hash(&mut self, hash: u64) {
+        self.platform_hash = hash;
+    }
 }
 
-/// Classify every `(strategy, window-kind, op)` MMIO combination for the ARM
-/// backend (design doc §5.6 matrix). ARM has only bus windows; emulated-window
+/// Classify every `(strategy, aperture-kind, op)` MMIO combination for the ARM
+/// backend (design doc §5.6 matrix). ARM has only bus apertures; emulated-aperture
 /// combos are structurally `Unsupported`. Loads are plain regardless of the
 /// write strategy; w1s/w1c stores lower to read-modify-write.
 pub fn mmio_cell(
     strategy: ir::WriteKind,
-    kind: ir::WindowKind,
+    kind: ir::ApertureKind,
     op: codegen_core::strategy::MmioOp,
 ) -> codegen_core::strategy::StrategyCell {
     use codegen_core::strategy::{MmioOp, StrategyCell};
-    use ir::{WindowKind, WriteKind};
+    use ir::{ApertureKind, WriteKind};
     match kind {
-        WindowKind::Emulated => StrategyCell::Unsupported {
-            reason: "no emulated windows on ARM",
+        ApertureKind::Emulated => StrategyCell::Unsupported {
+            reason: "no emulated apertures on ARM",
         },
-        WindowKind::Bus => match op {
+        ApertureKind::Bus => match op {
             MmioOp::Load | MmioOp::LoadField => StrategyCell::Supported { pattern: "ldr*" },
             MmioOp::Store => match strategy {
                 WriteKind::Plain => StrategyCell::Supported { pattern: "str*" },

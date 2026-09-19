@@ -1,6 +1,6 @@
-//! Golden pair: the x86 emulated MMIO window size is descriptor-sourced (P3,
+//! Golden pair: the x86 emulated MMIO aperture size is descriptor-sourced (P3,
 //! D-7, FR-21). Compiling the same module against two compiled descriptors
-//! with different emulated window sizes must change exactly one emitted
+//! with different emulated aperture sizes must change exactly one emitted
 //! immediate — the bounds-compare bound — and nothing else.
 
 use std::ffi::OsStr;
@@ -8,7 +8,7 @@ use std::fs;
 use std::os::unix::ffi::OsStrExt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use codegen_core::{FeatureSet, MmioWindowKind, MmioWindowSpec, Target};
+use codegen_core::{FeatureSet, MmioApertureKind, MmioApertureSpec, Target};
 use frontend::parse::Parser;
 use langc::driver::emit_obj_driver;
 use semantics::typecheck::ChecksMode;
@@ -30,11 +30,11 @@ fn atom(bytes: &[u8]) -> ir::Atom {
     ir::Atom::new(bytes).unwrap()
 }
 
-fn emulated_window(size: u32) -> [MmioWindowSpec; 1] {
-    [MmioWindowSpec {
+fn emulated_aperture(size: u32) -> [MmioApertureSpec; 1] {
+    [MmioApertureSpec {
         id: 0,
         name: atom(b"mmio"),
-        kind: MmioWindowKind::Emulated,
+        kind: MmioApertureKind::Emulated,
         base: None,
         size,
         reloc_isa: None,
@@ -45,8 +45,8 @@ fn os_bytes(s: &OsStr) -> &[u8] {
     s.as_bytes()
 }
 
-/// Compile SOURCE against `windows` and return the emitted asm text.
-fn compile_with_windows(windows: &[MmioWindowSpec]) -> String {
+/// Compile SOURCE against `apertures` and return the emitted asm text.
+fn compile_with_apertures(apertures: &[MmioApertureSpec]) -> String {
     let target = Target::X86_64UnknownNone;
     let out_dir = std::env::temp_dir().join(format!(
         "tyu-mmio-win-{}-{}",
@@ -76,9 +76,9 @@ fn compile_with_windows(windows: &[MmioWindowSpec]) -> String {
         input_bytes,
         FeatureSet::all(),
         None,
-        windows,
+        apertures,
     );
-    assert_eq!(status, 0, "object emission failed with {windows:?}");
+    assert_eq!(status, 0, "object emission failed with {apertures:?}");
 
     let asm = fs::read_to_string(out_dir.join("MmioWin.asm")).unwrap();
     let _ = fs::remove_dir_all(&out_dir);
@@ -86,42 +86,42 @@ fn compile_with_windows(windows: &[MmioWindowSpec]) -> String {
 }
 
 #[test]
-fn emulated_window_size_sources_bounds_compare() {
+fn emulated_aperture_size_sources_bounds_compare() {
     // The driver holds large inline aggregates (ModuleAst, MemOut); run on an
     // 8 MB stack like the other golden tests.
     std::thread::Builder::new()
         .stack_size(8 << 20)
-        .spawn(emulated_window_size_sources_bounds_compare_inner)
+        .spawn(emulated_aperture_size_sources_bounds_compare_inner)
         .unwrap()
         .join()
         .unwrap();
 }
 
-fn emulated_window_size_sources_bounds_compare_inner() {
-    let asm_64k = compile_with_windows(&emulated_window(0x10000));
-    let asm_32k = compile_with_windows(&emulated_window(0x8000));
+fn emulated_aperture_size_sources_bounds_compare_inner() {
+    let asm_64k = compile_with_apertures(&emulated_aperture(0x10000));
+    let asm_32k = compile_with_apertures(&emulated_aperture(0x8000));
 
     // The bounds-compare bound is `size - width` (width 4 for a u32 store).
     assert!(
         asm_64k.contains("cmp rax, 65532"),
-        "0x10000 window must bound at 65532, got:\n{asm_64k}"
+        "0x10000 aperture must bound at 65532, got:\n{asm_64k}"
     );
     assert!(
         asm_32k.contains("cmp rax, 32764"),
-        "0x8000 window must bound at 32764, got:\n{asm_32k}"
+        "0x8000 aperture must bound at 32764, got:\n{asm_32k}"
     );
 
     // Every other emitted byte must be identical — the descriptor sources the
-    // window size, nothing else. Two label families are normalized away:
+    // aperture size, nothing else. Two label families are normalized away:
     // `.ds_high_N` is a process-global counter (pre-existing design) and
-    // `.mmio_ok_N` is backend-local; neither depends on the window size.
+    // `.mmio_ok_N` is backend-local; neither depends on the aperture size.
     let mut normalized_64k = normalize_labels(&asm_64k);
     normalized_64k = normalized_64k.replace("65532", "BOUND");
     let mut normalized_32k = normalize_labels(&asm_32k);
     normalized_32k = normalized_32k.replace("32764", "BOUND");
     assert_eq!(
         normalized_64k, normalized_32k,
-        "the two window sizes must differ only in the bounds-compare bound"
+        "the two aperture sizes must differ only in the bounds-compare bound"
     );
 }
 

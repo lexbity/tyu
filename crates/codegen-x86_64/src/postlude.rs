@@ -104,7 +104,7 @@ impl<'a> X86_64HostedBackend<'a> {
                     // Same descriptor-sourced size as the bounds check
                     // (P3/FR-21): a hardcoded reservation smaller than the
                     // checked bound would admit MMIO past the array.
-                    let size = crate::mmio::emulated_window_size(self)?;
+                    let size = crate::mmio::emulated_aperture_size(self)?;
                     self.out.write(b"__mmio_mem rb ");
                     write_u32(self.out, size);
                     self.out.write(b"\n");

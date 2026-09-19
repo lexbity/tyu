@@ -44,7 +44,7 @@ pub fn sysroot_dir() -> PathBuf {
 }
 
 /// The platform pack directory whose compiled descriptor (`platform.desc`)
-/// sources MMIO window/device facts for a target's execution fixtures (P4).
+/// sources MMIO aperture/device facts for a target's execution fixtures (P4).
 pub fn platform_desc_dir(target: Target) -> PathBuf {
     let triple = std::str::from_utf8(target.triple()).unwrap();
     if triple == "x86_64-unknown-linux-gnu" {
@@ -52,6 +52,28 @@ pub fn platform_desc_dir(target: Target) -> PathBuf {
     } else {
         workspace_root().join("platforms").join(triple)
     }
+}
+
+/// The board identity (`platform_hash`, aperture table) a compiled descriptor
+/// carries — decoded from `<target>/platform.desc` with the shared codec
+/// (P6, decision D-5). Hosted loaders must carry this to accept modules
+/// compiled against the same descriptor.
+pub fn board_identity_for(target: Target) -> (u64, Vec<lmod::board_table::BoardAperture>) {
+    let desc_path = platform_desc_dir(target).join("platform.desc");
+    let bytes = std::fs::read(&desc_path).expect("platform.desc present");
+    let cd = codegen_core::compiled_desc::decode_compiled_desc(&bytes)
+        .expect("compiled descriptor decodes");
+    let apertures: Vec<lmod::board_table::BoardAperture> = cd
+        .apertures()
+        .iter()
+        .map(|w| lmod::board_table::BoardAperture {
+            name_hash: lmod::hash::fnv1a_u64(w.name.as_bytes()),
+            base: w.base.unwrap_or(0) as u32,
+            size: w.size,
+            capability: codegen_core::compiled_desc::aperture_capability(&cd, w.id),
+        })
+        .collect();
+    (cd.platform_hash, apertures)
 }
 
 pub fn langc_exe() -> PathBuf {

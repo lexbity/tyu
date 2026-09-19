@@ -1,10 +1,10 @@
-# E3646: unknown window kind — the registry knows only bus|emulated.
+# E3646: unknown aperture kind — the registry knows only bus|emulated.
 [platform]
 name = "bad"
 schema = 2
 family = "bad"
 
-[[platform.windows]]
+[[platform.apertures]]
 id = 0
 name = "a"
 kind = "bogus"

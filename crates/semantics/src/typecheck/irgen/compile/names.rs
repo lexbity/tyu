@@ -56,17 +56,17 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         if tok.kind == TokenKind::Ident {
             let place = crate::typecheck::mmio::qualname_to_placepath(name, name_abs);
             if let Some(res) = resolve_mmio_place(self.mmio, self.src, &place, name_abs)? {
-                let (window, offset, access) = match res {
-                    MmioResolved::Reg(reg) => (reg.window, reg.offset, reg.access),
-                    MmioResolved::Field(field) => (field.window, field.offset, field.reg_access),
+                let (aperture, offset, access) = match res {
+                    MmioResolved::Reg(reg) => (reg.aperture, reg.offset, reg.access),
+                    MmioResolved::Field(field) => (field.aperture, field.offset, field.reg_access),
                 };
-                self.record_window(window, access, name_abs)?;
+                self.record_aperture(aperture, access, name_abs)?;
                 push(stack, sp, Value::MmioPlace(res))?;
                 self.emit_op(
                     cur,
                     lir::OpKind::MmioPlace {
                         place: lir_atom(name)?,
-                        window,
+                        aperture,
                         offset,
                     },
                     name_abs,

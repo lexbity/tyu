@@ -1,11 +1,11 @@
-//! RISC-V window-base reloc site (P6).
+//! RISC-V aperture-base reloc site (P6).
 //!
 //! Site pattern: `auipc rN, hi20` + `lw rN, lo12(rN)` over a literal-pool
 //! word. The reloc site is that word: a `R_RISCV_32` relocation against the
-//! extern `__lang_window_N_base`, loaded pc-relatively (`R_RISCV_LO12_I`)
+//! extern `__lang_aperture_N_base`, loaded pc-relatively (`R_RISCV_LO12_I`)
 //! so it survives module relocation into RAM. At pack time the word is bound
-//! to the window base; at load time the loader re-derives the same base from
-//! its descriptor (`check_window_base`).
+//! to the aperture base; at load time the loader re-derives the same base from
+//! its descriptor (`check_aperture_base`).
 //!
 //! `apply_base`/`read_site_base` from the shared `mod` write/read that word
 //! unchanged — the hi20/lo12 pair addresses the literal; the literal itself

@@ -18,6 +18,7 @@ pub fn claim_text(trap_code: u16) -> &'static str {
         23 => "UNREACHABLE",
         24 => "TASK_QUEUE_OVERFLOW",
         25 => "DEADLOCK",
+        26 => "REGION_EXHAUSTED",
         // Effect / context model 50xx band
         5001 => "E_SUSPEND_FORBIDDEN",
         5002 => "E_LOCK_NEST",
@@ -51,6 +52,7 @@ mod tests {
         assert_eq!(claim_text(23), "UNREACHABLE");
         assert_eq!(claim_text(24), "TASK_QUEUE_OVERFLOW");
         assert_eq!(claim_text(25), "DEADLOCK");
+        assert_eq!(claim_text(26), "REGION_EXHAUSTED");
     }
 
     #[test]
@@ -85,8 +87,8 @@ mod tests {
     #[test]
     fn every_registered_code_has_text() {
         let known = [
-            10u16, 20, 21, 22, 23, 24, 5001, 5002, 5003, 5004, 5010, 5011, 5012, 5020, 5030, 5031,
-            5040, 5100, 5101, 5103,
+            10u16, 20, 21, 22, 23, 24, 25, 26, 5001, 5002, 5003, 5004, 5010, 5011, 5012, 5020,
+            5030, 5031, 5040, 5100, 5101, 5103,
         ];
         for &code in &known {
             assert_ne!(

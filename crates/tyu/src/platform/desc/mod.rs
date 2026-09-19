@@ -66,7 +66,7 @@ pub struct Descriptor {
     pub name: String,
     pub family: String,
     pub description: Option<String>,
-    pub windows: Vec<MmioWindow>,
+    pub apertures: Vec<MmioAperture>,
     pub devices: Vec<DeviceMap>,
     pub allocator: Option<AllocatorSpec>,
     pub scoped: Option<ScopedSpec>,
@@ -75,9 +75,9 @@ pub struct Descriptor {
 }
 
 impl Descriptor {
-    /// Look up a window by module-local id.
-    pub fn window(&self, id: u16) -> Option<&MmioWindow> {
-        self.windows.iter().find(|w| w.id == id)
+    /// Look up a aperture by module-local id.
+    pub fn aperture(&self, id: u16) -> Option<&MmioAperture> {
+        self.apertures.iter().find(|w| w.id == id)
     }
 
     /// Look up a `[memory]` region by name.
@@ -86,35 +86,35 @@ impl Descriptor {
     }
 }
 
-/// A memory-mapped window a board exposes.
+/// A memory-mapped aperture a board exposes.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MmioWindow {
+pub struct MmioAperture {
     pub id: u16,
     pub name: String,
-    pub kind: WindowKind,
+    pub kind: ApertureKind,
     /// Absolute base address. `None` means the base is a link-time symbol
-    /// (the hosted/emulated window, decision D-7) rather than a bus address.
+    /// (the hosted/emulated aperture, decision D-7) rather than a bus address.
     pub base: Option<u64>,
     pub size: u32,
-    /// Binding-time relocation ISA for this window's base (P6). `None` for
-    /// emulated windows (runtime-dynamic addressing).
+    /// Binding-time relocation ISA for this aperture's base (P6). `None` for
+    /// emulated apertures (runtime-dynamic addressing).
     pub reloc_isa: Option<codegen_core::RelocIsa>,
 }
 
-/// How a window is backed.
+/// How a aperture is backed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum WindowKind {
+pub enum ApertureKind {
     /// Real device address space.
     Bus,
     /// RAM the runtime owns (the hosted `__mmio_mem` fiction, D-7).
     Emulated,
 }
 
-impl WindowKind {
+impl ApertureKind {
     pub fn as_str(self) -> &'static str {
         match self {
-            WindowKind::Bus => "bus",
-            WindowKind::Emulated => "emulated",
+            ApertureKind::Bus => "bus",
+            ApertureKind::Emulated => "emulated",
         }
     }
 }
@@ -125,13 +125,13 @@ impl WindowKind {
 pub struct DeviceMap {
     pub map: String,
     pub instance: String,
-    pub window: u16,
+    pub aperture: u16,
     pub base_offset: u32,
     pub registers: Vec<RegisterRow>,
 }
 
 impl DeviceMap {
-    /// Furthest byte extent of the map within its window
+    /// Furthest byte extent of the map within its aperture
     /// (`max(offset + width/8)`, 0 when the map declares no registers).
     pub fn extent(&self) -> u32 {
         self.registers
@@ -158,6 +158,14 @@ pub struct RegisterRow {
     /// Documentation + future contract use. Defaults to 0.
     pub reset: u64,
     pub barrier: BarrierKind,
+    /// The NVIC IRQ number an `@interrupt(VECTOR)` binding to this register's
+    /// device resolves to (P8, datasheet-derived). `None` when the register
+    /// has no interrupt vector.
+    pub interrupt: Option<u16>,
+    /// The interrupt request number associated with this register (the
+    /// datasheet IRQ a read/clear of this register acknowledges). `None` when
+    /// the register does not participate in an IRQ.
+    pub irq: Option<u16>,
 }
 
 impl RegisterRow {

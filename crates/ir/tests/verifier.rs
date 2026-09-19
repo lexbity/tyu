@@ -50,11 +50,11 @@ fn sig0_1(out0: TypeId) -> Sig {
     sig
 }
 
-fn win(id: u16, size: u32) -> ir::WindowUse {
-    ir::WindowUse {
+fn win(id: u16, size: u32) -> ir::ApertureUse {
+    ir::ApertureUse {
         id,
         name: atom(b"w"),
-        kind: ir::WindowKind::Bus,
+        kind: ir::ApertureKind::Bus,
         base: Some(0x20000000),
         size,
         access_mask: ir::ACCESS_READ | ir::ACCESS_WRITE,
@@ -63,11 +63,11 @@ fn win(id: u16, size: u32) -> ir::WindowUse {
 }
 
 fn word_with_single_block(sig: Sig, block_ops: &[OpKind]) -> Word {
-    word_with_single_block_and_windows(sig, block_ops, &[])
+    word_with_single_block_and_apertures(sig, block_ops, &[])
 }
 
-/// Like [`word_with_single_block`] but with a window-use table (P4).
-fn word_with_single_block_and_windows(sig: Sig, block_ops: &[OpKind], windows: &[ir::WindowUse]) -> Word {
+/// Like [`word_with_single_block`] but with a aperture-use table (P4).
+fn word_with_single_block_and_apertures(sig: Sig, block_ops: &[OpKind], apertures: &[ir::ApertureUse]) -> Word {
     let mut ops: FixedVec<Op, 96> = FixedVec::new();
     for &kind in block_ops {
         ops.push(Op {
@@ -86,8 +86,8 @@ fn word_with_single_block_and_windows(sig: Sig, block_ops: &[OpKind], windows: &
     let mut blocks: FixedVec<Block, 16> = FixedVec::new();
     blocks.push(b0).unwrap();
 
-    let mut win: FixedVec<ir::WindowUse, 8> = FixedVec::new();
-    for &w in windows {
+    let mut win: FixedVec<ir::ApertureUse, 8> = FixedVec::new();
+    for &w in apertures {
         win.push(w).unwrap();
     }
 
@@ -101,7 +101,7 @@ fn word_with_single_block_and_windows(sig: Sig, block_ops: &[OpKind], windows: &
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
         type_classes: baseline_type_classes(),
-        windows: win,
+        apertures: win,
         subtype_bases: FixedVec::new(),
         blocks,
     }
@@ -190,7 +190,7 @@ fn verifier_rejects_branch_stack_mismatch() {
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
         type_classes: baseline_type_classes(),
-        windows: frontend::fixed::FixedVec::new(),
+        apertures: frontend::fixed::FixedVec::new(),
         subtype_bases: FixedVec::new(),
         blocks,
     };
@@ -254,7 +254,7 @@ fn verify_word_rejects_missing_entry_block() {
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
         type_classes: baseline_type_classes(),
-        windows: frontend::fixed::FixedVec::new(),
+        apertures: frontend::fixed::FixedVec::new(),
         subtype_bases: FixedVec::new(),
         blocks,
     };
@@ -306,7 +306,7 @@ fn verify_word_rejects_entry_stack_type_mismatch() {
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
         type_classes: baseline_type_classes(),
-        windows: frontend::fixed::FixedVec::new(),
+        apertures: frontend::fixed::FixedVec::new(),
         subtype_bases: FixedVec::new(),
         blocks,
     };
@@ -364,7 +364,7 @@ fn verify_block_rejects_ops_after_br() {
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
         type_classes: baseline_type_classes(),
-        windows: frontend::fixed::FixedVec::new(),
+        apertures: frontend::fixed::FixedVec::new(),
         subtype_bases: FixedVec::new(),
         blocks,
     };
@@ -650,12 +650,12 @@ fn verify_rejects_mmio_load_field_not_mmio() {
 #[test]
 fn verify_rejects_mmio_store_field_type_mismatch() {
     // push mmio place, push wrong value type
-    let w = word_with_single_block_and_windows(
+    let w = word_with_single_block_and_apertures(
         Sig::empty(),
         &[
             OpKind::MmioPlace {
                 place: atom(b"r"),
-                window: 0,
+                aperture: 0,
                 offset: 0x1000,
             },
             OpKind::ConstI64(42),
@@ -786,7 +786,7 @@ fn verify_rejects_br_target_stack_type_mismatch() {
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
         type_classes: baseline_type_classes(),
-        windows: frontend::fixed::FixedVec::new(),
+        apertures: frontend::fixed::FixedVec::new(),
         subtype_bases: FixedVec::new(),
         blocks,
     };
@@ -842,7 +842,7 @@ fn verify_rejects_brif_cond_not_bool() {
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
         type_classes: baseline_type_classes(),
-        windows: frontend::fixed::FixedVec::new(),
+        apertures: frontend::fixed::FixedVec::new(),
         subtype_bases: FixedVec::new(),
         blocks,
     };
@@ -926,7 +926,7 @@ fn verify_rejects_brif_target_stack_depth_mismatch() {
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
         type_classes: baseline_type_classes(),
-        windows: frontend::fixed::FixedVec::new(),
+        apertures: frontend::fixed::FixedVec::new(),
         subtype_bases: FixedVec::new(),
         blocks,
     };
@@ -997,7 +997,7 @@ fn verify_rejects_brif_target_stack_type_mismatch() {
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
         type_classes: baseline_type_classes(),
-        windows: frontend::fixed::FixedVec::new(),
+        apertures: frontend::fixed::FixedVec::new(),
         subtype_bases: FixedVec::new(),
         blocks,
     };
@@ -1060,7 +1060,7 @@ fn verify_handles_stack_overflow() {
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
         type_classes: baseline_type_classes(),
-        windows: frontend::fixed::FixedVec::new(),
+        apertures: frontend::fixed::FixedVec::new(),
         subtype_bases: FixedVec::new(),
         blocks,
     };
@@ -1109,7 +1109,7 @@ fn verify_accepts_stack_64_exact() {
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
         type_classes: baseline_type_classes(),
-        windows: frontend::fixed::FixedVec::new(),
+        apertures: frontend::fixed::FixedVec::new(),
         subtype_bases: FixedVec::new(),
         blocks,
     };
@@ -1162,7 +1162,7 @@ fn word_with_two_blocks(b0_ops: &[OpKind], b1_ops: &[OpKind]) -> Word {
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
         type_classes: baseline_type_classes(),
-        windows: frontend::fixed::FixedVec::new(),
+        apertures: frontend::fixed::FixedVec::new(),
         subtype_bases: FixedVec::new(),
         blocks,
     }
@@ -1262,7 +1262,7 @@ fn verify_rejects_brif_asymmetric_mismatch() {
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
         type_classes: baseline_type_classes(),
-        windows: frontend::fixed::FixedVec::new(),
+        apertures: frontend::fixed::FixedVec::new(),
         subtype_bases: FixedVec::new(),
         blocks,
     };
@@ -1335,7 +1335,7 @@ fn verify_accepts_back_edge() {
         types: baseline_types(),
         type_sizes: baseline_type_sizes(),
         type_classes: baseline_type_classes(),
-        windows: frontend::fixed::FixedVec::new(),
+        apertures: frontend::fixed::FixedVec::new(),
         subtype_bases: FixedVec::new(),
         blocks,
     };
@@ -1365,12 +1365,12 @@ fn verify_accepts_addr_of() {
 
 #[test]
 fn verify_accepts_mmio_place() {
-    let w = word_with_single_block_and_windows(
+    let w = word_with_single_block_and_apertures(
         sig0_1(TY_MMIO),
         &[
             OpKind::MmioPlace {
                 place: atom(b"r"),
-                window: 0,
+                aperture: 0,
                 offset: 0x1000,
             },
             OpKind::Ret,
@@ -1381,14 +1381,14 @@ fn verify_accepts_mmio_place() {
 }
 
 #[test]
-fn verify_rejects_mmio_place_out_of_window() {
-    // The place offset must fall inside the declared window (P4, E9038).
-    let w = word_with_single_block_and_windows(
+fn verify_rejects_mmio_place_out_of_aperture() {
+    // The place offset must fall inside the declared aperture (P4, E9038).
+    let w = word_with_single_block_and_apertures(
         sig0_1(TY_MMIO),
         &[
             OpKind::MmioPlace {
                 place: atom(b"r"),
-                window: 0,
+                aperture: 0,
                 offset: 0x1000,
             },
             OpKind::Ret,
@@ -1400,14 +1400,14 @@ fn verify_rejects_mmio_place_out_of_window() {
 }
 
 #[test]
-fn verify_rejects_mmio_place_unknown_window() {
-    // A place referencing an undeclared window must fail (P4, E9037).
-    let w = word_with_single_block_and_windows(
+fn verify_rejects_mmio_place_unknown_aperture() {
+    // A place referencing an undeclared aperture must fail (P4, E9037).
+    let w = word_with_single_block_and_apertures(
         sig0_1(TY_MMIO),
         &[
             OpKind::MmioPlace {
                 place: atom(b"r"),
-                window: 3,
+                aperture: 3,
                 offset: 0x0,
             },
             OpKind::Ret,
@@ -1478,7 +1478,7 @@ fn verify_accepts_scoped_enter_slice_class() {
         types,
         type_sizes: sizes,
         type_classes: classes,
-        windows: frontend::fixed::FixedVec::new(),
+        apertures: frontend::fixed::FixedVec::new(),
         subtype_bases: FixedVec::new(),
         blocks: {
             let mut b = FixedVec::new();
@@ -1532,7 +1532,7 @@ fn verify_accepts_scoped_enter_region_ref_class() {
         types,
         type_sizes: sizes,
         type_classes: classes,
-        windows: frontend::fixed::FixedVec::new(),
+        apertures: frontend::fixed::FixedVec::new(),
         subtype_bases: FixedVec::new(),
         blocks: {
             let mut b = FixedVec::new();
@@ -1629,12 +1629,12 @@ fn verify_accepts_load_store() {
 
 #[test]
 fn verify_accepts_mmio_load() {
-    let w = word_with_single_block_and_windows(
+    let w = word_with_single_block_and_apertures(
         sig0_1(TY_I64),
         &[
             OpKind::MmioPlace {
                 place: atom(b"r"),
-                window: 0,
+                aperture: 0,
                 offset: 0x1000,
             },
             OpKind::MmioVolLoad {
@@ -1654,12 +1654,12 @@ fn verify_accepts_mmio_load() {
 #[test]
 fn verify_accepts_mmio_store() {
     // MmioStore pops two: value then mmio. Need trailing value for Ret.
-    let w = word_with_single_block_and_windows(
+    let w = word_with_single_block_and_apertures(
         sig0_1(TY_I64),
         &[
             OpKind::MmioPlace {
                 place: atom(b"r"),
-                window: 0,
+                aperture: 0,
                 offset: 0x1000,
             },
             OpKind::ConstI64(0),
@@ -1738,7 +1738,7 @@ fn word_with_subtype(sig: Sig, block_ops: &[OpKind]) -> Word {
         types,
         type_sizes: sizes,
         type_classes: classes,
-        windows: frontend::fixed::FixedVec::new(),
+        apertures: frontend::fixed::FixedVec::new(),
         subtype_bases: bases,
         blocks,
     }
@@ -1862,7 +1862,7 @@ mod proptests {
             types: super::baseline_types(),
             type_sizes: super::baseline_type_sizes(),
             type_classes: super::baseline_type_classes(),
-            windows: frontend::fixed::FixedVec::new(),
+            apertures: frontend::fixed::FixedVec::new(),
             subtype_bases: frontend::fixed::FixedVec::new(),
             blocks,
         }
@@ -1945,12 +1945,12 @@ mod proptests {
 fn verify_rejects_phantom_read_store_field() {
     // A field store is read-modify-write; on an effectful register the RMW
     // read is a phantom bus read (rule R1).
-    let w = word_with_single_block_and_windows(
+    let w = word_with_single_block_and_apertures(
         sig0_1(TY_I64),
         &[
             OpKind::MmioPlace {
                 place: atom(b"r"),
-                window: 0,
+                aperture: 0,
                 offset: 0x1000,
             },
             OpKind::ConstI64(0),
@@ -1978,12 +1978,12 @@ fn verify_rejects_phantom_read_store_field() {
 fn verify_rejects_phantom_read_w1s_store() {
     // A w1s/w1c store is read-modify-write; on an effectful register the RMW
     // read is a phantom bus read (rule R1).
-    let w = word_with_single_block_and_windows(
+    let w = word_with_single_block_and_apertures(
         sig0_1(TY_I64),
         &[
             OpKind::MmioPlace {
                 place: atom(b"r"),
-                window: 0,
+                aperture: 0,
                 offset: 0x1000,
             },
             OpKind::ConstI64(0),
@@ -2007,12 +2007,12 @@ fn verify_rejects_phantom_read_w1s_store() {
 #[test]
 fn verify_rejects_over_wide_load() {
     // atomic_max=32 means a 64-bit access is over-wide (rule R2).
-    let w = word_with_single_block_and_windows(
+    let w = word_with_single_block_and_apertures(
         sig0_1(TY_I64),
         &[
             OpKind::MmioPlace {
                 place: atom(b"r"),
-                window: 0,
+                aperture: 0,
                 offset: 0x1000,
             },
             OpKind::MmioVolLoad {
@@ -2033,12 +2033,12 @@ fn verify_rejects_over_wide_load() {
 #[test]
 fn verify_accepts_atomic_max_respecting_access() {
     // A 32-bit access with atomic_max=32 is fine.
-    let w = word_with_single_block_and_windows(
+    let w = word_with_single_block_and_apertures(
         sig0_1(TY_I64),
         &[
             OpKind::MmioPlace {
                 place: atom(b"r"),
-                window: 0,
+                aperture: 0,
                 offset: 0x1000,
             },
             OpKind::ConstI64(0),

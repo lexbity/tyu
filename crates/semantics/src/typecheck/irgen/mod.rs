@@ -6,7 +6,7 @@ use crate::typecheck::db::{
 use crate::typecheck::error::{ChecksMode, EscapeKind, TcError};
 use crate::typecheck::irgen::compile::borrow::{mint_id, PlaceKey, LEDGER_CAP};
 use crate::typecheck::mmio::mmio_type_width_bytes;
-use crate::typecheck::mmio::{window_access_bits,
+use crate::typecheck::mmio::{aperture_access_bits,
     access_can_read, access_can_write, field_mask_shift, resolve_mmio_place, MmioDb, MmioResolved,
 };
 use crate::typecheck::parse::{capture_balanced, capture_scoped_block, read_qualified_name};
@@ -67,8 +67,8 @@ struct IrWordGen<'a, 'r> {
     env: &'a [WordEntry],
     subtypes: &'a [SubtypeInfo],
     mmio: &'a MmioDb,
-    /// The compiled platform descriptor (P4): sources window identity/size for
-    /// the word's window-use table. `None` for descriptor-less compiles.
+    /// The compiled platform descriptor (P4): sources aperture identity/size for
+    /// the word's aperture-use table. `None` for descriptor-less compiles.
     descriptor: Option<&'a codegen_core::compiled_desc::CompiledDescriptor>,
     resources: &'a ResourceDb,
     nominals: &'a NominalDb,
@@ -99,9 +99,9 @@ struct IrWordGen<'a, 'r> {
 
     terminated: bool,
     word: lir::Word,
-    /// Window-use table accumulated while emitting `MmioPlace`/`AddrOf::Mmio`
-    /// ops (P4); assigned to `word.windows` at finalization.
-    word_windows: FixedVec<lir::WindowUse, 8>,
+    /// Aperture-use table accumulated while emitting `MmioPlace`/`AddrOf::Mmio`
+    /// ops (P4); assigned to `word.apertures` at finalization.
+    word_apertures: FixedVec<lir::ApertureUse, 8>,
     extra_words: FixedVec<&'r lir::Word, { arena::QUOTE_WORD_CAP }>,
     arena: *mut arena::ArenaAllocator,
     quote_id: u32,
@@ -295,11 +295,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 types,
                 type_sizes,
                 type_classes: FixedVec::new(),
-                windows: FixedVec::new(),
+                apertures: FixedVec::new(),
                 subtype_bases,
                 blocks,
             },
-            word_windows: FixedVec::new(),
+            word_apertures: FixedVec::new(),
             extra_words,
             arena,
             quote_id,
@@ -531,7 +531,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
     pub(super) fn finish(mut self, span: Span) -> Result<IrWordOutput<'r>, TcError> {
         self.fill_subtype_bases(span)?;
         self.fill_type_classes(span)?;
-        self.word.windows = core::mem::replace(&mut self.word_windows, FixedVec::new());
+        self.word.apertures = core::mem::replace(&mut self.word_apertures, FixedVec::new());
         self.word.bound = self.acc;
         let word = unsafe {
             let arena = &mut *self.arena;
@@ -590,38 +590,38 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         Ok(())
     }
 
-    /// Record a window use for the word being compiled (P4). Adds or updates
-    /// the entry in `word_windows` from the descriptor's window identity, and
-    /// ORs the register's fused access bits. A bus window with no absolute
+    /// Record a aperture use for the word being compiled (P4). Adds or updates
+    /// the entry in `word_apertures` from the descriptor's aperture identity, and
+    /// ORs the register's fused access bits. A bus aperture with no absolute
     /// base is unbindable (E3648).
-    pub(super) fn record_window(
+    pub(super) fn record_aperture(
         &mut self,
-        window: u16,
+        aperture: u16,
         access: super::mmio::AccessMode,
         span: Span,
     ) -> Result<(), TcError> {
         let Some(descriptor) = self.descriptor else {
             return Ok(());
         };
-        let Some(spec) = descriptor.windows().iter().find(|w| w.id == window) else {
+        let Some(spec) = descriptor.apertures().iter().find(|w| w.id == aperture) else {
             return Ok(());
         };
-        if spec.kind == codegen_core::MmioWindowKind::Bus && spec.base.is_none() {
-            return Err(TcError::MmioWindowUnbindable { span });
+        if spec.kind == codegen_core::MmioApertureKind::Bus && spec.base.is_none() {
+            return Err(TcError::MmioApertureUnbindable { span });
         }
-        let bits = window_access_bits(access);
-        for wu in self.word_windows.iter_mut() {
-            if wu.id == window {
+        let bits = aperture_access_bits(access);
+        for wu in self.word_apertures.iter_mut() {
+            if wu.id == aperture {
                 wu.access_mask |= bits;
                 return Ok(());
             }
         }
-        let _ = self.word_windows.push(lir::WindowUse {
-            id: window,
+        let _ = self.word_apertures.push(lir::ApertureUse {
+            id: aperture,
             name: spec.name,
             kind: match spec.kind {
-                codegen_core::MmioWindowKind::Bus => lir::WindowKind::Bus,
-                codegen_core::MmioWindowKind::Emulated => lir::WindowKind::Emulated,
+                codegen_core::MmioApertureKind::Bus => lir::ApertureKind::Bus,
+                codegen_core::MmioApertureKind::Emulated => lir::ApertureKind::Emulated,
             },
             base: spec.base,
             size: spec.size,

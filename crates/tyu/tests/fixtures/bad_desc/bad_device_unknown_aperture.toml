@@ -1,10 +1,10 @@
-# E3647: device references a window id the board does not declare.
+# E3647: device references a aperture id the board does not declare.
 [platform]
 name = "bad"
 schema = 2
 family = "bad"
 
-[[platform.windows]]
+[[platform.apertures]]
 id = 0
 name = "a"
 kind = "bus"
@@ -14,7 +14,7 @@ size = 0x1000
 [[platform.devices]]
 map = "G"
 instance = "g"
-window = 7
+aperture = 7
 base_offset = 0x0
 registers = [
   { offset = 0x0, name = "r", width = 32, access = "rw" },

@@ -472,6 +472,173 @@ w_6a5791a972f2fbd0:
 w_46f6f74f7859ca64:
     b __lang_fail_exit
 
+@ -----------------------------------------------------------------
+@ platform.mem.region words — reference bump allocator (P7, D-6 metal.trust)
+@
+@ Model (matches the x86 hosted codegen allocator): a static arena
+@ `__region_arena` (4096 bytes) in BSS with 16 slots of { base, size, off }.
+@ region-create carves a chunk from the arena and records it in a free slot;
+@ region-alloc bumps `off` within the slot; region-reset zeroes `off`;
+@ region-destroy frees the slot.
+@
+@ DS convention (abi-contract): r4 = DS pointer, slot_bytes = 4, upward.
+@   pop i64  = subs r4,#8; ldrd r0,r1,[r4]
+@   push i64 = strd r0,r1,[r4]; adds r4,#8
+@ Trap: r0 = trap_code; b __lang_trap.
+@ Exhaustion (no free slot / arena overrun / region full) raises
+@ REGION_EXHAUSTED (26).  Register discipline: only r0-r3 and r12 are used
+@ (caller-saved); r5-r11 preserved (AAPCS), matching the other runtime words.
+@ -----------------------------------------------------------------
+.global w_7a5f795caa045668
+.type w_7a5f795caa045668, %function
+w_7a5f795caa045668:
+    subs r4, r4, #8
+    ldrd r0, r1, [r4]          @ r0 = size (low)
+    cmp r0, #0
+    bne 1f
+    movs r0, #23               @ UNREACHABLE: zero-size region
+    b __lang_trap
+1:
+    @ align size to 8
+    adds r0, r0, #7
+    bic r0, r0, #7
+    @ find a free slot: scan __region_size[0..15] for 0
+    movs r1, #0                @ slot index
+    ldr r2, =__region_size
+2:
+    cmp r1, #16
+    bge 3f                     @ none free -> use __region_next
+    ldr r3, [r2, r1, lsl #2]
+    cmp r3, #0
+    beq 4f                     @ free slot found
+    adds r1, r1, #1
+    b 2b
+3:
+    @ use __region_next if under 16, else exhausted
+    ldr r2, =__region_next
+    ldr r1, [r2]
+    cmp r1, #16
+    bge 8f
+    ldr r3, [r2]
+    adds r3, r3, #1
+    str r3, [r2]
+4:
+    @ r1 = slot, r0 = aligned size
+    @ carve from arena: base = __region_arena + __region_used
+    ldr r2, =__region_used
+    ldr r3, [r2]               @ used
+    ldr r12, =__region_arena
+    add r12, r12, r3           @ base
+    add r3, r3, r0             @ new used
+    @ end of this slot = base + size; must fit in arena
+    add r12, r12, r0           @ r12 = base + size (end)
+    ldr r2, =__region_arena_end
+    cmp r12, r2
+    bgt 8f                     @ arena overrun -> exhausted
+    sub r12, r12, r0           @ r12 = base again
+    ldr r2, =__region_used
+    str r3, [r2]               @ used = new used
+    @ record slot: base, size, off=0
+    ldr r2, =__region_base
+    str r12, [r2, r1, lsl #2]
+    ldr r2, =__region_size
+    str r0, [r2, r1, lsl #2]
+    ldr r2, =__region_off
+    movs r3, #0
+    str r3, [r2, r1, lsl #2]
+    @ return Region handle = slot index
+    mov r0, r1
+    movs r1, #0                @ high word
+    strd r0, r1, [r4]
+    adds r4, r4, #8
+    bx lr
+8:
+    movs r0, #26               @ REGION_EXHAUSTED
+    b __lang_trap
+
+.global w_00433c33168e6701
+.type w_00433c33168e6701, %function
+w_00433c33168e6701:
+    subs r4, r4, #8
+    ldrd r2, r3, [r4]          @ r2 = usize (size, low)
+    subs r4, r4, #8
+    ldrd r0, r1, [r4]          @ r0 = Region handle
+    cmp r0, #16
+    bge 9f                     @ bad handle -> UNREACHABLE
+    ldr r3, =__region_size
+    ldr r3, [r3, r0, lsl #2]   @ slot size
+    cmp r3, #0
+    beq 9f                     @ dead slot -> UNREACHABLE
+    @ r3 = slot size; align request to 8
+    adds r2, r2, #7
+    bic r2, r2, #7
+    @ off + size <= slot_size ?
+    ldr r12, =__region_off
+    ldr r1, [r12, r0, lsl #2]  @ off
+    add r1, r1, r2             @ new off
+    cmp r1, r3
+    bgt 8f                     @ region full -> REGION_EXHAUSTED
+    str r1, [r12, r0, lsl #2]  @ off = new off
+    @ ptr = base + old_off
+    ldr r12, =__region_base
+    ldr r3, [r12, r0, lsl #2]  @ base
+    ldr r12, =__region_off
+    ldr r1, [r12, r0, lsl #2]  @ new off
+    sub r1, r1, r2             @ old off
+    add r0, r3, r1             @ ptr
+    movs r1, #0
+    strd r0, r1, [r4]
+    adds r4, r4, #8
+    bx lr
+8:
+    movs r0, #26               @ REGION_EXHAUSTED
+    b __lang_trap
+9:
+    movs r0, #23               @ UNREACHABLE
+    b __lang_trap
+
+.global w_a52160bb1e22438b
+.type w_a52160bb1e22438b, %function
+w_a52160bb1e22438b:
+    subs r4, r4, #8
+    ldrd r0, r1, [r4]
+    cmp r0, #16
+    bge 9f
+    ldr r2, =__region_size
+    ldr r3, [r2, r0, lsl #2]
+    cmp r3, #0
+    beq 9f
+    ldr r2, =__region_off
+    movs r3, #0
+    str r3, [r2, r0, lsl #2]
+    bx lr
+9:
+    movs r0, #23
+    b __lang_trap
+
+.global w_3dc921382ce34c3e
+.type w_3dc921382ce34c3e, %function
+w_3dc921382ce34c3e:
+    subs r4, r4, #8
+    ldrd r0, r1, [r4]
+    cmp r0, #16
+    bge 9f
+    ldr r2, =__region_size
+    ldr r3, [r2, r0, lsl #2]
+    cmp r3, #0
+    beq 9f
+    movs r3, #0
+    ldr r2, =__region_base
+    str r3, [r2, r0, lsl #2]
+    ldr r2, =__region_size
+    str r3, [r2, r0, lsl #2]
+    ldr r2, =__region_off
+    str r3, [r2, r0, lsl #2]
+    bx lr
+9:
+    movs r0, #23
+    b __lang_trap
+
 @ Note: `.modpack` / __lang_modpack_start/_end are provided by `modload.asm`
 @ (assembled only when the module-loading feature is enabled), matching the
 @ RISC-V runtime.  Defining them here too caused a duplicate-symbol link error.
@@ -510,10 +677,33 @@ __lang_time_counter:
 __mmio_mem:
     .space 4096
 
+    @ Region allocator arena (P7): 208-byte bump arena + 16 slot records.
+    .balign 8
+.global __region_arena
+__region_arena:
+    .space 208
+.global __region_arena_end
+__region_arena_end:
+.global __region_next
+__region_next:
+    .word 0
+.global __region_used
+__region_used:
+    .word 0
+.global __region_base
+__region_base:
+    .space 64
+.global __region_size
+__region_size:
+    .space 64
+.global __region_off
+__region_off:
+    .space 64
+
 .section .data, "aw"
 .global __lang_expected_abi_hash
 __lang_expected_abi_hash:
-    @ compute_abi_hash(ARCH_TAG_ARM=2, slot=4, word=32, MODINFO_VER=3) = 0x5d36b0efe4b2e904, recipe v2
+    @ compute_abi_hash(ARCH_TAG_ARM=2, slot=4, word=32, MODINFO_VER=4) = 0x4e2b602bb1069843, recipe v2
     .word 0xe4b2e904
     .word 0x5d36b0ef
 

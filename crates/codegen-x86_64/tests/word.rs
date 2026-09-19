@@ -377,7 +377,7 @@ fn emit_br_if() {
             types: baseline_types(),
             type_sizes: baseline_sizes(),
             type_classes: baseline_classes(),
-            windows: frontend::fixed::FixedVec::new(),
+            apertures: frontend::fixed::FixedVec::new(),
             subtype_bases: frontend::fixed::FixedVec::new(),
             blocks,
         };
@@ -430,7 +430,7 @@ fn emit_load() {
                 OpKind::AddrOf {
                     place: atom(b"x"),
                     mutable: true,
-                    base: ir::AddrOfBase::Mmio { window: 0, offset: 0x1000 },
+                    base: ir::AddrOfBase::Mmio { aperture: 0, offset: 0x1000 },
                 },
                 OpKind::Load { ty: TY_I64 },
                 OpKind::Ret,
@@ -450,7 +450,7 @@ fn emit_store() {
                 OpKind::AddrOf {
                     place: atom(b"x"),
                     mutable: true,
-                    base: ir::AddrOfBase::Mmio { window: 0, offset: 0x1000 },
+                    base: ir::AddrOfBase::Mmio { aperture: 0, offset: 0x1000 },
                 },
                 OpKind::ConstI64(IMM),
                 OpKind::Store { ty: TY_I64 },
@@ -476,7 +476,7 @@ fn emit_ptr_add_const() {
                 OpKind::AddrOf {
                     place: atom(b"x"),
                     mutable: false,
-                    base: ir::AddrOfBase::Mmio { window: 0, offset: 0x1000 },
+                    base: ir::AddrOfBase::Mmio { aperture: 0, offset: 0x1000 },
                 },
                 OpKind::PtrAddConst {
                     ty: TY_PTR,
@@ -664,7 +664,7 @@ fn emit_load_i64_from_ptr() {
                 OpKind::AddrOf {
                     place: atom(b"x"),
                     mutable: false,
-                    base: ir::AddrOfBase::Mmio { window: 0, offset: 0x1000 },
+                    base: ir::AddrOfBase::Mmio { aperture: 0, offset: 0x1000 },
                 },
                 OpKind::Load { ty: TY_I64 },
                 OpKind::Ret,

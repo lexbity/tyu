@@ -193,30 +193,30 @@ mod tests {
 
     #[test]
     fn abi_hash_golden_x86_64_none() {
-        // Golden for x86_64 (arch=1, slot_bytes=8, word_bits=64, MODINFO_VER=3).
-        let h = compute_abi_hash(ARCH_TAG_X86_64, 8, 64, 3);
+        // Golden for x86_64 (arch=1, slot_bytes=8, word_bits=64, MODINFO_VER=4).
+        let h = compute_abi_hash(ARCH_TAG_X86_64, 8, 64, 4);
         assert_eq!(
-            h, 0x41F0_5B8B_1ADA_B0ABu64,
+            h, 0x50FB_AC4F_4E87_016Cu64,
             "abi_hash x86_64 golden must be stable"
         );
     }
 
     #[test]
     fn abi_hash_golden_armv7m_none() {
-        // Golden for armv7-m (arch=2, slot_bytes=4, word_bits=32, MODINFO_VER=3).
-        let h = compute_abi_hash(ARCH_TAG_ARM, 4, 32, 3);
+        // Golden for armv7-m (arch=2, slot_bytes=4, word_bits=32, MODINFO_VER=4).
+        let h = compute_abi_hash(ARCH_TAG_ARM, 4, 32, 4);
         assert_eq!(
-            h, 0x5D36_B0EF_E4B2_E904u64,
+            h, 0x4E2B_602B_B106_9843u64,
             "abi_hash armv7-m golden must be stable"
         );
     }
 
     #[test]
     fn abi_hash_golden_riscv32_none() {
-        // Golden for riscv32 (arch=3, slot_bytes=4, word_bits=32, MODINFO_VER=3).
-        let h = compute_abi_hash(ARCH_TAG_RISCV, 4, 32, 3);
+        // Golden for riscv32 (arch=3, slot_bytes=4, word_bits=32, MODINFO_VER=4).
+        let h = compute_abi_hash(ARCH_TAG_RISCV, 4, 32, 4);
         assert_eq!(
-            h, 0xF6DD_34A3_E430_BD85u64,
+            h, 0x49D5_B84F_8A5A_3C42u64,
             "abi_hash riscv32 golden must be stable"
         );
     }

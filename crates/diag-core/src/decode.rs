@@ -272,7 +272,7 @@ mod tests {
 
         let mut buf = Vec::with_capacity(4096);
         buf.resize(4096, 0);
-        let n = modinfo::encode_into(&mut buf, b"test", &export_entries, &[], abi_hash, 0, &[])
+        let n = modinfo::encode_into(&mut buf, b"test", &export_entries, &[], abi_hash, 0, &[], 0, &[])
             .expect("encode modinfo");
         buf.truncate(n);
         buf

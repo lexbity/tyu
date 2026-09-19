@@ -2,8 +2,10 @@
 
 use crate::error::{LoadError, E_BAD_CONTAINER};
 use crate::load::{load_module, LoadedSet};
-use crate::platform::{LoaderPlatform, Region, Rw, Rx, TrustLevel};
+use crate::platform::{BoardAperture, LoaderPlatform, Region, Rw, Rx, TrustLevel};
 use crate::symbols::SymMap;
+use crate::apertures::ApertureRegistry;
+use lmod::board_table::{decode as decode_board_table, BoardTable, BOARD_TABLE_ENCODED_SIZE};
 use lmod::validate::Container;
 #[cfg(feature = "signing")]
 use {
@@ -42,12 +44,12 @@ pub struct DevicePlatform {
     /// `from_linker_symbols`; the test/bring-up constructors leave it
     /// unbounded (`u32::MAX`) since they do not link the runtime DS region.
     ds_remaining_slots: u32,
-    /// The firmware's MMIO window bases (P6), indexed by window id, and how
-    /// many are bound. Emitted by the firmware build from the descriptor
-    /// (`__lang_mmio_window_bases` / `__lang_mmio_window_count`). The loader
-    /// re-derives the same bases from them (`check_window_base`).
-    window_bases: [u32; 8],
-    window_count: usize,
+    /// The firmware's board identity + MMIO aperture table (P6). Emitted by the
+    /// firmware build from the compiled descriptor as `__lang_platform_desc`
+    /// and decoded here with the shared codec (design doc §5.8). The loader
+    /// enforces `platform_hash` (E5220) and resolves aperture bases/sizes from
+    /// it (E5221/22/23).
+    board: BoardTable,
     #[cfg(feature = "signing")]
     sign_key: Option<[u8; KEY_LEN]>,
     #[cfg(feature = "encryption")]
@@ -98,9 +100,7 @@ impl DevicePlatform {
         let mut platform = Self::new(heap_start, heap_end, device_expected_abi_hash());
 
         platform.ds_remaining_slots = ds_remaining_slots;
-        let (window_bases, window_count) = read_window_bases();
-        platform.window_bases = window_bases;
-        platform.window_count = window_count;
+        platform.board = read_board_table();
         platform
     }
 
@@ -129,8 +129,7 @@ impl DevicePlatform {
                 cursor: heap_start,
                 expected_abi_hash,
                 ds_remaining_slots: u32::MAX,
-                window_bases: [0; 8],
-                window_count: 0,
+                board: BoardTable::empty(),
             }
         }
     }
@@ -150,8 +149,7 @@ impl DevicePlatform {
             cursor: heap_start,
             expected_abi_hash,
             ds_remaining_slots: u32::MAX,
-            window_bases: [0; 8],
-            window_count: 0,
+            board: BoardTable::empty(),
             #[cfg(feature = "signing")]
             sign_key,
             #[cfg(feature = "encryption")]
@@ -212,22 +210,27 @@ fn device_expected_abi_hash() -> u64 {
     lmod::abi_hash::compute_abi_hash(arch_tag, slot_bytes, word_bits, lmod::modinfo::MODINFO_VER)
 }
 
-/// Read the firmware's MMIO window bases (P6) from the linker symbols the
-/// firmware build emits from the descriptor. Unused slots stay zero.
-fn read_window_bases() -> ([u32; 8], usize) {
+/// Read the firmware's board identity + MMIO aperture table (P6) from the
+/// `__lang_platform_desc` blob the firmware build embeds from the compiled
+/// descriptor (design doc §5.8). Decoded with the shared codec — no TOML on
+/// the device, no second implementation. An absent/malformed blob yields the
+/// empty table (no board identity): `from_linker_symbols` must still boot.
+fn read_board_table() -> BoardTable {
     extern "C" {
-        static __lang_mmio_window_bases: u32;
-        static __lang_mmio_window_count: u32;
+        static __lang_platform_desc_start: u8;
+        static __lang_platform_desc_end: u8;
     }
-    let base_ptr = core::ptr::addr_of!(__lang_mmio_window_bases) as *const u32;
-    let count_ptr = core::ptr::addr_of!(__lang_mmio_window_count) as *const u32;
-    let count = unsafe { core::ptr::read_volatile(count_ptr) as usize };
-    let count = count.min(8);
-    let mut bases = [0u32; 8];
-    for i in 0..count {
-        bases[i] = unsafe { core::ptr::read_volatile(base_ptr.add(i)) };
+    let start = core::ptr::addr_of!(__lang_platform_desc_start) as *const u8;
+    let end = core::ptr::addr_of!(__lang_platform_desc_end) as *const u8;
+    let len = end as usize - start as usize;
+    if len == 0 || len > BOARD_TABLE_ENCODED_SIZE {
+        return BoardTable::empty();
     }
-    (bases, count)
+    let bytes = unsafe { core::slice::from_raw_parts(start, len) };
+    match decode_board_table(bytes) {
+        Ok(t) => t,
+        Err(_) => BoardTable::empty(),
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -270,9 +273,16 @@ impl LoaderPlatform for DevicePlatform {
         self.expected_abi_hash
     }
 
-    /// The firmware's bound base for a window id (P6), if within the table.
-    fn window_base(&self, id: u16) -> Option<u32> {
-        ((id as usize) < self.window_count).then(|| self.window_bases[id as usize])
+    /// The firmware's board `platform_hash` (P6, decision D-5), if a
+    /// descriptor was embedded.
+    fn platform_hash(&self) -> Option<u64> {
+        (self.board.platform_hash != 0).then_some(self.board.platform_hash)
+    }
+
+    /// The firmware's MMIO aperture table (P6), decoded from the embedded
+    /// compiled-descriptor projection.
+    fn aperture_table(&self) -> &[BoardAperture] {
+        self.board.apertures()
     }
 
     fn ds_remaining_slots(&self) -> u32 {
@@ -410,6 +420,7 @@ pub extern "C" fn __lang_load_and_run() -> ! {
     let mark = platform.mark();
     let mut symmap: SymMap<'_, 256> = SymMap::new();
     let mut loaded_set = LoadedSet::<64>::new();
+    let mut aperture_registry = ApertureRegistry::new();
 
     if register_firmware_symtab(&mut symmap, &mut platform).is_err() {
         trap(E_BAD_CONTAINER);
@@ -424,7 +435,13 @@ pub extern "C" fn __lang_load_and_run() -> ! {
         Err(_) => trap(E_BAD_CONTAINER),
     };
 
-    match load_module(&container, &mut platform, &mut symmap, &mut loaded_set) {
+    match load_module(
+        &container,
+        &mut platform,
+        &mut symmap,
+        &mut loaded_set,
+        &mut aperture_registry,
+    ) {
         Ok(_) => {
             let Some(main) = symmap.lookup_by_hash(MAIN_HASH) else {
                 trap(LoadError::SymbolUnresolved.code());

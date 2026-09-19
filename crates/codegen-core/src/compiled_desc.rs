@@ -1,8 +1,8 @@
-//! Compiled platform descriptor — the runtime-side form (windows + devices +
+//! Compiled platform descriptor — the runtime-side form (apertures + devices +
 //! hash).
 //!
 //! Produced by `tyu` from a validated descriptor (design doc §5.3/§5.8) and
-//! consumed by `langc` (P3: descriptor-sourced window sizes; P4: symbolic
+//! consumed by `langc` (P3: descriptor-sourced aperture sizes; P4: symbolic
 //! `board.<instance>` resolution) and later the loader (P6: platform
 //! binding). It lives in `codegen-core` so the producer and every consumer
 //! share one encoder/decoder — the format is never reimplemented in a
@@ -13,8 +13,8 @@
 //! 0  4   magic b"TYDP"
 //! 4  1   format version (2)
 //! 5  8   platform_hash (u64 LE)
-//! 13 1   window_count
-//! 14 ..  per window:
+//! 13 1   aperture_count
+//! 14 ..  per aperture:
 //!           u16 id
 //!           u8  name_len
 //!           [u8; name_len] name
@@ -27,7 +27,7 @@
 //!           [u8; map_len] map
 //!           u8  instance_len
 //!           [u8; instance_len] instance
-//!           u16 window
+//!           u16 aperture
 //!           u32 base_offset
 //!           u8  register_count
 //!           per register:
@@ -46,11 +46,11 @@
 
 use core::fmt;
 
-use super::target::{MmioWindowKind, MmioWindowSpec, RelocIsa};
+use super::target::{MmioApertureKind, MmioApertureSpec, RelocIsa};
 
-/// Maximum number of windows a compiled descriptor may carry (matches the
-/// loader's window-use table cap, design doc §5.5).
-pub const COMPILED_DESC_WINDOW_CAP: usize = 8;
+/// Maximum number of apertures a compiled descriptor may carry (matches the
+/// loader's aperture-use table cap, design doc §5.5).
+pub const COMPILED_DESC_APERTURE_CAP: usize = 8;
 
 /// Maximum number of devices.
 pub const COMPILED_DESC_DEVICE_CAP: usize = 16;
@@ -58,11 +58,11 @@ pub const COMPILED_DESC_DEVICE_CAP: usize = 16;
 /// Maximum number of registers per device.
 pub const COMPILED_DESC_REGISTER_CAP: usize = 32;
 
-/// Maximum serialized size (16 devices × 32 registers × ~62 B + windows).
+/// Maximum serialized size (16 devices × 32 registers × ~62 B + apertures).
 pub const COMPILED_DESC_MAX_BYTES: usize = 32 * 1024;
 
 const MAGIC: &[u8; 4] = b"TYDP";
-const FORMAT_VER: u8 = 3;
+const FORMAT_VER: u8 = 4;
 
 /// Register access discriminants (D-3 fields, shared with the descriptor
 /// model's enum ordering — never renumber).
@@ -92,6 +92,11 @@ pub struct CompiledRegister {
     pub mask: u64,
     pub reset: u64,
     pub barrier: u8,
+    /// Datasheet NVIC IRQ number for an `@interrupt` binding (P8).
+    /// `0xFFFF` = none.
+    pub interrupt: u16,
+    /// Datasheet interrupt request number (P8). `0xFFFF` = none.
+    pub irq: u16,
 }
 
 impl CompiledRegister {
@@ -106,6 +111,8 @@ impl CompiledRegister {
         mask: 0,
         reset: 0,
         barrier: 0,
+        interrupt: 0xFFFF,
+        irq: 0xFFFF,
     };
 }
 
@@ -114,7 +121,7 @@ impl CompiledRegister {
 pub struct CompiledDevice {
     pub map: ir::Atom,
     pub instance: ir::Atom,
-    pub window: u16,
+    pub aperture: u16,
     pub base_offset: u32,
     pub registers: [CompiledRegister; COMPILED_DESC_REGISTER_CAP],
     pub register_count: usize,
@@ -124,7 +131,7 @@ impl CompiledDevice {
     pub const EMPTY: Self = Self {
         map: ir::AT_EMPTY,
         instance: ir::AT_EMPTY,
-        window: 0,
+        aperture: 0,
         base_offset: 0,
         registers: [CompiledRegister::EMPTY; COMPILED_DESC_REGISTER_CAP],
         register_count: 0,
@@ -139,17 +146,17 @@ impl CompiledDevice {
 /// The compiled, loadable form of a platform descriptor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CompiledDescriptor {
-    pub windows: [MmioWindowSpec; COMPILED_DESC_WINDOW_CAP],
-    pub window_count: usize,
+    pub apertures: [MmioApertureSpec; COMPILED_DESC_APERTURE_CAP],
+    pub aperture_count: usize,
     pub devices: [CompiledDevice; COMPILED_DESC_DEVICE_CAP],
     pub device_count: usize,
     pub platform_hash: u64,
 }
 
 impl CompiledDescriptor {
-    /// The windows as a slice of length `window_count`.
-    pub fn windows(&self) -> &[MmioWindowSpec] {
-        &self.windows[..self.window_count]
+    /// The apertures as a slice of length `aperture_count`.
+    pub fn apertures(&self) -> &[MmioApertureSpec] {
+        &self.apertures[..self.aperture_count]
     }
 
     /// The devices as a slice of length `device_count`.
@@ -166,8 +173,8 @@ impl CompiledDescriptor {
 impl Default for CompiledDescriptor {
     fn default() -> Self {
         Self {
-            windows: [MmioWindowSpec::EMPTY; COMPILED_DESC_WINDOW_CAP],
-            window_count: 0,
+            apertures: [MmioApertureSpec::EMPTY; COMPILED_DESC_APERTURE_CAP],
+            aperture_count: 0,
             devices: [CompiledDevice::EMPTY; COMPILED_DESC_DEVICE_CAP],
             device_count: 0,
             platform_hash: 0,
@@ -180,17 +187,17 @@ impl Default for CompiledDescriptor {
 pub enum CompiledDescError {
     BadMagic,
     BadVersion,
-    TooManyWindows,
+    TooManyApertures,
     TooManyDevices,
     TooManyRegisters,
     BufferTooSmall,
     Truncated,
     BadNameLen,
     BadKind,
-    WindowSizeZero,
-    WindowIdGap,
-    WindowOverlap,
-    DeviceUnknownWindow,
+    ApertureSizeZero,
+    ApertureIdGap,
+    ApertureOverlap,
+    DeviceUnknownAperture,
     DeviceDuplicate,
     TrailingBytes,
 }
@@ -200,17 +207,17 @@ impl CompiledDescError {
         match self {
             Self::BadMagic => "bad compiled-descriptor magic",
             Self::BadVersion => "unsupported compiled-descriptor format version",
-            Self::TooManyWindows => "too many windows (> 8)",
+            Self::TooManyApertures => "too many apertures (> 8)",
             Self::TooManyDevices => "too many devices (> 16)",
             Self::TooManyRegisters => "too many registers in a device (> 32)",
             Self::BufferTooSmall => "output buffer too small for compiled descriptor",
             Self::Truncated => "compiled descriptor truncated",
-            Self::BadNameLen => "window name length exceeds 32 bytes",
-            Self::BadKind => "unknown window kind",
-            Self::WindowSizeZero => "window size must be > 0",
-            Self::WindowIdGap => "window ids must be unique and densely numbered from 0",
-            Self::WindowOverlap => "bus windows overlap",
-            Self::DeviceUnknownWindow => "device references an unknown window id",
+            Self::BadNameLen => "aperture name length exceeds 32 bytes",
+            Self::BadKind => "unknown aperture kind",
+            Self::ApertureSizeZero => "aperture size must be > 0",
+            Self::ApertureIdGap => "aperture ids must be unique and densely numbered from 0",
+            Self::ApertureOverlap => "bus apertures overlap",
+            Self::DeviceUnknownAperture => "device references an unknown aperture id",
             Self::DeviceDuplicate => "device (map, instance) identity must be unique",
             Self::TrailingBytes => "trailing bytes after compiled descriptor",
         }
@@ -239,9 +246,9 @@ pub fn encode_compiled_desc(
     p += 1;
     out[p..p + 8].copy_from_slice(&cd.platform_hash.to_le_bytes());
     p += 8;
-    out[p] = cd.window_count as u8;
+    out[p] = cd.aperture_count as u8;
     p += 1;
-    for w in cd.windows() {
+    for w in cd.apertures() {
         out[p..p + 2].copy_from_slice(&w.id.to_le_bytes());
         p += 2;
         let name = w.name.as_bytes();
@@ -249,7 +256,7 @@ pub fn encode_compiled_desc(
         p += 1;
         out[p..p + name.len()].copy_from_slice(name);
         p += name.len();
-        out[p] = window_kind_disc(w.kind);
+        out[p] = aperture_kind_disc(w.kind);
         p += 1;
         out[p] = reloc_isa_disc(w.reloc_isa);
         p += 1;
@@ -271,7 +278,7 @@ pub fn encode_compiled_desc(
         p += 1;
         out[p..p + instance.len()].copy_from_slice(instance);
         p += instance.len();
-        out[p..p + 2].copy_from_slice(&d.window.to_le_bytes());
+        out[p..p + 2].copy_from_slice(&d.aperture.to_le_bytes());
         p += 2;
         out[p..p + 4].copy_from_slice(&d.base_offset.to_le_bytes());
         p += 4;
@@ -301,6 +308,10 @@ pub fn encode_compiled_desc(
             p += 8;
             out[p] = r.barrier;
             p += 1;
+            out[p..p + 2].copy_from_slice(&r.interrupt.to_le_bytes());
+            p += 2;
+            out[p..p + 2].copy_from_slice(&r.irq.to_le_bytes());
+            p += 2;
         }
     }
     Ok(p)
@@ -325,13 +336,13 @@ pub fn decode_compiled_desc(bytes: &[u8]) -> Result<CompiledDescriptor, Compiled
     hash_le.copy_from_slice(&bytes[p..p + 8]);
     let platform_hash = u64::from_le_bytes(hash_le);
     p += 8;
-    let window_count = bytes[p] as usize;
+    let aperture_count = bytes[p] as usize;
     p += 1;
-    if window_count > COMPILED_DESC_WINDOW_CAP {
-        return Err(CompiledDescError::TooManyWindows);
+    if aperture_count > COMPILED_DESC_APERTURE_CAP {
+        return Err(CompiledDescError::TooManyApertures);
     }
-    let mut windows = [MmioWindowSpec::EMPTY; COMPILED_DESC_WINDOW_CAP];
-    for slot in windows.iter_mut().take(window_count) {
+    let mut apertures = [MmioApertureSpec::EMPTY; COMPILED_DESC_APERTURE_CAP];
+    for slot in apertures.iter_mut().take(aperture_count) {
         if bytes.len() < p + 2 {
             return Err(CompiledDescError::Truncated);
         }
@@ -353,8 +364,8 @@ pub fn decode_compiled_desc(bytes: &[u8]) -> Result<CompiledDescriptor, Compiled
             return Err(CompiledDescError::Truncated);
         }
         let kind = match bytes[p] {
-            0 => MmioWindowKind::Bus,
-            1 => MmioWindowKind::Emulated,
+            0 => MmioApertureKind::Bus,
+            1 => MmioApertureKind::Emulated,
             _ => return Err(CompiledDescError::BadKind),
         };
         p += 1;
@@ -376,7 +387,7 @@ pub fn decode_compiled_desc(bytes: &[u8]) -> Result<CompiledDescriptor, Compiled
         size_le.copy_from_slice(&bytes[p..p + 4]);
         let size = u32::from_le_bytes(size_le);
         p += 4;
-        *slot = MmioWindowSpec {
+        *slot = MmioApertureSpec {
             id,
             name,
             kind,
@@ -420,9 +431,9 @@ pub fn decode_compiled_desc(bytes: &[u8]) -> Result<CompiledDescriptor, Compiled
         if bytes.len() < p + 6 {
             return Err(CompiledDescError::Truncated);
         }
-        let mut window_le = [0u8; 2];
-        window_le.copy_from_slice(&bytes[p..p + 2]);
-        let window = u16::from_le_bytes(window_le);
+        let mut aperture_le = [0u8; 2];
+        aperture_le.copy_from_slice(&bytes[p..p + 2]);
+        let aperture = u16::from_le_bytes(aperture_le);
         p += 2;
         let mut off_le = [0u8; 4];
         off_le.copy_from_slice(&bytes[p..p + 4]);
@@ -478,6 +489,13 @@ pub fn decode_compiled_desc(bytes: &[u8]) -> Result<CompiledDescriptor, Compiled
             p += 8;
             let barrier = bytes[p];
             p += 1;
+            if bytes.len() < p + 4 {
+                return Err(CompiledDescError::Truncated);
+            }
+            let interrupt = u16::from_le_bytes(bytes[p..p + 2].try_into().unwrap());
+            p += 2;
+            let irq = u16::from_le_bytes(bytes[p..p + 2].try_into().unwrap());
+            p += 2;
             *rslot = CompiledRegister {
                 offset,
                 name,
@@ -489,12 +507,14 @@ pub fn decode_compiled_desc(bytes: &[u8]) -> Result<CompiledDescriptor, Compiled
                 mask,
                 reset,
                 barrier,
+                interrupt,
+                irq,
             };
         }
         *slot = CompiledDevice {
             map,
             instance,
-            window,
+            aperture,
             base_offset,
             registers,
             register_count,
@@ -505,40 +525,40 @@ pub fn decode_compiled_desc(bytes: &[u8]) -> Result<CompiledDescriptor, Compiled
         return Err(CompiledDescError::TrailingBytes);
     }
     Ok(CompiledDescriptor {
-        windows,
-        window_count,
+        apertures,
+        aperture_count,
         devices,
         device_count,
         platform_hash,
     })
 }
 
-/// Semantic validation of a decoded compiled descriptor: window size > 0,
-/// ids unique and densely numbered from 0, no overlapping bus windows, every
-/// device referencing a declared window, and unique device identity.
+/// Semantic validation of a decoded compiled descriptor: aperture size > 0,
+/// ids unique and densely numbered from 0, no overlapping bus apertures, every
+/// device referencing a declared aperture, and unique device identity.
 pub fn validate_compiled_desc(cd: &CompiledDescriptor) -> Result<(), CompiledDescError> {
-    let mut ids = [0u16; COMPILED_DESC_WINDOW_CAP];
+    let mut ids = [0u16; COMPILED_DESC_APERTURE_CAP];
     let mut id_count = 0usize;
-    for w in cd.windows() {
+    for w in cd.apertures() {
         ids[id_count] = w.id;
         id_count += 1;
     }
     sort_u16(&mut ids[..id_count]);
     for (index, &id) in ids[..id_count].iter().enumerate() {
         if id as usize != index {
-            return Err(CompiledDescError::WindowIdGap);
+            return Err(CompiledDescError::ApertureIdGap);
         }
     }
 
-    for w in cd.windows() {
+    for w in cd.apertures() {
         if w.size == 0 {
-            return Err(CompiledDescError::WindowSizeZero);
+            return Err(CompiledDescError::ApertureSizeZero);
         }
     }
 
-    let mut ranged = [(0u64, 0u64); COMPILED_DESC_WINDOW_CAP];
+    let mut ranged = [(0u64, 0u64); COMPILED_DESC_APERTURE_CAP];
     let mut range_count = 0usize;
-    for w in cd.windows() {
+    for w in cd.apertures() {
         if let Some(b) = w.base {
             ranged[range_count] = (b, b.saturating_add(w.size as u64));
             range_count += 1;
@@ -547,15 +567,15 @@ pub fn validate_compiled_desc(cd: &CompiledDescriptor) -> Result<(), CompiledDes
     sort_ranges(&mut ranged[..range_count]);
     for pair in ranged[..range_count].windows(2) {
         if pair[0].1 > pair[1].0 {
-            return Err(CompiledDescError::WindowOverlap);
+            return Err(CompiledDescError::ApertureOverlap);
         }
     }
 
     let mut keys = [ir::AT_EMPTY; COMPILED_DESC_DEVICE_CAP];
     let mut key_count = 0usize;
     for d in cd.devices() {
-        if cd.windows().iter().all(|w| w.id != d.window) {
-            return Err(CompiledDescError::DeviceUnknownWindow);
+        if cd.apertures().iter().all(|w| w.id != d.aperture) {
+            return Err(CompiledDescError::DeviceUnknownAperture);
         }
         keys[key_count] = d.instance;
         key_count += 1;
@@ -571,14 +591,14 @@ pub fn validate_compiled_desc(cd: &CompiledDescriptor) -> Result<(), CompiledDes
 }
 
 fn serialized_len(cd: &CompiledDescriptor) -> Result<usize, CompiledDescError> {
-    if cd.window_count > COMPILED_DESC_WINDOW_CAP {
-        return Err(CompiledDescError::TooManyWindows);
+    if cd.aperture_count > COMPILED_DESC_APERTURE_CAP {
+        return Err(CompiledDescError::TooManyApertures);
     }
     if cd.device_count > COMPILED_DESC_DEVICE_CAP {
         return Err(CompiledDescError::TooManyDevices);
     }
-    let mut len = 15usize; // magic 4 + ver 1 + hash 8 + window_count 1 + device_count 1
-    for w in cd.windows() {
+    let mut len = 15usize; // magic 4 + ver 1 + hash 8 + aperture_count 1 + device_count 1
+    for w in cd.apertures() {
         len += 2 + 1 + w.name.as_bytes().len() + 1 + 1 + 8 + 4;
     }
     for d in cd.devices() {
@@ -631,9 +651,83 @@ fn reloc_isa_disc(r: Option<RelocIsa>) -> u8 {
     }
 }
 
-fn window_kind_disc(k: MmioWindowKind) -> u8 {
+fn aperture_kind_disc(k: MmioApertureKind) -> u8 {
     match k {
-        MmioWindowKind::Bus => 0,
-        MmioWindowKind::Emulated => 1,
+        MmioApertureKind::Bus => 0,
+        MmioApertureKind::Emulated => 1,
+    }
+}
+
+/// The board-declared capability of a aperture (P6, design doc §5.2/§5.8): the
+/// union of its devices' register access semantics. `tyu` encodes this into the
+/// board aperture table (`lmod::board_table`) at build time; the loader checks a
+/// module's fused `access_mask` is a subset of it (E5223). Host-side only —
+/// the device loads the precomputed bytes.
+pub fn aperture_capability(cd: &CompiledDescriptor, aperture_id: u16) -> u8 {
+    use ir::{ACCESS_EFFECTFUL_READ, ACCESS_READ, ACCESS_W1C, ACCESS_W1S, ACCESS_WRITE};
+    let mut cap = 0u8;
+    for d in cd.devices() {
+        if d.aperture != aperture_id {
+            continue;
+        }
+        for r in d.registers() {
+            match r.access {
+                REG_ACCESS_RO => cap |= ACCESS_READ,
+                REG_ACCESS_WO => cap |= ACCESS_WRITE,
+                REG_ACCESS_RW => cap |= ACCESS_READ | ACCESS_WRITE,
+                _ => {}
+            }
+            match r.write_kind {
+                REG_WRITE_W1S => cap |= ACCESS_W1S,
+                REG_WRITE_W1C => cap |= ACCESS_W1C,
+                _ => {}
+            }
+            if r.read_kind == REG_READ_EFFECTFUL {
+                cap |= ACCESS_EFFECTFUL_READ;
+            }
+        }
+    }
+    cap
+}
+
+#[cfg(test)]
+mod capability_tests {
+    use super::*;
+    use crate::target::{MmioApertureKind, MmioApertureSpec};
+    use ir::Atom;
+
+    #[test]
+    fn capability_derives_from_devices() {
+        use ir::{ACCESS_EFFECTFUL_READ, ACCESS_READ, ACCESS_W1C, ACCESS_WRITE};
+        let mut cd = CompiledDescriptor::default();
+        cd.aperture_count = 1;
+        cd.apertures[0] = MmioApertureSpec {
+            id: 0,
+            name: Atom::new(b"apb").unwrap(),
+            kind: MmioApertureKind::Bus,
+            base: Some(0x4000_0000),
+            size: 0x1_0000,
+            reloc_isa: Some(crate::target::RelocIsa::ArmThumbLdrLiteral),
+        };
+        let mut dev = CompiledDevice::EMPTY;
+        dev.aperture = 0;
+        dev.register_count = 2;
+        dev.registers[0] = CompiledRegister {
+            access: REG_ACCESS_RW,
+            write_kind: REG_WRITE_W1C,
+            read_kind: REG_READ_PLAIN,
+            ..CompiledRegister::EMPTY
+        };
+        dev.registers[1] = CompiledRegister {
+            access: REG_ACCESS_RO,
+            write_kind: REG_WRITE_PLAIN,
+            read_kind: REG_READ_EFFECTFUL,
+            ..CompiledRegister::EMPTY
+        };
+        cd.devices[0] = dev;
+        cd.device_count = 1;
+        let cap = aperture_capability(&cd, 0);
+        assert_eq!(cap, ACCESS_READ | ACCESS_WRITE | ACCESS_W1C | ACCESS_EFFECTFUL_READ);
+        assert_eq!(aperture_capability(&cd, 1), 0);
     }
 }

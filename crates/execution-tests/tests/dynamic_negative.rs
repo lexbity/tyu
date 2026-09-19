@@ -80,13 +80,22 @@ fn build_mutated_dynamic_image_with_mod(
 }
 
 fn assert_loader_trap(target: common::DynamicTarget, mutation: &str, expected_code: u16) {
+    assert_loader_trap_with_mod(target, mutation, expected_code, PASS_MOD)
+}
+
+fn assert_loader_trap_with_mod(
+    target: common::DynamicTarget,
+    mutation: &str,
+    expected_code: u16,
+    module: &str,
+) {
     if !common::require_tool_groups(target.tools) {
         return;
     }
     build_tools();
 
     let dir = common::temp_dir(&format!("dynamic_negative_{}_{}", target.triple, mutation));
-    let image = build_mutated_dynamic_image(target, mutation, &dir);
+    let image = build_mutated_dynamic_image_with_mod(target, mutation, &dir, module);
     let outcome = common::run_with_product_runner(target.target, &image, Duration::from_secs(10));
     assert!(
         !outcome.timed_out,
@@ -111,8 +120,8 @@ fn assert_loader_trap(target: common::DynamicTarget, mutation: &str, expected_co
     );
 }
 
-/// A module that touches the arm/riscv `board.scratch` window, so packing
-/// produces a `MmioWindowBase` reloc site the loader binds and re-validates.
+/// A module that touches the arm/riscv `board.scratch` aperture, so packing
+/// produces a `MmioApertureBase` reloc site the loader binds and re-validates.
 const MMIO_PASS_MOD: &str = "module Main;\n\
 import platform/testio { testio.write-byte };\n\
 register-map Scratch\n\
@@ -126,28 +135,29 @@ const scratch = Scratch @ board.scratch;\n\
   0 ;\n\
 export { main };\nend;\n";
 
-/// P6 `check_window_base`: a module whose window-base reloc site was bound to
-/// a different base than the device's descriptor-derived base must be
-/// rejected (5221) — no silent binding to a foreign window geometry.
+/// P6 defense-in-depth `check`: a module whose aperture-base reloc site claims a
+/// non-zero base different from the board's must be rejected (5219) — a Tier-2
+/// module built against / forging another geometry. The `platform_hash` gate
+/// (E5220) is the primary check; this is the re-derivation behind it.
 #[test]
-fn dynamic_window_base_mismatch_traps_5221() {
+fn dynamic_aperture_base_mismatch_traps_5219() {
     for target in common::DYNAMIC_TARGETS {
         if target.target == codegen_core::Target::X86_64UnknownNone {
-            continue; // x86's emulated window has no binding-time reloc
+            continue; // x86's emulated aperture has no binding-time reloc
         }
         if !common::require_tool_groups(target.tools) {
             return;
         }
         build_tools();
         let dir =
-            common::temp_dir(&format!("dynamic_negative_{}_window-base-mismatch", target.triple));
+            common::temp_dir(&format!("dynamic_negative_{}_aperture-base-mismatch", target.triple));
         let image =
-            build_mutated_dynamic_image_with_mod(*target, "window-base-mismatch", &dir, MMIO_PASS_MOD);
+            build_mutated_dynamic_image_with_mod(*target, "aperture-base-mismatch", &dir, MMIO_PASS_MOD);
         let outcome =
             common::run_with_product_runner(target.target, &image, Duration::from_secs(10));
         assert!(
             !outcome.timed_out,
-            "{} window-base-mismatch must trap, not hang",
+            "{} aperture-base-mismatch must trap, not hang",
             target.triple
         );
         let trap_codes: Vec<u16> = harness_core::parse_records(&outcome.stdout)
@@ -159,12 +169,60 @@ fn dynamic_window_base_mismatch_traps_5221() {
             })
             .collect();
         assert!(
-            trap_codes.contains(&5221),
-            "{} window-base-mismatch expected loader trap 5221, got {:?}\nstdout bytes: {:02x?}",
+            trap_codes.contains(&5219),
+            "{} aperture-base-mismatch expected loader trap 5219, got {:?}\nstdout bytes: {:02x?}",
             target.triple,
             trap_codes,
             outcome.stdout,
         );
+    }
+}
+
+/// P6 board-identity gate (D-5): a module whose modinfo `platform_hash` does
+/// not match the board's is rejected E5220 before any binding.
+#[test]
+fn dynamic_platform_hash_mismatch_traps_5220() {
+    for target in common::DYNAMIC_TARGETS {
+        if target.target == codegen_core::Target::X86_64UnknownNone {
+            continue; // x86 emulated aperture has no reloc; same gate still applies
+        }
+        assert_loader_trap(*target, "platform-hash-mismatch", 5220);
+    }
+}
+
+/// P6 version gate (D-12): a v3 module on a v4 loader is rejected E5224 before
+/// any allocation.
+#[test]
+fn dynamic_modinfo_version_rejected_e5224() {
+    for target in common::DYNAMIC_TARGETS {
+        if target.target == codegen_core::Target::X86_64UnknownNone {
+            continue;
+        }
+        assert_loader_trap(*target, "modinfo-version", 5224);
+    }
+}
+
+/// P6 aperture resolution (E5222): a module whose aperture-use entry names a aperture
+/// the board does not expose (corrupted name_hash) is rejected.
+#[test]
+fn dynamic_aperture_unresolved_traps_5222() {
+    for target in common::DYNAMIC_TARGETS {
+        if target.target == codegen_core::Target::X86_64UnknownNone {
+            continue;
+        }
+        assert_loader_trap_with_mod(*target, "aperture-name-hash", 5222, MMIO_PASS_MOD);
+    }
+}
+
+/// P6 aperture table structural validation (E5223): a malformed aperture-use table
+/// is rejected.
+#[test]
+fn dynamic_aperture_table_malformed_traps_5223() {
+    for target in common::DYNAMIC_TARGETS {
+        if target.target == codegen_core::Target::X86_64UnknownNone {
+            continue;
+        }
+        assert_loader_trap(*target, "aperture-table-malformed", 5223);
     }
 }
 

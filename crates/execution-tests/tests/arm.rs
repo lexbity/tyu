@@ -359,11 +359,11 @@ end;
     let asm = std::fs::read_to_string(&asm_path).unwrap();
 
     // Verify key instructions are present in the assembly.
-    // P6: the window base is bound through a relocatable literal site
-    // (`ldr r0, =__lang_window_0_base`), and the register offset added.
+    // P6: the aperture base is bound through a relocatable literal site
+    // (`ldr r0, =__lang_aperture_0_base`), and the register offset added.
     assert!(
-        asm.contains("ldr r0, =__lang_window_0_base"),
-        "MmioPlace / AddrOf must load the bound window base (window 0 = 0x20000000)"
+        asm.contains("ldr r0, =__lang_aperture_0_base"),
+        "MmioPlace / AddrOf must load the bound aperture base (aperture 0 = 0x20000000)"
     );
     assert!(
         asm.contains("adds r0, r0, r1"),

@@ -7,7 +7,7 @@ description = "RV32 bare-metal runtime"
 triple = "riscv32-unknown-none"
 arch = "riscv"
 default = true
-expected_abi_hash = "0xf6dd34a3e430bd85"
+expected_abi_hash = "0x49d5b84f8a5a3c42"
 
 [metal]
 path = "."

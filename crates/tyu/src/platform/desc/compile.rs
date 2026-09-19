@@ -2,7 +2,7 @@
 //! consumption (design doc §5.3/§5.8, phase P3).
 //!
 //! `compile` converts a validated [`Descriptor`] into a [`CompiledDescriptor`]
-//! (windows + `platform_hash`), serialized with the shared `codegen-core`
+//! (apertures + `platform_hash`), serialized with the shared `codegen-core`
 //! encoder so `langc` and the loader decode the same format. The compiled
 //! file is written next to `platform.toml` as `platform.desc`; the guard
 //! (G14) and the sync test pin it to the source descriptor.
@@ -13,14 +13,14 @@ use std::path::{Path, PathBuf};
 use codegen_core::compiled_desc::{
     encode_compiled_desc, validate_compiled_desc, CompiledDescriptor, CompiledDevice,
     CompiledRegister, COMPILED_DESC_DEVICE_CAP, COMPILED_DESC_MAX_BYTES,
-    COMPILED_DESC_REGISTER_CAP, COMPILED_DESC_WINDOW_CAP, REG_ACCESS_RO, REG_ACCESS_RW,
+    COMPILED_DESC_REGISTER_CAP, COMPILED_DESC_APERTURE_CAP, REG_ACCESS_RO, REG_ACCESS_RW,
     REG_ACCESS_WO, REG_BARRIER_AFTER, REG_BARRIER_BEFORE, REG_BARRIER_BOTH, REG_BARRIER_NONE,
     REG_READ_EFFECTFUL, REG_READ_PLAIN, REG_WRITE_PLAIN, REG_WRITE_W1C, REG_WRITE_W1S,
 };
-use codegen_core::{MmioWindowKind, MmioWindowSpec};
+use codegen_core::{MmioApertureKind, MmioApertureSpec};
 
 use super::{
-    AccessKind, BarrierKind, Descriptor, DescriptorError, E_DESC_INVALID, ReadKind, WindowKind,
+    AccessKind, BarrierKind, Descriptor, DescriptorError, E_DESC_INVALID, ReadKind, ApertureKind,
     WriteKind, canonical, parse::parse_descriptor, validate::validate,
 };
 use crate::error::TyuError;
@@ -35,13 +35,13 @@ pub fn descriptor_file_path(pack_root: &Path) -> PathBuf {
 
 /// Convert a validated descriptor model into its runtime-side compiled form.
 pub fn compile(desc: &Descriptor) -> Result<CompiledDescriptor, DescriptorError> {
-    if desc.windows.len() > COMPILED_DESC_WINDOW_CAP {
+    if desc.apertures.len() > COMPILED_DESC_APERTURE_CAP {
         return Err(DescriptorError::new(
             E_DESC_INVALID,
             format!(
-                "descriptor declares {} windows (compiled form supports {})",
-                desc.windows.len(),
-                COMPILED_DESC_WINDOW_CAP
+                "descriptor declares {} apertures (compiled form supports {})",
+                desc.apertures.len(),
+                COMPILED_DESC_APERTURE_CAP
             ),
         ));
     }
@@ -55,20 +55,20 @@ pub fn compile(desc: &Descriptor) -> Result<CompiledDescriptor, DescriptorError>
             ),
         ));
     }
-    let mut windows = [MmioWindowSpec::EMPTY; COMPILED_DESC_WINDOW_CAP];
-    for (i, w) in desc.windows.iter().enumerate() {
+    let mut apertures = [MmioApertureSpec::EMPTY; COMPILED_DESC_APERTURE_CAP];
+    for (i, w) in desc.apertures.iter().enumerate() {
         let name = ir::Atom::new(w.name.as_bytes()).ok_or_else(|| {
             DescriptorError::new(
                 E_DESC_INVALID,
-                format!("window [{}] name exceeds 32 bytes", w.id),
+                format!("aperture [{}] name exceeds 32 bytes", w.id),
             )
         })?;
-        windows[i] = MmioWindowSpec {
+        apertures[i] = MmioApertureSpec {
             id: w.id,
             name,
             kind: match w.kind {
-                WindowKind::Bus => MmioWindowKind::Bus,
-                WindowKind::Emulated => MmioWindowKind::Emulated,
+                ApertureKind::Bus => MmioApertureKind::Bus,
+                ApertureKind::Emulated => MmioApertureKind::Emulated,
             },
             base: w.base,
             size: w.size,
@@ -137,12 +137,14 @@ pub fn compile(desc: &Descriptor) -> Result<CompiledDescriptor, DescriptorError>
                     BarrierKind::After => REG_BARRIER_AFTER,
                     BarrierKind::Both => REG_BARRIER_BOTH,
                 },
+                interrupt: r.interrupt.unwrap_or(0xFFFF),
+                irq: r.irq.unwrap_or(0xFFFF),
             };
         }
         devices[i] = CompiledDevice {
             map,
             instance,
-            window: d.window,
+            aperture: d.aperture,
             base_offset: d.base_offset,
             registers,
             register_count: d.registers.len(),
@@ -150,8 +152,8 @@ pub fn compile(desc: &Descriptor) -> Result<CompiledDescriptor, DescriptorError>
     }
 
     Ok(CompiledDescriptor {
-        windows,
-        window_count: desc.windows.len(),
+        apertures,
+        aperture_count: desc.apertures.len(),
         devices,
         device_count: desc.devices.len(),
         platform_hash: canonical::platform_hash(desc),
@@ -231,13 +233,13 @@ mod tests {
 name = "rp2350"
 schema = 2
 family = "rp2350"
-[[platform.windows]]
+[[platform.apertures]]
 id = 0
 name = "apb"
 kind = "bus"
 base = 0x40000000
 size = 0x10000
-[[platform.windows]]
+[[platform.apertures]]
 id = 1
 name = "mmio"
 kind = "bus"
@@ -247,10 +249,10 @@ size = 0x1000
         let desc = parse_descriptor(text).unwrap().unwrap();
         assert!(validate(&desc, None).is_empty());
         let cd = compile(&desc).unwrap();
-        assert_eq!(cd.window_count, 2);
-        assert_eq!(cd.windows()[0].name.as_bytes(), b"apb");
-        assert_eq!(cd.windows()[0].base, Some(0x40000000));
-        assert_eq!(cd.windows()[1].size, 0x1000);
+        assert_eq!(cd.aperture_count, 2);
+        assert_eq!(cd.apertures()[0].name.as_bytes(), b"apb");
+        assert_eq!(cd.apertures()[0].base, Some(0x40000000));
+        assert_eq!(cd.apertures()[1].size, 0x1000);
         // Encode/decode roundtrip through the shared codegen-core format.
         let mut buf = [0u8; COMPILED_DESC_MAX_BYTES];
         let n = encode_compiled_desc(&cd, &mut buf).unwrap();
@@ -259,17 +261,17 @@ size = 0x1000
     }
 
     #[test]
-    fn compile_rejects_over_capacity_windows() {
+    fn compile_rejects_over_capacity_apertures() {
         let mut text = String::from("[platform]\nname = \"big\"\nschema = 2\nfamily = \"big\"\n");
         for i in 0..9 {
             text.push_str(&format!(
-                "[[platform.windows]]\nid = {i}\nname = \"w{i}\"\nkind = \"bus\"\nbase = 0x{:x}\nsize = 0x1000\n",
+                "[[platform.apertures]]\nid = {i}\nname = \"w{i}\"\nkind = \"bus\"\nbase = 0x{:x}\nsize = 0x1000\n",
                 0x40000000 + i * 0x10000
             ));
         }
         let desc = parse_descriptor(&text).unwrap().unwrap();
         let err = compile(&desc).unwrap_err();
         assert_eq!(err.code, E_DESC_INVALID);
-        assert!(err.detail.contains("9 windows"));
+        assert!(err.detail.contains("9 apertures"));
     }
 }

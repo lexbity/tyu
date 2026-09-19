@@ -7,6 +7,7 @@
 extern crate alloc;
 
 pub mod abi_hash;
+pub mod board_table;
 pub mod debugsec;
 pub mod enc;
 pub mod hash;

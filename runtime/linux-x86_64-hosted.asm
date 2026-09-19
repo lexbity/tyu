@@ -424,8 +424,8 @@ __lang_ds_limit:
 public __lang_ds_high
 __lang_ds_high dq 0
 public __lang_expected_abi_hash
-; compute_abi_hash(ARCH_TAG_X86_64=1, slot=8, word=64, MODINFO_VER=3), recipe v2
-__lang_expected_abi_hash dq 0x41f05b8b1adab0ab
+; compute_abi_hash(ARCH_TAG_X86_64=1, slot=8, word=64, MODINFO_VER=4), recipe v2
+__lang_expected_abi_hash dq 0x50fbac4f4e87016c
 
 ; ---------------------------------------------------------------------------
 ; Module modpack section (S2 Phase 14) — empty for hosted; FS used instead

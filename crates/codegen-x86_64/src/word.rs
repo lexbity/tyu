@@ -21,6 +21,10 @@ use crate::X86_64HostedBackend;
 impl<'a> X86_64HostedBackend<'a> {
     pub fn emit_word(&mut self, w: &lir::Word) -> Result<(), CodegenError> {
         self.cur_word_id = fnv1a_u64(w.name.as_bytes());
+        // P6: fuse this word's aperture-use entries into the module table.
+        for wu in w.apertures.iter() {
+            codegen_core::merge_aperture_use(&mut self.mi_apertures, &mut self.mi_aperture_count, wu);
+        }
         // Collect debug metadata for every word when debug_trap_loc is set.
         if self.debug_trap_loc {
             let idx = self.debug_word_count;
@@ -132,11 +136,11 @@ impl<'a> X86_64HostedBackend<'a> {
             }
 
             lir::OpKind::AddrOf {
-                base: lir::AddrOfBase::Mmio { window, offset },
+                base: lir::AddrOfBase::Mmio { aperture, offset },
                 ..
             } => {
                 self.uses_mmio = true;
-                let addr = self.mmio_window_addr(window, offset)?;
+                let addr = self.mmio_aperture_addr(aperture, offset)?;
                 emit_push_u64(self.out, addr);
                 Ok(true)
             }
@@ -161,9 +165,9 @@ impl<'a> X86_64HostedBackend<'a> {
                 emit_push_rax(self.out);
                 Ok(true)
             }
-            lir::OpKind::MmioPlace { window, offset, .. } => {
+            lir::OpKind::MmioPlace { aperture, offset, .. } => {
                 self.uses_mmio = true;
-                let addr = self.mmio_window_addr(window, offset)?;
+                let addr = self.mmio_aperture_addr(aperture, offset)?;
                 emit_push_u64(self.out, addr);
                 Ok(true)
             }

@@ -5,7 +5,7 @@ use std::path::Path;
 
 use tyu::platform::{discover_platforms_in, format_lint_outcome, lint_pack};
 
-const X86_ABI_HASH: u64 = 0x41F0_5B8B_1ADA_B0AB;
+const X86_ABI_HASH: u64 = 0x50FB_AC4F_4E87_016C; // compute_abi_hash(x86_64, MODINFO_VER=4)
 
 fn x86_abi_hash_literal() -> String {
     format!("0x{:016x}", X86_ABI_HASH)

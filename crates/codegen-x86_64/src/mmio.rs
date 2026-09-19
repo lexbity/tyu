@@ -1,23 +1,23 @@
-use codegen_core::{CodegenError, MmioWindowKind};
+use codegen_core::{CodegenError, MmioApertureKind};
 use frontend::span::Span;
 use ir as lir;
 
 use crate::util::{mask_for_bits, write_u32, write_u64_hex};
 use crate::X86_64HostedBackend;
 
-/// The size of the emulated MMIO window (`__mmio_mem`), sourced from the
-/// backend's descriptor-driven window table (P3, D-7). The former hardcoded
+/// The size of the emulated MMIO aperture (`__mmio_mem`), sourced from the
+/// backend's descriptor-driven aperture table (P3, D-7). The former hardcoded
 /// 64 KiB constant is gone. This is the single source for BOTH the bounds
 /// check and the Executable-mode BSS reservation — a reservation smaller
 /// than the checked bound would admit MMIO past the array into adjacent
 /// `.bss` (platform-layer spec, finding F1).
-pub(crate) fn emulated_window_size(gen: &X86_64HostedBackend<'_>) -> Result<u32, CodegenError> {
-    for i in 0..gen.mmio_window_count {
-        if gen.mmio_windows[i].kind == MmioWindowKind::Emulated {
-            return Ok(gen.mmio_windows[i].size);
+pub(crate) fn emulated_aperture_size(gen: &X86_64HostedBackend<'_>) -> Result<u32, CodegenError> {
+    for i in 0..gen.mmio_aperture_count {
+        if gen.mmio_apertures[i].kind == MmioApertureKind::Emulated {
+            return Ok(gen.mmio_apertures[i].size);
         }
     }
-    Err(CodegenError::NoMmioWindow)
+    Err(CodegenError::NoMmioAperture)
 }
 
 pub fn emit_mmio_bounds_check(
@@ -25,7 +25,7 @@ pub fn emit_mmio_bounds_check(
     width: u32,
     span: Span,
 ) -> Result<(), CodegenError> {
-    let size = emulated_window_size(gen)?;
+    let size = emulated_aperture_size(gen)?;
     let ok = gen.fresh_label();
     let max = size.saturating_sub(width);
     gen.out.write(b"  cmp rax, ");
