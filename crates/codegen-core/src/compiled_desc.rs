@@ -55,11 +55,14 @@ pub const COMPILED_DESC_APERTURE_CAP: usize = 8;
 /// Maximum number of devices.
 pub const COMPILED_DESC_DEVICE_CAP: usize = 16;
 
-/// Maximum number of registers per device.
-pub const COMPILED_DESC_REGISTER_CAP: usize = 32;
+/// Maximum number of registers per device. Host-side only — the on-device
+/// board table (`lmod::board_table`) carries apertures and the platform hash,
+/// never register rows — so the cap can follow real board tables (the RP2350
+/// IO_BANK0 table alone declares 120 rows).
+pub const COMPILED_DESC_REGISTER_CAP: usize = 128;
 
-/// Maximum serialized size (16 devices × 32 registers × ~62 B + apertures).
-pub const COMPILED_DESC_MAX_BYTES: usize = 32 * 1024;
+/// Maximum serialized size (16 devices × 128 registers × ~40 B + apertures).
+pub const COMPILED_DESC_MAX_BYTES: usize = 96 * 1024;
 
 const MAGIC: &[u8; 4] = b"TYDP";
 const FORMAT_VER: u8 = 4;
@@ -72,6 +75,7 @@ pub const REG_ACCESS_RW: u8 = 2;
 pub const REG_WRITE_PLAIN: u8 = 0;
 pub const REG_WRITE_W1S: u8 = 1;
 pub const REG_WRITE_W1C: u8 = 2;
+pub const REG_WRITE_XOR: u8 = 3;
 pub const REG_READ_PLAIN: u8 = 0;
 pub const REG_READ_EFFECTFUL: u8 = 1;
 pub const REG_BARRIER_NONE: u8 = 0;
@@ -209,7 +213,7 @@ impl CompiledDescError {
             Self::BadVersion => "unsupported compiled-descriptor format version",
             Self::TooManyApertures => "too many apertures (> 8)",
             Self::TooManyDevices => "too many devices (> 16)",
-            Self::TooManyRegisters => "too many registers in a device (> 32)",
+            Self::TooManyRegisters => "too many registers in a device (> 128)",
             Self::BufferTooSmall => "output buffer too small for compiled descriptor",
             Self::Truncated => "compiled descriptor truncated",
             Self::BadNameLen => "aperture name length exceeds 32 bytes",
@@ -664,7 +668,7 @@ fn aperture_kind_disc(k: MmioApertureKind) -> u8 {
 /// module's fused `access_mask` is a subset of it (E5223). Host-side only —
 /// the device loads the precomputed bytes.
 pub fn aperture_capability(cd: &CompiledDescriptor, aperture_id: u16) -> u8 {
-    use ir::{ACCESS_EFFECTFUL_READ, ACCESS_READ, ACCESS_W1C, ACCESS_W1S, ACCESS_WRITE};
+    use ir::{ACCESS_EFFECTFUL_READ, ACCESS_READ, ACCESS_W1C, ACCESS_W1S, ACCESS_WRITE, ACCESS_XOR};
     let mut cap = 0u8;
     for d in cd.devices() {
         if d.aperture != aperture_id {
@@ -680,6 +684,7 @@ pub fn aperture_capability(cd: &CompiledDescriptor, aperture_id: u16) -> u8 {
             match r.write_kind {
                 REG_WRITE_W1S => cap |= ACCESS_W1S,
                 REG_WRITE_W1C => cap |= ACCESS_W1C,
+                REG_WRITE_XOR => cap |= ACCESS_XOR,
                 _ => {}
             }
             if r.read_kind == REG_READ_EFFECTFUL {

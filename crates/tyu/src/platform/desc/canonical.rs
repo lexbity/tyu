@@ -45,6 +45,7 @@ pub fn canonical_bytes(desc: &Descriptor) -> Vec<u8> {
         encode_str(&mut out, &w.name);
         encode_u8(&mut out, aperture_kind_disc(w.kind));
         encode_u8(&mut out, reloc_isa_disc(w.reloc_isa));
+        encode_u8(&mut out, w.scratch as u8);
         encode_u64(&mut out, w.base.unwrap_or(0));
         encode_u32(&mut out, w.size);
     }
@@ -171,6 +172,7 @@ fn write_kind_disc(w: WriteKind) -> u8 {
         WriteKind::Plain => 0,
         WriteKind::W1s => 1,
         WriteKind::W1c => 2,
+        WriteKind::Xor => 3,
     }
 }
 

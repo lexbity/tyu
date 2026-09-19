@@ -272,6 +272,7 @@ fn descriptor_instance_meta(
             codegen_core::compiled_desc::REG_WRITE_PLAIN => ir::WriteKind::Plain,
             codegen_core::compiled_desc::REG_WRITE_W1C => ir::WriteKind::W1c,
             codegen_core::compiled_desc::REG_WRITE_W1S => ir::WriteKind::W1s,
+            codegen_core::compiled_desc::REG_WRITE_XOR => ir::WriteKind::Xor,
             _ => return Err(TcError::MmioUnknownRegisterKind { span: Span::UNKNOWN }),
         };
         let read_kind = match r.read_kind {

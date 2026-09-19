@@ -23,6 +23,14 @@ w1c    emulated  ld        no emulated apertures on ARM
 w1c    emulated  st        no emulated apertures on ARM
 w1c    emulated  field-ld  no emulated apertures on ARM
 w1c    emulated  field-st  no emulated apertures on ARM
+xor    bus       ld        ldr*
+xor    bus       st        RMW eor
+xor    bus       field-ld  ldr*
+xor    bus       field-st  RMW field
+xor    emulated  ld        no emulated apertures on ARM
+xor    emulated  st        no emulated apertures on ARM
+xor    emulated  field-ld  no emulated apertures on ARM
+xor    emulated  field-st  no emulated apertures on ARM
 # compile-time guards (all backends, any strategy / aperture kind)
 any any field-st-on-effectful E3642 phantom-read (R1)
 any any access-over-atomic_max E3643 over-wide (R2)
@@ -31,9 +39,10 @@ any any access-over-atomic_max E3643 over-wide (R2)
 #   plain  bus       ld/st      mmio_smoke_{arm,riscv}
 #   w1s    bus       st         mmio_strategies_{arm,riscv} (RMW or/orr)
 #   w1c    bus       st         mmio_strategies_{arm,riscv} (RMW and/bic)
+#   xor    bus       st         mmio_strategies_{arm,riscv} (RMW xor/eor)
 #   field-ld/st       bus       mmio_strategies_* (FIFO32 field via brace block)
 #   plain  emulated  ld/st      mmio_smoke_x86
-#   w1s/w1c emulated st         mmio_strategies_x86 (RMW or / RMW andn)
+#   w1s/w1c/xor emulated st      mmio_strategies_x86 (RMW or / RMW andn / RMW xor)
 #   E3642  any        field-st-on-effectful  platform_resolution::e3642_*
 #   E3643  any        over-atomic_max        platform_resolution::e3643_over_wide
 # riscv MMIO strategy matrix (design doc §5.6)
@@ -61,6 +70,14 @@ w1c    emulated  ld        no emulated apertures on RISC-V
 w1c    emulated  st        no emulated apertures on RISC-V
 w1c    emulated  field-ld  no emulated apertures on RISC-V
 w1c    emulated  field-st  no emulated apertures on RISC-V
+xor    bus       ld        l*
+xor    bus       st        RMW xor
+xor    bus       field-ld  l*
+xor    bus       field-st  RMW field
+xor    emulated  ld        no emulated apertures on RISC-V
+xor    emulated  st        no emulated apertures on RISC-V
+xor    emulated  field-ld  no emulated apertures on RISC-V
+xor    emulated  field-st  no emulated apertures on RISC-V
 # compile-time guards (all backends, any strategy / aperture kind)
 any any field-st-on-effectful E3642 phantom-read (R1)
 any any access-over-atomic_max E3643 over-wide (R2)
@@ -69,9 +86,10 @@ any any access-over-atomic_max E3643 over-wide (R2)
 #   plain  bus       ld/st      mmio_smoke_{arm,riscv}
 #   w1s    bus       st         mmio_strategies_{arm,riscv} (RMW or/orr)
 #   w1c    bus       st         mmio_strategies_{arm,riscv} (RMW and/bic)
+#   xor    bus       st         mmio_strategies_{arm,riscv} (RMW xor/eor)
 #   field-ld/st       bus       mmio_strategies_* (FIFO32 field via brace block)
 #   plain  emulated  ld/st      mmio_smoke_x86
-#   w1s/w1c emulated st         mmio_strategies_x86 (RMW or / RMW andn)
+#   w1s/w1c/xor emulated st      mmio_strategies_x86 (RMW or / RMW andn / RMW xor)
 #   E3642  any        field-st-on-effectful  platform_resolution::e3642_*
 #   E3643  any        over-atomic_max        platform_resolution::e3643_over_wide
 # x86_64 MMIO strategy matrix (design doc §5.6)
@@ -99,6 +117,14 @@ w1c    emulated  ld        mov
 w1c    emulated  st        RMW andn
 w1c    emulated  field-ld  mov
 w1c    emulated  field-st  RMW field
+xor    bus       ld        no bus apertures on x86 targets today
+xor    bus       st        no bus apertures on x86 targets today
+xor    bus       field-ld  no bus apertures on x86 targets today
+xor    bus       field-st  no bus apertures on x86 targets today
+xor    emulated  ld        mov
+xor    emulated  st        RMW xor
+xor    emulated  field-ld  mov
+xor    emulated  field-st  RMW field
 # compile-time guards (all backends, any strategy / aperture kind)
 any any field-st-on-effectful E3642 phantom-read (R1)
 any any access-over-atomic_max E3643 over-wide (R2)
@@ -107,8 +133,9 @@ any any access-over-atomic_max E3643 over-wide (R2)
 #   plain  bus       ld/st      mmio_smoke_{arm,riscv}
 #   w1s    bus       st         mmio_strategies_{arm,riscv} (RMW or/orr)
 #   w1c    bus       st         mmio_strategies_{arm,riscv} (RMW and/bic)
+#   xor    bus       st         mmio_strategies_{arm,riscv} (RMW xor/eor)
 #   field-ld/st       bus       mmio_strategies_* (FIFO32 field via brace block)
 #   plain  emulated  ld/st      mmio_smoke_x86
-#   w1s/w1c emulated st         mmio_strategies_x86 (RMW or / RMW andn)
+#   w1s/w1c/xor emulated st      mmio_strategies_x86 (RMW or / RMW andn / RMW xor)
 #   E3642  any        field-st-on-effectful  platform_resolution::e3642_*
 #   E3643  any        over-atomic_max        platform_resolution::e3643_over_wide

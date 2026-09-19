@@ -1,12 +1,12 @@
 module platform/gpio;
 : platform.gpio.init ( usize usize -- )
-  # bare-metal: QEMU stub backed by runtime assembly
+  # implementation: metal runtime asm (declared in the pack descriptor)
 ;
 : platform.gpio.write ( usize bool -- )
-  # bare-metal: QEMU stub backed by runtime assembly
+  # implementation: metal runtime asm (declared in the pack descriptor)
 ;
 : platform.gpio.read ( usize -- bool )
-  # bare-metal: QEMU stub backed by runtime assembly
+  # implementation: metal runtime asm (declared in the pack descriptor)
 ;
 export { platform.gpio.init platform.gpio.write platform.gpio.read };
 end;

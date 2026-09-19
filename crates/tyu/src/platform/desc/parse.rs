@@ -69,6 +69,7 @@ pub fn parse_descriptor(text: &str) -> Result<Option<Descriptor>, DescriptorErro
                 base: w.base,
                 size: w.size,
                 reloc_isa: w.bind.as_deref().map(parse_reloc_isa).transpose()?,
+                scratch: w.scratch,
             })
         })
         .collect::<Result<Vec<_>, DescriptorError>>()?;
@@ -211,7 +212,8 @@ fn parse_write_kind(s: &str) -> Result<WriteKind, DescriptorError> {
         "plain" => Ok(WriteKind::Plain),
         "w1s" => Ok(WriteKind::W1s),
         "w1c" => Ok(WriteKind::W1c),
-        other => Err(unknown_kind("write kind", other, &["plain", "w1s", "w1c"])),
+        "xor" => Ok(WriteKind::Xor),
+        other => Err(unknown_kind("write kind", other, &["plain", "w1s", "w1c", "xor"])),
     }
 }
 
@@ -314,6 +316,9 @@ struct RawAperture {
     /// Optional `bind = "arm-thumb-ldr-literal" | "riscv-hi20-lo12"` (P6).
     #[serde(default)]
     bind: Option<String>,
+    /// Declared test scratch: aperture may alias a `[memory]` region (D-14).
+    #[serde(default)]
+    scratch: bool,
 }
 
 #[derive(serde::Deserialize)]

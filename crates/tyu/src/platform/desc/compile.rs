@@ -16,6 +16,7 @@ use codegen_core::compiled_desc::{
     COMPILED_DESC_REGISTER_CAP, COMPILED_DESC_APERTURE_CAP, REG_ACCESS_RO, REG_ACCESS_RW,
     REG_ACCESS_WO, REG_BARRIER_AFTER, REG_BARRIER_BEFORE, REG_BARRIER_BOTH, REG_BARRIER_NONE,
     REG_READ_EFFECTFUL, REG_READ_PLAIN, REG_WRITE_PLAIN, REG_WRITE_W1C, REG_WRITE_W1S,
+    REG_WRITE_XOR,
 };
 use codegen_core::{MmioApertureKind, MmioApertureSpec};
 
@@ -123,6 +124,7 @@ pub fn compile(desc: &Descriptor) -> Result<CompiledDescriptor, DescriptorError>
                     WriteKind::Plain => REG_WRITE_PLAIN,
                     WriteKind::W1s => REG_WRITE_W1S,
                     WriteKind::W1c => REG_WRITE_W1C,
+                    WriteKind::Xor => REG_WRITE_XOR,
                 },
                 read_kind: match r.read_kind {
                     ReadKind::Plain => REG_READ_PLAIN,

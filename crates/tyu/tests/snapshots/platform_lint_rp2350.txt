@@ -1,149 +1,714 @@
 platform rp2350: ok
 descriptor rp2350 schema=2 family=rp2350
-platform-hash 0x83c970828a831235
-apertures 4
+platform-hash 0xba4f95b2a4a8eb61
+apertures 3
   [0] apb kind=bus bind=arm-thumb-ldr-literal base=0x40000000 size=0x1000000
-  [1] mmio kind=bus bind=arm-thumb-ldr-literal base=0x20000000 size=0x1000
-  [2] pio kind=bus bind=arm-thumb-ldr-literal base=0x50200000 size=0x200000
-  [3] sio kind=bus bind=arm-thumb-ldr-literal base=0xd0000000 size=0x1000
-devices 12
-  GPIO gpio0 aperture=0 base_offset=0x14000 extent=0xdc
-    GPIO0_CTRL offset=0x0000 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    GPIO0_STATUS offset=0x0004 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    GPIO1_CTRL offset=0x0008 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    GPIO1_STATUS offset=0x000c width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    GPIO15_CTRL offset=0x0078 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    GPIO15_STATUS offset=0x007c width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    INTR0 offset=0x00cc width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    INTR0 irq=13
-    INTR1 offset=0x00d0 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    INTR1 irq=13
-    INTR2 offset=0x00d4 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    INTR2 irq=13
-    INTR3 offset=0x00d8 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    INTR3 irq=13
-  UART uart0 aperture=0 base_offset=0x34000 extent=0x48
+  [1] pio kind=bus bind=arm-thumb-ldr-literal base=0x50200000 size=0x200000
+  [2] sio kind=bus bind=arm-thumb-ldr-literal base=0xd0000000 size=0x1000
+devices 14
+  GPIO gpio0 aperture=0 base_offset=0x28000 extent=0x290
+    GPIO0_STATUS offset=0x0000 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO0_CTRL offset=0x0004 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO1_STATUS offset=0x0008 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO1_CTRL offset=0x000c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO2_STATUS offset=0x0010 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO2_CTRL offset=0x0014 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO3_STATUS offset=0x0018 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO3_CTRL offset=0x001c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO4_STATUS offset=0x0020 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO4_CTRL offset=0x0024 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO5_STATUS offset=0x0028 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO5_CTRL offset=0x002c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO6_STATUS offset=0x0030 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO6_CTRL offset=0x0034 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO7_STATUS offset=0x0038 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO7_CTRL offset=0x003c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO8_STATUS offset=0x0040 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO8_CTRL offset=0x0044 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO9_STATUS offset=0x0048 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO9_CTRL offset=0x004c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO10_STATUS offset=0x0050 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO10_CTRL offset=0x0054 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO11_STATUS offset=0x0058 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO11_CTRL offset=0x005c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO12_STATUS offset=0x0060 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO12_CTRL offset=0x0064 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO13_STATUS offset=0x0068 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO13_CTRL offset=0x006c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO14_STATUS offset=0x0070 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO14_CTRL offset=0x0074 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO15_STATUS offset=0x0078 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO15_CTRL offset=0x007c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO16_STATUS offset=0x0080 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO16_CTRL offset=0x0084 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO17_STATUS offset=0x0088 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO17_CTRL offset=0x008c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO18_STATUS offset=0x0090 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO18_CTRL offset=0x0094 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO19_STATUS offset=0x0098 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO19_CTRL offset=0x009c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO20_STATUS offset=0x00a0 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO20_CTRL offset=0x00a4 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO21_STATUS offset=0x00a8 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO21_CTRL offset=0x00ac width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO22_STATUS offset=0x00b0 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO22_CTRL offset=0x00b4 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO23_STATUS offset=0x00b8 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO23_CTRL offset=0x00bc width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO24_STATUS offset=0x00c0 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO24_CTRL offset=0x00c4 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO25_STATUS offset=0x00c8 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO25_CTRL offset=0x00cc width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO26_STATUS offset=0x00d0 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO26_CTRL offset=0x00d4 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO27_STATUS offset=0x00d8 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO27_CTRL offset=0x00dc width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO28_STATUS offset=0x00e0 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO28_CTRL offset=0x00e4 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO29_STATUS offset=0x00e8 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO29_CTRL offset=0x00ec width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO30_STATUS offset=0x00f0 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO30_CTRL offset=0x00f4 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO31_STATUS offset=0x00f8 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO31_CTRL offset=0x00fc width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO32_STATUS offset=0x0100 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO32_CTRL offset=0x0104 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO33_STATUS offset=0x0108 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO33_CTRL offset=0x010c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO34_STATUS offset=0x0110 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO34_CTRL offset=0x0114 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO35_STATUS offset=0x0118 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO35_CTRL offset=0x011c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO36_STATUS offset=0x0120 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO36_CTRL offset=0x0124 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO37_STATUS offset=0x0128 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO37_CTRL offset=0x012c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO38_STATUS offset=0x0130 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO38_CTRL offset=0x0134 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO39_STATUS offset=0x0138 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO39_CTRL offset=0x013c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO40_STATUS offset=0x0140 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO40_CTRL offset=0x0144 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO41_STATUS offset=0x0148 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO41_CTRL offset=0x014c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO42_STATUS offset=0x0150 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO42_CTRL offset=0x0154 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO43_STATUS offset=0x0158 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO43_CTRL offset=0x015c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO44_STATUS offset=0x0160 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO44_CTRL offset=0x0164 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO45_STATUS offset=0x0168 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO45_CTRL offset=0x016c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO46_STATUS offset=0x0170 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO46_CTRL offset=0x0174 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO47_STATUS offset=0x0178 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO47_CTRL offset=0x017c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INTR0 offset=0x0230 width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INTR0 irq=21
+    INTR1 offset=0x0234 width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INTR1 irq=21
+    INTR2 offset=0x0238 width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INTR2 irq=21
+    INTR3 offset=0x023c width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INTR3 irq=21
+    INTR4 offset=0x0240 width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INTR4 irq=21
+    INTR5 offset=0x0244 width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INTR5 irq=21
+    PROC0_INTE0 offset=0x0248 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    PROC0_INTE0 irq=21
+    PROC0_INTE1 offset=0x024c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    PROC0_INTE1 irq=21
+    PROC0_INTE2 offset=0x0250 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    PROC0_INTE2 irq=21
+    PROC0_INTE3 offset=0x0254 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    PROC0_INTE3 irq=21
+    PROC0_INTE4 offset=0x0258 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    PROC0_INTE4 irq=21
+    PROC0_INTE5 offset=0x025c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    PROC0_INTE5 irq=21
+    PROC0_INTF0 offset=0x0260 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    PROC0_INTF1 offset=0x0264 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    PROC0_INTF2 offset=0x0268 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    PROC0_INTF3 offset=0x026c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    PROC0_INTF4 offset=0x0270 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    PROC0_INTF5 offset=0x0274 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    PROC0_INTS0 offset=0x0278 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    PROC0_INTS0 irq=21
+    PROC0_INTS1 offset=0x027c width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    PROC0_INTS1 irq=21
+    PROC0_INTS2 offset=0x0280 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    PROC0_INTS2 irq=21
+    PROC0_INTS3 offset=0x0284 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    PROC0_INTS3 irq=21
+    PROC0_INTS4 offset=0x0288 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    PROC0_INTS4 irq=21
+    PROC0_INTS5 offset=0x028c width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    PROC0_INTS5 irq=21
+  PADS pads_bank0 aperture=0 base_offset=0x38000 extent=0xcc
+    VOLTAGE_SELECT offset=0x0000 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO0 offset=0x0004 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO1 offset=0x0008 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO2 offset=0x000c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO3 offset=0x0010 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO4 offset=0x0014 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO5 offset=0x0018 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO6 offset=0x001c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO7 offset=0x0020 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO8 offset=0x0024 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO9 offset=0x0028 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO10 offset=0x002c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO11 offset=0x0030 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO12 offset=0x0034 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO13 offset=0x0038 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO14 offset=0x003c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO15 offset=0x0040 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO16 offset=0x0044 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO17 offset=0x0048 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO18 offset=0x004c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO19 offset=0x0050 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO20 offset=0x0054 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO21 offset=0x0058 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO22 offset=0x005c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO23 offset=0x0060 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO24 offset=0x0064 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO25 offset=0x0068 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO26 offset=0x006c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO27 offset=0x0070 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO28 offset=0x0074 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO29 offset=0x0078 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO30 offset=0x007c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO31 offset=0x0080 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO32 offset=0x0084 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO33 offset=0x0088 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO34 offset=0x008c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO35 offset=0x0090 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO36 offset=0x0094 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO37 offset=0x0098 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO38 offset=0x009c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO39 offset=0x00a0 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO40 offset=0x00a4 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO41 offset=0x00a8 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO42 offset=0x00ac width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO43 offset=0x00b0 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO44 offset=0x00b4 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO45 offset=0x00b8 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO46 offset=0x00bc width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO47 offset=0x00c0 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SWCLK offset=0x00c4 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SWD offset=0x00c8 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+  UART uart0 aperture=0 base_offset=0x70000 extent=0x4c
     UARTDR offset=0x0000 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    UARTRSR_ECR offset=0x0004 width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    UARTRSR offset=0x0004 width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
     UARTFR offset=0x0018 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    UARTILPR offset=0x0020 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    UARTIBRD offset=0x0024 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    UARTFBRD offset=0x0028 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
     UARTLCR_H offset=0x002c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
     UARTCR offset=0x0030 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    UARTIFLS offset=0x0034 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
     UARTIMSC offset=0x0038 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
     UARTRIS offset=0x003c width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    UARTRIS irq=20
+    UARTRIS irq=33
     UARTMIS offset=0x0040 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    UARTMIS irq=20
+    UARTMIS irq=33
     UARTICR offset=0x0044 width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    UARTICR irq=20
-  UART uart1 aperture=0 base_offset=0x38000 extent=0x48
+    UARTICR irq=33
+    UARTDMACR offset=0x0048 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+  UART uart1 aperture=0 base_offset=0x78000 extent=0x4c
     UARTDR offset=0x0000 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    UARTRSR offset=0x0004 width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
     UARTFR offset=0x0018 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    UARTILPR offset=0x0020 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    UARTIBRD offset=0x0024 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    UARTFBRD offset=0x0028 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    UARTLCR_H offset=0x002c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
     UARTCR offset=0x0030 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    UARTIFLS offset=0x0034 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    UARTIMSC offset=0x0038 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
     UARTRIS offset=0x003c width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    UARTRIS irq=21
+    UARTRIS irq=34
+    UARTMIS offset=0x0040 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    UARTMIS irq=34
     UARTICR offset=0x0044 width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    UARTICR irq=21
-  SPI spi0 aperture=0 base_offset=0x3c000 extent=0x24
+    UARTICR irq=34
+    UARTDMACR offset=0x0048 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+  SPI spi0 aperture=0 base_offset=0x80000 extent=0x28
     SSPCR0 offset=0x0000 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
     SSPCR1 offset=0x0004 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
     SSPDR offset=0x0008 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
     SSPSR offset=0x000c width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SSPCPSR offset=0x0010 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SSPIMSC offset=0x0014 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
     SSPRIS offset=0x0018 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    SSPRIS irq=22
+    SSPRIS irq=31
+    SSPMIS offset=0x001c width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SSPMIS irq=31
     SSPICR offset=0x0020 width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    SSPICR irq=22
-  SPI spi1 aperture=0 base_offset=0x40000 extent=0x24
+    SSPICR irq=31
+    SSPDMACR offset=0x0024 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+  SPI spi1 aperture=0 base_offset=0x88000 extent=0x28
     SSPCR0 offset=0x0000 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SSPCR1 offset=0x0004 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
     SSPDR offset=0x0008 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SSPSR offset=0x000c width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SSPCPSR offset=0x0010 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SSPIMSC offset=0x0014 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
     SSPRIS offset=0x0018 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    SSPRIS irq=23
+    SSPRIS irq=32
+    SSPMIS offset=0x001c width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SSPMIS irq=32
     SSPICR offset=0x0020 width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    SSPICR irq=23
-  I2C i2c0 aperture=0 base_offset=0x44000 extent=0x74
+    SSPICR irq=32
+    SSPDMACR offset=0x0024 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+  I2C i2c0 aperture=0 base_offset=0x90000 extent=0x100
     IC_CON offset=0x0000 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
     IC_TAR offset=0x0004 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_SAR offset=0x0008 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
     IC_DATA_CMD offset=0x0010 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_SS_SCL_HCNT offset=0x0014 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_SS_SCL_LCNT offset=0x0018 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_FS_SCL_HCNT offset=0x001c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_FS_SCL_LCNT offset=0x0020 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
     IC_INTR_STAT offset=0x002c width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    IC_INTR_STAT irq=24
+    IC_INTR_STAT irq=36
     IC_INTR_MASK offset=0x0030 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_INTR_MASK irq=36
     IC_RAW_INTR_STAT offset=0x0034 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    IC_RAW_INTR_STAT irq=24
+    IC_RAW_INTR_STAT irq=36
+    IC_RX_TL offset=0x0038 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_TX_TL offset=0x003c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
     IC_CLR_INTR offset=0x0040 width=32 access=ro write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    IC_CLR_INTR irq=24
+    IC_CLR_INTR irq=36
+    IC_CLR_RX_UNDER offset=0x0044 width=32 access=ro write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_CLR_RX_UNDER irq=36
+    IC_CLR_RX_OVER offset=0x0048 width=32 access=ro write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_CLR_RX_OVER irq=36
+    IC_CLR_TX_OVER offset=0x004c width=32 access=ro write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_CLR_TX_OVER irq=36
+    IC_CLR_RD_REQ offset=0x0050 width=32 access=ro write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_CLR_RD_REQ irq=36
     IC_CLR_TX_ABRT offset=0x0054 width=32 access=ro write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    IC_CLR_TX_ABRT irq=24
+    IC_CLR_TX_ABRT irq=36
+    IC_CLR_RX_DONE offset=0x0058 width=32 access=ro write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_CLR_RX_DONE irq=36
+    IC_CLR_ACTIVITY offset=0x005c width=32 access=ro write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_CLR_ACTIVITY irq=36
+    IC_CLR_STOP_DET offset=0x0060 width=32 access=ro write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_CLR_STOP_DET irq=36
+    IC_CLR_START_DET offset=0x0064 width=32 access=ro write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_CLR_START_DET irq=36
+    IC_CLR_GEN_CALL offset=0x0068 width=32 access=ro write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_CLR_GEN_CALL irq=36
+    IC_CLR_RESTART_DET offset=0x00a8 width=32 access=ro write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_CLR_RESTART_DET irq=36
     IC_ENABLE offset=0x006c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
     IC_STATUS offset=0x0070 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-  I2C i2c1 aperture=0 base_offset=0x48000 extent=0x44
+    IC_TXFLR offset=0x0074 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_RXFLR offset=0x0078 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_SDA_HOLD offset=0x007c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_TX_ABRT_SOURCE offset=0x0080 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_SLV_DATA_NACK_ONLY offset=0x0084 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_DMA_CR offset=0x0088 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_DMA_TDLR offset=0x008c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_DMA_RDLR offset=0x0090 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_SDA_SETUP offset=0x0094 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_ACK_GENERAL_CALL offset=0x0098 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_ENABLE_STATUS offset=0x009c width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_FS_SPKLEN offset=0x00a0 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_COMP_PARAM_1 offset=0x00f4 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_COMP_VERSION offset=0x00f8 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_COMP_TYPE offset=0x00fc width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+  I2C i2c1 aperture=0 base_offset=0x98000 extent=0x100
     IC_CON offset=0x0000 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_TAR offset=0x0004 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_SAR offset=0x0008 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
     IC_DATA_CMD offset=0x0010 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_SS_SCL_HCNT offset=0x0014 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_SS_SCL_LCNT offset=0x0018 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_FS_SCL_HCNT offset=0x001c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_FS_SCL_LCNT offset=0x0020 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
     IC_INTR_STAT offset=0x002c width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    IC_INTR_STAT irq=25
+    IC_INTR_STAT irq=37
+    IC_INTR_MASK offset=0x0030 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_INTR_MASK irq=37
+    IC_RAW_INTR_STAT offset=0x0034 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_RAW_INTR_STAT irq=37
+    IC_RX_TL offset=0x0038 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_TX_TL offset=0x003c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
     IC_CLR_INTR offset=0x0040 width=32 access=ro write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    IC_CLR_INTR irq=25
-  Timer timer aperture=0 base_offset=0x54000 extent=0x44
+    IC_CLR_INTR irq=37
+    IC_CLR_RX_UNDER offset=0x0044 width=32 access=ro write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_CLR_RX_UNDER irq=37
+    IC_CLR_RX_OVER offset=0x0048 width=32 access=ro write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_CLR_RX_OVER irq=37
+    IC_CLR_TX_OVER offset=0x004c width=32 access=ro write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_CLR_TX_OVER irq=37
+    IC_CLR_RD_REQ offset=0x0050 width=32 access=ro write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_CLR_RD_REQ irq=37
+    IC_CLR_TX_ABRT offset=0x0054 width=32 access=ro write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_CLR_TX_ABRT irq=37
+    IC_CLR_RX_DONE offset=0x0058 width=32 access=ro write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_CLR_RX_DONE irq=37
+    IC_CLR_ACTIVITY offset=0x005c width=32 access=ro write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_CLR_ACTIVITY irq=37
+    IC_CLR_STOP_DET offset=0x0060 width=32 access=ro write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_CLR_STOP_DET irq=37
+    IC_CLR_START_DET offset=0x0064 width=32 access=ro write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_CLR_START_DET irq=37
+    IC_CLR_GEN_CALL offset=0x0068 width=32 access=ro write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_CLR_GEN_CALL irq=37
+    IC_CLR_RESTART_DET offset=0x00a8 width=32 access=ro write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_CLR_RESTART_DET irq=37
+    IC_ENABLE offset=0x006c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_STATUS offset=0x0070 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_TXFLR offset=0x0074 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_RXFLR offset=0x0078 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_SDA_HOLD offset=0x007c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_TX_ABRT_SOURCE offset=0x0080 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_SLV_DATA_NACK_ONLY offset=0x0084 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_DMA_CR offset=0x0088 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_DMA_TDLR offset=0x008c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_DMA_RDLR offset=0x0090 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_SDA_SETUP offset=0x0094 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_ACK_GENERAL_CALL offset=0x0098 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_ENABLE_STATUS offset=0x009c width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_FS_SPKLEN offset=0x00a0 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_COMP_PARAM_1 offset=0x00f4 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_COMP_VERSION offset=0x00f8 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IC_COMP_TYPE offset=0x00fc width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+  TIMER timer0 aperture=0 base_offset=0xb0000 extent=0x4c
+    TIMEHW offset=0x0000 width=32 access=wo write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    TIMELW offset=0x0004 width=32 access=wo write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
     TIMEHR offset=0x0008 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
     TIMELR offset=0x000c width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    TIMERAWL offset=0x0010 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    TIMERARWH offset=0x0014 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    ALARM0 offset=0x0020 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    ALARM1 offset=0x0024 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    ALARM2 offset=0x0028 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    ALARM3 offset=0x002c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    ARMED offset=0x0030 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    TIMERALARM0 offset=0x0034 width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    TIMERALARM0 irq=0
-    TIMERALARM1 offset=0x0038 width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    TIMERALARM1 irq=1
-    TIMERALARM2 offset=0x003c width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    TIMERALARM2 irq=2
-    TIMERALARM3 offset=0x0040 width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    TIMERALARM3 irq=3
-  QMI qmi aperture=0 base_offset=0x60000 extent=0x5c
-    FFLAGS offset=0x0000 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    SS_CTRL offset=0x0008 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    SS_CMD offset=0x000c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    SS_DATA0 offset=0x0010 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    SS_DATA1 offset=0x0014 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    SS_DATA2 offset=0x0018 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    SS_DATA3 offset=0x001c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    M0_FIFO offset=0x0058 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    M0_FIFO irq=6
-  PIO pio0 aperture=2 base_offset=0x0 extent=0xd6
+    ALARM0 offset=0x0010 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    ALARM0 irq=0
+    ALARM1 offset=0x0014 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    ALARM1 irq=1
+    ALARM2 offset=0x0018 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    ALARM2 irq=2
+    ALARM3 offset=0x001c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    ALARM3 irq=3
+    ARMED offset=0x0020 width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    TIMERAWH offset=0x0024 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    TIMERAWL offset=0x0028 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    DBGPAUSE offset=0x002c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    PAUSE offset=0x0030 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    LOCKED offset=0x0034 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SOURCE offset=0x0038 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INTR offset=0x003c width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INTE offset=0x0040 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INTF offset=0x0044 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INTS offset=0x0048 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+  TIMER timer1 aperture=0 base_offset=0xb8000 extent=0x4c
+    TIMEHW offset=0x0000 width=32 access=wo write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    TIMELW offset=0x0004 width=32 access=wo write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    TIMEHR offset=0x0008 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    TIMELR offset=0x000c width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    ALARM0 offset=0x0010 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    ALARM0 irq=4
+    ALARM1 offset=0x0014 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    ALARM1 irq=5
+    ALARM2 offset=0x0018 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    ALARM2 irq=6
+    ALARM3 offset=0x001c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    ALARM3 irq=7
+    ARMED offset=0x0020 width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    TIMERAWH offset=0x0024 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    TIMERAWL offset=0x0028 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    DBGPAUSE offset=0x002c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    PAUSE offset=0x0030 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    LOCKED offset=0x0034 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SOURCE offset=0x0038 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INTR offset=0x003c width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INTE offset=0x0040 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INTF offset=0x0044 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INTS offset=0x0048 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+  QMI qmi aperture=0 base_offset=0xd0000 extent=0xc
+    DIRECT_CSR offset=0x0000 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    DIRECT_TX offset=0x0004 width=32 access=wo write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    DIRECT_RX offset=0x0008 width=32 access=ro write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+  PIO pio0 aperture=1 base_offset=0x0 extent=0x188
     CTRL offset=0x0000 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
     FSTAT offset=0x0004 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    FLEVEL offset=0x0008 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    FDEBUG offset=0x0008 width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    FLEVEL offset=0x000c width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
     TXF0 offset=0x0010 width=32 access=wo write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    TXF1 offset=0x0014 width=32 access=wo write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    TXF2 offset=0x0018 width=32 access=wo write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    TXF3 offset=0x001c width=32 access=wo write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
     RXF0 offset=0x0020 width=32 access=ro write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    IRQ offset=0x0024 width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    IRQ irq=7
-    INSTR_MEM0 offset=0x0040 width=16 access=rw write=plain read=plain atomic=16 mask=0xffff reset=0x0 barrier=none
-    INSTR_MEM2 offset=0x0048 width=16 access=rw write=plain read=plain atomic=16 mask=0xffff reset=0x0 barrier=none
-    SM0_CLKDIV offset=0x00c0 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    SM0_EXECCTRL offset=0x00c8 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    SM0_SHIFTCTRL offset=0x00cc width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    SM0_INSTR offset=0x00d4 width=16 access=rw write=plain read=plain atomic=16 mask=0xffff reset=0x0 barrier=none
-  PIO pio1 aperture=2 base_offset=0x10000 extent=0x28
+    RXF1 offset=0x0024 width=32 access=ro write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    RXF2 offset=0x0028 width=32 access=ro write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    RXF3 offset=0x002c width=32 access=ro write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IRQ offset=0x0030 width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IRQ_FORCE offset=0x0034 width=32 access=wo write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INPUT_SYNC_BYPASS offset=0x0038 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    DBG_PADOUT offset=0x003c width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    DBG_PADOE offset=0x0040 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    DBG_CFGINFO offset=0x0044 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM0 offset=0x0048 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM1 offset=0x004c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM2 offset=0x0050 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM3 offset=0x0054 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM4 offset=0x0058 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM5 offset=0x005c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM6 offset=0x0060 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM7 offset=0x0064 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM8 offset=0x0068 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM9 offset=0x006c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM10 offset=0x0070 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM11 offset=0x0074 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM12 offset=0x0078 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM13 offset=0x007c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM14 offset=0x0080 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM15 offset=0x0084 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM16 offset=0x0088 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM17 offset=0x008c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM18 offset=0x0090 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM19 offset=0x0094 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM20 offset=0x0098 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM21 offset=0x009c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM22 offset=0x00a0 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM23 offset=0x00a4 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM24 offset=0x00a8 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM25 offset=0x00ac width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM26 offset=0x00b0 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM27 offset=0x00b4 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM28 offset=0x00b8 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM29 offset=0x00bc width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM30 offset=0x00c0 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM31 offset=0x00c4 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM0_CLKDIV offset=0x00c8 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM0_EXECCTRL offset=0x00cc width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM0_SHIFTCTRL offset=0x00d0 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM0_ADDR offset=0x00d4 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM0_INSTR offset=0x00d8 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM0_PINCTRL offset=0x00dc width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM1_CLKDIV offset=0x00e0 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM1_EXECCTRL offset=0x00e4 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM1_SHIFTCTRL offset=0x00e8 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM1_ADDR offset=0x00ec width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM1_INSTR offset=0x00f0 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM1_PINCTRL offset=0x00f4 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM2_CLKDIV offset=0x00f8 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM2_EXECCTRL offset=0x00fc width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM2_SHIFTCTRL offset=0x0100 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM2_ADDR offset=0x0104 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM2_INSTR offset=0x0108 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM2_PINCTRL offset=0x010c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM3_CLKDIV offset=0x0110 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM3_EXECCTRL offset=0x0114 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM3_SHIFTCTRL offset=0x0118 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM3_ADDR offset=0x011c width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM3_INSTR offset=0x0120 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM3_PINCTRL offset=0x0124 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    RXF0_PUTGET0 offset=0x0128 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    RXF0_PUTGET1 offset=0x012c width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    RXF0_PUTGET2 offset=0x0130 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    RXF0_PUTGET3 offset=0x0134 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    RXF1_PUTGET0 offset=0x0138 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    RXF1_PUTGET1 offset=0x013c width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    RXF1_PUTGET2 offset=0x0140 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    RXF1_PUTGET3 offset=0x0144 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    RXF2_PUTGET0 offset=0x0148 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    RXF2_PUTGET1 offset=0x014c width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    RXF2_PUTGET2 offset=0x0150 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    RXF2_PUTGET3 offset=0x0154 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    RXF3_PUTGET0 offset=0x0158 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    RXF3_PUTGET1 offset=0x015c width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    RXF3_PUTGET2 offset=0x0160 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    RXF3_PUTGET3 offset=0x0164 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIOBASE offset=0x0168 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INTR offset=0x016c width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IRQ0_INTE offset=0x0170 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IRQ0_INTE irq=15
+    IRQ0_INTF offset=0x0174 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IRQ0_INTS offset=0x0178 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IRQ0_INTS irq=15
+    IRQ1_INTE offset=0x017c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IRQ1_INTE irq=16
+    IRQ1_INTF offset=0x0180 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IRQ1_INTS offset=0x0184 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IRQ1_INTS irq=16
+  PIO pio1 aperture=1 base_offset=0x100000 extent=0x188
     CTRL offset=0x0000 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
     FSTAT offset=0x0004 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    FDEBUG offset=0x0008 width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    FLEVEL offset=0x000c width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
     TXF0 offset=0x0010 width=32 access=wo write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    TXF1 offset=0x0014 width=32 access=wo write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    TXF2 offset=0x0018 width=32 access=wo write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    TXF3 offset=0x001c width=32 access=wo write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
     RXF0 offset=0x0020 width=32 access=ro write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    IRQ offset=0x0024 width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    IRQ irq=9
-  SIO sio aperture=3 base_offset=0x0 extent=0x68
+    RXF1 offset=0x0024 width=32 access=ro write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    RXF2 offset=0x0028 width=32 access=ro write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    RXF3 offset=0x002c width=32 access=ro write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IRQ offset=0x0030 width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IRQ_FORCE offset=0x0034 width=32 access=wo write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INPUT_SYNC_BYPASS offset=0x0038 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    DBG_PADOUT offset=0x003c width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    DBG_PADOE offset=0x0040 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    DBG_CFGINFO offset=0x0044 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM0 offset=0x0048 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM1 offset=0x004c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM2 offset=0x0050 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM3 offset=0x0054 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM4 offset=0x0058 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM5 offset=0x005c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM6 offset=0x0060 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM7 offset=0x0064 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM8 offset=0x0068 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM9 offset=0x006c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM10 offset=0x0070 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM11 offset=0x0074 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM12 offset=0x0078 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM13 offset=0x007c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM14 offset=0x0080 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM15 offset=0x0084 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM16 offset=0x0088 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM17 offset=0x008c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM18 offset=0x0090 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM19 offset=0x0094 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM20 offset=0x0098 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM21 offset=0x009c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM22 offset=0x00a0 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM23 offset=0x00a4 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM24 offset=0x00a8 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM25 offset=0x00ac width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM26 offset=0x00b0 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM27 offset=0x00b4 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM28 offset=0x00b8 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM29 offset=0x00bc width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM30 offset=0x00c0 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INSTR_MEM31 offset=0x00c4 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM0_CLKDIV offset=0x00c8 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM0_EXECCTRL offset=0x00cc width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM0_SHIFTCTRL offset=0x00d0 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM0_ADDR offset=0x00d4 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM0_INSTR offset=0x00d8 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM0_PINCTRL offset=0x00dc width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM1_CLKDIV offset=0x00e0 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM1_EXECCTRL offset=0x00e4 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM1_SHIFTCTRL offset=0x00e8 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM1_ADDR offset=0x00ec width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM1_INSTR offset=0x00f0 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM1_PINCTRL offset=0x00f4 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM2_CLKDIV offset=0x00f8 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM2_EXECCTRL offset=0x00fc width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM2_SHIFTCTRL offset=0x0100 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM2_ADDR offset=0x0104 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM2_INSTR offset=0x0108 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM2_PINCTRL offset=0x010c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM3_CLKDIV offset=0x0110 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM3_EXECCTRL offset=0x0114 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM3_SHIFTCTRL offset=0x0118 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM3_ADDR offset=0x011c width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM3_INSTR offset=0x0120 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SM3_PINCTRL offset=0x0124 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    RXF0_PUTGET0 offset=0x0128 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    RXF0_PUTGET1 offset=0x012c width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    RXF0_PUTGET2 offset=0x0130 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    RXF0_PUTGET3 offset=0x0134 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    RXF1_PUTGET0 offset=0x0138 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    RXF1_PUTGET1 offset=0x013c width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    RXF1_PUTGET2 offset=0x0140 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    RXF1_PUTGET3 offset=0x0144 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    RXF2_PUTGET0 offset=0x0148 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    RXF2_PUTGET1 offset=0x014c width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    RXF2_PUTGET2 offset=0x0150 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    RXF2_PUTGET3 offset=0x0154 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    RXF3_PUTGET0 offset=0x0158 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    RXF3_PUTGET1 offset=0x015c width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    RXF3_PUTGET2 offset=0x0160 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    RXF3_PUTGET3 offset=0x0164 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIOBASE offset=0x0168 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    INTR offset=0x016c width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IRQ0_INTE offset=0x0170 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IRQ0_INTE irq=17
+    IRQ0_INTF offset=0x0174 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IRQ0_INTS offset=0x0178 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IRQ0_INTS irq=17
+    IRQ1_INTE offset=0x017c width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IRQ1_INTE irq=18
+    IRQ1_INTF offset=0x0180 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IRQ1_INTS offset=0x0184 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    IRQ1_INTS irq=18
+  SIO sio aperture=2 base_offset=0x0 extent=0x1c0
+    CPUID offset=0x0000 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
     GPIO_IN offset=0x0004 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO_HI_IN offset=0x0008 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
     GPIO_OUT offset=0x0010 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    GPIO_OUT_SET offset=0x0014 width=32 access=rw write=w1s read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    GPIO_OUT_CLR offset=0x0018 width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    GPIO_OUT_XOR offset=0x001c width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    GPIO_OE offset=0x0020 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    GPIO_OE_SET offset=0x0024 width=32 access=rw write=w1s read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    GPIO_OE_CLR offset=0x0028 width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO_HI_OUT offset=0x0014 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO_OUT_SET offset=0x0018 width=32 access=rw write=w1s read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO_HI_OUT_SET offset=0x001c width=32 access=rw write=w1s read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO_OUT_CLR offset=0x0020 width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO_HI_OUT_CLR offset=0x0024 width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO_OUT_XOR offset=0x0028 width=32 access=rw write=xor read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO_HI_OUT_XOR offset=0x002c width=32 access=rw write=xor read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO_OE offset=0x0030 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO_HI_OE offset=0x0034 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO_OE_SET offset=0x0038 width=32 access=rw write=w1s read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO_HI_OE_SET offset=0x003c width=32 access=rw write=w1s read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO_OE_CLR offset=0x0040 width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO_HI_OE_CLR offset=0x0044 width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO_OE_XOR offset=0x0048 width=32 access=rw write=xor read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    GPIO_HI_OE_XOR offset=0x004c width=32 access=rw write=xor read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
     FIFO_ST offset=0x0050 width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    FIFO_ST irq=25
     FIFO_WR offset=0x0054 width=32 access=wo write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    FIFO_WR irq=25
     FIFO_RD offset=0x0058 width=32 access=ro write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    IRQ offset=0x0064 width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
-    IRQ irq=15
-allocator region=SRAM offset=0x8400 length=0x77000 impl=glue/region policy=pool-firstfit
+    FIFO_RD irq=25
+    SPINLOCK_ST offset=0x005c width=32 access=ro write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SPINLOCK0 offset=0x0100 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SPINLOCK1 offset=0x0104 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SPINLOCK2 offset=0x0108 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SPINLOCK3 offset=0x010c width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SPINLOCK4 offset=0x0110 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SPINLOCK5 offset=0x0114 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SPINLOCK6 offset=0x0118 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SPINLOCK7 offset=0x011c width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SPINLOCK8 offset=0x0120 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SPINLOCK9 offset=0x0124 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SPINLOCK10 offset=0x0128 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SPINLOCK11 offset=0x012c width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SPINLOCK12 offset=0x0130 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SPINLOCK13 offset=0x0134 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SPINLOCK14 offset=0x0138 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SPINLOCK15 offset=0x013c width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SPINLOCK16 offset=0x0140 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SPINLOCK17 offset=0x0144 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SPINLOCK18 offset=0x0148 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SPINLOCK19 offset=0x014c width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SPINLOCK20 offset=0x0150 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SPINLOCK21 offset=0x0154 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SPINLOCK22 offset=0x0158 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SPINLOCK23 offset=0x015c width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SPINLOCK24 offset=0x0160 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SPINLOCK25 offset=0x0164 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SPINLOCK26 offset=0x0168 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SPINLOCK27 offset=0x016c width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SPINLOCK28 offset=0x0170 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SPINLOCK29 offset=0x0174 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SPINLOCK30 offset=0x0178 width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    SPINLOCK31 offset=0x017c width=32 access=rw write=plain read=effectful atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    DOORBELL_OUT_SET offset=0x0180 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    DOORBELL_OUT_SET irq=26
+    DOORBELL_OUT_CLR offset=0x0184 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    DOORBELL_OUT_CLR irq=26
+    DOORBELL_IN_SET offset=0x0188 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    DOORBELL_IN_SET irq=26
+    DOORBELL_IN_CLR offset=0x018c width=32 access=rw write=w1c read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    DOORBELL_IN_CLR irq=26
+    PERI_NONSEC offset=0x0190 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    RISCV_SOFTIRQ offset=0x01a0 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    MTIME_CTRL offset=0x01a4 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    MTIME offset=0x01b0 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    MTIMEH offset=0x01b4 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    MTIMECMP offset=0x01b8 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+    MTIMECMPH offset=0x01bc width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none
+allocator (none)
 scoped metadata_slots_max=64
-metal.trust (none)
+metal.trust platform.gpio.init, platform.gpio.read, platform.gpio.write, platform.mem.region-alloc, platform.mem.region-create, platform.mem.region-destroy, platform.mem.region-reset, platform.time.now_us, platform.time.reboot, platform.uart.init, platform.uart.rx, platform.uart.tx, testio.exit, testio.write-byte, testio.write-str

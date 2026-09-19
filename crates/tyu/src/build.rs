@@ -211,7 +211,7 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
                 .map(|deploy| deploy.boot.as_str())
                 == Some("image_def")
             {
-                let image_def_obj = assemble_image_def(target, &out_dir, selection)?;
+                let image_def_obj = assemble_image_def(target, &out_dir)?;
                 objs.push(image_def_obj);
             }
         }
@@ -289,6 +289,22 @@ fn build_dynamic_image(
 
     let mut firmware_objs =
         assemble_runtime_for_context_mode(ctx, feature_set, BuildMode::Dynamic)?;
+
+    // The dynamic firmware is the flashable image, so it carries the PICOBIN
+    // boot block just like the static image does (DS2 5.9.5).
+    if let Some(selection) = ctx.platform_selection() {
+        if selection
+            .pack
+            .manifest
+            .deploy
+            .as_ref()
+            .map(|deploy| deploy.boot.as_str())
+            == Some("image_def")
+        {
+            firmware_objs.insert(0, assemble_image_def(ctx.target, &ctx.out_dir)?);
+        }
+    }
+
     if sign_key.is_some() || kek.is_some() {
         firmware_objs.push(assemble_keys_object(
             ctx.target,
@@ -606,32 +622,10 @@ fn pack_final_lmod(
     Ok(lmod_path)
 }
 
-fn assemble_image_def(
-    target: Target,
-    out_dir: &Path,
-    selection: &platform::ResolvedPlatformSelection,
-) -> Result<PathBuf, TyuError> {
-    let memory = selection
-        .pack
-        .manifest
-        .memory
-        .as_ref()
-        .ok_or_else(|| TyuError::Build("boot=image_def requires [memory]".into()))?;
-    let flash = memory
-        .flash
-        .as_ref()
-        .ok_or_else(|| TyuError::Build("boot=image_def requires memory.flash".into()))?;
-    let sram = memory
-        .sram
-        .as_ref()
-        .ok_or_else(|| TyuError::Build("boot=image_def requires memory.sram".into()))?;
-    let ds_size = memory
-        .ds_size
-        .ok_or_else(|| TyuError::Build("boot=image_def requires memory.ds_size".into()))?;
-
+fn assemble_image_def(target: Target, out_dir: &Path) -> Result<PathBuf, TyuError> {
     let asm_path = out_dir.join("image_def.s");
     let obj_path = out_dir.join("image_def.o");
-    let asm = render_image_def_asm(flash, sram, memory.ds_region.as_deref(), ds_size);
+    let asm = render_image_def_asm(target)?;
     fs::write(&asm_path, asm).map_err(TyuError::Io)?;
 
     match target.spec().assembler {
@@ -669,9 +663,7 @@ fn assemble_image_def(
                     obj_path.file_name().unwrap().to_string_lossy().as_ref(),
                 ])
                 .status()
-                .map_err(|e| {
-                    TyuError::Build(format!("running {} for image_def: {}", asm.display(), e))
-                })?;
+                .map_err(|e| TyuError::Build(format!("running {} for image_def: {}", asm.display(), e)))?;
             if !status.success() {
                 return Err(TyuError::Build(format!(
                     "{} failed to assemble image_def",
@@ -689,31 +681,59 @@ fn assemble_image_def(
     Ok(obj_path)
 }
 
-fn render_image_def_asm(
-    flash: &platform::MemoryRegion,
-    sram: &platform::MemoryRegion,
-    ds_region: Option<&str>,
-    ds_size: u64,
-) -> String {
-    let ds_origin = match ds_region {
-        Some(name) if name == flash.name => flash.origin,
-        Some(name) if name == sram.name => sram.origin,
-        _ => sram.origin,
+/// PICOBIN image-definition block for the RP2350 bootrom (DS2 5.9).
+///
+/// Layout (all words little-endian):
+///   word  0      block marker start 0xffffded3
+///   word  1      IMAGE_DEF item: type 0x42, 1 word, image_type_flags
+///   words 2-5    ENTRY_POINT item: type 0x44, 4 words, { pc, sp, sp_limit }
+///   word  6      2BS_LAST item 0x000001ff (per the DS2 5.9.5 minimum blocks)
+///   word  7      next-block relative pointer (0: block loop of one block)
+///   word  8      block marker end 0xab123579
+///
+/// The ENTRY_POINT item removes any dependence on section order: the bootrom
+/// enters at the given PC with the given SP instead of deriving them from a
+/// vector table at image start. The block must live in the first 4 kB of
+/// flash (DS2 5.9.5); the pack's linker script places it right after the
+/// vector table.
+fn render_image_def_asm(target: Target) -> Result<String, TyuError> {
+    let (flags, entry) = match target {
+        Target::ArmV7MUnknownNone => ("0x1021", "__lang_start + 1"), // EXE | Secure | Arm | RP2350
+        Target::RiscV32UnknownNone => ("0x1101", "__lang_start"),    // EXE | RISC-V | RP2350
+        other => {
+            return Err(TyuError::Build(format!(
+                "boot=image_def is only defined for the RP2350 triples, got {other:?}"
+            )))
+        }
+    };
+
+    // GAS comment character differs per ISA: `@` for Arm, `#` for RISC-V.
+    let c = match target {
+        Target::ArmV7MUnknownNone => '@',
+        _ => '#',
     };
 
     let mut out = String::new();
+    let w = |out: &mut String, text: &str, comment: &str| {
+        let _ = writeln!(out, "    {text:<32}{c} {comment}");
+    };
     let _ = writeln!(&mut out, ".section .image_def, \"a\", %progbits");
     let _ = writeln!(&mut out, ".globl __lang_image_def");
     let _ = writeln!(&mut out, "__lang_image_def:");
-    let _ = writeln!(&mut out, "    .ascii \"IMAGE_DEF\\0\"");
-    let _ = writeln!(&mut out, "    .word 1");
-    let _ = writeln!(&mut out, "    .word 0x{:08x}", flash.origin);
-    let _ = writeln!(&mut out, "    .word 0x{:08x}", flash.length);
-    let _ = writeln!(&mut out, "    .word 0x{:08x}", sram.origin);
-    let _ = writeln!(&mut out, "    .word 0x{:08x}", sram.length);
-    let _ = writeln!(&mut out, "    .word 0x{:08x}", ds_origin);
-    let _ = writeln!(&mut out, "    .word 0x{:08x}", ds_size);
-    out
+    w(&mut out, ".word 0xffffded3", "PICOBIN_BLOCK_MARKER_START");
+    w(&mut out, ".byte 0x42", "PICOBIN_BLOCK_ITEM_1BS_IMAGE_TYPE");
+    w(&mut out, ".byte 0x01", "item is 1 word");
+    let _ = writeln!(&mut out, "    .short {flags}");
+    w(&mut out, ".byte 0x44", "PICOBIN_BLOCK_ITEM_1BS_ENTRY_POINT");
+    w(&mut out, ".byte 0x04", "item is 4 words (pc, sp, sp_limit)");
+    let _ = writeln!(&mut out, "    .short 0x0000");
+    let _ = writeln!(&mut out, "    .word {entry}");
+    w(&mut out, ".word __stack_top", "initial sp");
+    w(&mut out, ".word __lang_stack_limit", "sp limit");
+    w(&mut out, ".word 0x000001ff", "PICOBIN_BLOCK_ITEM_2BS_LAST");
+    w(&mut out, ".word 0x00000000", "next block in loop: self");
+    w(&mut out, ".word 0xab123579", "PICOBIN_BLOCK_MARKER_END");
+    Ok(out)
 }
 
 /// Compile a single `.mod` file with langc, without caching.
@@ -1642,23 +1662,11 @@ pub fn link_image(
     // bare-metal targets need a custom `link.ld` to place sections in flash/RAM.
     let linker_script: Option<PathBuf> =
         if let Some(selection) = platform_selection {
-            let boot_is_image_def = selection
-                .pack
-                .manifest
-                .deploy
-                .as_ref()
-                .map(|deploy| deploy.boot.as_str())
-                == Some("image_def");
-            if boot_is_image_def {
-                let memory =
-                    selection.pack.manifest.memory.as_ref().ok_or_else(|| {
-                        TyuError::Build("boot=image_def requires [memory]".into())
-                    })?;
-                let rendered = render_linker_script(memory)?;
-                let path = out_dir.join(format!("{}.link.ld", selection.pack.name()));
-                fs::write(&path, rendered).map_err(TyuError::Io)?;
-                Some(path)
-            } else if selection.metal().linker.is_empty() {
+            // `boot = "image_def"` only adds the PICOBIN block object to the
+            // link (see `assemble_image_def`); layout stays owned by the
+            // pack's `metal/<isa>/link.ld`, which must place `.image_def`
+            // within the bootrom's first-4 kB scan window (DS2 5.9.5).
+            if selection.metal().linker.is_empty() {
                 // Hosted packs (e.g. linux-x86_64-hosted) declare `linker = ""`.
                 None
             } else {
@@ -1711,79 +1719,3 @@ pub fn link_image_for_context(ctx: &BuildContext, objs: &[PathBuf]) -> Result<Pa
     link_image(ctx.target, objs, &ctx.out_dir, ctx.platform_selection())
 }
 
-fn render_linker_script(memory: &platform::MemorySection) -> Result<String, TyuError> {
-    let flash = memory
-        .flash
-        .as_ref()
-        .ok_or_else(|| TyuError::Build("platform memory is missing flash region".into()))?;
-    let sram = memory
-        .sram
-        .as_ref()
-        .ok_or_else(|| TyuError::Build("platform memory is missing sram region".into()))?;
-
-    let mut out = String::new();
-    writeln!(&mut out, "ENTRY(__lang_start)").unwrap();
-    writeln!(&mut out).unwrap();
-    writeln!(&mut out, "MEMORY").unwrap();
-    writeln!(&mut out, "{{").unwrap();
-    writeln!(
-        &mut out,
-        "    {} (rx) : ORIGIN = 0x{:08x}, LENGTH = 0x{:08x}",
-        flash.name, flash.origin, flash.length
-    )
-    .unwrap();
-    writeln!(
-        &mut out,
-        "    {} (rwx) : ORIGIN = 0x{:08x}, LENGTH = 0x{:08x}",
-        sram.name, sram.origin, sram.length
-    )
-    .unwrap();
-    writeln!(&mut out, "}}").unwrap();
-    writeln!(&mut out).unwrap();
-    writeln!(
-        &mut out,
-        "__stack_top = ORIGIN({}) + LENGTH({});",
-        sram.name, sram.name
-    )
-    .unwrap();
-    writeln!(&mut out).unwrap();
-    writeln!(&mut out, "SECTIONS").unwrap();
-    writeln!(&mut out, "{{").unwrap();
-    writeln!(&mut out, "    .vectors : ALIGN(4)").unwrap();
-    writeln!(&mut out, "    {{").unwrap();
-    writeln!(&mut out, "        KEEP(*(.vectors))").unwrap();
-    writeln!(&mut out, "    }} > {}", flash.name).unwrap();
-    writeln!(&mut out).unwrap();
-    writeln!(&mut out, "    .image_def : ALIGN(4)").unwrap();
-    writeln!(&mut out, "    {{").unwrap();
-    writeln!(&mut out, "        KEEP(*(.image_def))").unwrap();
-    writeln!(&mut out, "        KEEP(*(.image_def.*))").unwrap();
-    writeln!(&mut out, "    }} > {}", flash.name).unwrap();
-    writeln!(&mut out).unwrap();
-    writeln!(&mut out, "    .text : ALIGN(4)").unwrap();
-    writeln!(&mut out, "    {{").unwrap();
-    writeln!(&mut out, "        *(.text*)").unwrap();
-    writeln!(&mut out, "        *(.rodata*)").unwrap();
-    writeln!(&mut out, "        *(.lang.symtab)").unwrap();
-    writeln!(&mut out, "    }} > {}", flash.name).unwrap();
-    writeln!(&mut out).unwrap();
-    writeln!(&mut out, "    .data : ALIGN(4)").unwrap();
-    writeln!(&mut out, "    {{").unwrap();
-    writeln!(&mut out, "        *(.data*)").unwrap();
-    writeln!(&mut out, "    }} > {} AT > {}", sram.name, flash.name).unwrap();
-    writeln!(&mut out).unwrap();
-    writeln!(&mut out, "    .modpack : ALIGN(4)").unwrap();
-    writeln!(&mut out, "    {{").unwrap();
-    writeln!(&mut out, "        *(.modpack)").unwrap();
-    writeln!(&mut out, "    }} > {}", sram.name).unwrap();
-    writeln!(&mut out).unwrap();
-    writeln!(&mut out, "    .bss : ALIGN(4)").unwrap();
-    writeln!(&mut out, "    {{").unwrap();
-    writeln!(&mut out, "        __bss_start = .;").unwrap();
-    writeln!(&mut out, "        *(.bss*)").unwrap();
-    writeln!(&mut out, "        *(COMMON)").unwrap();
-    writeln!(&mut out, "        __bss_end = .;").unwrap();
-    writeln!(&mut out, "    }} > {}", sram.name).unwrap();
-    writeln!(&mut out, "}}").unwrap();
-    Ok(out)
-}

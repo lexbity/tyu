@@ -1,3 +1,15 @@
+# RP2350 board pack - descriptor v2 (P8).
+#
+# Every offset, name and IRQ number below is transcribed from RP-008373-DS-2
+# (devdocs/HW-datasheets/RP-008373-DS-2-rp2350-datasheet.pdf): address map
+# Tables 13/14, system IRQs Table 95, per-peripheral "List of registers".
+# Access semantics follow the datasheet Type column per register field table:
+#   WC -> access="rw" write_kind="w1c"     WF -> access="wo"
+#   RO -> access="ro"                      RW -> access="rw"
+# plus read_kind="effectful" on FIFO/data-pop and spinlock-acquire reads.
+# Rows deliberately excluded are listed with their rationale in
+# platforms/rp2350/docs/descriptor-notes.md.
+
 [platform]
 name = "rp2350"
 schema = 2
@@ -25,9 +37,17 @@ linker = "link.ld"
 
 [memory]
 flash = { name = "FLASH", origin = 0x10000000, length = 0x00400000, exec = "xip" }
-sram = { name = "SRAM", origin = 0x20000000, length = 0x00084000 }
+sram  = { name = "SRAM",  origin = 0x20000000, length = 0x00082000 }   # 520 KiB: banks 0-7 striped + banks 8-9 (DS2 Tables 11-12)
 ds_region = "SRAM"
 ds_size = 0x4000
+
+# Concurrency (tasks) is supported; module loading is deliberately not
+# declared: the on-device dynamic loader (loader-core staticlib plus its
+# load arena) does not fit in 520 kB of SRAM, so this pack builds static
+# images only. `tyu build --mode=dynamic` fails fast on the missing entry
+# unit instead of linking an image that cannot fit.
+[features.concurrency]
+unit = "concurrency.asm"
 
 [capabilities.gpio]
 glue = "glue/gpio"
@@ -40,7 +60,7 @@ glue = "glue/time"
 
 [deploy]
 method = "uf2"
-boot = "image_def"
+boot = "image_def"   # emitted by `tyu build` as a PICOBIN block (DS2 5.9.5)
 
 [[deploy.step]]
 run = "picotool"
@@ -63,19 +83,13 @@ encryption_implies_secure_boot = true
 
 # ---- descriptor v2 ---------------------------------------------------------
 
-[platform.allocator]
-region = "SRAM"                # memory region allocatable payloads live in
-offset = 0x8400                # byte offset into region (carve-out below DS/RS)
-length = 0x77000               # allocatable span
-impl = "glue/region"           # module dir providing platform.region.* words
-policy = "pool-firstfit"       # documentation for reviewers; opaque to toolchain
-
 [platform.scoped]
-metadata_slots_max = 64        # diagnostic bound; per-word body count must be <=
+metadata_slots_max = 64
 
-# Datasheet-verified apertures (P8, RP2350 §2.3). The APB aperture covers the
-# 0x40000000-0x41000000 peripheral block; PIO at 0x50200000 and SIO at
-# 0xD0000000 are separate regions; `mmio` is the QEMU/HIL scratch.
+# Apertures (DS2 Tables 13/14). The APB segment covers every APB peripheral
+# through TBMAN (0x40160000); PIO0/PIO1 live in the AHB segment; SIO is the
+# core-local bank. There is deliberately no scratch aperture aliasing SRAM on
+# the real board: QEMU-model fixtures use the runtime descriptors (D-14).
 [[platform.apertures]]
 id = 0
 name = "apb"
@@ -86,235 +100,783 @@ size = 0x01000000
 
 [[platform.apertures]]
 id = 1
-name = "mmio"                  # QEMU/HIL scratch
-kind = "bus"
-bind = "arm-thumb-ldr-literal"
-base = 0x20000000
-size = 0x1000
-
-[[platform.apertures]]
-id = 2
-name = "pio"                   # PIO0/PIO1 (0x50200000/0x50300000)
+name = "pio"                    # PIO0 + PIO1 (0x50200000/0x50300000)
 kind = "bus"
 bind = "arm-thumb-ldr-literal"
 base = 0x50200000
 size = 0x00200000
 
 [[platform.apertures]]
-id = 3
-name = "sio"                   # SIO (0xD0000000)
+id = 2
+name = "sio"                    # core-local SIO (0xd0000000)
 kind = "bus"
 bind = "arm-thumb-ldr-literal"
-base = 0xD0000000
+base = 0xd0000000
 size = 0x1000
 
-# ---- Datasheet-derived device tables (P8) ----------------------------------
-
-# GPIO bank0 ctrl/status block (RP2350 §2.19.3), base 0x40014000.
+# IO_BANK0 (DS2 3.19 / section 9.11), base 0x40028000, IO_IRQ_BANK0 = 21.
+# STATUS reads the pad (RO); CTRL selects function/overrides (RW).
+# INTR0-5 are write-1-to-clear raw status (Type WC), 8 pins per register.
 [[platform.devices]]
 map = "GPIO"
 instance = "gpio0"
 aperture = 0
-base_offset = 0x14000
+base_offset = 0x28000
 registers = [
-  { offset = 0x000, name = "GPIO0_CTRL", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x004, name = "GPIO0_STATUS", width = 32, access = "ro", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x008, name = "GPIO1_CTRL", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x00C, name = "GPIO1_STATUS", width = 32, access = "ro", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x078, name = "GPIO15_CTRL", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x07C, name = "GPIO15_STATUS", width = 32, access = "ro", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x0CC, name = "INTR0", width = 32, access = "ro", read_kind = "plain", atomic_max = 32, irq = 13 },
-  { offset = 0x0D0, name = "INTR1", width = 32, access = "ro", read_kind = "plain", atomic_max = 32, irq = 13 },
-  { offset = 0x0D4, name = "INTR2", width = 32, access = "ro", read_kind = "plain", atomic_max = 32, irq = 13 },
-  { offset = 0x0D8, name = "INTR3", width = 32, access = "ro", read_kind = "plain", atomic_max = 32, irq = 13 },
+  { offset = 0x000, name = "GPIO0_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x004, name = "GPIO0_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x008, name = "GPIO1_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x00c, name = "GPIO1_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x010, name = "GPIO2_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x014, name = "GPIO2_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x018, name = "GPIO3_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x01c, name = "GPIO3_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x020, name = "GPIO4_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x024, name = "GPIO4_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x028, name = "GPIO5_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x02c, name = "GPIO5_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x030, name = "GPIO6_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x034, name = "GPIO6_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x038, name = "GPIO7_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x03c, name = "GPIO7_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x040, name = "GPIO8_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x044, name = "GPIO8_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x048, name = "GPIO9_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x04c, name = "GPIO9_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x050, name = "GPIO10_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x054, name = "GPIO10_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x058, name = "GPIO11_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x05c, name = "GPIO11_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x060, name = "GPIO12_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x064, name = "GPIO12_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x068, name = "GPIO13_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x06c, name = "GPIO13_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x070, name = "GPIO14_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x074, name = "GPIO14_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x078, name = "GPIO15_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x07c, name = "GPIO15_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x080, name = "GPIO16_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x084, name = "GPIO16_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x088, name = "GPIO17_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x08c, name = "GPIO17_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x090, name = "GPIO18_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x094, name = "GPIO18_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x098, name = "GPIO19_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x09c, name = "GPIO19_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0a0, name = "GPIO20_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x0a4, name = "GPIO20_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0a8, name = "GPIO21_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x0ac, name = "GPIO21_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0b0, name = "GPIO22_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x0b4, name = "GPIO22_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0b8, name = "GPIO23_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x0bc, name = "GPIO23_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0c0, name = "GPIO24_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x0c4, name = "GPIO24_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0c8, name = "GPIO25_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x0cc, name = "GPIO25_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0d0, name = "GPIO26_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x0d4, name = "GPIO26_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0d8, name = "GPIO27_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x0dc, name = "GPIO27_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0e0, name = "GPIO28_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x0e4, name = "GPIO28_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0e8, name = "GPIO29_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x0ec, name = "GPIO29_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0f0, name = "GPIO30_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x0f4, name = "GPIO30_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0f8, name = "GPIO31_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x0fc, name = "GPIO31_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x100, name = "GPIO32_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x104, name = "GPIO32_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x108, name = "GPIO33_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x10c, name = "GPIO33_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x110, name = "GPIO34_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x114, name = "GPIO34_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x118, name = "GPIO35_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x11c, name = "GPIO35_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x120, name = "GPIO36_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x124, name = "GPIO36_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x128, name = "GPIO37_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x12c, name = "GPIO37_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x130, name = "GPIO38_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x134, name = "GPIO38_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x138, name = "GPIO39_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x13c, name = "GPIO39_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x140, name = "GPIO40_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x144, name = "GPIO40_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x148, name = "GPIO41_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x14c, name = "GPIO41_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x150, name = "GPIO42_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x154, name = "GPIO42_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x158, name = "GPIO43_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x15c, name = "GPIO43_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x160, name = "GPIO44_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x164, name = "GPIO44_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x168, name = "GPIO45_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x16c, name = "GPIO45_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x170, name = "GPIO46_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x174, name = "GPIO46_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x178, name = "GPIO47_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x17c, name = "GPIO47_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x230, name = "INTR0", width = 32, access = "rw", write_kind = "w1c", atomic_max = 32, irq = 21 },
+  { offset = 0x234, name = "INTR1", width = 32, access = "rw", write_kind = "w1c", atomic_max = 32, irq = 21 },
+  { offset = 0x238, name = "INTR2", width = 32, access = "rw", write_kind = "w1c", atomic_max = 32, irq = 21 },
+  { offset = 0x23c, name = "INTR3", width = 32, access = "rw", write_kind = "w1c", atomic_max = 32, irq = 21 },
+  { offset = 0x240, name = "INTR4", width = 32, access = "rw", write_kind = "w1c", atomic_max = 32, irq = 21 },
+  { offset = 0x244, name = "INTR5", width = 32, access = "rw", write_kind = "w1c", atomic_max = 32, irq = 21 },
+  { offset = 0x248, name = "PROC0_INTE0", width = 32, access = "rw", atomic_max = 32, irq = 21 },
+  { offset = 0x24c, name = "PROC0_INTE1", width = 32, access = "rw", atomic_max = 32, irq = 21 },
+  { offset = 0x250, name = "PROC0_INTE2", width = 32, access = "rw", atomic_max = 32, irq = 21 },
+  { offset = 0x254, name = "PROC0_INTE3", width = 32, access = "rw", atomic_max = 32, irq = 21 },
+  { offset = 0x258, name = "PROC0_INTE4", width = 32, access = "rw", atomic_max = 32, irq = 21 },
+  { offset = 0x25c, name = "PROC0_INTE5", width = 32, access = "rw", atomic_max = 32, irq = 21 },
+  { offset = 0x260, name = "PROC0_INTF0", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x264, name = "PROC0_INTF1", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x268, name = "PROC0_INTF2", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x26c, name = "PROC0_INTF3", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x270, name = "PROC0_INTF4", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x274, name = "PROC0_INTF5", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x278, name = "PROC0_INTS0", width = 32, access = "ro", atomic_max = 32, irq = 21 },
+  { offset = 0x27c, name = "PROC0_INTS1", width = 32, access = "ro", atomic_max = 32, irq = 21 },
+  { offset = 0x280, name = "PROC0_INTS2", width = 32, access = "ro", atomic_max = 32, irq = 21 },
+  { offset = 0x284, name = "PROC0_INTS3", width = 32, access = "ro", atomic_max = 32, irq = 21 },
+  { offset = 0x288, name = "PROC0_INTS4", width = 32, access = "ro", atomic_max = 32, irq = 21 },
+  { offset = 0x28c, name = "PROC0_INTS5", width = 32, access = "ro", atomic_max = 32, irq = 21 },
 ]
 
-# UART0 (RP2350 §4.2), base 0x40034000, UART0_IRQ = 20.
+# PADS_BANK0 (DS2 3.19 / section 9.11.3), base 0x40038000.
+[[platform.devices]]
+map = "PADS"
+instance = "pads_bank0"
+aperture = 0
+base_offset = 0x38000
+registers = [
+  { offset = 0x000, name = "VOLTAGE_SELECT", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x004, name = "GPIO0", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x008, name = "GPIO1", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x00c, name = "GPIO2", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x010, name = "GPIO3", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x014, name = "GPIO4", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x018, name = "GPIO5", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x01c, name = "GPIO6", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x020, name = "GPIO7", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x024, name = "GPIO8", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x028, name = "GPIO9", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x02c, name = "GPIO10", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x030, name = "GPIO11", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x034, name = "GPIO12", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x038, name = "GPIO13", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x03c, name = "GPIO14", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x040, name = "GPIO15", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x044, name = "GPIO16", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x048, name = "GPIO17", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x04c, name = "GPIO18", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x050, name = "GPIO19", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x054, name = "GPIO20", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x058, name = "GPIO21", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x05c, name = "GPIO22", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x060, name = "GPIO23", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x064, name = "GPIO24", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x068, name = "GPIO25", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x06c, name = "GPIO26", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x070, name = "GPIO27", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x074, name = "GPIO28", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x078, name = "GPIO29", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x07c, name = "GPIO30", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x080, name = "GPIO31", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x084, name = "GPIO32", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x088, name = "GPIO33", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x08c, name = "GPIO34", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x090, name = "GPIO35", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x094, name = "GPIO36", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x098, name = "GPIO37", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x09c, name = "GPIO38", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0a0, name = "GPIO39", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0a4, name = "GPIO40", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0a8, name = "GPIO41", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0ac, name = "GPIO42", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0b0, name = "GPIO43", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0b4, name = "GPIO44", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0b8, name = "GPIO45", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0bc, name = "GPIO46", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0c0, name = "GPIO47", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0c4, name = "SWCLK", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0c8, name = "SWD", width = 32, access = "rw", atomic_max = 32 },
+]
+
+# UART0 (DS2 12.1), base 0x40070000, UART0_IRQ = 33. PrimeCell PL011 layout.
 [[platform.devices]]
 map = "UART"
 instance = "uart0"
 aperture = 0
-base_offset = 0x34000
+base_offset = 0x70000
 registers = [
-  { offset = 0x00, name = "UARTDR", width = 32, access = "rw", write_kind = "plain", read_kind = "effectful", atomic_max = 32 },
-  { offset = 0x04, name = "UARTRSR_ECR", width = 32, access = "rw", write_kind = "w1c", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x18, name = "UARTFR", width = 32, access = "ro", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x2C, name = "UARTLCR_H", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x30, name = "UARTCR", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x38, name = "UARTIMSC", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x3C, name = "UARTRIS", width = 32, access = "ro", read_kind = "plain", atomic_max = 32, irq = 20 },
-  { offset = 0x40, name = "UARTMIS", width = 32, access = "ro", read_kind = "plain", atomic_max = 32, irq = 20 },
-  { offset = 0x44, name = "UARTICR", width = 32, access = "rw", write_kind = "w1c", read_kind = "plain", atomic_max = 32, irq = 20 },
+  { offset = 0x000, name = "UARTDR", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x004, name = "UARTRSR", width = 32, access = "rw", write_kind = "w1c", atomic_max = 32 },
+  { offset = 0x018, name = "UARTFR", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x020, name = "UARTILPR", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x024, name = "UARTIBRD", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x028, name = "UARTFBRD", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x02c, name = "UARTLCR_H", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x030, name = "UARTCR", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x034, name = "UARTIFLS", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x038, name = "UARTIMSC", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x03c, name = "UARTRIS", width = 32, access = "ro", atomic_max = 32, irq = 33 },
+  { offset = 0x040, name = "UARTMIS", width = 32, access = "ro", atomic_max = 32, irq = 33 },
+  { offset = 0x044, name = "UARTICR", width = 32, access = "rw", write_kind = "w1c", atomic_max = 32, irq = 33 },
+  { offset = 0x048, name = "UARTDMACR", width = 32, access = "rw", atomic_max = 32 },
 ]
 
-# UART1 (RP2350 §4.2), base 0x40038000, UART1_IRQ = 21.
+# UART1 (DS2 12.1), base 0x40078000, UART1_IRQ = 34. PrimeCell PL011 layout.
 [[platform.devices]]
 map = "UART"
 instance = "uart1"
 aperture = 0
-base_offset = 0x38000
+base_offset = 0x78000
 registers = [
-  { offset = 0x00, name = "UARTDR", width = 32, access = "rw", write_kind = "plain", read_kind = "effectful", atomic_max = 32 },
-  { offset = 0x18, name = "UARTFR", width = 32, access = "ro", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x30, name = "UARTCR", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x3C, name = "UARTRIS", width = 32, access = "ro", read_kind = "plain", atomic_max = 32, irq = 21 },
-  { offset = 0x44, name = "UARTICR", width = 32, access = "rw", write_kind = "w1c", read_kind = "plain", atomic_max = 32, irq = 21 },
+  { offset = 0x000, name = "UARTDR", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x004, name = "UARTRSR", width = 32, access = "rw", write_kind = "w1c", atomic_max = 32 },
+  { offset = 0x018, name = "UARTFR", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x020, name = "UARTILPR", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x024, name = "UARTIBRD", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x028, name = "UARTFBRD", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x02c, name = "UARTLCR_H", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x030, name = "UARTCR", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x034, name = "UARTIFLS", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x038, name = "UARTIMSC", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x03c, name = "UARTRIS", width = 32, access = "ro", atomic_max = 32, irq = 34 },
+  { offset = 0x040, name = "UARTMIS", width = 32, access = "ro", atomic_max = 32, irq = 34 },
+  { offset = 0x044, name = "UARTICR", width = 32, access = "rw", write_kind = "w1c", atomic_max = 32, irq = 34 },
+  { offset = 0x048, name = "UARTDMACR", width = 32, access = "rw", atomic_max = 32 },
 ]
 
-# SPI0 (RP2350 §4.3), base 0x4003C000, SPI0_IRQ = 22.
+# SPI0 (DS2 12.2, PrimeCell PL022 SSP), base 0x40080000, SPI0_IRQ = 31.
 [[platform.devices]]
 map = "SPI"
 instance = "spi0"
 aperture = 0
-base_offset = 0x3C000
+base_offset = 0x80000
 registers = [
-  { offset = 0x00, name = "SSPCR0", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x04, name = "SSPCR1", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x08, name = "SSPDR", width = 32, access = "rw", write_kind = "plain", read_kind = "effectful", atomic_max = 32 },
-  { offset = 0x0C, name = "SSPSR", width = 32, access = "ro", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x18, name = "SSPRIS", width = 32, access = "ro", read_kind = "plain", atomic_max = 32, irq = 22 },
-  { offset = 0x20, name = "SSPICR", width = 32, access = "rw", write_kind = "w1c", read_kind = "plain", atomic_max = 32, irq = 22 },
+  { offset = 0x000, name = "SSPCR0", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x004, name = "SSPCR1", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x008, name = "SSPDR", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x00c, name = "SSPSR", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x010, name = "SSPCPSR", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x014, name = "SSPIMSC", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x018, name = "SSPRIS", width = 32, access = "ro", atomic_max = 32, irq = 31 },
+  { offset = 0x01c, name = "SSPMIS", width = 32, access = "ro", atomic_max = 32, irq = 31 },
+  { offset = 0x020, name = "SSPICR", width = 32, access = "rw", write_kind = "w1c", atomic_max = 32, irq = 31 },
+  { offset = 0x024, name = "SSPDMACR", width = 32, access = "rw", atomic_max = 32 },
 ]
 
-# SPI1 (RP2350 §4.3), base 0x40040000, SPI1_IRQ = 23.
+# SPI1 (DS2 12.2, PrimeCell PL022 SSP), base 0x40088000, SPI1_IRQ = 32.
 [[platform.devices]]
 map = "SPI"
 instance = "spi1"
 aperture = 0
-base_offset = 0x40000
+base_offset = 0x88000
 registers = [
-  { offset = 0x00, name = "SSPCR0", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x08, name = "SSPDR", width = 32, access = "rw", write_kind = "plain", read_kind = "effectful", atomic_max = 32 },
-  { offset = 0x18, name = "SSPRIS", width = 32, access = "ro", read_kind = "plain", atomic_max = 32, irq = 23 },
-  { offset = 0x20, name = "SSPICR", width = 32, access = "rw", write_kind = "w1c", read_kind = "plain", atomic_max = 32, irq = 23 },
+  { offset = 0x000, name = "SSPCR0", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x004, name = "SSPCR1", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x008, name = "SSPDR", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x00c, name = "SSPSR", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x010, name = "SSPCPSR", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x014, name = "SSPIMSC", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x018, name = "SSPRIS", width = 32, access = "ro", atomic_max = 32, irq = 32 },
+  { offset = 0x01c, name = "SSPMIS", width = 32, access = "ro", atomic_max = 32, irq = 32 },
+  { offset = 0x020, name = "SSPICR", width = 32, access = "rw", write_kind = "w1c", atomic_max = 32, irq = 32 },
+  { offset = 0x024, name = "SSPDMACR", width = 32, access = "rw", atomic_max = 32 },
 ]
 
-# I2C0 (RP2350 §4.4), base 0x40044000, I2C0_IRQ = 24.
+# I2C0 (DS2 12.3, DW_apb_i2c), base 0x40090000, I2C0_IRQ = 36.
 [[platform.devices]]
 map = "I2C"
 instance = "i2c0"
 aperture = 0
-base_offset = 0x44000
+base_offset = 0x90000
 registers = [
-  { offset = 0x00, name = "IC_CON", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x04, name = "IC_TAR", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x10, name = "IC_DATA_CMD", width = 32, access = "rw", write_kind = "plain", read_kind = "effectful", atomic_max = 32 },
-  { offset = 0x2C, name = "IC_INTR_STAT", width = 32, access = "ro", read_kind = "plain", atomic_max = 32, irq = 24 },
-  { offset = 0x30, name = "IC_INTR_MASK", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x34, name = "IC_RAW_INTR_STAT", width = 32, access = "ro", read_kind = "plain", atomic_max = 32, irq = 24 },
-  { offset = 0x40, name = "IC_CLR_INTR", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32, irq = 24 },
-  { offset = 0x54, name = "IC_CLR_TX_ABRT", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32, irq = 24 },
-  { offset = 0x6C, name = "IC_ENABLE", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x70, name = "IC_STATUS", width = 32, access = "ro", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x000, name = "IC_CON", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x004, name = "IC_TAR", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x008, name = "IC_SAR", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x010, name = "IC_DATA_CMD", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x014, name = "IC_SS_SCL_HCNT", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x018, name = "IC_SS_SCL_LCNT", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x01c, name = "IC_FS_SCL_HCNT", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x020, name = "IC_FS_SCL_LCNT", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x02c, name = "IC_INTR_STAT", width = 32, access = "ro", atomic_max = 32, irq = 36 },
+  { offset = 0x030, name = "IC_INTR_MASK", width = 32, access = "rw", atomic_max = 32, irq = 36 },
+  { offset = 0x034, name = "IC_RAW_INTR_STAT", width = 32, access = "ro", atomic_max = 32, irq = 36 },
+  { offset = 0x038, name = "IC_RX_TL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x03c, name = "IC_TX_TL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x040, name = "IC_CLR_INTR", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32, irq = 36 },
+  { offset = 0x044, name = "IC_CLR_RX_UNDER", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32, irq = 36 },
+  { offset = 0x048, name = "IC_CLR_RX_OVER", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32, irq = 36 },
+  { offset = 0x04c, name = "IC_CLR_TX_OVER", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32, irq = 36 },
+  { offset = 0x050, name = "IC_CLR_RD_REQ", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32, irq = 36 },
+  { offset = 0x054, name = "IC_CLR_TX_ABRT", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32, irq = 36 },
+  { offset = 0x058, name = "IC_CLR_RX_DONE", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32, irq = 36 },
+  { offset = 0x05c, name = "IC_CLR_ACTIVITY", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32, irq = 36 },
+  { offset = 0x060, name = "IC_CLR_STOP_DET", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32, irq = 36 },
+  { offset = 0x064, name = "IC_CLR_START_DET", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32, irq = 36 },
+  { offset = 0x068, name = "IC_CLR_GEN_CALL", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32, irq = 36 },
+  { offset = 0x0a8, name = "IC_CLR_RESTART_DET", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32, irq = 36 },
+  { offset = 0x06c, name = "IC_ENABLE", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x070, name = "IC_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x074, name = "IC_TXFLR", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x078, name = "IC_RXFLR", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x07c, name = "IC_SDA_HOLD", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x080, name = "IC_TX_ABRT_SOURCE", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x084, name = "IC_SLV_DATA_NACK_ONLY", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x088, name = "IC_DMA_CR", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x08c, name = "IC_DMA_TDLR", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x090, name = "IC_DMA_RDLR", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x094, name = "IC_SDA_SETUP", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x098, name = "IC_ACK_GENERAL_CALL", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x09c, name = "IC_ENABLE_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x0a0, name = "IC_FS_SPKLEN", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0f4, name = "IC_COMP_PARAM_1", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x0f8, name = "IC_COMP_VERSION", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x0fc, name = "IC_COMP_TYPE", width = 32, access = "ro", atomic_max = 32 },
 ]
 
-# I2C1 (RP2350 §4.4), base 0x40048000, I2C1_IRQ = 25.
+# I2C1 (DS2 12.3, DW_apb_i2c), base 0x40098000, I2C1_IRQ = 37.
 [[platform.devices]]
 map = "I2C"
 instance = "i2c1"
 aperture = 0
-base_offset = 0x48000
+base_offset = 0x98000
 registers = [
-  { offset = 0x00, name = "IC_CON", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x10, name = "IC_DATA_CMD", width = 32, access = "rw", write_kind = "plain", read_kind = "effectful", atomic_max = 32 },
-  { offset = 0x2C, name = "IC_INTR_STAT", width = 32, access = "ro", read_kind = "plain", atomic_max = 32, irq = 25 },
-  { offset = 0x40, name = "IC_CLR_INTR", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32, irq = 25 },
+  { offset = 0x000, name = "IC_CON", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x004, name = "IC_TAR", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x008, name = "IC_SAR", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x010, name = "IC_DATA_CMD", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x014, name = "IC_SS_SCL_HCNT", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x018, name = "IC_SS_SCL_LCNT", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x01c, name = "IC_FS_SCL_HCNT", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x020, name = "IC_FS_SCL_LCNT", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x02c, name = "IC_INTR_STAT", width = 32, access = "ro", atomic_max = 32, irq = 37 },
+  { offset = 0x030, name = "IC_INTR_MASK", width = 32, access = "rw", atomic_max = 32, irq = 37 },
+  { offset = 0x034, name = "IC_RAW_INTR_STAT", width = 32, access = "ro", atomic_max = 32, irq = 37 },
+  { offset = 0x038, name = "IC_RX_TL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x03c, name = "IC_TX_TL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x040, name = "IC_CLR_INTR", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32, irq = 37 },
+  { offset = 0x044, name = "IC_CLR_RX_UNDER", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32, irq = 37 },
+  { offset = 0x048, name = "IC_CLR_RX_OVER", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32, irq = 37 },
+  { offset = 0x04c, name = "IC_CLR_TX_OVER", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32, irq = 37 },
+  { offset = 0x050, name = "IC_CLR_RD_REQ", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32, irq = 37 },
+  { offset = 0x054, name = "IC_CLR_TX_ABRT", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32, irq = 37 },
+  { offset = 0x058, name = "IC_CLR_RX_DONE", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32, irq = 37 },
+  { offset = 0x05c, name = "IC_CLR_ACTIVITY", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32, irq = 37 },
+  { offset = 0x060, name = "IC_CLR_STOP_DET", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32, irq = 37 },
+  { offset = 0x064, name = "IC_CLR_START_DET", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32, irq = 37 },
+  { offset = 0x068, name = "IC_CLR_GEN_CALL", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32, irq = 37 },
+  { offset = 0x0a8, name = "IC_CLR_RESTART_DET", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32, irq = 37 },
+  { offset = 0x06c, name = "IC_ENABLE", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x070, name = "IC_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x074, name = "IC_TXFLR", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x078, name = "IC_RXFLR", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x07c, name = "IC_SDA_HOLD", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x080, name = "IC_TX_ABRT_SOURCE", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x084, name = "IC_SLV_DATA_NACK_ONLY", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x088, name = "IC_DMA_CR", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x08c, name = "IC_DMA_TDLR", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x090, name = "IC_DMA_RDLR", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x094, name = "IC_SDA_SETUP", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x098, name = "IC_ACK_GENERAL_CALL", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x09c, name = "IC_ENABLE_STATUS", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x0a0, name = "IC_FS_SPKLEN", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0f4, name = "IC_COMP_PARAM_1", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x0f8, name = "IC_COMP_VERSION", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x0fc, name = "IC_COMP_TYPE", width = 32, access = "ro", atomic_max = 32 },
 ]
 
-# Timer (RP2350 §4.6), base 0x40054000, TIMER_IRQ_0..3 = 0..3.
+# TIMER0 (DS2 12.8), base 0x400b0000, TIMER0_IRQ_0..3 = 0..3.
+# ARMED is write-1-to-disarm (Type WC). The raw interrupt register is INTR
+# (Type WC); INTE enables, INTS is the masked view. The tick for TIMER0 is
+# configured by the runtime from clk_ref/XOSC at 1 us (DS2 8.5).
 [[platform.devices]]
-map = "Timer"
-instance = "timer"
+map = "TIMER"
+instance = "timer0"
 aperture = 0
-base_offset = 0x54000
+base_offset = 0xb0000
 registers = [
-  { offset = 0x08, name = "TIMEHR", width = 32, access = "ro", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x0C, name = "TIMELR", width = 32, access = "ro", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x10, name = "TIMERAWL", width = 32, access = "ro", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x14, name = "TIMERARWH", width = 32, access = "ro", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x20, name = "ALARM0", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x24, name = "ALARM1", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x28, name = "ALARM2", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x2C, name = "ALARM3", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x30, name = "ARMED", width = 32, access = "ro", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x34, name = "TIMERALARM0", width = 32, access = "rw", write_kind = "w1c", read_kind = "plain", atomic_max = 32, irq = 0 },
-  { offset = 0x38, name = "TIMERALARM1", width = 32, access = "rw", write_kind = "w1c", read_kind = "plain", atomic_max = 32, irq = 1 },
-  { offset = 0x3C, name = "TIMERALARM2", width = 32, access = "rw", write_kind = "w1c", read_kind = "plain", atomic_max = 32, irq = 2 },
-  { offset = 0x40, name = "TIMERALARM3", width = 32, access = "rw", write_kind = "w1c", read_kind = "plain", atomic_max = 32, irq = 3 },
+  { offset = 0x000, name = "TIMEHW", width = 32, access = "wo", atomic_max = 32 },
+  { offset = 0x004, name = "TIMELW", width = 32, access = "wo", atomic_max = 32 },
+  { offset = 0x008, name = "TIMEHR", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x00c, name = "TIMELR", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x010, name = "ALARM0", width = 32, access = "rw", atomic_max = 32, irq = 0 },
+  { offset = 0x014, name = "ALARM1", width = 32, access = "rw", atomic_max = 32, irq = 1 },
+  { offset = 0x018, name = "ALARM2", width = 32, access = "rw", atomic_max = 32, irq = 2 },
+  { offset = 0x01c, name = "ALARM3", width = 32, access = "rw", atomic_max = 32, irq = 3 },
+  { offset = 0x020, name = "ARMED", width = 32, access = "rw", write_kind = "w1c", atomic_max = 32 },
+  { offset = 0x024, name = "TIMERAWH", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x028, name = "TIMERAWL", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x02c, name = "DBGPAUSE", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x030, name = "PAUSE", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x034, name = "LOCKED", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x038, name = "SOURCE", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x03c, name = "INTR", width = 32, access = "rw", write_kind = "w1c", atomic_max = 32 },
+  { offset = 0x040, name = "INTE", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x044, name = "INTF", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x048, name = "INTS", width = 32, access = "ro", atomic_max = 32 },
 ]
 
-# QMI (QSPI, RP2350 §4.10), base 0x40060000, XIP_IRQ = 6.
+# TIMER1 (DS2 12.8), base 0x400b8000, TIMER1_IRQ_0..3 = 4..7.
+# ARMED is write-1-to-disarm (Type WC). The raw interrupt register is INTR
+# (Type WC); INTE enables, INTS is the masked view. The tick for TIMER1 is
+# configured by the runtime from clk_ref/XOSC at 1 us (DS2 8.5).
+[[platform.devices]]
+map = "TIMER"
+instance = "timer1"
+aperture = 0
+base_offset = 0xb8000
+registers = [
+  { offset = 0x000, name = "TIMEHW", width = 32, access = "wo", atomic_max = 32 },
+  { offset = 0x004, name = "TIMELW", width = 32, access = "wo", atomic_max = 32 },
+  { offset = 0x008, name = "TIMEHR", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x00c, name = "TIMELR", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x010, name = "ALARM0", width = 32, access = "rw", atomic_max = 32, irq = 4 },
+  { offset = 0x014, name = "ALARM1", width = 32, access = "rw", atomic_max = 32, irq = 5 },
+  { offset = 0x018, name = "ALARM2", width = 32, access = "rw", atomic_max = 32, irq = 6 },
+  { offset = 0x01c, name = "ALARM3", width = 32, access = "rw", atomic_max = 32, irq = 7 },
+  { offset = 0x020, name = "ARMED", width = 32, access = "rw", write_kind = "w1c", atomic_max = 32 },
+  { offset = 0x024, name = "TIMERAWH", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x028, name = "TIMERAWL", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x02c, name = "DBGPAUSE", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x030, name = "PAUSE", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x034, name = "LOCKED", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x038, name = "SOURCE", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x03c, name = "INTR", width = 32, access = "rw", write_kind = "w1c", atomic_max = 32 },
+  { offset = 0x040, name = "INTE", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x044, name = "INTF", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x048, name = "INTS", width = 32, access = "ro", atomic_max = 32 },
+]
+
+# QMI direct-mode surface only (DS2 12.14), base 0x400d0000. The M0_*/M1_*/
+# ATRANS* timing and translation rows are deliberately excluded: rewriting
+# them from a running XIP image unmaps the executing flash. The bootrom owns
+# that configuration (see docs/descriptor-notes.md).
 [[platform.devices]]
 map = "QMI"
 instance = "qmi"
 aperture = 0
-base_offset = 0x60000
+base_offset = 0xd0000
 registers = [
-  { offset = 0x00, name = "FFLAGS", width = 32, access = "ro", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x08, name = "SS_CTRL", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x0C, name = "SS_CMD", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x10, name = "SS_DATA0", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x14, name = "SS_DATA1", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x18, name = "SS_DATA2", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x1C, name = "SS_DATA3", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x58, name = "M0_FIFO", width = 32, access = "rw", write_kind = "plain", read_kind = "effectful", atomic_max = 32, irq = 6 },
+  { offset = 0x000, name = "DIRECT_CSR", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x004, name = "DIRECT_TX", width = 32, access = "wo", atomic_max = 32 },
+  { offset = 0x008, name = "DIRECT_RX", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32 },
 ]
 
-# PIO0 (RP2350 §4.8), base 0x50200000, PIO0_IRQ_0 = 7, PIO0_IRQ_1 = 8.
+# PIO0 (DS2 11), base 0x50200000, PIO0_IRQ_0 = 15, PIO0_IRQ_1 = 16.
 [[platform.devices]]
 map = "PIO"
 instance = "pio0"
-aperture = 2
-base_offset = 0x00000
+aperture = 1
+base_offset = 0x0
 registers = [
-  { offset = 0x00, name = "CTRL", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x04, name = "FSTAT", width = 32, access = "ro", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x08, name = "FLEVEL", width = 32, access = "ro", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x10, name = "TXF0", width = 32, access = "wo", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x20, name = "RXF0", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32 },
-  { offset = 0x24, name = "IRQ", width = 32, access = "rw", write_kind = "w1c", read_kind = "plain", atomic_max = 32, irq = 7 },
-  { offset = 0x40, name = "INSTR_MEM0", width = 16, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 16 },
-  { offset = 0x48, name = "INSTR_MEM2", width = 16, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 16 },
-  { offset = 0xC0, name = "SM0_CLKDIV", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
-  { offset = 0xC8, name = "SM0_EXECCTRL", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
-  { offset = 0xCC, name = "SM0_SHIFTCTRL", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
-  { offset = 0xD4, name = "SM0_INSTR", width = 16, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 16 },
+  { offset = 0x000, name = "CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x004, name = "FSTAT", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x008, name = "FDEBUG", width = 32, access = "rw", write_kind = "w1c", atomic_max = 32 },
+  { offset = 0x00c, name = "FLEVEL", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x010, name = "TXF0", width = 32, access = "wo", atomic_max = 32 },
+  { offset = 0x014, name = "TXF1", width = 32, access = "wo", atomic_max = 32 },
+  { offset = 0x018, name = "TXF2", width = 32, access = "wo", atomic_max = 32 },
+  { offset = 0x01c, name = "TXF3", width = 32, access = "wo", atomic_max = 32 },
+  { offset = 0x020, name = "RXF0", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x024, name = "RXF1", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x028, name = "RXF2", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x02c, name = "RXF3", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x030, name = "IRQ", width = 32, access = "rw", write_kind = "w1c", atomic_max = 32 },
+  { offset = 0x034, name = "IRQ_FORCE", width = 32, access = "wo", atomic_max = 32 },
+  { offset = 0x038, name = "INPUT_SYNC_BYPASS", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x03c, name = "DBG_PADOUT", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x040, name = "DBG_PADOE", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x044, name = "DBG_CFGINFO", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x048, name = "INSTR_MEM0", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x04c, name = "INSTR_MEM1", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x050, name = "INSTR_MEM2", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x054, name = "INSTR_MEM3", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x058, name = "INSTR_MEM4", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x05c, name = "INSTR_MEM5", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x060, name = "INSTR_MEM6", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x064, name = "INSTR_MEM7", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x068, name = "INSTR_MEM8", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x06c, name = "INSTR_MEM9", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x070, name = "INSTR_MEM10", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x074, name = "INSTR_MEM11", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x078, name = "INSTR_MEM12", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x07c, name = "INSTR_MEM13", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x080, name = "INSTR_MEM14", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x084, name = "INSTR_MEM15", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x088, name = "INSTR_MEM16", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x08c, name = "INSTR_MEM17", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x090, name = "INSTR_MEM18", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x094, name = "INSTR_MEM19", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x098, name = "INSTR_MEM20", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x09c, name = "INSTR_MEM21", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0a0, name = "INSTR_MEM22", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0a4, name = "INSTR_MEM23", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0a8, name = "INSTR_MEM24", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0ac, name = "INSTR_MEM25", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0b0, name = "INSTR_MEM26", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0b4, name = "INSTR_MEM27", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0b8, name = "INSTR_MEM28", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0bc, name = "INSTR_MEM29", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0c0, name = "INSTR_MEM30", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0c4, name = "INSTR_MEM31", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0c8, name = "SM0_CLKDIV", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0cc, name = "SM0_EXECCTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0d0, name = "SM0_SHIFTCTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0d4, name = "SM0_ADDR", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x0d8, name = "SM0_INSTR", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0dc, name = "SM0_PINCTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0e0, name = "SM1_CLKDIV", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0e4, name = "SM1_EXECCTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0e8, name = "SM1_SHIFTCTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0ec, name = "SM1_ADDR", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x0f0, name = "SM1_INSTR", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0f4, name = "SM1_PINCTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0f8, name = "SM2_CLKDIV", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0fc, name = "SM2_EXECCTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x100, name = "SM2_SHIFTCTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x104, name = "SM2_ADDR", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x108, name = "SM2_INSTR", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x10c, name = "SM2_PINCTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x110, name = "SM3_CLKDIV", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x114, name = "SM3_EXECCTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x118, name = "SM3_SHIFTCTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x11c, name = "SM3_ADDR", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x120, name = "SM3_INSTR", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x124, name = "SM3_PINCTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x128, name = "RXF0_PUTGET0", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x12c, name = "RXF0_PUTGET1", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x130, name = "RXF0_PUTGET2", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x134, name = "RXF0_PUTGET3", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x138, name = "RXF1_PUTGET0", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x13c, name = "RXF1_PUTGET1", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x140, name = "RXF1_PUTGET2", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x144, name = "RXF1_PUTGET3", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x148, name = "RXF2_PUTGET0", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x14c, name = "RXF2_PUTGET1", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x150, name = "RXF2_PUTGET2", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x154, name = "RXF2_PUTGET3", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x158, name = "RXF3_PUTGET0", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x15c, name = "RXF3_PUTGET1", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x160, name = "RXF3_PUTGET2", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x164, name = "RXF3_PUTGET3", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x168, name = "GPIOBASE", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x16c, name = "INTR", width = 32, access = "rw", write_kind = "w1c", atomic_max = 32 },
+  { offset = 0x170, name = "IRQ0_INTE", width = 32, access = "rw", atomic_max = 32, irq = 15 },
+  { offset = 0x174, name = "IRQ0_INTF", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x178, name = "IRQ0_INTS", width = 32, access = "ro", atomic_max = 32, irq = 15 },
+  { offset = 0x17c, name = "IRQ1_INTE", width = 32, access = "rw", atomic_max = 32, irq = 16 },
+  { offset = 0x180, name = "IRQ1_INTF", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x184, name = "IRQ1_INTS", width = 32, access = "ro", atomic_max = 32, irq = 16 },
 ]
 
-# PIO1 (RP2350 §4.8), base 0x50300000, PIO1_IRQ_0 = 9, PIO1_IRQ_1 = 10.
+# PIO1 (DS2 11), base 0x50210000, PIO1_IRQ_0 = 17, PIO1_IRQ_1 = 18.
 [[platform.devices]]
 map = "PIO"
 instance = "pio1"
-aperture = 2
-base_offset = 0x10000
+aperture = 1
+base_offset = 0x100000
 registers = [
-  { offset = 0x00, name = "CTRL", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x04, name = "FSTAT", width = 32, access = "ro", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x10, name = "TXF0", width = 32, access = "wo", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x20, name = "RXF0", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32 },
-  { offset = 0x24, name = "IRQ", width = 32, access = "rw", write_kind = "w1c", read_kind = "plain", atomic_max = 32, irq = 9 },
+  { offset = 0x000, name = "CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x004, name = "FSTAT", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x008, name = "FDEBUG", width = 32, access = "rw", write_kind = "w1c", atomic_max = 32 },
+  { offset = 0x00c, name = "FLEVEL", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x010, name = "TXF0", width = 32, access = "wo", atomic_max = 32 },
+  { offset = 0x014, name = "TXF1", width = 32, access = "wo", atomic_max = 32 },
+  { offset = 0x018, name = "TXF2", width = 32, access = "wo", atomic_max = 32 },
+  { offset = 0x01c, name = "TXF3", width = 32, access = "wo", atomic_max = 32 },
+  { offset = 0x020, name = "RXF0", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x024, name = "RXF1", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x028, name = "RXF2", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x02c, name = "RXF3", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x030, name = "IRQ", width = 32, access = "rw", write_kind = "w1c", atomic_max = 32 },
+  { offset = 0x034, name = "IRQ_FORCE", width = 32, access = "wo", atomic_max = 32 },
+  { offset = 0x038, name = "INPUT_SYNC_BYPASS", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x03c, name = "DBG_PADOUT", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x040, name = "DBG_PADOE", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x044, name = "DBG_CFGINFO", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x048, name = "INSTR_MEM0", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x04c, name = "INSTR_MEM1", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x050, name = "INSTR_MEM2", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x054, name = "INSTR_MEM3", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x058, name = "INSTR_MEM4", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x05c, name = "INSTR_MEM5", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x060, name = "INSTR_MEM6", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x064, name = "INSTR_MEM7", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x068, name = "INSTR_MEM8", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x06c, name = "INSTR_MEM9", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x070, name = "INSTR_MEM10", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x074, name = "INSTR_MEM11", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x078, name = "INSTR_MEM12", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x07c, name = "INSTR_MEM13", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x080, name = "INSTR_MEM14", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x084, name = "INSTR_MEM15", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x088, name = "INSTR_MEM16", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x08c, name = "INSTR_MEM17", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x090, name = "INSTR_MEM18", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x094, name = "INSTR_MEM19", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x098, name = "INSTR_MEM20", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x09c, name = "INSTR_MEM21", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0a0, name = "INSTR_MEM22", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0a4, name = "INSTR_MEM23", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0a8, name = "INSTR_MEM24", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0ac, name = "INSTR_MEM25", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0b0, name = "INSTR_MEM26", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0b4, name = "INSTR_MEM27", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0b8, name = "INSTR_MEM28", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0bc, name = "INSTR_MEM29", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0c0, name = "INSTR_MEM30", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0c4, name = "INSTR_MEM31", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0c8, name = "SM0_CLKDIV", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0cc, name = "SM0_EXECCTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0d0, name = "SM0_SHIFTCTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0d4, name = "SM0_ADDR", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x0d8, name = "SM0_INSTR", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0dc, name = "SM0_PINCTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0e0, name = "SM1_CLKDIV", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0e4, name = "SM1_EXECCTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0e8, name = "SM1_SHIFTCTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0ec, name = "SM1_ADDR", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x0f0, name = "SM1_INSTR", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0f4, name = "SM1_PINCTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0f8, name = "SM2_CLKDIV", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x0fc, name = "SM2_EXECCTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x100, name = "SM2_SHIFTCTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x104, name = "SM2_ADDR", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x108, name = "SM2_INSTR", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x10c, name = "SM2_PINCTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x110, name = "SM3_CLKDIV", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x114, name = "SM3_EXECCTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x118, name = "SM3_SHIFTCTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x11c, name = "SM3_ADDR", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x120, name = "SM3_INSTR", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x124, name = "SM3_PINCTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x128, name = "RXF0_PUTGET0", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x12c, name = "RXF0_PUTGET1", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x130, name = "RXF0_PUTGET2", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x134, name = "RXF0_PUTGET3", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x138, name = "RXF1_PUTGET0", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x13c, name = "RXF1_PUTGET1", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x140, name = "RXF1_PUTGET2", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x144, name = "RXF1_PUTGET3", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x148, name = "RXF2_PUTGET0", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x14c, name = "RXF2_PUTGET1", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x150, name = "RXF2_PUTGET2", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x154, name = "RXF2_PUTGET3", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x158, name = "RXF3_PUTGET0", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x15c, name = "RXF3_PUTGET1", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x160, name = "RXF3_PUTGET2", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x164, name = "RXF3_PUTGET3", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x168, name = "GPIOBASE", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x16c, name = "INTR", width = 32, access = "rw", write_kind = "w1c", atomic_max = 32 },
+  { offset = 0x170, name = "IRQ0_INTE", width = 32, access = "rw", atomic_max = 32, irq = 17 },
+  { offset = 0x174, name = "IRQ0_INTF", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x178, name = "IRQ0_INTS", width = 32, access = "ro", atomic_max = 32, irq = 17 },
+  { offset = 0x17c, name = "IRQ1_INTE", width = 32, access = "rw", atomic_max = 32, irq = 18 },
+  { offset = 0x180, name = "IRQ1_INTF", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x184, name = "IRQ1_INTS", width = 32, access = "ro", atomic_max = 32, irq = 18 },
 ]
 
-# SIO (RP2350 §2.5), base 0xD0000000, SIO_IRQ_PROC0 = 15.
+# SIO (DS2 3.1), base 0xd0000000. SET/CLR/XOR and OE aliases follow the
+# RP2350 layout with the GPIO_HI registers interleaved (not the RP2040
+# layout). Spinlock reads acquire the lock (read_kind=effectful).
+# INTERP*/TMDS* application accelerators are excluded (docs/descriptor-notes.md).
 [[platform.devices]]
 map = "SIO"
 instance = "sio"
-aperture = 3
+aperture = 2
 base_offset = 0x0000
 registers = [
-  { offset = 0x04, name = "GPIO_IN", width = 32, access = "ro", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x10, name = "GPIO_OUT", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x14, name = "GPIO_OUT_SET", width = 32, access = "rw", write_kind = "w1s", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x18, name = "GPIO_OUT_CLR", width = 32, access = "rw", write_kind = "w1c", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x1C, name = "GPIO_OUT_XOR", width = 32, access = "rw", write_kind = "w1c", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x20, name = "GPIO_OE", width = 32, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x24, name = "GPIO_OE_SET", width = 32, access = "rw", write_kind = "w1s", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x28, name = "GPIO_OE_CLR", width = 32, access = "rw", write_kind = "w1c", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x50, name = "FIFO_ST", width = 32, access = "ro", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x54, name = "FIFO_WR", width = 32, access = "wo", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
-  { offset = 0x58, name = "FIFO_RD", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32 },
-  { offset = 0x64, name = "IRQ", width = 32, access = "rw", write_kind = "w1c", read_kind = "plain", atomic_max = 32, irq = 15 },
+  { offset = 0x000, name = "CPUID", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x004, name = "GPIO_IN", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x008, name = "GPIO_HI_IN", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x010, name = "GPIO_OUT", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x014, name = "GPIO_HI_OUT", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x018, name = "GPIO_OUT_SET", width = 32, access = "rw", write_kind = "w1s", atomic_max = 32 },
+  { offset = 0x01c, name = "GPIO_HI_OUT_SET", width = 32, access = "rw", write_kind = "w1s", atomic_max = 32 },
+  { offset = 0x020, name = "GPIO_OUT_CLR", width = 32, access = "rw", write_kind = "w1c", atomic_max = 32 },
+  { offset = 0x024, name = "GPIO_HI_OUT_CLR", width = 32, access = "rw", write_kind = "w1c", atomic_max = 32 },
+  { offset = 0x028, name = "GPIO_OUT_XOR", width = 32, access = "rw", write_kind = "xor", atomic_max = 32 },
+  { offset = 0x02c, name = "GPIO_HI_OUT_XOR", width = 32, access = "rw", write_kind = "xor", atomic_max = 32 },
+  { offset = 0x030, name = "GPIO_OE", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x034, name = "GPIO_HI_OE", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x038, name = "GPIO_OE_SET", width = 32, access = "rw", write_kind = "w1s", atomic_max = 32 },
+  { offset = 0x03c, name = "GPIO_HI_OE_SET", width = 32, access = "rw", write_kind = "w1s", atomic_max = 32 },
+  { offset = 0x040, name = "GPIO_OE_CLR", width = 32, access = "rw", write_kind = "w1c", atomic_max = 32 },
+  { offset = 0x044, name = "GPIO_HI_OE_CLR", width = 32, access = "rw", write_kind = "w1c", atomic_max = 32 },
+  { offset = 0x048, name = "GPIO_OE_XOR", width = 32, access = "rw", write_kind = "xor", atomic_max = 32 },
+  { offset = 0x04c, name = "GPIO_HI_OE_XOR", width = 32, access = "rw", write_kind = "xor", atomic_max = 32 },
+  { offset = 0x050, name = "FIFO_ST", width = 32, access = "ro", atomic_max = 32, irq = 25 },
+  { offset = 0x054, name = "FIFO_WR", width = 32, access = "wo", atomic_max = 32, irq = 25 },
+  { offset = 0x058, name = "FIFO_RD", width = 32, access = "ro", read_kind = "effectful", atomic_max = 32, irq = 25 },
+  { offset = 0x05c, name = "SPINLOCK_ST", width = 32, access = "ro", atomic_max = 32 },
+  { offset = 0x100, name = "SPINLOCK0", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x104, name = "SPINLOCK1", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x108, name = "SPINLOCK2", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x10c, name = "SPINLOCK3", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x110, name = "SPINLOCK4", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x114, name = "SPINLOCK5", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x118, name = "SPINLOCK6", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x11c, name = "SPINLOCK7", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x120, name = "SPINLOCK8", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x124, name = "SPINLOCK9", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x128, name = "SPINLOCK10", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x12c, name = "SPINLOCK11", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x130, name = "SPINLOCK12", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x134, name = "SPINLOCK13", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x138, name = "SPINLOCK14", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x13c, name = "SPINLOCK15", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x140, name = "SPINLOCK16", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x144, name = "SPINLOCK17", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x148, name = "SPINLOCK18", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x14c, name = "SPINLOCK19", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x150, name = "SPINLOCK20", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x154, name = "SPINLOCK21", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x158, name = "SPINLOCK22", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x15c, name = "SPINLOCK23", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x160, name = "SPINLOCK24", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x164, name = "SPINLOCK25", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x168, name = "SPINLOCK26", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x16c, name = "SPINLOCK27", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x170, name = "SPINLOCK28", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x174, name = "SPINLOCK29", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x178, name = "SPINLOCK30", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x17c, name = "SPINLOCK31", width = 32, access = "rw", read_kind = "effectful", atomic_max = 32 },
+  { offset = 0x180, name = "DOORBELL_OUT_SET", width = 32, access = "rw", atomic_max = 32, irq = 26 },
+  { offset = 0x184, name = "DOORBELL_OUT_CLR", width = 32, access = "rw", atomic_max = 32, irq = 26 },
+  { offset = 0x188, name = "DOORBELL_IN_SET", width = 32, access = "rw", atomic_max = 32, irq = 26 },
+  { offset = 0x18c, name = "DOORBELL_IN_CLR", width = 32, access = "rw", write_kind = "w1c", atomic_max = 32, irq = 26 },
+  { offset = 0x190, name = "PERI_NONSEC", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x1a0, name = "RISCV_SOFTIRQ", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x1a4, name = "MTIME_CTRL", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x1b0, name = "MTIME", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x1b4, name = "MTIMEH", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x1b8, name = "MTIMECMP", width = 32, access = "rw", atomic_max = 32 },
+  { offset = 0x1bc, name = "MTIMECMPH", width = 32, access = "rw", atomic_max = 32 },
 ]
 
-[platform.metal.trust]         # empty by default; lists asm-backed words
-words = []                     # e.g. ["platform.boot.enter_xip"]
+# asm-backed words enumerated per D-10 (see docs/descriptor-notes.md for the
+# per-word rationale; no silent asm convention remains for this pack).
+[platform.metal.trust]
+words = [
+  "platform.gpio.init",
+  "platform.gpio.write",
+  "platform.gpio.read",
+  "platform.uart.init",
+  "platform.uart.tx",
+  "platform.uart.rx",
+  "platform.time.now_us",
+  "platform.time.reboot",
+  "testio.write-byte",
+  "testio.write-str",
+  "testio.exit",
+  "platform.mem.region-create",
+  "platform.mem.region-alloc",
+  "platform.mem.region-reset",
+  "platform.mem.region-destroy",
+]

@@ -1012,7 +1012,7 @@ impl<'a> ArmThumbBackend<'a> {
                 }
                 Ok(())
             }
-            lir::WriteKind::W1s | lir::WriteKind::W1c => {
+            lir::WriteKind::W1s | lir::WriteKind::W1c | lir::WriteKind::Xor => {
                 // RMW: mask the value to the width, load, orr/bic, store back
                 // (the register's width-matched load/store avoids over-reading
                 // neighbouring registers).
@@ -1037,6 +1037,7 @@ impl<'a> ArmThumbBackend<'a> {
                 match write_kind {
                     lir::WriteKind::W1s => self.out.write(b"\torrs r3, r3, r0\n"),
                     lir::WriteKind::W1c => self.out.write(b"\tbics r3, r3, r0\n"),
+                    lir::WriteKind::Xor => self.out.write(b"\teors r3, r3, r0\n"),
                     lir::WriteKind::Plain => {} // unreachable: outer guard
                 }
                 let store: &[u8] = match bits {

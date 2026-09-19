@@ -296,6 +296,7 @@ pub fn mmio_cell(
                 WriteKind::Plain => StrategyCell::Supported { pattern: "s*" },
                 WriteKind::W1c => StrategyCell::Supported { pattern: "RMW and" },
                 WriteKind::W1s => StrategyCell::Supported { pattern: "RMW or" },
+                WriteKind::Xor => StrategyCell::Supported { pattern: "RMW xor" },
             },
             MmioOp::StoreField => StrategyCell::Supported { pattern: "RMW field" },
         },

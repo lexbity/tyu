@@ -99,6 +99,10 @@ pub struct MmioAperture {
     /// Binding-time relocation ISA for this aperture's base (P6). `None` for
     /// emulated apertures (runtime-dynamic addressing).
     pub reloc_isa: Option<codegen_core::RelocIsa>,
+    /// Deliberate test fiction: this aperture aliases a `[memory]` region
+    /// (the QEMU/HIL scratch apertures, D-14). Only legal when declared;
+    /// undeclared aperture/memory overlap is a validation error (E3647).
+    pub scratch: bool,
 }
 
 /// How a aperture is backed.
@@ -198,6 +202,7 @@ pub enum WriteKind {
     Plain,
     W1s,
     W1c,
+    Xor,
 }
 
 impl WriteKind {
@@ -206,6 +211,7 @@ impl WriteKind {
             WriteKind::Plain => "plain",
             WriteKind::W1s => "w1s",
             WriteKind::W1c => "w1c",
+            WriteKind::Xor => "xor",
         }
     }
 }

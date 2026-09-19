@@ -91,7 +91,8 @@ fn e3648_unbindable_bus_aperture() {
         instance: atom(b"bus"),
         aperture: 0,
         base_offset: 0,
-        registers: [codegen_core::compiled_desc::CompiledRegister::EMPTY; 32],
+        registers: [codegen_core::compiled_desc::CompiledRegister::EMPTY;
+            codegen_core::compiled_desc::COMPILED_DESC_REGISTER_CAP],
         register_count: 1,
     };
     cd.devices[0].registers[0] = codegen_core::compiled_desc::CompiledRegister {

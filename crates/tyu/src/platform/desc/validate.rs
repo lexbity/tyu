@@ -21,7 +21,7 @@ pub fn validate(desc: &Descriptor, pack_root: Option<&Path>) -> Vec<DescriptorEr
 
     validate_apertures(desc, &mut errors);
     validate_devices(desc, &mut errors);
-    validate_allocator(desc, &mut errors);
+    validate_allocator(desc, pack_root, &mut errors);
     validate_metal_trust(desc, pack_root, &mut errors);
 
     errors
@@ -73,6 +73,28 @@ fn validate_apertures(desc: &Descriptor, errors: &mut Vec<DescriptorError>) {
                 "aperture [{}] '{}': an emulated aperture must not declare a bind (its addressing is runtime-dynamic)",
                 w.id, w.name
             )));
+        }
+    }
+
+    // Rule (P8): a bus aperture must not alias a [memory] region unless it is
+    // declared `scratch = true` (the D-14 QEMU/HIL test fiction). A silent
+    // aperture/SRAM overlap on a real board is exactly the "module writes
+    // whatever occupies those addresses" hazard symbolic MMIO exists to
+    // prevent. Emulated apertures (link-time base) carry no board address.
+    for w in &desc.apertures {
+        if w.kind != ApertureKind::Bus || w.scratch {
+            continue;
+        }
+        let Some(base) = w.base else { continue };
+        let end = base.saturating_add(w.size as u64);
+        for r in &desc.memory.regions {
+            let r_end = r.origin.saturating_add(r.length);
+            if base < r_end && r.origin < end {
+                errors.push(err(format!(
+                    "aperture [{}] '{}' at 0x{:x}..0x{:x} overlaps memory region '{}' — declare `scratch = true` if this is the deliberate QEMU/HIL test fiction",
+                    w.id, w.name, base, end, r.name
+                )));
+            }
         }
     }
 
@@ -210,10 +232,25 @@ fn validate_register(d: &DeviceMap, r: &RegisterRow, errors: &mut Vec<Descriptor
     }
 }
 
-fn validate_allocator(desc: &Descriptor, errors: &mut Vec<DescriptorError>) {
+fn validate_allocator(
+    desc: &Descriptor,
+    pack_root: Option<&Path>,
+    errors: &mut Vec<DescriptorError>,
+) {
     let Some(a) = &desc.allocator else {
         return;
     };
+    // Rule (P8): the declared allocator implementation module must exist in
+    // the pack; a dangling `impl` path would advertise an implementation
+    // nothing can resolve.
+    if let Some(root) = pack_root {
+        if !a.impl_path.is_empty() && !root.join(&a.impl_path).is_dir() {
+            errors.push(err(format!(
+                "allocator impl '{}' does not exist in the platform pack",
+                a.impl_path
+            )));
+        }
+    }
 
     // Rule: allocator region must name a [memory] region.
     let Some(region) = desc.region(&a.region) else {
@@ -588,6 +625,90 @@ offset = 0x4000
 length = 0x1000
 "#;
         assert!(validate(&parse(text), None).is_empty());
+    }
+
+    #[test]
+    fn bus_aperture_aliasing_memory_requires_scratch_flag() {
+        // The D-14 QEMU scratch is a deliberate fiction; undeclared, it is
+        // exactly the "module writes whatever occupies those addresses"
+        // hazard symbolic MMIO exists to prevent.
+        let text = r#"
+[platform]
+name = "t"
+schema = 2
+
+[memory]
+sram = { name = "SRAM", origin = 0x20000000, length = 0x82000 }
+
+[[platform.apertures]]
+id = 0
+name = "evil"
+kind = "bus"
+base = 0x20000000
+size = 0x1000
+"#;
+        let errors = validate(&parse(text), None);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.detail.contains("overlaps memory region 'SRAM'")
+                    && e.detail.contains("scratch = true")),
+            "unexpected errors: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn scratch_aperture_aliasing_memory_passes() {
+        let text = r#"
+[platform]
+name = "t"
+schema = 2
+
+[memory]
+sram = { name = "SRAM", origin = 0x20000000, length = 0x82000 }
+
+[[platform.apertures]]
+id = 0
+name = "scratch"
+kind = "bus"
+base = 0x20000000
+size = 0x1000
+scratch = true
+"#;
+        assert!(validate(&parse(text), None).is_empty());
+    }
+
+    #[test]
+    fn allocator_impl_must_exist_in_pack() {
+        let text = r#"
+[platform]
+name = "t"
+schema = 2
+
+[memory]
+sram = { name = "SRAM", origin = 0x20000000, length = 0x82000 }
+
+[platform.allocator]
+region = "SRAM"
+offset = 0x8400
+length = 0x1000
+impl = "glue/region"
+"#;
+        let dir = std::env::temp_dir().join("tyu_desc_alloc_impl_missing");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let errors = validate(&parse(text), Some(&dir));
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.detail.contains("allocator impl 'glue/region' does not exist")),
+            "unexpected errors: {errors:?}"
+        );
+
+        // With the directory present the descriptor validates.
+        std::fs::create_dir_all(dir.join("glue/region")).unwrap();
+        assert!(validate(&parse(text), Some(&dir)).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

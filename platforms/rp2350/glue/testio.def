@@ -1,0 +1,6 @@
+module platform/testio;
+: testio.write-byte ( i64 -- ) ;
+: testio.write-str  ( str -- ) ;
+: testio.exit       ( i64 -- ) ;
+export { testio.write-byte testio.write-str testio.exit };
+end;

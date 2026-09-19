@@ -162,16 +162,14 @@ fn build_rp2350_emits_image_def_and_lmod() {
         "missing .vectors section:\n{sections}"
     );
 
-    let linker_script = out_dir.join("rp2350.link.ld");
+    // Layout is owned by the pack's metal link.ld (which places .image_def
+    // inside the bootrom's first-4 kB scan window); the build no longer
+    // renders a parallel script for boot=image_def packs.
+    let generated = out_dir.join("rp2350.link.ld");
     assert!(
-        linker_script.exists(),
-        "generated rp2350 linker script missing"
+        !generated.exists(),
+        "build must not generate a parallel linker script for boot=image_def packs"
     );
-    let script = fs::read_to_string(&linker_script).unwrap();
-    assert!(script.contains("0x10000000"));
-    assert!(script.contains("0x00400000"));
-    assert!(script.contains("0x20000000"));
-    assert!(script.contains("0x00084000"));
 }
 
 #[test]

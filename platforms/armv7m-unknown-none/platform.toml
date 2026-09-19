@@ -65,6 +65,7 @@ evidence = "evidence/debug_escalate.md"
 id = 0
 name = "scratch"               # lm3s6965evb SRAM; QEMU MMIO scratch (D-14)
 kind = "bus"
+scratch = true                 # deliberately aliases SRAM (test fiction)
 bind = "arm-thumb-ldr-literal"
 base = 0x20000000
 size = 0x10000
@@ -152,6 +153,7 @@ registers = [
   { offset = 0x14, name = "FIFO32", width = 32, access = "rw", write_kind = "plain", read_kind = "effectful", atomic_max = 32 },
   { offset = 0x18, name = "SETEFF", width = 32, access = "rw", write_kind = "w1s", read_kind = "effectful", atomic_max = 32 },
   { offset = 0x20, name = "WIDEW", width = 64, access = "rw", write_kind = "plain", read_kind = "plain", atomic_max = 32 },
+  { offset = 0x28, name = "SETXOR", width = 32, access = "rw", write_kind = "xor", read_kind = "plain", atomic_max = 32 },
 ]
 
 [[platform.devices]]

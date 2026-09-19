@@ -134,6 +134,27 @@ pub fn emit_mmio_store(
                 _ => {}
             }
         }
+        lir::WriteKind::Xor => {
+            // Write-1-to-invert: *reg = *reg ^ value
+            match width {
+                1 => gen.out.write(b"  movzx rdx, byte [__mmio_mem + rax]\n"),
+                2 => gen.out.write(b"  movzx rdx, word [__mmio_mem + rax]\n"),
+                4 => gen.out.write(b"  mov edx, dword [__mmio_mem + rax]\n"),
+                8 => gen.out.write(b"  mov rdx, qword [__mmio_mem + rax]\n"),
+                _ => {
+                    gen.emit_trap_with_loc(lir::trap_code_u32(lir::TrapCode::Unreachable), span);
+                    return Ok(());
+                }
+            }
+            gen.out.write(b"  xor rdx, rcx\n");
+            match width {
+                1 => gen.out.write(b"  mov byte [__mmio_mem + rax], dl\n"),
+                2 => gen.out.write(b"  mov word [__mmio_mem + rax], dx\n"),
+                4 => gen.out.write(b"  mov dword [__mmio_mem + rax], edx\n"),
+                8 => gen.out.write(b"  mov qword [__mmio_mem + rax], rdx\n"),
+                _ => {}
+            }
+        }
     }
     Ok(())
 }

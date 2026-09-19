@@ -38,10 +38,11 @@ pub fn format_descriptor_report(desc: &Descriptor) -> String {
             .reloc_isa
             .map(|r| format!(" bind={}", reloc_isa_str(r)))
             .unwrap_or_default();
+        let scratch = if w.scratch { " scratch" } else { "" };
         let _ = writeln!(
             &mut out,
-            "  [{}] {} kind={}{} base={} size={:#x}",
-            w.id, w.name, w.kind.as_str(), bind, base, w.size
+            "  [{}] {} kind={}{} base={} size={:#x}{}",
+            w.id, w.name, w.kind.as_str(), bind, base, w.size, scratch
         );
     }
 

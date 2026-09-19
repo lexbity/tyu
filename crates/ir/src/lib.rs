@@ -67,6 +67,7 @@ pub const ACCESS_WRITE: u8 = 2;
 pub const ACCESS_W1S: u8 = 4;
 pub const ACCESS_W1C: u8 = 8;
 pub const ACCESS_EFFECTFUL_READ: u8 = 16;
+pub const ACCESS_XOR: u8 = 32;
 
 /// How a memory-mapped aperture is backed (design doc §5.2, D-7).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -681,6 +682,9 @@ pub enum WriteKind {
     W1c,
     /// Write-1-to-set: writing 1 sets the bit; writing 0 has no effect.
     W1s,
+    /// Write-1-to-invert (atomic XOR alias): writing 1 toggles the bit;
+    /// writing 0 has no effect.
+    Xor,
 }
 
 /// Whether a *load* has side effects on the device (D-3 rule R1).
@@ -1210,7 +1214,9 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
                 // R1 (D-3): a w1s/w1c store is a read-modify-write; on an
                 // effectful register that read is a phantom bus read.
                 if read_kind == ReadKind::Effectful
-                    && (write_kind == WriteKind::W1s || write_kind == WriteKind::W1c)
+                    && (write_kind == WriteKind::W1s
+                        || write_kind == WriteKind::W1c
+                        || write_kind == WriteKind::Xor)
                 {
                     return Err(VerifyError::MmioPhantomRead { span: op.span });
                 }
@@ -1664,6 +1670,7 @@ fn write_op(out: &mut impl Output, w: &Word, op: &Op) {
             out.write(match write_kind {
                 WriteKind::W1c => b" w1c",
                 WriteKind::W1s => b" w1s",
+                WriteKind::Xor => b" xor",
                 WriteKind::Plain => b"",
             });
             write_access_meta(out, read_kind, atomic_max, barrier);
@@ -1714,6 +1721,7 @@ fn write_op(out: &mut impl Output, w: &Word, op: &Op) {
             out.write(match write_kind {
                 WriteKind::W1c => b" w1c",
                 WriteKind::W1s => b" w1s",
+                WriteKind::Xor => b" xor",
                 WriteKind::Plain => b"",
             });
             write_access_meta(out, read_kind, atomic_max, barrier);

@@ -6,6 +6,7 @@ register-map Strategy
   0x04 STATUS u32 rw
   0x08 SETBITS u32 rw
   0x10 FIFO u8 rw
+  0x28 SETXOR u32 rw
 end;
 
 register-map StrategySeed
@@ -17,6 +18,16 @@ const seed = StrategySeed @ board.strategy_seed;
 
 : check ( bool -- )
   not [ 70 testio.write-byte ] [ ] if ;
+
+: check-xor ( -- )
+  # xor: write-1-invert XORs into SETXOR (RMW xor). Writing the same
+  # value twice returns to the seed, which a plain store cannot produce.
+  &!strategy.SETXOR 0x5 as u32 !u32
+  &strategy.SETXOR @u32 as i64 0x5 == check
+  &!strategy.SETXOR 0x2 as u32 !u32
+  &strategy.SETXOR @u32 as i64 0x7 == check
+  &!strategy.SETXOR 0x2 as u32 !u32
+  &strategy.SETXOR @u32 as i64 0x5 == check ;
 
 : mmio-strategies-x86-run ( -- )
   # w1s: write-1-set ORs into SETBITS (RMW or).
@@ -41,7 +52,9 @@ const seed = StrategySeed @ board.strategy_seed;
 
   # FIFO effectful read: each @u8 is one access.
   &strategy.FIFO @u8 drop
-  &strategy.FIFO @u8 drop ;
+  &strategy.FIFO @u8 drop
+
+  check-xor ;
 
 export { mmio-strategies-x86-run };
 end;

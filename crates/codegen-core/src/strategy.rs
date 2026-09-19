@@ -50,7 +50,7 @@ pub fn render_strategy_matrix(
 ) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "# {backend} MMIO strategy matrix (design doc §5.6)");
-    for strategy in [WriteKind::Plain, WriteKind::W1s, WriteKind::W1c] {
+    for strategy in [WriteKind::Plain, WriteKind::W1s, WriteKind::W1c, WriteKind::Xor] {
         for kind in [ApertureKind::Bus, ApertureKind::Emulated] {
             for op in [MmioOp::Load, MmioOp::Store, MmioOp::LoadField, MmioOp::StoreField] {
                 let cell = cell(strategy, kind, op);
@@ -87,9 +87,10 @@ pub const FIXTURE_MAP: &str = "\n\
 #   plain  bus       ld/st      mmio_smoke_{arm,riscv}\n\
 #   w1s    bus       st         mmio_strategies_{arm,riscv} (RMW or/orr)\n\
 #   w1c    bus       st         mmio_strategies_{arm,riscv} (RMW and/bic)\n\
+#   xor    bus       st         mmio_strategies_{arm,riscv} (RMW xor/eor)\n\
 #   field-ld/st       bus       mmio_strategies_* (FIFO32 field via brace block)\n\
 #   plain  emulated  ld/st      mmio_smoke_x86\n\
-#   w1s/w1c emulated st         mmio_strategies_x86 (RMW or / RMW andn)\n\
+#   w1s/w1c/xor emulated st      mmio_strategies_x86 (RMW or / RMW andn / RMW xor)\n\
 #   E3642  any        field-st-on-effectful  platform_resolution::e3642_*\n\
 #   E3643  any        over-atomic_max        platform_resolution::e3643_over_wide\n\
 ";
@@ -99,6 +100,7 @@ fn strategy_str(s: WriteKind) -> &'static str {
         WriteKind::Plain => "plain",
         WriteKind::W1s => "w1s",
         WriteKind::W1c => "w1c",
+        WriteKind::Xor => "xor",
     }
 }
 

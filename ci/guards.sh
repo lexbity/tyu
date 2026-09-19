@@ -450,18 +450,43 @@ else
     failures=$((failures + 1))
 fi
 
-# --- G14c: rp2350 datasheet-derived device tables are present (P8) ---
-# The P1-era rp2350 descriptor pinned the *shape* with a single placeholder
-# device. P8 fills the register tables from the RP2350 datasheet; this guard
-# is the renewed baseline: the board's peripheral blocks and their interrupt
-# request numbers must be in the descriptor, not a 3-row stub.
+# --- G14c: rp2350 datasheet facts are anchored (P8, renewed by the audit) ---
+# Presence alone proved too weak: the first P8 draft passed this guard with
+# RP2040-era bases and IRQ numbers. The guard now anchors load-bearing
+# datasheet values (RP-008373-DS-2 Tables 13/14/95); the full row-level pin
+# lives in crates/tyu/tests/rp2350_datasheet_facts.rs (docs-as-tests).
 rp2350_devices=$(grep -c '^\[\[platform.devices\]\]' platforms/rp2350/platform.toml || true)
 rp2350_irqs=$(grep -c 'irq = ' platforms/rp2350/platform.toml || true)
-rp2350_interrupts=$(grep -c 'interrupt = ' platforms/rp2350/platform.toml || true)
-if [ "$rp2350_devices" -ge 10 ] && [ "$rp2350_irqs" -ge 8 ]; then
-    msg $GREEN "  G14c: rp2350 descriptor carries datasheet device tables (devices=$rp2350_devices irq_rows=$rp2350_irqs)"
+rp2350_ok=1
+# Correct RP2350 anchors (DS2): IO_BANK0 base_offset 0x28000, UART0 0x70000,
+# TIMER0 0xb0000, QMI/XIP_QMI 0xd0000; SRAM is 520 kB = 0x82000.
+for anchor in 'base_offset = 0x28000' 'base_offset = 0x70000' 'base_offset = 0xb0000' \
+              'base_offset = 0xd0000' 'length = 0x00082000'; do
+    if ! grep -qF "$anchor" platforms/rp2350/platform.toml; then
+        msg $RED "  G14c FAIL: rp2350 descriptor missing datasheet anchor: $anchor"
+        rp2350_ok=0
+    fi
+done
+# RP2040-era values must be gone entirely.
+for stale in '0x14000' '0x34000' '0x54000' '0x60000' '0x00084000' 'PADS_BANK0_BASE, 0x4001C000' 'SIO_GPIO_OUT_SET,0x014'; do
+    if grep -rqF "$stale" platforms/rp2350/; then
+        msg $RED "  G14c FAIL: rp2350 pack carries RP2040-era value: $stale"
+        rp2350_ok=0
+    fi
+done
+# IRQ numbers: Table 95 values must appear (GPIO 21, UART0 33, SPI0 31).
+for irq in 'irq = 21' 'irq = 33' 'irq = 31' 'irq = 36'; do
+    if ! grep -qF "$irq" platforms/rp2350/platform.toml; then
+        msg $RED "  G14c FAIL: rp2350 descriptor missing IRQ anchor: $irq"
+        rp2350_ok=0
+    fi
+done
+if [ "$rp2350_ok" -eq 1 ] && [ "$rp2350_devices" -ge 10 ] && [ "$rp2350_irqs" -ge 8 ]; then
+    msg $GREEN "  G14c: rp2350 descriptor anchors the RP2350 datasheet (devices=$rp2350_devices irq_rows=$rp2350_irqs)"
 else
-    msg $RED "  G14c FAIL: rp2350 datasheet tables incomplete (devices=$rp2350_devices irqs=$rp2350_irqs)"
+    if [ "$rp2350_ok" -eq 1 ]; then
+        msg $RED "  G14c FAIL: rp2350 datasheet tables incomplete (devices=$rp2350_devices irqs=$rp2350_irqs)"
+    fi
     failures=$((failures + 1))
 fi
 

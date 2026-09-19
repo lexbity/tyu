@@ -36,7 +36,7 @@ A borrow is an ownership-limited access to a region or root. The borrow rules ar
 
 ## Region
 
-A region is the allocation discipline used by Tyu instead of GC. See `crates/semantics/src/types.rs`, `crates/ir/src/lib.rs`, and the code generators in `crates/codegen-x86_64/src/word.rs`, `crates/codegen-arm/src/word.rs`, and `crates/codegen-riscv/src/word.rs`.
+A region is the allocation discipline used by Tyu instead of GC. Allocation goes through the platform words `platform.mem.region-create/alloc/reset/destroy`; exhaustion raises trap 26 (`RegionExhausted`). See `crates/semantics/src/types.rs`, `crates/ir/src/lib.rs`, and the code generators in `crates/codegen-x86_64/src/word.rs`, `crates/codegen-arm/src/word.rs`, and `crates/codegen-riscv/src/word.rs`.
 
 ## Stack bound
 
@@ -57,3 +57,15 @@ A trap code is the numeric diagnostic tag attached to a runtime failure or langu
 ## Loader
 
 The loader is the code path that authenticates, relocates, and maps a `.lmod` module. See `crates/loader-core/src/lib.rs`, `crates/loader-core/src/platform.rs`, and `crates/loader-core/src/load.rs`.
+
+## Aperture
+
+An aperture is a declared, bounded window of memory-mapped I/O — `bus` (real device space) or `emulated` (RAM the runtime owns) — that modules address symbolically as `(aperture, offset)` rather than by absolute address. Apertures are declared in a platform descriptor, carried in the module's aperture-use table (modinfo v4), and bound to the board's base addresses by the loader at load time. See `crates/ir/src/lib.rs`, `crates/loader-core/src/apertures.rs`, and the `[[platform.apertures]]` sections in `platforms/*/platform.toml`.
+
+## Platform descriptor
+
+The platform descriptor (`platform.toml`, schema 2) is the validated, canonically serialized fact sheet for one board: memory regions, MMIO apertures, device/register tables with per-register access semantics, allocator span, and the `metal.trust` list. The compiler requires it for MMIO compilation (`--platform=<dir|pack>`), and the loader consumes its compiled projection (never TOML on device). See `crates/tyu/src/platform/desc/`, `crates/tyu/src/platform.rs`, and `platforms/rp2350/platform.toml`.
+
+## `platform_hash`
+
+`platform_hash` is the FNV-1a-64 hash of a platform descriptor's canonical serialization, stamped into modinfo v4 and compared by the loader — a mismatch rejects the module (`E5220`, wrong board) before any binding or relocation. See `crates/tyu/src/platform/desc/canonical.rs`, `crates/lmod/src/modinfo.rs`, and `crates/loader-core/src/apertures.rs`.

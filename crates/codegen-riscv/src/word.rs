@@ -783,7 +783,7 @@ impl<'a> RiscVBackend<'a> {
                 }
                 Ok(())
             }
-            lir::WriteKind::W1s | lir::WriteKind::W1c => {
+            lir::WriteKind::W1s | lir::WriteKind::W1c | lir::WriteKind::Xor => {
                 let load: &[u8] = match bits {
                     8 => &b"\tlbu a3, 0(a2)\n"[..],
                     16 => &b"\tlhu a3, 0(a2)\n"[..],
@@ -803,6 +803,7 @@ impl<'a> RiscVBackend<'a> {
                 match write_kind {
                     lir::WriteKind::W1s => self.out.write(b"\tor a3, a3, a0\n"),
                     lir::WriteKind::W1c => self.out.write(b"\tnot a0, a0\n\tand a3, a3, a0\n"),
+                    lir::WriteKind::Xor => self.out.write(b"\txor a3, a3, a0\n"),
                     lir::WriteKind::Plain => {} // unreachable: outer guard
                 }
                 let store: &[u8] = match bits {
