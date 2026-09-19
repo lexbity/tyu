@@ -493,6 +493,37 @@ else
     failures=$((failures + 1))
 fi
 
+# --- G17: P6 window-base binding is wired end-to-end ---
+# The steel thread: bus windows declare a bind; the backends emit the
+# `__lang_window_{id}_base` reloc site; the pack maps+binds it (MmioWindowBase);
+# the loader re-derives + validates (check_window_base). A missing link means a
+# module silently bakes an absolute base and cannot be re-validated on-device.
+bind_decls=$(grep -h -c "bind = \"arm-thumb-ldr-literal\"\|bind = \"riscv-hi20-lo12\"" platforms/*/platform.toml 2>/dev/null | awk '{s+=$1} END {print s+0}')
+backend_sites=$(grep -h -c "__lang_window_" crates/codegen-arm/src/word.rs crates/codegen-riscv/src/word.rs | awk '{s+=$1} END {print s+0}')
+loader_check=$(grep -h -c "WindowBaseMismatch\|window_base(" crates/loader-core/src/load.rs crates/loader-core/src/boot.rs crates/loader-core/src/platform.rs | awk '{s+=$1} END {print s+0}')
+pack_bind=$(grep -h -c "window_base_id\|apply_base" crates/lmod-pack/src/lib.rs | awk '{s+=$1} END {print s+0}')
+if [ "$bind_decls" -ge 2 ] && [ "$backend_sites" -ge 2 ] && [ "$loader_check" -ge 2 ] && [ "$pack_bind" -ge 2 ]; then
+    msg $GREEN "  G17: window-base binding wired end-to-end (descriptor -> pack -> loader check_window_base)"
+else
+    msg $RED "  G17 FAIL: P6 window-base binding is incomplete (bind_decls=$bind_decls backend_sites=$backend_sites loader_check=$loader_check pack_bind=$pack_bind)"
+    failures=$((failures + 1))
+fi
+
+# --- G18: P7 set-payload region protocol + trap 26 ---
+# The region-with-rollback state machine exists host-side (crypto/region.rs),
+# the key registry resolves set signing keys (crypto/registry.rs), and
+# `RegionExhausted` (trap 26) is a distinct IR trap code with its own text
+# record. A missing piece means the OTA path cannot report/commit/rollback.
+region_state=$(grep -h -c -E "RegionState|RegionLoader|RegionFull" crates/tyu/src/crypto/region.rs | awk '{s+=$1} END {print s+0}')
+key_registry=$(grep -h -c -E "sign_key_for_payload|select_best_sk0|SET_KEY_RANGE" crates/tyu/src/crypto/registry.rs crates/tyu/src/crypto/keys.rs | awk '{s+=$1} END {print s+0}')
+trap26=$(grep -h -c "RegionExhausted" crates/ir/src/lib.rs | awk '{s+=$1} END {print s+0}')
+if [ "$region_state" -ge 3 ] && [ "$key_registry" -ge 3 ] && [ "$trap26" -ge 2 ]; then
+    msg $GREEN "  G18: P7 region-with-rollback + key roster + trap 26 (RegionExhausted) present"
+else
+    msg $RED "  G18 FAIL: P7 set-payload machinery incomplete (region_state=$region_state key_registry=$key_registry trap26=$trap26)"
+    failures=$((failures + 1))
+fi
+
 echo ""
 msg $GREEN "============================================"
 msg $GREEN "Per-package test counts:"

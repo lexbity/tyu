@@ -42,6 +42,12 @@ pub struct DevicePlatform {
     /// `from_linker_symbols`; the test/bring-up constructors leave it
     /// unbounded (`u32::MAX`) since they do not link the runtime DS region.
     ds_remaining_slots: u32,
+    /// The firmware's MMIO window bases (P6), indexed by window id, and how
+    /// many are bound. Emitted by the firmware build from the descriptor
+    /// (`__lang_mmio_window_bases` / `__lang_mmio_window_count`). The loader
+    /// re-derives the same bases from them (`check_window_base`).
+    window_bases: [u32; 8],
+    window_count: usize,
     #[cfg(feature = "signing")]
     sign_key: Option<[u8; KEY_LEN]>,
     #[cfg(feature = "encryption")]
@@ -92,6 +98,9 @@ impl DevicePlatform {
         let mut platform = Self::new(heap_start, heap_end, device_expected_abi_hash());
 
         platform.ds_remaining_slots = ds_remaining_slots;
+        let (window_bases, window_count) = read_window_bases();
+        platform.window_bases = window_bases;
+        platform.window_count = window_count;
         platform
     }
 
@@ -120,6 +129,8 @@ impl DevicePlatform {
                 cursor: heap_start,
                 expected_abi_hash,
                 ds_remaining_slots: u32::MAX,
+                window_bases: [0; 8],
+                window_count: 0,
             }
         }
     }
@@ -139,6 +150,8 @@ impl DevicePlatform {
             cursor: heap_start,
             expected_abi_hash,
             ds_remaining_slots: u32::MAX,
+            window_bases: [0; 8],
+            window_count: 0,
             #[cfg(feature = "signing")]
             sign_key,
             #[cfg(feature = "encryption")]
@@ -199,6 +212,24 @@ fn device_expected_abi_hash() -> u64 {
     lmod::abi_hash::compute_abi_hash(arch_tag, slot_bytes, word_bits, lmod::modinfo::MODINFO_VER)
 }
 
+/// Read the firmware's MMIO window bases (P6) from the linker symbols the
+/// firmware build emits from the descriptor. Unused slots stay zero.
+fn read_window_bases() -> ([u32; 8], usize) {
+    extern "C" {
+        static __lang_mmio_window_bases: u32;
+        static __lang_mmio_window_count: u32;
+    }
+    let base_ptr = core::ptr::addr_of!(__lang_mmio_window_bases) as *const u32;
+    let count_ptr = core::ptr::addr_of!(__lang_mmio_window_count) as *const u32;
+    let count = unsafe { core::ptr::read_volatile(count_ptr) as usize };
+    let count = count.min(8);
+    let mut bases = [0u32; 8];
+    for i in 0..count {
+        bases[i] = unsafe { core::ptr::read_volatile(base_ptr.add(i)) };
+    }
+    (bases, count)
+}
+
 #[cfg(target_arch = "x86_64")]
 fn device_abi_geometry() -> (u8, u8, u8) {
     (lmod::abi_hash::ARCH_TAG_X86_64, 8, 64)
@@ -237,6 +268,11 @@ impl LoaderPlatform for DevicePlatform {
 
     fn expected_abi_hash(&self) -> u64 {
         self.expected_abi_hash
+    }
+
+    /// The firmware's bound base for a window id (P6), if within the table.
+    fn window_base(&self, id: u16) -> Option<u32> {
+        ((id as usize) < self.window_count).then(|| self.window_bases[id as usize])
     }
 
     fn ds_remaining_slots(&self) -> u32 {

@@ -64,6 +64,7 @@ evidence = "evidence/debug_escalate.md"
 id = 0
 name = "scratch"               # virt DRAM; QEMU MMIO scratch (D-14)
 kind = "bus"
+bind = "riscv-hi20-lo12"
 base = 0x80000000
 size = 0x08000000
 

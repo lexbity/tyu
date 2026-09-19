@@ -519,10 +519,9 @@ impl<'a> ArmThumbBackend<'a> {
                 base: lir::AddrOfBase::Mmio { window, offset },
                 ..
             } => {
-                // Symbolic MMIO register address: window_base + offset (P4).
-                let addr = self.mmio_window_addr(window, offset)?;
-                let low = addr as u32;
-                self.emit_const32(low);
+                // Symbolic MMIO register address: window_base + offset (P4),
+                // bound through a relocatable literal site (P6).
+                self.emit_mmio_window_addr(window, offset)?;
                 self.out.write(b"\tstr r0, [r4]\n\tadds r4, r4, #4\n");
                 self.out.write(b"\teors r0, r0\n");
                 self.out.write(b"\tstr r0, [r4]\n\tadds r4, r4, #4\n");
@@ -770,13 +769,12 @@ impl<'a> ArmThumbBackend<'a> {
                 Ok(())
             }
             lir::OpKind::MmioPlace { window, offset, .. } => {
-                // Symbolic place: window_base + offset (P4). The window is
-                // guaranteed declared by construction (descriptor resolution);
-                // the lookup is a loud error if it ever is not.
-                let addr = self.mmio_window_addr(window, offset)?;
+                // Symbolic place: window_base + offset (P4), bound through a
+                // relocatable literal site (P6). The window is guaranteed
+                // declared by construction (descriptor resolution); the
+                // lookup is a loud error if it ever is not.
+                self.emit_mmio_window_addr(window, offset)?;
                 // Push the MMIO address onto DS.
-                let low = addr as u32;
-                self.emit_const32(low);
                 self.out.write(b"\tstr r0, [r4]\n\tadds r4, r4, #4\n");
                 self.out.write(b"\teors r0, r0\n");
                 self.out.write(b"\tstr r0, [r4]\n\tadds r4, r4, #4\n");
@@ -875,6 +873,58 @@ impl<'a> ArmThumbBackend<'a> {
             self.out.write(b"\tldr r0, =");
             write_hex(self.out, val as u64);
             self.out.write(b"\n");
+        }
+    }
+
+    /// Emit the window address of a window-relative place into r0 (P6).
+    /// A bus window with a binding ISA loads the base from a relocatable
+    /// literal site (`ldr r0, =__lang_window_{id}_base`) then adds the
+    /// register offset; an unbound (emulated) window falls back to the
+    /// absolute constant.
+    fn emit_mmio_window_addr(&mut self, window: u16, offset: u32) -> Result<(), CodegenError> {
+        let mut found = None;
+        for i in 0..self.mmio_window_count {
+            if self.mmio_windows[i].id == window {
+                found = Some(&self.mmio_windows[i]);
+                break;
+            }
+        }
+        let Some(spec) = found else {
+            return Err(CodegenError::NoMmioWindow);
+        };
+        match spec.reloc_isa {
+            Some(codegen_core::RelocIsa::ArmThumbLdrLiteral) => {
+                self.out.write(b"\tldr r0, =__lang_window_");
+                write_u32(self.out, window as u32);
+                self.out.write(b"_base\n");
+                self.emit_add_r0_const(offset);
+                Ok(())
+            }
+            _ => {
+                let addr = spec
+                    .base
+                    .ok_or(CodegenError::NoMmioWindow)?
+                    .saturating_add(offset as u64);
+                self.emit_const32(addr as u32);
+                Ok(())
+            }
+        }
+    }
+
+    /// Add a 32-bit constant to r0 (P6 offset add): a small immediate inline,
+    /// otherwise via a scratch constant.
+    fn emit_add_r0_const(&mut self, val: u32) {
+        if val == 0 {
+            return;
+        }
+        if val <= 255 {
+            self.out.write(b"\tadds r0, r0, #");
+            write_u32(self.out, val);
+            self.out.write(b"\n");
+        } else {
+            self.out.write(b"\tldr r1, =");
+            write_hex(self.out, val as u64);
+            self.out.write(b"\n\tadds r0, r0, r1\n");
         }
     }
 

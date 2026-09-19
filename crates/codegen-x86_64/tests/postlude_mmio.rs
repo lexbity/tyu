@@ -42,6 +42,7 @@ fn postlude_with_emulated(size: u32) -> String {
             kind: MmioWindowKind::Emulated,
             base: None,
             size,
+            reloc_isa: None,
         }])
         .unwrap();
     backend.emit_word(&mmio_store_word()).unwrap();

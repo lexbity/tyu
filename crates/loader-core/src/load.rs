@@ -537,6 +537,7 @@ fn apply_import_relocations<const N: usize>(
     container: &Container<'_>,
     hdr: &lmod::header::LmodHeader,
     map: &SymMap<'_, N>,
+    platform: &dyn LoaderPlatform,
     code_len: usize,
 ) -> Result<(), LoadError> {
     let container_code_off = hdr.code_off as u64;
@@ -551,10 +552,28 @@ fn apply_import_relocations<const N: usize>(
         if local_off + need > code_len {
             return Err(LoadError::BadContainer);
         }
+        let code_slice = code.as_mut_slice();
+        // P6: a window-base reloc carries the window id in the symbol-hash
+        // field. Re-derive the base from the device's descriptor binding and
+        // validate the module's packed base against it (`check_window_base`).
+        if entry.kind == lmod::reloc::RelocKind::MmioWindowBase as u8 {
+            let window_id = entry.sym_hash as u16;
+            let Some(base) = platform.window_base(window_id) else {
+                return Err(LoadError::RelocUnsupported);
+            };
+            let claimed =
+                lmod::reloc::RelocKind::read_site_base(code_slice, local_off).ok_or(
+                    LoadError::BadContainer,
+                )?;
+            if claimed != base {
+                return Err(LoadError::WindowBaseMismatch);
+            }
+            continue;
+        }
         let sym = map
             .lookup_by_hash(entry.sym_hash)
             .ok_or(LoadError::SymbolUnresolved)?;
-        dispatch_import_reloc(code.as_mut_slice(), local_off, entry.kind, sym.addr as u64)
+        dispatch_import_reloc(code_slice, local_off, entry.kind, sym.addr as u64)
             .map_err(|_| LoadError::RelocUnsupported)?;
     }
     Ok(())
@@ -720,7 +739,7 @@ pub fn load_module<'a>(
     decrypt_sections(platform, &mut sections, lens, decrypt.as_ref())?;
 
     let code_base = sections.code.as_ptr() as usize;
-    apply_import_relocations(&mut sections.code, container, hdr, sym_guard.map, lens.code)?;
+    apply_import_relocations(&mut sections.code, container, hdr, sym_guard.map, platform, lens.code)?;
 
     let PlacedSections { code, rodata, data } = sections;
     let code_region = platform.make_exec(code)?;

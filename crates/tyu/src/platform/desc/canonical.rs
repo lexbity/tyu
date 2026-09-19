@@ -36,7 +36,7 @@ pub fn canonical_bytes(desc: &Descriptor) -> Vec<u8> {
     encode_str(&mut out, &desc.name);
     encode_str(&mut out, &desc.family);
 
-    // Windows sorted by id: {id, name, kind, base, size}.
+    // Windows sorted by id: {id, name, kind, bind, base, size}.
     let mut windows = desc.windows.clone();
     windows.sort_by_key(|w| w.id);
     encode_u32(&mut out, windows.len() as u32);
@@ -44,6 +44,7 @@ pub fn canonical_bytes(desc: &Descriptor) -> Vec<u8> {
         encode_u16(&mut out, w.id);
         encode_str(&mut out, &w.name);
         encode_u8(&mut out, window_kind_disc(w.kind));
+        encode_u8(&mut out, reloc_isa_disc(w.reloc_isa));
         encode_u64(&mut out, w.base.unwrap_or(0));
         encode_u32(&mut out, w.size);
     }
@@ -144,6 +145,14 @@ fn window_kind_disc(k: WindowKind) -> u8 {
     match k {
         WindowKind::Bus => 0,
         WindowKind::Emulated => 1,
+    }
+}
+
+fn reloc_isa_disc(r: Option<codegen_core::RelocIsa>) -> u8 {
+    match r {
+        None => 0,
+        Some(codegen_core::RelocIsa::ArmThumbLdrLiteral) => 1,
+        Some(codegen_core::RelocIsa::RiscVHi20Lo12) => 2,
     }
 }
 

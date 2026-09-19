@@ -42,6 +42,7 @@ family = "rp2350"
 id = 0
 name = "apb"
 kind = "bus"
+bind = "arm-thumb-ldr-literal"
 base = 0x40000000
 size = 0x10000
 
@@ -49,6 +50,7 @@ size = 0x10000
 id = 1
 name = "mmio"
 kind = "bus"
+bind = "arm-thumb-ldr-literal"
 base = 0x20000000
 size = 0x1000
 
@@ -90,11 +92,13 @@ name = "mmio"
 size = 0x1000
 base = 0x20000000
 kind = "bus"
+bind = "arm-thumb-ldr-literal"
 
 [[platform.windows]]
 id = 0
 name = "apb"
 kind = "bus"
+bind = "arm-thumb-ldr-literal"
 base = 0x40000000
 size = 0x10000
 
@@ -135,6 +139,7 @@ family = "rp2350"
 id = 0
 name = "apb"
 kind = "bus"
+bind = "arm-thumb-ldr-literal"
 base = 0x40000000
 size = 0x10000
 
@@ -142,6 +147,7 @@ size = 0x10000
 id = 1
 name = "mmio"
 kind = "bus"
+bind = "arm-thumb-ldr-literal"
 base = 0x20000000
 size = 0x1000
 
@@ -188,7 +194,7 @@ fn hash_invariant_under_formatting() {
     // Golden pin for the P1 rp2350 descriptor.
     assert_eq!(
         ha,
-        0xa2f5_a534_825f_3fca,
+        0x6098_dc89_8c6e_f1fa,
         "rp2350 platform_hash golden must be stable"
     );
 }
@@ -209,8 +215,8 @@ fn hash_changes_on_semantic_edit() {
         "changing a register write_kind must change platform_hash"
     );
     // Pin both hex values so a semantic drift is caught on either side.
-    assert_eq!(h_base, 0xa2f5_a534_825f_3fca);
-    assert_eq!(h_flipped, 0x4620_8a46_eb09_5b57);
+    assert_eq!(h_base, 0x6098_dc89_8c6e_f1fa);
+    assert_eq!(h_flipped, 0x6afd_da16_2ff9_0f47);
 }
 
 #[test]
@@ -439,6 +445,7 @@ family = "big"
 id = 0
 name = "apb"
 kind = "bus"
+bind = "arm-thumb-ldr-literal"
 base = 0x40000000
 size = 0x10000
 [[platform.devices]]

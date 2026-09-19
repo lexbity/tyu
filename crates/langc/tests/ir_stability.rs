@@ -86,12 +86,12 @@ fn ir_emit_is_byte_stable_and_versioned() {
     // D-8 / FR-6: the first line is `format_ver 4` and the window section is
     // present; no absolute MMIO address may appear anywhere in the text.
     assert!(
-        ir_a.starts_with("format_ver 5\n"),
-        "IR must start with format_ver 5, got: {:?}",
+        ir_a.starts_with("format_ver 6\n"),
+        "IR must start with format_ver 6, got: {:?}",
         &ir_a[..ir_a.find('\n').unwrap_or(0)]
     );
     assert!(
-        ir_a.contains("\nwindows 1\nwindow 0 mmio emulated link 0x10000\n"),
+        ir_a.contains("\nwindows 1\nwindow 0 mmio emulated bind=none link 0x10000\n"),
         "IR must carry the windows section, got:\n{ir_a}"
     );
     assert!(

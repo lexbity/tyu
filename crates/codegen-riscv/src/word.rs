@@ -381,13 +381,10 @@ impl<'a> RiscVBackend<'a> {
                 base: lir::AddrOfBase::Mmio { window, offset },
                 ..
             } => {
-                let addr = self.mmio_window_addr(window, offset)?;
-                let low = addr as u32;
-                let high = (addr >> 32) as u32;
-                self.emit_const32(low);
+                // P6: window_base + offset through a relocatable literal site.
+                self.emit_mmio_window_addr(window, offset)?;
                 self.out.write(b"\tsw a0, 0(s2)\n\taddi s2, s2, 4\n");
-                self.emit_const32(high);
-                self.out.write(b"\tsw a0, 0(s2)\n\taddi s2, s2, 4\n");
+                self.out.write(b"\tli a1, 0\n\tsw a1, 0(s2)\n\taddi s2, s2, 4\n");
                 self.emit_ds_high_update();
                 Ok(true)
             }
@@ -591,15 +588,12 @@ impl<'a> RiscVBackend<'a> {
                 Ok(())
             }
             lir::OpKind::MmioPlace { window, offset, .. } => {
-                // Symbolic place: window_base + offset (P4). The window is
-                // guaranteed declared by construction (descriptor resolution).
-                let addr = self.mmio_window_addr(window, offset)?;
-                let low = addr as u32;
-                let high = (addr >> 32) as u32;
-                self.emit_const32(low);
+                // Symbolic place: window_base + offset (P4), bound through a
+                // relocatable literal site (P6). The window is guaranteed
+                // declared by construction (descriptor resolution).
+                self.emit_mmio_window_addr(window, offset)?;
                 self.out.write(b"\tsw a0, 0(s2)\n\taddi s2, s2, 4\n");
-                self.emit_const32(high);
-                self.out.write(b"\tsw a0, 0(s2)\n\taddi s2, s2, 4\n");
+                self.out.write(b"\tli a1, 0\n\tsw a1, 0(s2)\n\taddi s2, s2, 4\n");
                 self.emit_ds_high_update();
                 Ok(())
             }
@@ -839,6 +833,71 @@ impl<'a> RiscVBackend<'a> {
         self.out.write(b"\n.Laddr_after_");
         write_u32(self.out, id);
         self.out.write(b":\n");
+    }
+
+    /// Emit the window address of a window-relative place into a0 (P6).
+    /// A bus window with a binding ISA loads the base from a relocatable
+    /// literal site (`auipc` + `lw` over `__lang_window_{id}_base`) then adds
+    /// the register offset; an unbound (emulated) window falls back to the
+    /// absolute constant.
+    fn emit_mmio_window_addr(&mut self, window: u16, offset: u32) -> Result<(), CodegenError> {
+        let mut found = None;
+        for i in 0..self.mmio_window_count {
+            if self.mmio_windows[i].id == window {
+                found = Some(&self.mmio_windows[i]);
+                break;
+            }
+        }
+        let Some(spec) = found else {
+            return Err(CodegenError::NoMmioWindow);
+        };
+        match spec.reloc_isa {
+            Some(codegen_core::RelocIsa::RiscVHi20Lo12) => {
+                let id = self.fresh_label();
+                self.out.write(b".Lmmio_load_");
+                write_u32(self.out, id);
+                self.out.write(b":\n\tauipc a0, %pcrel_hi(.Lmmio_word_");
+                write_u32(self.out, id);
+                self.out.write(b")\n\tlw a0, %pcrel_lo(.Lmmio_load_");
+                write_u32(self.out, id);
+                self.out.write(b")(a0)\n\tj .Lmmio_after_");
+                write_u32(self.out, id);
+                self.out.write(b"\n\t.balign 4\n.Lmmio_word_");
+                write_u32(self.out, id);
+                self.out.write(b":\n\t.word __lang_window_");
+                write_u32(self.out, window as u32);
+                self.out.write(b"_base\n.Lmmio_after_");
+                write_u32(self.out, id);
+                self.out.write(b":\n");
+                self.emit_add_a0_const(offset);
+                Ok(())
+            }
+            _ => {
+                let addr = spec
+                    .base
+                    .ok_or(CodegenError::NoMmioWindow)?
+                    .saturating_add(offset as u64);
+                self.emit_const32(addr as u32);
+                Ok(())
+            }
+        }
+    }
+
+    /// Add a 32-bit constant to a0 (P6 offset add): `addi` for a small
+    /// immediate, otherwise via a scratch register.
+    fn emit_add_a0_const(&mut self, val: u32) {
+        if val == 0 {
+            return;
+        }
+        if val <= 2047 {
+            self.out.write(b"\taddi a0, a0, ");
+            write_u32(self.out, val);
+            self.out.write(b"\n");
+        } else {
+            self.out.write(b"\tli a1, ");
+            write_hex(self.out, val);
+            self.out.write(b"\n\tadd a0, a0, a1\n");
+        }
     }
 
     /// Load a register and extract a bitfield (mask+shift).

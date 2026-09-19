@@ -1,9 +1,9 @@
 platform rp2350: ok
 descriptor rp2350 schema=2 family=rp2350
-platform-hash 0xa2f5a534825f3fca
+platform-hash 0x6098dc898c6ef1fa
 windows 2
-  [0] apb kind=bus base=0x40000000 size=0x10000
-  [1] mmio kind=bus base=0x20000000 size=0x1000
+  [0] apb kind=bus bind=arm-thumb-ldr-literal base=0x40000000 size=0x10000
+  [1] mmio kind=bus bind=arm-thumb-ldr-literal base=0x20000000 size=0x1000
 devices 1
   GPIO gpio0 window=0 base_offset=0xd000 extent=0x21
     ctrl offset=0x0000 width=32 access=rw write=plain read=plain atomic=32 mask=0xffffffff reset=0x0 barrier=none

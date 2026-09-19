@@ -58,6 +58,7 @@ fn win(id: u16, size: u32) -> ir::WindowUse {
         base: Some(0x20000000),
         size,
         access_mask: ir::ACCESS_READ | ir::ACCESS_WRITE,
+        bind: ir::BindKind::ArmThumbLdrLiteral,
     }
 }
 

@@ -185,6 +185,12 @@ fn write_windows(out: &mut impl Output, windows: &FixedVec<lir::WindowUse, 8>) {
             lir::WindowKind::Bus => b"bus",
             lir::WindowKind::Emulated => b"emulated",
         });
+        out.write(b" bind=");
+        out.write(match wu.bind {
+            lir::BindKind::None => b"none",
+            lir::BindKind::ArmThumbLdrLiteral => b"arm-thumb-ldr-literal",
+            lir::BindKind::RiscVHi20Lo12 => b"riscv-hi20-lo12",
+        });
         out.write(b" ");
         match wu.base {
             Some(base) => {

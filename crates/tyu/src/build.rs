@@ -198,7 +198,8 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
             let root_obj = module_objs
                 .get(module_count.saturating_sub(1))
                 .ok_or_else(|| TyuError::Build("no root module object to pack".into()))?;
-            pack_final_lmod(root_obj, &out_dir, modules.last().map(|m| m.name.as_str()))?
+            let binds = window_binds(platform_selection.as_ref())?;
+            pack_final_lmod(root_obj, &out_dir, modules.last().map(|m| m.name.as_str()), &binds)?
         };
         (final_image, exec_image)
     };
@@ -236,7 +237,8 @@ fn build_dynamic_image(
     let root_obj = module_objs
         .last()
         .ok_or_else(|| TyuError::Build("no root module object to pack".into()))?;
-    let app_lmod = pack_final_lmod(root_obj, &ctx.out_dir, root_module.map(|m| m.name.as_str()))?;
+    let binds = window_binds(ctx.platform_selection.as_ref())?;
+    let app_lmod = pack_final_lmod(root_obj, &ctx.out_dir, root_module.map(|m| m.name.as_str()), &binds)?;
     let sign_key = resolve_metal_sign_key(metal_sign_key)?;
     let kek = resolve_metal_kek(metal_kek)?;
     if kek.is_some() && sign_key.is_none() {
@@ -386,6 +388,13 @@ fn maybe_apply_test_lmod_mutation(lmod_path: &Path) -> Result<(), TyuError> {
             bytes[reloc_sym_hash..reloc_sym_hash + 8]
                 .copy_from_slice(&0xfeed_dead_beef_cafeu64.to_le_bytes());
         }
+        "window-base-mismatch" => {
+            // Flip the first MmioWindowBase reloc site's bound base so the
+            // loader's `check_window_base` rejects it (P6).
+            let site = lmod_first_window_base_site_offset(&bytes)?;
+            let orig = u32::from_le_bytes(bytes[site..site + 4].try_into().unwrap());
+            bytes[site..site + 4].copy_from_slice(&(orig ^ 0x1000).to_le_bytes());
+        }
         other => {
             return Err(TyuError::Build(format!(
                 "unknown TYU_TEST_MUTATE_LMOD value '{}'",
@@ -450,6 +459,39 @@ fn lmod_first_reloc_offset(bytes: &[u8]) -> Result<usize, TyuError> {
     Ok(reloc_off)
 }
 
+/// The .lmod offset of the first `MmioWindowBase` reloc site (P6), for the
+/// `window-base-mismatch` test mutation.
+fn lmod_first_window_base_site_offset(bytes: &[u8]) -> Result<usize, TyuError> {
+    if bytes.len() < lmod::header::HEADER_SIZE as usize {
+        return Err(TyuError::Build(
+            "test lmod mutation: header too short".into(),
+        ));
+    }
+    let reloc_off = u32::from_le_bytes(bytes[56..60].try_into().unwrap()) as usize;
+    let reloc_count = u32::from_le_bytes(bytes[60..64].try_into().unwrap());
+    for i in 0..reloc_count {
+        let off = reloc_off + i as usize * lmod::reloc::RELOC_ENTRY_SIZE as usize;
+        if off + 13 > bytes.len() {
+            return Err(TyuError::Build(
+                "test lmod mutation: reloc entry out of range".into(),
+            ));
+        }
+        let site = u32::from_le_bytes(bytes[off..off + 4].try_into().unwrap()) as usize;
+        let kind = bytes[off + 12];
+        if kind == lmod::reloc::RelocKind::MmioWindowBase as u8 {
+            if site + 4 > bytes.len() {
+                return Err(TyuError::Build(
+                    "test lmod mutation: window-base site out of range".into(),
+                ));
+            }
+            return Ok(site);
+        }
+    }
+    Err(TyuError::Build(
+        "test lmod mutation needs a window-base reloc".into(),
+    ))
+}
+
 pub fn resolve_build_context(args: &BuildArgs) -> Result<BuildContext, TyuError> {
     let workspace_root = platform::workspace_root();
     let platform_selection = match args.platform.as_deref() {
@@ -492,6 +534,7 @@ fn pack_final_lmod(
     obj_path: &Path,
     out_dir: &Path,
     module_name: Option<&str>,
+    window_binds: &[lmod_pack::WindowBind],
 ) -> Result<PathBuf, TyuError> {
     let lmod_name = match module_name {
         Some(name) if !name.is_empty() => format!("{}.lmod", name),
@@ -500,11 +543,30 @@ fn pack_final_lmod(
     let lmod_path = out_dir.join(lmod_name);
     let obj_bytes = std::fs::read(obj_path)
         .map_err(|e| TyuError::Build(format!("reading '{}': {}", obj_path.display(), e)))?;
-    let packed =
-        lmod_pack::pack(&obj_bytes).map_err(|e| TyuError::Build(format!("lmod-pack: {}", e)))?;
+    let packed = lmod_pack::pack_with_windows(&obj_bytes, window_binds)
+        .map_err(|e| TyuError::Build(format!("lmod-pack: {}", e)))?;
     std::fs::write(&lmod_path, &packed)
         .map_err(|e| TyuError::Build(format!("writing '{}': {}", lmod_path.display(), e)))?;
     Ok(lmod_path)
+}
+
+/// The window binds for a platform selection (P6): the descriptor's windows
+/// with an absolute base, as `(id, base)` pairs the pack binds window-base
+/// reloc sites against. `None` selection (no descriptor) → no binds.
+fn window_binds(selection: Option<&ResolvedPlatformSelection>) -> Result<Vec<lmod_pack::WindowBind>, TyuError> {
+    let Some(selection) = selection else {
+        return Ok(Vec::new());
+    };
+    let compiled = desc::ensure_compiled_descriptor(&selection.pack.manifest_path, selection.pack.pack_root())?;
+    let binds = compiled
+        .windows()
+        .iter()
+        .filter_map(|w| w.base.map(|b| lmod_pack::WindowBind {
+            id: w.id,
+            base: b as u32,
+        }))
+        .collect();
+    Ok(binds)
 }
 
 fn assemble_image_def(
@@ -1113,6 +1175,9 @@ fn assemble_runtime_with_mode(
         objs.push(entry_obj);
     }
 
+    // P6: the MMIO window-base table the on-device loader re-derives against.
+    objs.push(assemble_mmio_windows_object(target, out_dir, platform_selection)?);
+
     // Feature-specific runtime units: assemble each stem that maps to
     // an enabled feature.  `assemble_unit` returns an error for missing
     // files (the unit must exist for at least the targets that enable it).
@@ -1174,6 +1239,70 @@ fn generate_runtime_symtab(
     fs::write(&names_path, render_names(&symbols)).map_err(TyuError::Io)?;
     assemble_asm_file(target, &asm_path, &obj_path, Some(out_dir), "lang_symtab")?;
     Ok(obj_path)
+}
+
+/// Assemble the firmware's MMIO window-base table (P6). The on-device loader
+/// re-derives window bases from this table (`__lang_mmio_window_bases`) and
+/// validates each module's packed bases against it (`check_window_base`).
+/// Assemble the firmware's MMIO window-base table (P6). The on-device loader
+/// re-derives window bases from this table and validates each module's packed
+/// bases against it (`check_window_base`). Emitted unconditionally (a zero
+/// table when no platform selection or no absolute bases) so the loader's
+/// table symbols always resolve.
+fn assemble_mmio_windows_object(
+    target: Target,
+    out_dir: &Path,
+    selection: Option<&platform::ResolvedPlatformSelection>,
+) -> Result<PathBuf, TyuError> {
+    let bases: Vec<u32> = match selection {
+        Some(sel) => desc::ensure_compiled_descriptor(&sel.pack.manifest_path, sel.pack.pack_root())?
+            .windows()
+            .iter()
+            .filter_map(|w| w.base.map(|b| b as u32))
+            .collect(),
+        None => Vec::new(),
+    };
+    let asm_path = out_dir.join("mmio_windows_generated.asm");
+    let obj_path = out_dir.join("mmio_windows_generated.o");
+    let asm = render_mmio_windows_asm(target, &bases);
+    fs::write(&asm_path, asm).map_err(TyuError::Io)?;
+    assemble_asm_file(target, &asm_path, &obj_path, Some(out_dir), "mmio_windows")?;
+    Ok(obj_path)
+}
+
+fn render_mmio_windows_asm(target: Target, bases: &[u32]) -> String {
+    let count = bases.len().min(8);
+    let words: Vec<String> = bases
+        .iter()
+        .take(count)
+        .chain(core::iter::repeat(&0u32))
+        .take(8)
+        .map(|b| format!("{:#x}", b))
+        .collect();
+    match target.spec().assembler {
+        AssemblerKind::Fasm => format!(
+            "format ELF64\n\nsection '.rodata' writeable\n    align 4\n    public __lang_mmio_window_bases\n__lang_mmio_window_bases:\n    dd {}\n    public __lang_mmio_window_count\n__lang_mmio_window_count:\n    dd {}\n",
+            words.join(", "),
+            count
+        ),
+        _ => {
+            // Per-window absolute symbols (`__lang_window_{id}_base`) so a
+            // statically-linked module's literal sites resolve at link time;
+            // plus the table the on-device loader re-derives against (P6).
+            let mut out = String::new();
+            out.push_str(".section .rodata, \"a\", %progbits\n.balign 4\n.global __lang_mmio_window_bases\n__lang_mmio_window_bases:\n  .word ");
+            out.push_str(&words.join("\n  .word "));
+            out.push_str(&format!("\n.global __lang_mmio_window_count\n__lang_mmio_window_count:\n  .word {}\n", count));
+            for (id, base) in bases.iter().take(count).enumerate() {
+                out.push_str(&format!(
+                    ".global __lang_window_{}_base\n.set __lang_window_{}_base, {:#x}\n",
+                    id, id, base
+                ));
+            }
+            out.push_str(".section .note.GNU-stack, \"\", %progbits\n");
+            out
+        }
+    }
 }
 
 fn assemble_modpack_object(

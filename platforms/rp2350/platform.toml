@@ -77,6 +77,7 @@ metadata_slots_max = 64        # diagnostic bound; per-word body count must be <
 id = 0
 name = "apb"
 kind = "bus"
+bind = "arm-thumb-ldr-literal"
 base = 0x40000000
 size = 0x10000
 
@@ -84,6 +85,7 @@ size = 0x10000
 id = 1
 name = "mmio"                  # QEMU/HIL scratch
 kind = "bus"
+bind = "arm-thumb-ldr-literal"
 base = 0x20000000
 size = 0x1000
 

@@ -359,9 +359,15 @@ end;
     let asm = std::fs::read_to_string(&asm_path).unwrap();
 
     // Verify key instructions are present in the assembly.
+    // P6: the window base is bound through a relocatable literal site
+    // (`ldr r0, =__lang_window_0_base`), and the register offset added.
     assert!(
-        asm.contains("ldr r0, =0x20007000"),
-        "MmioPlace / AddrOf must load the MMIO address (0x20007000)"
+        asm.contains("ldr r0, =__lang_window_0_base"),
+        "MmioPlace / AddrOf must load the bound window base (window 0 = 0x20000000)"
+    );
+    assert!(
+        asm.contains("adds r0, r0, r1"),
+        "MmioPlace / AddrOf must add the register offset; got:\n{asm}"
     );
     assert!(
         asm.contains("ldrd r0, r1, [r0]"),

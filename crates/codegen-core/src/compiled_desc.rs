@@ -46,7 +46,7 @@
 
 use core::fmt;
 
-use super::target::{MmioWindowKind, MmioWindowSpec};
+use super::target::{MmioWindowKind, MmioWindowSpec, RelocIsa};
 
 /// Maximum number of windows a compiled descriptor may carry (matches the
 /// loader's window-use table cap, design doc §5.5).
@@ -62,7 +62,7 @@ pub const COMPILED_DESC_REGISTER_CAP: usize = 32;
 pub const COMPILED_DESC_MAX_BYTES: usize = 32 * 1024;
 
 const MAGIC: &[u8; 4] = b"TYDP";
-const FORMAT_VER: u8 = 2;
+const FORMAT_VER: u8 = 3;
 
 /// Register access discriminants (D-3 fields, shared with the descriptor
 /// model's enum ordering — never renumber).
@@ -251,6 +251,8 @@ pub fn encode_compiled_desc(
         p += name.len();
         out[p] = window_kind_disc(w.kind);
         p += 1;
+        out[p] = reloc_isa_disc(w.reloc_isa);
+        p += 1;
         out[p..p + 8].copy_from_slice(&w.base.unwrap_or(0).to_le_bytes());
         p += 8;
         out[p..p + 4].copy_from_slice(&w.size.to_le_bytes());
@@ -356,6 +358,13 @@ pub fn decode_compiled_desc(bytes: &[u8]) -> Result<CompiledDescriptor, Compiled
             _ => return Err(CompiledDescError::BadKind),
         };
         p += 1;
+        let reloc_isa = match bytes[p] {
+            0 => None,
+            1 => Some(RelocIsa::ArmThumbLdrLiteral),
+            2 => Some(RelocIsa::RiscVHi20Lo12),
+            _ => return Err(CompiledDescError::BadKind),
+        };
+        p += 1;
         if bytes.len() < p + 12 {
             return Err(CompiledDescError::Truncated);
         }
@@ -373,6 +382,7 @@ pub fn decode_compiled_desc(bytes: &[u8]) -> Result<CompiledDescriptor, Compiled
             kind,
             base: (base_raw != 0).then_some(base_raw),
             size,
+            reloc_isa,
         };
     }
 
@@ -569,7 +579,7 @@ fn serialized_len(cd: &CompiledDescriptor) -> Result<usize, CompiledDescError> {
     }
     let mut len = 15usize; // magic 4 + ver 1 + hash 8 + window_count 1 + device_count 1
     for w in cd.windows() {
-        len += 2 + 1 + w.name.as_bytes().len() + 1 + 8 + 4;
+        len += 2 + 1 + w.name.as_bytes().len() + 1 + 1 + 8 + 4;
     }
     for d in cd.devices() {
         if d.register_count > COMPILED_DESC_REGISTER_CAP {
@@ -610,6 +620,14 @@ fn sort_atoms(v: &mut [ir::Atom]) {
             v.swap(j - 1, j);
             j -= 1;
         }
+    }
+}
+
+fn reloc_isa_disc(r: Option<RelocIsa>) -> u8 {
+    match r {
+        None => 0,
+        Some(RelocIsa::ArmThumbLdrLiteral) => 1,
+        Some(RelocIsa::RiscVHi20Lo12) => 2,
     }
 }
 

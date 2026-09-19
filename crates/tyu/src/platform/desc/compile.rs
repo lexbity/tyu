@@ -72,6 +72,7 @@ pub fn compile(desc: &Descriptor) -> Result<CompiledDescriptor, DescriptorError>
             },
             base: w.base,
             size: w.size,
+            reloc_isa: w.reloc_isa,
         };
     }
 

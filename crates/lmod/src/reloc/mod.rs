@@ -5,11 +5,23 @@
 //! After pre-resolving internal relocations, the remaining fixups (imports)
 //! are serialised into the `.lmod` import reloc table.  Each entry describes
 //! one patch site that the loader must fix up at load time.
+//!
+//! P6 binding: a bus window's base is *not* a baked absolute constant. The
+//! code carries a relocatable site (a 32-bit little-endian word in `.text`)
+//! that the pack binds to the window base and the on-device loader re-derives
+//! from its descriptor. The per-ISA site patterns live in [`arm`] and
+//! [`riscv`]; the apply/read mechanics are shared here.
+
+pub mod arm;
+pub mod riscv;
 
 /// Size of one on-wire relocation entry in bytes.
 ///
 /// Layout: `{ u32 site_off, u64 sym_hash, u8 kind, u8[3] _pad }` = 16 bytes.
 pub const RELOC_ENTRY_SIZE: u32 = 16;
+
+/// Size of a window-base reloc site in bytes (P6): one 32-bit LE word.
+pub const WINDOW_BASE_SITE_SIZE: usize = 4;
 
 /// Per-target relocation subset kinds (module-format §3.1).
 ///
@@ -55,6 +67,47 @@ impl RelocKind {
             10 => Some(Self::MmioWindowBase),
             _ => None,
         }
+    }
+
+    /// The window-base relocation kind for a binding-time relocation ISA
+    /// (P6). Every reloc-capable ISA binds the base via `MmioWindowBase`.
+    pub fn kind_for_isa(isa: ir::RelocIsa) -> Self {
+        match isa {
+            ir::RelocIsa::ArmThumbLdrLiteral | ir::RelocIsa::RiscVHi20Lo12 => Self::MmioWindowBase,
+        }
+    }
+
+    /// The linker symbol a module's window-base site references before the
+    /// pack binds it (P6): `__lang_window_{id}_base`. The firmware build
+    /// defines these symbols from the descriptor; the loader re-derives the
+    /// same bases from them.
+    pub fn window_base_symbol(id: u16) -> alloc::string::String {
+        alloc::format!("__lang_window_{}_base", id)
+    }
+
+    /// Write the window base into a reloc site (P6). The site is one 32-bit
+    /// little-endian word; the raw value is written unchanged (the ARM lone
+    /// literal and RISC-V literal-load patterns both carry the *address* in
+    /// the pool word).
+    pub fn apply_base(site: &mut [u8], site_off: usize, base: u32) -> Option<()> {
+        let end = site_off.checked_add(WINDOW_BASE_SITE_SIZE)?;
+        if end > site.len() {
+            return None;
+        }
+        site[site_off..end].copy_from_slice(&base.to_le_bytes());
+        Some(())
+    }
+
+    /// Read the window base back from a reloc site (P6). Used by tests and by
+    /// the loader's `check_window_base` (the bound-window validation).
+    pub fn read_site_base(site: &[u8], site_off: usize) -> Option<u32> {
+        let end = site_off.checked_add(WINDOW_BASE_SITE_SIZE)?;
+        if end > site.len() {
+            return None;
+        }
+        let mut le = [0u8; 4];
+        le.copy_from_slice(&site[site_off..end]);
+        Some(u32::from_le_bytes(le))
     }
 }
 

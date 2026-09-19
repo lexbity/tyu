@@ -368,6 +368,12 @@ pub enum TcError {
     MmioUnknownRegisterKind {
         span: Span,
     },
+    /// A register-map reference resolves to a bus window with no absolute
+    /// base (E3648): the base cannot be bound into a relocatable site, so the
+    /// reference is unbindable.
+    MmioWindowUnbindable {
+        span: Span,
+    },
 
     // 3700-3718: Struct/Enum
     DestructBorrowMix {
@@ -707,6 +713,7 @@ impl TcError {
             TcError::MmioPhantomRead { .. } => 3642,
             TcError::MmioOverWideAccess { .. } => 3643,
             TcError::MmioUnknownRegisterKind { .. } => 3646,
+            TcError::MmioWindowUnbindable { .. } => 3648,
             TcError::DestructBorrowMix { .. } => 3701,
             TcError::DestructExpectedIdent { .. } => 3702,
             TcError::DestructEmpty { .. } => 3703,
@@ -890,6 +897,7 @@ impl TcError {
             | TcError::MmioPhantomRead { span }
             | TcError::MmioOverWideAccess { span }
             | TcError::MmioUnknownRegisterKind { span }
+            | TcError::MmioWindowUnbindable { span }
             | TcError::IsrCapacityExceeded { span }
             | TcError::DestructBorrowMix { span }
             | TcError::DestructExpectedIdent { span }

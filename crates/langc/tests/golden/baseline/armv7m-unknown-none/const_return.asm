@@ -6,6 +6,8 @@
 	.extern __lang_trap
 	.extern __stack_overflow
 	.extern __lang_stack_limit
+	.extern __lang_window_0_base
+	.extern __lang_window_1_base
 
 	.thumb_func
 	.global w_1f5962a2ce9803c8

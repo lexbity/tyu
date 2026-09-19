@@ -3,6 +3,7 @@
 /// Each variant corresponds to an exact triple string that the user passes
 /// via `--target`. The `parse` method is the sole place where a raw byte
 /// string is converted to this type; all downstream code receives `Target`.
+pub use ir::RelocIsa;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Target {
     /// x86-64 Linux, System V ABI, glibc hosted.
@@ -326,6 +327,10 @@ pub struct MmioWindowSpec {
     /// (the emulated window on hosted/x86, D-7).
     pub base: Option<u64>,
     pub size: u32,
+    /// The binding-time relocation ISA for this window's base (P6). `None`
+    /// for emulated windows (runtime-dynamic addressing) — bus windows on a
+    /// reloc-capable target carry their ISA.
+    pub reloc_isa: Option<RelocIsa>,
 }
 
 impl MmioWindowSpec {
@@ -335,6 +340,7 @@ impl MmioWindowSpec {
         kind: MmioWindowKind::Bus,
         base: None,
         size: 0,
+        reloc_isa: None,
     };
 }
 
@@ -439,6 +445,12 @@ pub struct TargetSpec {
     /// platform descriptor's windows when `--platform` is given (P3).
     pub mmio_windows: &'static [MmioWindowSpec],
 
+    /// The binding-time relocation ISA this target's instruction selection
+    /// uses for bus-window bases (P6). `None` for targets whose addressing is
+    /// runtime-dynamic (x86's emulated window). The default each bus window
+    /// inherits when its descriptor row does not override it.
+    pub reloc_isa: Option<RelocIsa>,
+
     /// Linker binary name, e.g. `b"ld"`, `b"arm-none-eabi-ld"`.
     pub linker: &'static [u8],
 }
@@ -477,6 +489,7 @@ static X86_64_UNKNOWN_LINUX_GNU: TargetSpec = TargetSpec {
     slot_bytes: 8,
     qemu: None,
     mmio_windows: &X86_64_EMULATED_MMIO_WINDOW,
+    reloc_isa: None,
     linker: b"ld",
 };
 
@@ -526,6 +539,7 @@ static X86_64_UNKNOWN_NONE: TargetSpec = TargetSpec {
     slot_bytes: 8,
     qemu: Some(&X86_64_UNKNOWN_NONE_QEMU),
     mmio_windows: &X86_64_EMULATED_MMIO_WINDOW,
+    reloc_isa: None,
     linker: b"ld",
 };
 
@@ -541,6 +555,7 @@ static X86_64_EMULATED_MMIO_WINDOW: [MmioWindowSpec; 1] = [MmioWindowSpec {
     kind: MmioWindowKind::Emulated,
     base: None,
     size: 0x10000,
+    reloc_isa: None,
 }];
 
 /// ARMv7-M (lm3s6965evb QEMU): RAM-backed scratch window covering the SRAM
@@ -553,6 +568,7 @@ static ARM_V7M_BUS_MMIO_WINDOW: [MmioWindowSpec; 2] = [
         kind: MmioWindowKind::Bus,
         base: Some(0x20000000),
         size: 0x10000,
+        reloc_isa: Some(RelocIsa::ArmThumbLdrLiteral),
     },
     MmioWindowSpec {
         id: 1,
@@ -560,6 +576,7 @@ static ARM_V7M_BUS_MMIO_WINDOW: [MmioWindowSpec; 2] = [
         kind: MmioWindowKind::Bus,
         base: Some(0xE000E010),
         size: 0x1000,
+        reloc_isa: Some(RelocIsa::ArmThumbLdrLiteral),
     },
 ];
 
@@ -571,6 +588,7 @@ static RISCV32_BUS_MMIO_WINDOW: [MmioWindowSpec; 1] = [MmioWindowSpec {
     kind: MmioWindowKind::Bus,
     base: Some(0x80000000),
     size: 0x08000000,
+    reloc_isa: Some(RelocIsa::RiscVHi20Lo12),
 }];
 
 // ---------------------------------------------------------------------------
@@ -614,6 +632,7 @@ static RISCV32_UNKNOWN_NONE: TargetSpec = TargetSpec {
     slot_bytes: 4,
     qemu: Some(&RISCV32_NONE_QEMU),
     mmio_windows: &RISCV32_BUS_MMIO_WINDOW,
+    reloc_isa: Some(RelocIsa::RiscVHi20Lo12),
     linker: b"riscv32-elf-ld",
 };
 
@@ -653,6 +672,7 @@ static ARM_V7M_UNKNOWN_NONE: TargetSpec = TargetSpec {
     slot_bytes: 4,
     qemu: Some(&ARM_V7M_NONE_QEMU),
     mmio_windows: &ARM_V7M_BUS_MMIO_WINDOW,
+    reloc_isa: Some(RelocIsa::ArmThumbLdrLiteral),
     linker: b"arm-none-eabi-ld",
 };
 

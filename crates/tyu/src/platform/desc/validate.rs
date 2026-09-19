@@ -10,8 +10,8 @@
 //! skips the disk-backed rule.
 
 use super::{
-    AccessKind, Descriptor, DescriptorError, DeviceMap, E_DESC_INVALID, RegisterRow, WriteKind,
-    full_mask,
+    AccessKind, Descriptor, DescriptorError, DeviceMap, E_DESC_INVALID, RegisterRow, WindowKind,
+    WriteKind, full_mask,
 };
 use std::path::Path;
 
@@ -54,13 +54,25 @@ fn validate_windows(desc: &Descriptor, errors: &mut Vec<DescriptorError>) {
         }
     }
 
-    // Rule (loader identity, §5.5): window names are the stable identity a
-    // module binds on — they must be unique within a descriptor.
+    // Rule: window names are the stable identity a module binds on — they
+    // must be unique within a descriptor.
     let mut names: Vec<&str> = desc.windows.iter().map(|w| w.name.as_str()).collect();
     names.sort_unstable();
     for pair in names.windows(2) {
         if pair[0] == pair[1] {
             errors.push(err(format!("window names must be unique (duplicate '{}')", pair[0])));
+        }
+    }
+
+    // Rule (P6 binding): an emulated window's base is a link-time symbol with
+    // runtime-dynamic addressing — it has no binding-time relocation. A bind
+    // on an emulated window is a contradiction.
+    for w in &desc.windows {
+        if w.kind == WindowKind::Emulated && w.reloc_isa.is_some() {
+            errors.push(err(format!(
+                "window [{}] '{}': an emulated window must not declare a bind (its addressing is runtime-dynamic)",
+                w.id, w.name
+            )));
         }
     }
 

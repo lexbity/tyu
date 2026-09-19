@@ -7,6 +7,13 @@
 
 use super::canonical::{hash_hex, platform_hash};
 use super::Descriptor;
+
+fn reloc_isa_str(r: codegen_core::RelocIsa) -> &'static str {
+    match r {
+        codegen_core::RelocIsa::ArmThumbLdrLiteral => "arm-thumb-ldr-literal",
+        codegen_core::RelocIsa::RiscVHi20Lo12 => "riscv-hi20-lo12",
+    }
+}
 use std::fmt::Write as _;
 
 /// Render the validated descriptor model as a deterministic human-readable
@@ -27,10 +34,14 @@ pub fn format_descriptor_report(desc: &Descriptor) -> String {
             .base
             .map(|b| format!("{:#x}", b))
             .unwrap_or_else(|| "link".to_string());
+        let bind = w
+            .reloc_isa
+            .map(|r| format!(" bind={}", reloc_isa_str(r)))
+            .unwrap_or_default();
         let _ = writeln!(
             &mut out,
-            "  [{}] {} kind={} base={} size={:#x}",
-            w.id, w.name, w.kind.as_str(), base, w.size
+            "  [{}] {} kind={}{} base={} size={:#x}",
+            w.id, w.name, w.kind.as_str(), bind, base, w.size
         );
     }
 

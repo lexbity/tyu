@@ -60,7 +60,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                     MmioResolved::Reg(reg) => (reg.window, reg.offset, reg.access),
                     MmioResolved::Field(field) => (field.window, field.offset, field.reg_access),
                 };
-                self.record_window(window, access);
+                self.record_window(window, access, name_abs)?;
                 push(stack, sp, Value::MmioPlace(res))?;
                 self.emit_op(
                     cur,

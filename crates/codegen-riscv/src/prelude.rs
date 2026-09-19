@@ -36,6 +36,15 @@ impl<'a> RiscVBackend<'a> {
                 self.out.write(b"\t.extern __lang_trap\n");
                 self.out.write(b"\t.extern __stack_overflow\n");
                 self.out.write(b"\t.extern __lang_stack_limit\n");
+                // P6: window-base literal sites reference these externs.
+                for i in 0..self.mmio_window_count {
+                    let w = &self.mmio_windows[i];
+                    if w.reloc_isa.is_some() {
+                        self.out.write(b"\t.extern __lang_window_");
+                        crate::ophelpers::write_u32(self.out, w.id as u32);
+                        self.out.write(b"_base\n");
+                    }
+                }
                 Ok(())
             }
         }

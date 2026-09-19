@@ -37,6 +37,7 @@ fn emulated_window(size: u32) -> [MmioWindowSpec; 1] {
         kind: MmioWindowKind::Emulated,
         base: None,
         size,
+        reloc_isa: None,
     }]
 }
 

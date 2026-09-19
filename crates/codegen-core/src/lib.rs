@@ -30,8 +30,8 @@ pub use emit_mode::{AsmMode, EmitMode};
 pub use error::CodegenError;
 pub use target::{
     AssemblerKind, CallingConv, Endian, Feature, FeatureSet, InterruptSource, MmioScratch,
-    MmioWindowKind, MmioWindowSpec, OutputFormat, PlatformCapability, QemuExitConvention,
-    QemuSpec, ScratchBacking, Target, TargetSpec,
+    MmioWindowKind, MmioWindowSpec, OutputFormat, PlatformCapability, QemuExitConvention, QemuSpec,
+    RelocIsa, ScratchBacking, Target, TargetSpec,
 };
 
 /// Monotonically-increasing revision counter for the codegen + IR format.

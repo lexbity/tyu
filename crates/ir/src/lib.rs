@@ -16,7 +16,7 @@ pub use contract::{abi_hash, CapSet, Context, EffectSet, High, StackBound, ABI_C
 /// consumer of the text format (golden tooling, corpus tooling, the future
 /// Lean-side parser) checks the first emitted line against this constant and
 /// fails fast on mismatch.
-pub const FORMAT_VER: u32 = 5;
+pub const FORMAT_VER: u32 = 6;
 
 /// A `format_ver` header that does not match this reader's [`FORMAT_VER`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -75,6 +75,44 @@ pub enum WindowKind {
     Emulated,
 }
 
+/// The binding-time relocation ISA for a bus window's base (P6). The base is
+/// *not* baked as an absolute constant; the code carries a relocatable site
+/// that the pack binds and the on-device loader re-derives.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RelocIsa {
+    /// ARM Thumb `ldr rN, [pc, #imm]` over a literal-pool word (the reloc
+    /// site) holding the window base.
+    ArmThumbLdrLiteral,
+    /// RISC-V `auipc rN, hi20` + `lw rN, lo12(rN)` over a literal-pool word
+    /// (the reloc site) holding the window base.
+    RiscVHi20Lo12,
+}
+
+/// How a window's base is bound into the code (P6). A bus window's base is
+/// *not* an absolute baked constant; the code carries a relocatable site the
+/// pack binds and the on-device loader re-derives. Emulated windows use
+/// runtime-dynamic addressing (`None`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BindKind {
+    None,
+    /// ARM Thumb `ldr rN, [pc, #imm]` over a literal-pool word (the reloc
+    /// site) holding the window base.
+    ArmThumbLdrLiteral,
+    /// RISC-V `auipc rN, hi20` + `lw rN, lo12(rN)` over a literal-pool word
+    /// (the reloc site) holding the window base.
+    RiscVHi20Lo12,
+}
+
+impl BindKind {
+    pub fn from_reloc_isa(isa: Option<RelocIsa>) -> Self {
+        match isa {
+            Some(RelocIsa::ArmThumbLdrLiteral) => BindKind::ArmThumbLdrLiteral,
+            Some(RelocIsa::RiscVHi20Lo12) => BindKind::RiscVHi20Lo12,
+            None => BindKind::None,
+        }
+    }
+}
+
 /// A window a module touches, with the fused access mask derived by irgen
 /// (design doc §5.4/§5.5). Carried on the `Word` for the verifier's
 /// place-bounds check and on the `Module` for text emit; the modinfo
@@ -88,6 +126,8 @@ pub struct WindowUse {
     pub base: Option<u64>,
     pub size: u32,
     pub access_mask: u8,
+    /// The binding strategy for this window's base (P6).
+    pub bind: BindKind,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -450,6 +490,10 @@ pub enum TrapCode {
     TaskQueueOverflow,
     Unreachable,
     Deadlock,
+    /// The set-payload region is full: no slot can be allocated for the
+    /// candidate (P7). A distinct pre-panic region-failure trap with its own
+    /// trace record.
+    RegionExhausted,
 }
 
 pub const fn trap_code_u32(code: TrapCode) -> u32 {
@@ -461,6 +505,7 @@ pub const fn trap_code_u32(code: TrapCode) -> u32 {
         TrapCode::TaskQueueOverflow => 24,
         TrapCode::StackOverflow => 10,
         TrapCode::Deadlock => 25,
+        TrapCode::RegionExhausted => 26,
     }
 }
 
@@ -747,6 +792,8 @@ pub enum VerifyError {
     MmioPlaceOutOfBounds { span: Span },
     MmioPhantomRead { span: Span },
     MmioOverWideAccess { span: Span },
+    MmioWindowUnbound { span: Span },
+    MmioWindowEmulatedBound { span: Span },
 }
 
 impl VerifyError {
@@ -786,6 +833,8 @@ impl VerifyError {
             VerifyError::MmioPlaceOutOfBounds { .. } => 9038,
             VerifyError::MmioPhantomRead { .. } => 9040,
             VerifyError::MmioOverWideAccess { .. } => 9041,
+            VerifyError::MmioWindowUnbound { .. } => 9042,
+            VerifyError::MmioWindowEmulatedBound { .. } => 9043,
         }
     }
 
@@ -824,7 +873,9 @@ impl VerifyError {
             | VerifyError::MmioWindowOutOfRange { span }
             | VerifyError::MmioPlaceOutOfBounds { span }
             | VerifyError::MmioPhantomRead { span }
-            | VerifyError::MmioOverWideAccess { span } => span,
+            | VerifyError::MmioOverWideAccess { span }
+            | VerifyError::MmioWindowUnbound { span }
+            | VerifyError::MmioWindowEmulatedBound { span } => span,
         }
     }
 }
@@ -869,6 +920,27 @@ pub fn verify_word(w: &Word) -> Result<(), VerifyError> {
 
     for b in w.blocks.iter() {
         verify_block(w, b)?;
+    }
+
+    // P6 (E3649): a window-use's binding must be coherent with its backing.
+    // A bus window's base is bound into relocatable sites (BindKind != None);
+    // an emulated window's base is a link-time symbol with runtime-dynamic
+    // addressing (BindKind == None). A bus window with `None` is unboundable;
+    // an emulated window with a bind is a contradiction.
+    for wu in w.windows.iter() {
+        match (wu.kind, wu.bind) {
+            (WindowKind::Bus, BindKind::None) => {
+                return Err(VerifyError::MmioWindowUnbound {
+                    span: Span::UNKNOWN,
+                })
+            }
+            (WindowKind::Emulated, BindKind::ArmThumbLdrLiteral | BindKind::RiscVHi20Lo12) => {
+                return Err(VerifyError::MmioWindowEmulatedBound {
+                    span: Span::UNKNOWN,
+                })
+            }
+            _ => {}
+        }
     }
 
     Ok(())
@@ -1327,6 +1399,12 @@ pub fn write_module(out: &mut impl Output, m: &Module) {
             WindowKind::Bus => b"bus",
             WindowKind::Emulated => b"emulated",
         });
+        out.write(b" bind=");
+        out.write(match wu.bind {
+            BindKind::None => b"none",
+            BindKind::ArmThumbLdrLiteral => b"arm-thumb-ldr-literal",
+            BindKind::RiscVHi20Lo12 => b"riscv-hi20-lo12",
+        });
         out.write(b" ");
         match wu.base {
             Some(base) => {
@@ -1653,6 +1731,7 @@ fn write_op(out: &mut impl Output, w: &Word, op: &Op) {
                 TrapCode::TaskQueueOverflow => b"TASK_QUEUE_OVERFLOW",
                 TrapCode::Unreachable => b"UNREACHABLE",
                 TrapCode::Deadlock => b"DEADLOCK",
+                TrapCode::RegionExhausted => b"REGION_EXHAUSTED",
             });
         }
         OpKind::Br { target } => {
@@ -1838,5 +1917,17 @@ mod format_ver_tests {
             e.to_string(),
             format!("format mismatch: reader expects {FORMAT_VER}, artifact says 3")
         );
+    }
+}
+
+#[cfg(test)]
+mod trap_code_tests {
+    use super::*;
+
+    #[test]
+    fn region_exhausted_is_trap_26() {
+        assert_eq!(trap_code_u32(TrapCode::RegionExhausted), 26);
+        assert_eq!(trap_code_u32(TrapCode::Deadlock), 25);
+        assert_eq!(trap_code_u32(TrapCode::ContractFail), 20);
     }
 }

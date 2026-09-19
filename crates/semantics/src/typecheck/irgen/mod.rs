@@ -592,19 +592,28 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
 
     /// Record a window use for the word being compiled (P4). Adds or updates
     /// the entry in `word_windows` from the descriptor's window identity, and
-    /// ORs the register's fused access bits.
-    pub(super) fn record_window(&mut self, window: u16, access: super::mmio::AccessMode) {
+    /// ORs the register's fused access bits. A bus window with no absolute
+    /// base is unbindable (E3648).
+    pub(super) fn record_window(
+        &mut self,
+        window: u16,
+        access: super::mmio::AccessMode,
+        span: Span,
+    ) -> Result<(), TcError> {
         let Some(descriptor) = self.descriptor else {
-            return;
+            return Ok(());
         };
         let Some(spec) = descriptor.windows().iter().find(|w| w.id == window) else {
-            return;
+            return Ok(());
         };
+        if spec.kind == codegen_core::MmioWindowKind::Bus && spec.base.is_none() {
+            return Err(TcError::MmioWindowUnbindable { span });
+        }
         let bits = window_access_bits(access);
         for wu in self.word_windows.iter_mut() {
             if wu.id == window {
                 wu.access_mask |= bits;
-                return;
+                return Ok(());
             }
         }
         let _ = self.word_windows.push(lir::WindowUse {
@@ -617,7 +626,13 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             base: spec.base,
             size: spec.size,
             access_mask: bits,
+            bind: match spec.reloc_isa {
+                Some(codegen_core::RelocIsa::ArmThumbLdrLiteral) => lir::BindKind::ArmThumbLdrLiteral,
+                Some(codegen_core::RelocIsa::RiscVHi20Lo12) => lir::BindKind::RiscVHi20Lo12,
+                None => lir::BindKind::None,
+            },
         });
+        Ok(())
     }
 
     /// Unified suspend blocker — checks the three rejection dimensions

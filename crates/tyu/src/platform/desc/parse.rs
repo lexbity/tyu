@@ -68,6 +68,7 @@ pub fn parse_descriptor(text: &str) -> Result<Option<Descriptor>, DescriptorErro
                 kind: parse_window_kind(&w.kind)?,
                 base: w.base,
                 size: w.size,
+                reloc_isa: w.bind.as_deref().map(parse_reloc_isa).transpose()?,
             })
         })
         .collect::<Result<Vec<_>, DescriptorError>>()?;
@@ -172,6 +173,19 @@ fn memory_model(raw: &Option<RawMemory>) -> MemoryModel {
 // ---------------------------------------------------------------------------
 // Kind-name mapping (decision D-2: compiler-owned, registry-validated names).
 // ---------------------------------------------------------------------------
+
+fn parse_reloc_isa(s: &str) -> Result<codegen_core::RelocIsa, DescriptorError> {
+    match s {
+        "arm-thumb-ldr-literal" => Ok(codegen_core::RelocIsa::ArmThumbLdrLiteral),
+        "riscv-hi20-lo12" => Ok(codegen_core::RelocIsa::RiscVHi20Lo12),
+        other => Err(DescriptorError::new(
+            E_DESC_INVALID,
+            format!(
+                "unknown window bind '{other}' (supported: arm-thumb-ldr-literal, riscv-hi20-lo12)"
+            ),
+        )),
+    }
+}
 
 fn parse_window_kind(s: &str) -> Result<WindowKind, DescriptorError> {
     match s {
@@ -295,6 +309,9 @@ struct RawWindow {
     #[serde(default)]
     base: Option<u64>,
     size: u32,
+    /// Optional `bind = "arm-thumb-ldr-literal" | "riscv-hi20-lo12"` (P6).
+    #[serde(default)]
+    bind: Option<String>,
 }
 
 #[derive(serde::Deserialize)]

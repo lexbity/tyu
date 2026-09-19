@@ -4,6 +4,7 @@
 	.extern __lang_trap
 	.extern __stack_overflow
 	.extern __lang_stack_limit
+	.extern __lang_window_0_base
 
 	.globl w_1f5962a2ce9803c8
 	.type w_1f5962a2ce9803c8, @function

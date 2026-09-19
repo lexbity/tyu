@@ -96,6 +96,9 @@ pub struct MmioWindow {
     /// (the hosted/emulated window, decision D-7) rather than a bus address.
     pub base: Option<u64>,
     pub size: u32,
+    /// Binding-time relocation ISA for this window's base (P6). `None` for
+    /// emulated windows (runtime-dynamic addressing).
+    pub reloc_isa: Option<codegen_core::RelocIsa>,
 }
 
 /// How a window is backed.

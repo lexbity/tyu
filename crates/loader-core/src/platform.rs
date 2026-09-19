@@ -182,6 +182,12 @@ pub trait LoaderPlatform {
         u32::MAX
     }
 
+    /// The device's bound base for an MMIO window id (P6 `check_window_base`).
+    /// Returns `None` if the window id is not in the device's binding table.
+    fn window_base(&self, _id: u16) -> Option<u32> {
+        None
+    }
+
     /// The trust level this platform operates at.
     fn trust_level(&self) -> TrustLevel;
 

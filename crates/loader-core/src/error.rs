@@ -41,6 +41,10 @@ pub enum LoadError {
     EncAuthFail,
     /// The encryption header is malformed.
     EncBadHeader,
+    /// A window-base reloc site's bound base does not match the device's
+    /// descriptor-derived base (P6 `check_window_base`): the module was
+    /// packed against a different window geometry than this device binds.
+    WindowBaseMismatch,
 }
 
 /// Allow converting from `u32` (legacy platform interface) to `LoadError`.
@@ -86,6 +90,7 @@ impl LoadError {
             Self::EncAuthFail => 5216,
             Self::EncBadHeader => 5217,
             Self::StackBoundUnverifiable => 5220,
+            Self::WindowBaseMismatch => 5221,
         }
     }
 }
