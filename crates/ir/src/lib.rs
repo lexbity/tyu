@@ -490,9 +490,10 @@ pub enum TrapCode {
     TaskQueueOverflow,
     Unreachable,
     Deadlock,
-    /// The set-payload region is full: no slot can be allocated for the
-    /// candidate (P7). A distinct pre-panic region-failure trap with its own
-    /// trace record.
+    /// A platform region is exhausted: the allocator words
+    /// (`platform.mem.region-create/alloc`, metal.trust asm) raised it on
+    /// arena overrun or no free region slot (P7). A distinct pre-panic
+    /// region-failure trap with its own trace record.
     RegionExhausted,
 }
 

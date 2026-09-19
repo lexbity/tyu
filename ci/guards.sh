@@ -27,7 +27,8 @@
 #   G17 P6 platform binding wired end-to-end (descriptor -> board table ->
 #       loader E5220-24 + reloc apply).
 #   G17b Board aperture table embedded (`__lang_platform_desc`) and decoded on-device.
-#   G18 P7 set-payload region protocol + key roster + trap 26 present.
+#   G18 Trap 26 (`RegionExhausted`) is a registered IR trap with a diag claim
+#       table entry — the allocator exhaustion path is nameable in diagnostics.
 #   G18b P7 reference allocator words present per bare-metal target
 #        (arm/riscv metal.trust words + x86 __region_* arrays) and trap 26
 #        registered in the diag claim table.
@@ -565,18 +566,18 @@ else
     failures=$((failures + 1))
 fi
 
-# --- G18: P7 set-payload region protocol + trap 26 ---
-# The region-with-rollback state machine exists host-side (crypto/region.rs),
-# the key registry resolves set signing keys (crypto/registry.rs), and
+# --- G18: trap 26 (RegionExhausted) registered in IR + diag claims ---
 # `RegionExhausted` (trap 26) is a distinct IR trap code with its own text
-# record. A missing piece means the OTA path cannot report/commit/rollback.
-region_state=$(grep -h -c -E "RegionState|RegionLoader|RegionFull" crates/tyu/src/crypto/region.rs | awk '{s+=$1} END {print s+0}')
-key_registry=$(grep -h -c -E "sign_key_for_payload|select_best_sk0|SET_KEY_RANGE" crates/tyu/src/crypto/registry.rs crates/tyu/src/crypto/keys.rs | awk '{s+=$1} END {print s+0}')
-trap26=$(grep -h -c "RegionExhausted" crates/ir/src/lib.rs | awk '{s+=$1} END {print s+0}')
-if [ "$region_state" -ge 3 ] && [ "$key_registry" -ge 3 ] && [ "$trap26" -ge 2 ]; then
-    msg $GREEN "  G18: P7 region-with-rollback + key roster + trap 26 (RegionExhausted) present"
+# record, raised by the platform region allocator on exhaustion. (A host-side
+# "set-payload" crypto subsystem that formerly shared this code was removed as
+# unintended scope: it had no callers, no CLI surface, and no on-device
+# counterpart.)
+trap26_ir=$(grep -h -c "RegionExhausted" crates/ir/src/lib.rs | awk '{s+=$1} END {print s+0}')
+trap26_claim=$(grep -c '26 => "REGION_EXHAUSTED"' crates/diag-core/src/claims.rs 2>/dev/null || echo 0)
+if [ "$trap26_ir" -ge 2 ] && [ "$trap26_claim" -ge 1 ]; then
+    msg $GREEN "  G18: trap 26 (RegionExhausted) registered in IR + diag claims"
 else
-    msg $RED "  G18 FAIL: P7 set-payload machinery incomplete (region_state=$region_state key_registry=$key_registry trap26=$trap26)"
+    msg $RED "  G18 FAIL: trap 26 registration incomplete (ir=$trap26_ir claims=$trap26_claim)"
     failures=$((failures + 1))
 fi
 

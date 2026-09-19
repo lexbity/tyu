@@ -8,7 +8,6 @@
 pub mod args;
 pub mod build;
 pub mod cache;
-pub mod crypto;
 pub mod debug_escalate;
 pub mod deploy;
 pub mod elf_reader;
