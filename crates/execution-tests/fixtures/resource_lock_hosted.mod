@@ -5,5 +5,9 @@ resource Counter : i64 = 0 ceiling 1;
   Counter lock [ &!Counter @i64 1 + &!Counter swap !i64 ]
 ;
 
-export { bump };
+: resource-lock-hosted-run ( -- )
+  bump
+;
+
+export { resource-lock-hosted-run };
 end;

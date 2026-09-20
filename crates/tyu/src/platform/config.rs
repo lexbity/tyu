@@ -629,6 +629,49 @@ pub fn resolve_platform_selection(
     Ok(ResolvedPlatformSelection { pack, isa, target })
 }
 
+/// Resolve the platform pack that owns `target` for a bare `--target=` run.
+///
+/// langc rejects MMIO constructs compiled without `--platform=<dir>`
+/// (D-1 / E3640), so a bare-target run needs the matching pack's platform
+/// binding. Preference: a pack *named* exactly after the triple (the
+/// per-triple packs under `platforms/`), else the single pack that declares
+/// the triple. No match leaves the run unbound (non-MMIO programs still
+/// build); an ambiguous match is an error naming the candidates.
+pub fn platform_pack_for_target(
+    root: &Path,
+    target: Target,
+) -> Result<Option<ResolvedPlatformSelection>, TyuError> {
+    let triple = std::str::from_utf8(target.triple())
+        .map_err(|_| TyuError::Platform("non-UTF-8 target triple".into()))?;
+    let packs = discover_platforms_in(root)?;
+
+    if let Some(pack) = packs.iter().find(|p| p.name() == triple) {
+        let selection = resolve_platform_selection(root, pack.name(), None)?;
+        if selection.target == target {
+            return Ok(Some(selection));
+        }
+    }
+
+    let candidates: Vec<&PlatformPack> = packs
+        .iter()
+        .filter(|p| p.manifest.platform.isa.iter().any(|isa| isa.triple == triple))
+        .collect();
+    match candidates.as_slice() {
+        [] => Ok(None),
+        [pack] => resolve_platform_selection(root, pack.name(), Some(triple)).map(Some),
+        _ => Err(TyuError::Platform(format!(
+            "target '{}' is declared by multiple platform packs ({}); \
+             pass --platform=<name> to disambiguate",
+            triple,
+            candidates
+                .iter()
+                .map(|p| p.name())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))),
+    }
+}
+
 /// Derive runtime-service capabilities for a bare target by probing the
 /// sysroot for the corresponding platform modules.
 ///

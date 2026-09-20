@@ -100,6 +100,133 @@ pub fn read_elf_section<'a>(data: &'a [u8], section_name: &[u8]) -> Option<&'a [
     None
 }
 
+/// Collect the hashes of undefined `w_<hex>` symbols (the word-symbol
+/// mangling, `fnv1a64(word-name)` rendered as `w_` plus lowercase hex) in an
+/// ELF object's symbol table. Names that do not parse under that convention
+/// are ignored. Returns an empty vector for non-ELF data or objects without
+/// a symbol table. Handles both ELF32 (arm/riscv objects) and ELF64.
+pub fn undefined_word_hashes(data: &[u8]) -> Vec<u64> {
+    let mut out = Vec::new();
+    let Some((symtab, strtab, elf64)) = symtab_and_strtab(data) else {
+        return out;
+    };
+    // Elf64_Sym: st_name u32 @0, st_shndx u16 @6, entry 24 bytes.
+    // Elf32_Sym: st_name u32 @0, st_shndx u16 @14, entry 16 bytes.
+    let (entry_size, shndx_off) = if elf64 { (24usize, 6usize) } else { (16usize, 14usize) };
+    let mut off = 0;
+    while off + entry_size <= symtab.len() {
+        let st_name = u32::from_le_bytes(symtab[off..off + 4].try_into().unwrap());
+        let st_shndx =
+            u16::from_le_bytes(symtab[off + shndx_off..off + shndx_off + 2].try_into().unwrap());
+        off += entry_size;
+        // SHN_UNDEF == 0; the all-null entry has st_name == 0.
+        if st_shndx != 0 || st_name == 0 {
+            continue;
+        }
+        let Some(name) = cstr_at(strtab, st_name as usize) else {
+            continue;
+        };
+        if let Ok(hash) = u64::from_str_radix(
+            std::str::from_utf8(&name[2..]).unwrap_or(""),
+            16,
+        ) {
+            out.push(hash);
+        }
+    }
+    out
+}
+
+/// Name bytes at `off` in an ELF string table, up to (not including) the
+/// terminating NUL. `None` if `off` is out of bounds or unterminated.
+fn cstr_at(strtab: &[u8], off: usize) -> Option<&[u8]> {
+    if off >= strtab.len() {
+        return None;
+    }
+    let end = strtab[off..].iter().position(|&b| b == 0)? + off;
+    Some(&strtab[off..end])
+}
+
+/// Locate the object's symbol table together with its linked string table.
+/// Returns `(symtab, strtab, is_elf64)`, or `None` for non-ELF data or when
+/// no `.symtab` is present.
+fn symtab_and_strtab(data: &[u8]) -> Option<(&[u8], &[u8], bool)> {
+    if data.len() < 64 || &data[0..4] != b"\x7fELF" {
+        return None;
+    }
+    let elf64 = data[4] == 2;
+    let (shoff, shentsz, shnum) = if elf64 {
+        let shoff = u64::from_le_bytes(data[0x28..0x30].try_into().ok()?) as usize;
+        let shentsz = u16::from_le_bytes(data[0x3a..0x3c].try_into().ok()?) as usize;
+        let shnum = u16::from_le_bytes(data[0x3c..0x3e].try_into().ok()?) as usize;
+        (shoff, shentsz, shnum)
+    } else {
+        let shoff = u32::from_le_bytes(data[0x20..0x24].try_into().ok()?) as usize;
+        let shentsz = u16::from_le_bytes(data[0x2e..0x30].try_into().ok()?) as usize;
+        let shnum = u16::from_le_bytes(data[0x30..0x32].try_into().ok()?) as usize;
+        (shoff, shentsz, shnum)
+    };
+    if shentsz < 1 {
+        return None;
+    }
+
+    // SHT_SYMTAB == 2; its sh_link names the string table section.
+    for i in 0..shnum {
+        let sh_off = shoff + i * shentsz;
+        if sh_off + shentsz > data.len() {
+            break;
+        }
+        let (sec_type, sec_off, sec_size, link) = if elf64 {
+            (
+                u32::from_le_bytes(data[sh_off + 4..sh_off + 8].try_into().ok()?),
+                u64::from_le_bytes(data[sh_off + 0x18..sh_off + 0x20].try_into().ok()?) as usize,
+                u64::from_le_bytes(data[sh_off + 0x20..sh_off + 0x28].try_into().ok()?) as usize,
+                u32::from_le_bytes(data[sh_off + 40..sh_off + 44].try_into().ok()?) as usize,
+            )
+        } else {
+            (
+                u32::from_le_bytes(data[sh_off + 4..sh_off + 8].try_into().ok()?),
+                u32::from_le_bytes(data[sh_off + 0x10..sh_off + 0x14].try_into().ok()?) as usize,
+                u32::from_le_bytes(data[sh_off + 0x14..sh_off + 0x18].try_into().ok()?) as usize,
+                u32::from_le_bytes(data[sh_off + 24..sh_off + 28].try_into().ok()?) as usize,
+            )
+        };
+        if sec_type != 2 {
+            continue;
+        }
+        if sec_off + sec_size > data.len() {
+            return None;
+        }
+        let str_sh_off = shoff + link * shentsz;
+        if str_sh_off + shentsz > data.len() {
+            return None;
+        }
+        let (str_off, str_size) = if elf64 {
+            (
+                u64::from_le_bytes(data[str_sh_off + 0x18..str_sh_off + 0x20].try_into().ok()?)
+                    as usize,
+                u64::from_le_bytes(data[str_sh_off + 0x20..str_sh_off + 0x28].try_into().ok()?)
+                    as usize,
+            )
+        } else {
+            (
+                u32::from_le_bytes(data[str_sh_off + 0x10..str_sh_off + 0x14].try_into().ok()?)
+                    as usize,
+                u32::from_le_bytes(data[str_sh_off + 0x14..str_sh_off + 0x18].try_into().ok()?)
+                    as usize,
+            )
+        };
+        if str_off + str_size > data.len() {
+            return None;
+        }
+        return Some((
+            &data[sec_off..sec_off + sec_size],
+            &data[str_off..str_off + str_size],
+            elf64,
+        ));
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -9,11 +9,11 @@ mod lint;
 pub(crate) use config::workspace_root;
 pub use config::{
     capabilities_for_selection, capabilities_for_target, discover_platforms, discover_platforms_in,
-    info_report, is_qemu_capable_selection, list_report, load_platform_pack, print_info,
-    print_list, resolve_platform_selection, run, DebugAgentSection, DebugSection, DeploySection,
-    DeployStep, FeatureUnit, IsaEntry, MemoryRegion, MemorySection, MetalSection, PlatformManifest,
-    PlatformPack, PlatformSection, ResolvedPlatformSelection, SecureBootSection, TestRung,
-    TestSection,
+    info_report, is_qemu_capable_selection, list_report, load_platform_pack,
+    platform_pack_for_target, print_info, print_list, resolve_platform_selection, run,
+    DebugAgentSection, DebugSection, DeploySection, DeployStep, FeatureUnit, IsaEntry, MemoryRegion,
+    MemorySection, MetalSection, PlatformManifest, PlatformPack, PlatformSection,
+    ResolvedPlatformSelection, SecureBootSection, TestRung, TestSection,
 };
 pub use linker_script::scaffold_platform_pack;
 pub use lint::{

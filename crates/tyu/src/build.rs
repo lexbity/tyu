@@ -1649,6 +1649,11 @@ pub fn link_image(
     out_dir: &Path,
     platform_selection: Option<&platform::ResolvedPlatformSelection>,
 ) -> Result<PathBuf, TyuError> {
+    // Provenance gate (flat word-symbol namespace): reject duplicate exports
+    // and undeclared word references with module-attributed errors before the
+    // linker sees them. See `provenance` for the accepted residual.
+    crate::provenance::verify_link_provenance(objs)?;
+
     let spec = target.spec();
     let triple = std::str::from_utf8(target.triple()).map_err(|_| TyuError::NonUtf8Triple)?;
 

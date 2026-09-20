@@ -354,6 +354,56 @@ w_034a1ff17acf93d3:
   add r15, 8
   ret
 
+; ---------------------------------------------------------------------------
+; testio words — called by compiled tyu_lang code via normal ABI
+;
+; Symbols use the same mangling convention as langc:
+;   fnv1a_u64(word name bytes), prefixed with w_
+; The diagnostic channel is stderr (fd 2), matching platform.io.log; the
+; harness merges both streams, so either reaches the frame parser.
+; ---------------------------------------------------------------------------
+
+; testio.write-byte ( i64 -- )
+;   Write the low byte to the diagnostic channel.
+;   fnv1a_u64("testio.write-byte") = accb676a903a06d9
+public w_accb676a903a06d9
+w_accb676a903a06d9:
+  sub r15, 8
+  mov rax, [r15]
+  sub rsp, 8
+  mov [rsp], al
+  mov rdx, 1
+  mov rsi, rsp
+  mov rdi, 2
+  mov rax, 1
+  syscall
+  add rsp, 8
+  ret
+
+; testio.write-str ( str -- )
+;   str is a pointer to a length-prefixed byte string: [u64 len][u8 bytes...]
+;   fnv1a_u64("testio.write-str") = eb06855547211672
+public w_eb06855547211672
+w_eb06855547211672:
+  sub r15, 8
+  mov rsi, [r15]       ; rsi = pointer to string struct
+  mov rdx, [rsi]       ; rdx = length
+  add rsi, 8           ; rsi = pointer to first byte
+  mov rdi, 2
+  mov rax, 1
+  syscall
+  ret
+
+; testio.exit ( i64 -- )
+;   Terminate the hosted process; 0 = pass, nonzero = trap code.
+;   fnv1a_u64("testio.exit") = f91ca4f233247b4d
+public w_f91ca4f233247b4d
+w_f91ca4f233247b4d:
+  sub r15, 8
+  mov rdi, [r15]
+  mov rax, 231         ; exit_group
+  syscall
+
 section '.bss' writeable
 public __chan_next
 public __chan_inuse

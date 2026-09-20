@@ -817,10 +817,23 @@ fn run_single_suite(
         fixture.name,
         std::process::id()
     ));
+
+    // Bare-target runs borrow the matching platform pack's binding: langc
+    // rejects MMIO constructs compiled without `--platform=<dir>` (E3640), and
+    // the pack supplies the per-target metal/aperture context those fixtures
+    // need. Hosted targets keep the unbound sysroot path.
+    let platform_selection = match selection.platform_selection() {
+        Some(sel) => Some(sel.clone()),
+        None if target.spec().qemu.is_some() => {
+            platform::platform_pack_for_target(&workspace_root(), target)?
+        }
+        None => None,
+    };
+
     let build_ctx = build::BuildContext {
         target,
         out_dir: out_dir.clone(),
-        platform_selection: selection.platform_selection().cloned(),
+        platform_selection,
     };
 
     // Build langc first.
@@ -829,8 +842,24 @@ fn run_single_suite(
         .args(["build", "-q", "-p", "langc"])
         .status();
 
+    let fixture_path = fixtures_dir.join(&fixture.file);
+
+    // Resolve the names the fixture source actually declares. The runner and
+    // stub .def below must use exactly these — deriving them from the manifest
+    // entry name instead compiles cleanly against a self-consistent stub and
+    // only fails later (E2210 against the fixture's real exports, or an
+    // undefined `w_<hash>` symbol at link). See FixtureNames.
+    let fixture_source = std::fs::read_to_string(&fixture_path).map_err(|e| {
+        TyuError::Test(format!(
+            "reading fixture '{}': {}",
+            fixture_path.display(),
+            e
+        ))
+    })?;
+    let names = resolve_fixture_names(fixture, &fixture_source)?;
+
     // Generate test runner.
-    let runner_src = generate_runner(&[fixture], target);
+    let runner_src = generate_runner(&[(fixture, &names)], target);
     let runner_path = out_dir.join("test_runner.mod");
     std::fs::create_dir_all(&out_dir)
         .map_err(|e| TyuError::Test(format!("creating out_dir: {}", e)))?;
@@ -838,9 +867,10 @@ fn run_single_suite(
         .map_err(|e| TyuError::Test(format!("writing test_runner: {}", e)))?;
 
     // Write a .def file for the fixture so the generated runner can import it.
-    // langc does not emit .def files, so we write one from the fixture metadata.
-    let mod_name = fixture_module_name(&fixture.name);
-    let run_word = fixture_run_word(&fixture.name);
+    // langc does not emit .def files, so we write one from the names the
+    // fixture source declares. A real .def in the fixtures dir takes
+    // precedence in langc's include order and stays authoritative.
+    let (mod_name, run_word) = (&names.module, &names.entry);
     let def_content =
         format!("module {mod_name};\nexport {{ {run_word} }};\n: {run_word} ( -- ) ;\nend;\n");
     let def_path = out_dir.join(format!("{}.def", mod_name));
@@ -849,7 +879,6 @@ fn run_single_suite(
     // Compile the fixture as lib.
     let mut objs: Vec<PathBuf> = Vec::new();
 
-    let fixture_path = fixtures_dir.join(&fixture.file);
     let fixture_o = compile_mod(&build_ctx, &fixture_path, true, feature_set)?;
     objs.push(fixture_o.clone());
 
@@ -1149,13 +1178,14 @@ fn poison_verdict(
     }
 }
 
-/// Generate a test_runner.mod that imports the given fixture and calls its
-/// test-run word, then emits S\n and returns 0.
-fn generate_runner(fixtures: &[&FixtureEntry], target: Target) -> String {
+/// Generate a test_runner.mod that imports each fixture by its
+/// source-declared module name and calls its entry word, then emits S\n and
+/// returns 0.
+fn generate_runner(fixtures: &[(&FixtureEntry, &FixtureNames)], target: Target) -> String {
     let mut out = String::from("module TestRunner;\n");
-    for f in fixtures {
-        let mod_name = fixture_module_name(&f.name);
-        let word = fixture_run_word(&f.name);
+    for (_, names) in fixtures {
+        let mod_name = &names.module;
+        let word = &names.entry;
         out.push_str(&format!("import {mod_name} {{ {word} }};\n"));
     }
     if target == Target::X86_64UnknownLinuxGnu {
@@ -1173,8 +1203,8 @@ fn generate_runner(fixtures: &[&FixtureEntry], target: Target) -> String {
     }
     out.push('\n');
     out.push_str(": main ( -- i64 )\n");
-    for f in fixtures {
-        out.push_str(&format!("  {}\n", fixture_run_word(&f.name)));
+    for (_, names) in fixtures {
+        out.push_str(&format!("  {}\n", names.entry));
     }
     out.push_str("  emit-done\n");
     out.push_str("  0 ;\n");
@@ -1184,21 +1214,133 @@ fn generate_runner(fixtures: &[&FixtureEntry], target: Target) -> String {
     out
 }
 
-fn fixture_run_word(fixture: &str) -> String {
-    format!("{}-run", fixture.replace('_', "-"))
+/// The module name and entry word a fixture source actually declares.
+///
+/// `tyu test` links a generated `TestRunner` against each fixture: the runner
+/// does `import <module> { <entry> };` and calls `<entry>`, and a stub
+/// `<module>.def` is written into the out_dir so that import typechecks. Both
+/// names must be the ones the fixture source declares — word symbols are a
+/// flat `w_<fnv1a64(word-name)>` namespace that never encodes the module, so
+/// any other naming scheme compiles cleanly and only fails later (E2210 when
+/// the stub is checked against the fixture's real exports, or an undefined
+/// `w_<hash>` at link).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct FixtureNames {
+    /// The fixture's `module <Name>;` declaration.
+    module: String,
+    /// The exported `<…>-run` word the generated runner calls.
+    entry: String,
 }
 
-fn fixture_module_name(fixture: &str) -> String {
-    fixture
-        .split('_')
-        .map(|part| {
-            let mut chars = part.chars();
-            match chars.next() {
-                None => String::new(),
-                Some(c) => c.to_uppercase().to_string() + chars.as_str(),
+/// Resolve `FixtureNames` from fixture source text.
+///
+/// Every suite fixture follows the convention `module <Name>;` plus an
+/// exported `<…>-run` word. A fixture that deviates fails here, naming the
+/// file and the convention, instead of as an opaque compiler/linker error.
+fn resolve_fixture_names(fixture: &FixtureEntry, source: &str) -> Result<FixtureNames, TyuError> {
+    let toks = source_tokens(source);
+
+    let module = toks
+        .windows(3)
+        .find(|w| w[0] == "module" && w[2] == ";")
+        .map(|w| w[1].to_string())
+        .ok_or_else(|| {
+            TyuError::Test(format!(
+                "fixture '{}': no `module <Name>;` declaration in '{}' — \
+                 the generated runner imports the module name the fixture \
+                 source declares, so there is no manifest-name fallback",
+                fixture.name, fixture.file
+            ))
+        })?;
+
+    // `: <word>` opens a word definition; `export { … }` lists exports.
+    let defined: Vec<&str> = toks
+        .windows(2)
+        .filter_map(|w| if w[0] == ":" { Some(w[1]) } else { None })
+        .collect();
+    let mut exported: Vec<&str> = Vec::new();
+    let mut i = 0;
+    while i + 1 < toks.len() {
+        if toks[i] == "export" && toks[i + 1] == "{" {
+            let mut j = i + 2;
+            while j < toks.len() && toks[j] != "}" {
+                exported.push(toks[j]);
+                j += 1;
             }
-        })
-        .collect()
+            i = j;
+        }
+        i += 1;
+    }
+
+    let entry = exported.iter().copied().find(|w| w.ends_with("-run"));
+    let entry = match entry {
+        Some(word) => word.to_string(),
+        None => {
+            let unexported: Vec<&str> = defined
+                .iter()
+                .copied()
+                .filter(|w| w.ends_with("-run"))
+                .collect();
+            return Err(TyuError::Test(format!(
+                "fixture '{}': no exported `<…>-run` entry word in '{}'{} — \
+                 the generated runner imports the entry word, so it must \
+                 appear in `export {{ … }}`",
+                fixture.name,
+                fixture.file,
+                if unexported.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (defined but unexported: {})", unexported.join(", "))
+                }
+            )));
+        }
+    };
+
+    Ok(FixtureNames { module, entry })
+}
+
+/// Rough tokenization of Tyu source for declaration scanning: whitespace-
+/// separated runs, with `;{}` as self-delimiting punctuation and `#` comments
+/// plus string literals skipped. Only declarations (`module`, `: word`,
+/// `export { … }`) matter here — this is not a parser.
+fn source_tokens(src: &str) -> Vec<&str> {
+    let b = src.as_bytes();
+    let mut toks = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b' ' | b'\t' | b'\r' | b'\n' => i += 1,
+            b'#' => {
+                while i < b.len() && b[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b'"' => {
+                i += 1;
+                while i < b.len() && b[i] != b'"' {
+                    i += if b[i] == b'\\' { 2 } else { 1 };
+                }
+                i += 1;
+            }
+            b';' | b'{' | b'}' => {
+                toks.push(&src[i..i + 1]);
+                i += 1;
+            }
+            _ => {
+                let start = i;
+                while i < b.len()
+                    && !matches!(
+                        b[i],
+                        b' ' | b'\t' | b'\r' | b'\n' | b'#' | b'"' | b';' | b'{' | b'}'
+                    )
+                {
+                    i += 1;
+                }
+                toks.push(&src[start..i]);
+            }
+        }
+    }
+    toks
 }
 
 /// Compile a .mod file with langc.
@@ -1549,6 +1691,86 @@ rung = "{rung}"
         assert_eq!(report.verdict, Verdict::Fail);
         assert_eq!(report.label, "x86_64-unknown-none");
         assert_eq!(report.reasons, vec!["missing child report".to_string()]);
+    }
+
+    // -----------------------------------------------------------------------
+    // Fixture name resolution (source-derived, not manifest-derived)
+    // -----------------------------------------------------------------------
+
+    fn fixture_entry(name: &str, file: &str) -> FixtureEntry {
+        FixtureEntry {
+            name: name.to_string(),
+            file: file.to_string(),
+            axes: vec![CoverageAxis::Arith],
+            requires: Vec::new(),
+            targets: Vec::new(),
+            poison: None,
+            expects: None,
+        }
+    }
+
+    fn resolve(source: &str) -> Result<FixtureNames, TyuError> {
+        // The manifest entry name is deliberately unrelated to the source —
+        // resolution must never fall back to it.
+        resolve_fixture_names(&fixture_entry("totally_unrelated", "fixture.mod"), source)
+    }
+
+    #[test]
+    fn names_come_from_source_not_manifest_name() {
+        let source = "# leading comment\n\
+                      module MmioStrategiesX86;\n\
+                      const TAG = \"not # a comment\";\n\
+                      : check ( bool -- )\n\
+                      ;\n\
+                      : mmio-strategies-x86-run ( -- )\n\
+                        1 1 + 2 == [ true ] [ false ] if check\n\
+                      ;\n\
+                      export{mmio-strategies-x86-run};\n\
+                      end;\n";
+        let names = resolve(source).expect("resolves");
+        assert_eq!(
+            names,
+            FixtureNames {
+                module: "MmioStrategiesX86".to_string(),
+                entry: "mmio-strategies-x86-run".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn exported_run_word_beats_defined_run_word() {
+        let source = "module M;\n\
+                      : other-run ( -- ) ;\n\
+                      : real-run ( -- ) ;\n\
+                      export { real-run };\n\
+                      end;\n";
+        let names = resolve(source).expect("resolves");
+        assert_eq!(names.entry, "real-run");
+    }
+
+    #[test]
+    fn missing_module_declaration_is_a_clear_error() {
+        let err = resolve(": x-run ( -- ) ;\nexport { x-run };\n").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("no `module <Name>;`"), "{msg}");
+        assert!(msg.contains("fixture.mod"), "{msg}");
+    }
+
+    #[test]
+    fn missing_run_word_is_a_clear_error() {
+        let source = "module M;\n: helper ( -- ) ;\nexport { helper };\nend;\n";
+        let err = resolve(source).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("no exported `<…>-run` entry word"), "{msg}");
+        assert!(msg.contains("totally_unrelated"), "{msg}");
+    }
+
+    #[test]
+    fn unexported_run_word_names_the_word() {
+        let source = "module M;\n: m-run ( -- ) ;\nexport { helper };\n: helper ( -- ) ;\nend;\n";
+        let err = resolve(source).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("defined but unexported: m-run"), "{msg}");
     }
 
     // -----------------------------------------------------------------------

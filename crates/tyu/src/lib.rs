@@ -18,6 +18,7 @@ pub mod keys;
 pub mod manifest;
 pub mod platform;
 pub mod project;
+pub mod provenance;
 pub mod provision;
 pub mod run_cmd;
 pub mod runner;
