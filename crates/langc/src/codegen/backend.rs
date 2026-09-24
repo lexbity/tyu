@@ -56,4 +56,13 @@ impl<'a> CodegenBackend for Backend<'a> {
             Backend::RiscV(b) => b.set_expected_abi_hash(hash),
         }
     }
+
+    // P4: the mmio-bounds elision signal is an x86-only concern (ARM/RISC-V
+    // carry no emulated-aperture checks — §3.1 C7); the other backends use
+    // the trait's no-op default.
+    fn set_mmio_checks_discharged(&mut self, elide: bool) {
+        if let Backend::X86(b) = self {
+            b.set_mmio_checks_discharged(elide);
+        }
+    }
 }

@@ -8,10 +8,10 @@
 //! share one encoder/decoder — the format is never reimplemented in a
 //! consumer crate.
 //!
-//! Wire format version 2 (little-endian):
+//! Wire format version 6 (little-endian):
 //! ```text
 //! 0  4   magic b"TYDP"
-//! 4  1   format version (2)
+//! 4  1   format version (5)
 //! 5  8   platform_hash (u64 LE)
 //! 13 1   aperture_count
 //! 14 ..  per aperture:
@@ -19,6 +19,7 @@
 //!           u8  name_len
 //!           [u8; name_len] name
 //!           u8  kind (0 = bus, 1 = emulated)
+//!           u8  reloc (0 = none, 1 = thumb, 2 = riscv)
 //!           u64 base (0 = none / link-time)
 //!           u32 size
 //!       then device_count (u8)
@@ -36,13 +37,33 @@
 //!             [u8; name_len] name
 //!             u8  width
 //!             u8  access (0=ro 1=wo 2=rw)
-//!             u8  write_kind (0=plain 1=w1s 2=w1c)
+//!             u8  write_kind (0=plain 1=w1s 2=w1c 3=xor)
 //!             u8  read_kind (0=plain 1=effectful)
 //!             u8  atomic_max
 //!             u64 mask
 //!             u64 reset
 //!             u8  barrier (0=none 1=before 2=after 3=both)
+//!             u16 interrupt
+//!             u16 irq
+//!       then verification grant (v6, stable-verification P3 amended):
+//!           u32 isr_stack_slots   (default 32 when the section is absent;
+//!                                 N_main is derived from the runtime binary)
 //! ```
+//!
+//! Format version 5 added the trailing `[verification]` grants
+//! (`static-verification.md` §6.4, original form): the main context's
+//! `bounded-stack(N_main)` grant and the ISR context's `bounded-stack(N_isr)`
+//! grant, folded into `platform_hash` so a budgets change invalidates cached
+//! images exactly as a board change would.
+//!
+//! Format version 6 (amended §6.4) removed `data_stack_slots` from the wire:
+//! `N_main` is *derived* from the runtime binary's own geometry
+//! (`__lang_ds_limit − __lang_ds_base`, divided by the target's
+//! `slot_bytes`) — bounds are computed, never hand-declared
+//! (stack-bound-analysis.md §13; the descriptor restated a number the runtime
+//! asm already owns). Only `N_isr` remains declared: the ISR data-stack
+//! region has no runtime symbol yet, so it stays a per-pack grant defaulting
+//! to 32.
 
 use core::fmt;
 
@@ -65,7 +86,12 @@ pub const COMPILED_DESC_REGISTER_CAP: usize = 128;
 pub const COMPILED_DESC_MAX_BYTES: usize = 96 * 1024;
 
 const MAGIC: &[u8; 4] = b"TYDP";
-const FORMAT_VER: u8 = 4;
+const FORMAT_VER: u8 = 6;
+
+/// Default `N_isr` — today's hardcoded ISR budget, kept as the default when a
+/// pack does not declare `[verification] isr_stack_slots`
+/// (static-verification.md §6.4; FR-10 compatibility).
+pub const DEFAULT_ISR_STACK_SLOTS: u32 = 32;
 
 /// Register access discriminants (D-3 fields, shared with the descriptor
 /// model's enum ordering — never renumber).
@@ -155,6 +181,35 @@ pub struct CompiledDescriptor {
     pub devices: [CompiledDevice; COMPILED_DESC_DEVICE_CAP],
     pub device_count: usize,
     pub platform_hash: u64,
+    /// The `[verification]` stack grants (static-verification.md §6.4):
+    /// per-context `bounded-stack(N)` budgets the compiler proves against.
+    pub verification: VerificationGrants,
+}
+
+/// The `[verification]` grant carried by the compiled descriptor (amended
+/// §6.4): the ISR context's `bounded-stack(N_isr)` budget.
+///
+/// `N_main` is no longer carried — it is *derived* from the runtime binary's
+/// own data-stack geometry (`__lang_ds_limit − __lang_ds_base`, over the
+/// target's `slot_bytes`) at report-composition time. Declaring it here
+/// duplicated a number the runtime asm already owns; bounds are computed,
+/// never hand-declared (stack-bound-analysis.md §13). The declared value is
+/// the ISR grant only: the ISR data-stack region has no runtime symbol yet,
+/// so it stays a per-pack policy number defaulting to
+/// [`DEFAULT_ISR_STACK_SLOTS`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VerificationGrants {
+    /// `N_isr` — the ISR context's budget; the per-handler ceiling
+    /// ([`DEFAULT_ISR_STACK_SLOTS`] when the pack omits it).
+    pub isr_stack_slots: u32,
+}
+
+impl Default for VerificationGrants {
+    fn default() -> Self {
+        Self {
+            isr_stack_slots: DEFAULT_ISR_STACK_SLOTS,
+        }
+    }
 }
 
 impl CompiledDescriptor {
@@ -182,6 +237,7 @@ impl Default for CompiledDescriptor {
             devices: [CompiledDevice::EMPTY; COMPILED_DESC_DEVICE_CAP],
             device_count: 0,
             platform_hash: 0,
+            verification: VerificationGrants::default(),
         }
     }
 }
@@ -318,6 +374,10 @@ pub fn encode_compiled_desc(
             p += 2;
         }
     }
+    // Verification grant (trailing, v6): N_isr only — N_main is derived from
+    // the runtime binary's geometry (amended §6.4).
+    out[p..p + 4].copy_from_slice(&cd.verification.isr_stack_slots.to_le_bytes());
+    p += 4;
     Ok(p)
 }
 
@@ -525,6 +585,16 @@ pub fn decode_compiled_desc(bytes: &[u8]) -> Result<CompiledDescriptor, Compiled
         };
     }
 
+    // Verification grant (trailing, v6): N_isr only — N_main is derived from
+    // the runtime binary's geometry (amended §6.4). Absence is not
+    // representable on the wire — legacy v4/v5 files are rejected by the
+    // version check above.
+    if bytes.len() < p + 4 {
+        return Err(CompiledDescError::Truncated);
+    }
+    let isr_stack_slots = u32::from_le_bytes(bytes[p..p + 4].try_into().unwrap());
+    p += 4;
+
     if bytes.len() != p {
         return Err(CompiledDescError::TrailingBytes);
     }
@@ -534,6 +604,7 @@ pub fn decode_compiled_desc(bytes: &[u8]) -> Result<CompiledDescriptor, Compiled
         devices,
         device_count,
         platform_hash,
+        verification: VerificationGrants { isr_stack_slots },
     })
 }
 
@@ -614,6 +685,9 @@ fn serialized_len(cd: &CompiledDescriptor) -> Result<usize, CompiledDescError> {
             len += 4 + 1 + r.name.as_bytes().len() + 1 + 1 + 1 + 1 + 1 + 8 + 8 + 1;
         }
     }
+    // Verification grant (1 × u32; amended §6.4 — N_main is derived, not
+    // carried on the wire).
+    len += 4;
     Ok(len)
 }
 

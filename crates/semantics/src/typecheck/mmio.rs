@@ -1274,8 +1274,8 @@ mod tests {
     /// Build a compiled descriptor with a single device/register.
     fn desc_with_write_kind(kind: u8) -> codegen_core::compiled_desc::CompiledDescriptor {
         use codegen_core::compiled_desc::{
-            CompiledDevice, CompiledDescriptor, CompiledRegister, COMPILED_DESC_DEVICE_CAP,
-            COMPILED_DESC_REGISTER_CAP, COMPILED_DESC_APERTURE_CAP,
+            CompiledDevice, CompiledDescriptor, CompiledRegister, VerificationGrants,
+            COMPILED_DESC_DEVICE_CAP, COMPILED_DESC_REGISTER_CAP, COMPILED_DESC_APERTURE_CAP,
         };
         use codegen_core::target::MmioApertureSpec;
         let mut regs = [CompiledRegister::EMPTY; COMPILED_DESC_REGISTER_CAP];
@@ -1308,6 +1308,7 @@ mod tests {
             devices: devs,
             device_count: 1,
             platform_hash: 0,
+            verification: VerificationGrants::default(),
         }
     }
 

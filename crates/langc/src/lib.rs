@@ -103,6 +103,30 @@ pub unsafe fn run(argc: isize, argv: *const *const hosted::c::c_char) -> i32 {
         return 2;
     }
 
+    // P4: `--verdicts=<file>` — load and schema-validate the verdicts file
+    // before any codegen. Fail-closed (§7.5): a malformed, wrong-schema, or
+    // wrong-semantics file is E6402 and aborts the compile (never a silent
+    // best-effort read — a bad file can only cause *more* checking).
+    let verdicts: Option<verifier::verdict::Verdicts> = match cfg.verdicts {
+        Some(path) => {
+            let bytes = match fs::read_file(path) {
+                Ok(b) => b,
+                Err(_) => {
+                    let _ = diag::error_simple(6402, b"cannot read --verdicts file");
+                    return 2;
+                }
+            };
+            match verifier::verdict::read_verdicts(bytes.as_slice()) {
+                Ok(v) => Some(v),
+                Err(_) => {
+                    let _ = diag::error_simple(6402, b"invalid --verdicts file (E6402)");
+                    return 2;
+                }
+            }
+        }
+        None => None,
+    };
+
     let mut out = Stdout;
     match cfg.emit {
         EmitMode::Ast => match Parser::new(src).parse_module_dump(&mut out) {
@@ -163,6 +187,7 @@ pub unsafe fn run(argc: isize, argv: *const *const hosted::c::c_char) -> i32 {
                 descriptor,
                 mmio_apertures,
                 cfg.write_obl,
+                verdicts.as_ref(),
             )
         }
         EmitMode::Obligations => {

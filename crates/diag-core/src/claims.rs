@@ -36,10 +36,14 @@ pub fn claim_text(trap_code: u16) -> &'static str {
         5101 => "E_STACK_EXCEEDS_BUDGET",
         5103 => "E_STACK_QUOT_ERASED",
         // Verification artifact band 64xx (static-verification.md FR-19) —
-        // compile-time codes registered here per the plan; surfaced by langc,
-        // never emitted in a runtime diagnostic record.
+        // compile-time codes registered here per the plan; surfaced by langc
+        // and tyu, never emitted in a runtime diagnostic record.
         6400 => "E_OBL_SCHEMA_VERSION",
         6401 => "E_OBL_MALFORMED",
+        6402 => "E_VERDICTS_MALFORMED",
+        6403 => "E_DESC_VERIFICATION_INVALID",
+        6410 => "E_VERIFY_NO_OPEN",
+        6415 => "E_IMAGE_VERDICTS_INVALID",
         _ => "UNKNOWN_TRAP_CODE",
     }
 }
@@ -86,6 +90,10 @@ mod tests {
     fn artifact_band_codes() {
         assert_eq!(claim_text(6400), "E_OBL_SCHEMA_VERSION");
         assert_eq!(claim_text(6401), "E_OBL_MALFORMED");
+        assert_eq!(claim_text(6402), "E_VERDICTS_MALFORMED");
+        assert_eq!(claim_text(6403), "E_DESC_VERIFICATION_INVALID");
+        assert_eq!(claim_text(6410), "E_VERIFY_NO_OPEN");
+        assert_eq!(claim_text(6415), "E_IMAGE_VERDICTS_INVALID");
     }
 
     #[test]
@@ -99,7 +107,7 @@ mod tests {
     fn every_registered_code_has_text() {
         let known = [
             10u16, 20, 21, 22, 23, 24, 25, 26, 5001, 5002, 5003, 5004, 5010, 5011, 5012, 5020,
-            5030, 5031, 5040, 5100, 5101, 5103, 6400, 6401,
+            5030, 5031, 5040, 5100, 5101, 5103, 6400, 6401, 6402, 6403, 6410, 6415,
         ];
         for &code in &known {
             assert_ne!(

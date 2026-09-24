@@ -973,4 +973,12 @@ pub enum ChecksMode {
     Off,
     Contracts,
     All,
+    /// Slice P4 (`--checks=undischarged`, static-verification.md §6.2/§10):
+    /// emit a runtime check at an obligation site exactly when its resolved
+    /// verdict is neither `discharged` nor `assumed`. Requires a verdicts
+    /// file (else E6402). Site classes whose obligations are not yet
+    /// extracted (contracts, P6) behave as `All`. There is no path by which
+    /// this mode emits *less* than `--checks=all` except at a closed verdict
+    /// site (FR-13).
+    Undischarged,
 }

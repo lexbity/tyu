@@ -26,9 +26,18 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             )?;
         }
 
-        if self.checks == ChecksMode::All {
-            for i in 0..n {
-                if let Some(st) = find_subtype(self.subtypes, self.sig.inputs[i]) {
+        // C1: record one obligation per subtype-typed input, then emit the
+        // runtime trap per the emission mode. The record is independent of
+        // `--checks` (FR-1 — the artifact is complete even when the trap is
+        // not inserted); it uses the SAME decision as the emission
+        // (`find_subtype`); never re-derives it. Under `Undischarged` the
+        // record's resolved verdict gates the emission (P4); under `All` the
+        // gate is a constant true — the emitted machine code is identical to
+        // today's path (FR-5).
+        for i in 0..n {
+            if let Some(st) = find_subtype(self.subtypes, self.sig.inputs[i]) {
+                let verdict = self.record_subtype_param_obligation(i, &st);
+                if self.emit_subtype_check(verdict) {
                     self.emit_subtype_range_trap(
                         cur,
                         i as u16,
@@ -40,19 +49,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             }
         }
 
-        // C1 extraction (P2): one obligation per subtype-typed input, recorded
-        // independently of `--checks` (FR-1 — the artifact is complete even
-        // when the runtime trap is not inserted). Uses the SAME decision as the
-        // emission above (`find_subtype`); never re-derives it.
-        for i in 0..n {
-            if let Some(st) = find_subtype(self.subtypes, self.sig.inputs[i]) {
-                self.record_subtype_param_obligation(i, &st);
-            }
-        }
-
         let mut params_on_stack = false;
         if self.checks != ChecksMode::Off
-            && (self.checks == ChecksMode::Contracts || self.checks == ChecksMode::All)
+            && (self.checks == ChecksMode::Contracts
+                || self.checks == ChecksMode::All
+                || self.checks == ChecksMode::Undischarged)
         {
             if let Some(req) = requires {
                 for i in 0..n {
@@ -86,6 +87,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                     },
                     req,
                 )?;
+                // P4: one emitted contract trap — the honesty count behind
+                // the report's `emitted.contract` field (FR-15).
+                if let Some(ctx) = self.extraction.as_mut() {
+                    ctx.note_emitted_contract();
+                }
                 params_on_stack = true;
             }
         }
@@ -117,7 +123,9 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         let mut cur = cur;
 
         if self.checks != ChecksMode::Off
-            && (self.checks == ChecksMode::Contracts || self.checks == ChecksMode::All)
+            && (self.checks == ChecksMode::Contracts
+                || self.checks == ChecksMode::All
+                || self.checks == ChecksMode::Undischarged)
         {
             if let Some(ens) = ensures {
                 let n = self.sig.out_len as usize;
@@ -142,60 +150,69 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                     },
                     ens,
                 )?;
+                // P4: one emitted contract trap (FR-15 honesty count).
+                if let Some(ctx) = self.extraction.as_mut() {
+                    ctx.note_emitted_contract();
+                }
             }
         }
 
-        if self.checks == ChecksMode::All {
+        // C2: record one obligation per subtype-typed output, then emit the
+        // runtime trap per the emission mode. Under `All`/`Undischarged` the
+        // values are staged through temp slots so the checks run before
+        // return; the record is independent of the emission decision (FR-1).
+        {
             let n = self.sig.out_len as usize;
-            let base_stack = *stack;
-            let base_sp = *sp;
-            let tmp_base = self.temp_base_slot();
-            for i in (0..n).rev() {
-                let v = pop(stack, sp).ok_or(TcError::StackUnderflow {
-                    span: Span::new(0, 0),
-                })?;
-                let _ = v;
-                self.emit_op(
-                    cur,
-                    lir::OpKind::LocalSet {
-                        slot: tmp_base + i as u16,
-                        ty: self.word.sig.outputs[i],
-                    },
-                    Span::new(0, 0),
-                )?;
-            }
-            for i in 0..n {
-                if let Some(st) = find_subtype(self.subtypes, self.sig.outputs[i]) {
-                    self.emit_subtype_range_trap(
+            if self.checks == ChecksMode::All || self.checks == ChecksMode::Undischarged {
+                let base_stack = *stack;
+                let base_sp = *sp;
+                let tmp_base = self.temp_base_slot();
+                for i in (0..n).rev() {
+                    let v = pop(stack, sp).ok_or(TcError::StackUnderflow {
+                        span: Span::new(0, 0),
+                    })?;
+                    let _ = v;
+                    self.emit_op(
                         cur,
-                        tmp_base + i as u16,
-                        self.word.sig.outputs[i],
-                        &st,
+                        lir::OpKind::LocalSet {
+                            slot: tmp_base + i as u16,
+                            ty: self.word.sig.outputs[i],
+                        },
                         Span::new(0, 0),
                     )?;
                 }
-            }
-            for i in 0..n {
-                self.emit_op(
-                    cur,
-                    lir::OpKind::LocalGet {
-                        slot: tmp_base + i as u16,
-                        ty: self.word.sig.outputs[i],
-                    },
-                    Span::new(0, 0),
-                )?;
-                stack[i] = base_stack[i];
-            }
-            *sp = base_sp;
-        }
-
-        // C2 extraction (P2): one obligation per subtype-typed output,
-        // recorded independently of `--checks` (FR-1).
-        {
-            let n = self.sig.out_len as usize;
-            for i in 0..n {
-                if let Some(st) = find_subtype(self.subtypes, self.sig.outputs[i]) {
-                    self.record_subtype_return_obligation(i, &st);
+                for i in 0..n {
+                    if let Some(st) = find_subtype(self.subtypes, self.sig.outputs[i]) {
+                        let verdict = self.record_subtype_return_obligation(i, &st);
+                        if self.emit_subtype_check(verdict) {
+                            self.emit_subtype_range_trap(
+                                cur,
+                                tmp_base + i as u16,
+                                self.word.sig.outputs[i],
+                                &st,
+                                Span::new(0, 0),
+                            )?;
+                        }
+                    }
+                }
+                for i in 0..n {
+                    self.emit_op(
+                        cur,
+                        lir::OpKind::LocalGet {
+                            slot: tmp_base + i as u16,
+                            ty: self.word.sig.outputs[i],
+                        },
+                        Span::new(0, 0),
+                    )?;
+                    stack[i] = base_stack[i];
+                }
+                *sp = base_sp;
+            } else {
+                // Off/Contracts: extraction only (FR-1).
+                for i in 0..n {
+                    if let Some(st) = find_subtype(self.subtypes, self.sig.outputs[i]) {
+                        self.record_subtype_return_obligation(i, &st);
+                    }
                 }
             }
         }

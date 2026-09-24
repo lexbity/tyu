@@ -480,7 +480,13 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         push(stack, sp, push_val)?;
         if name == b"as" {
             if let Some(st) = subtype {
-                if self.checks == ChecksMode::All {
+                // C3: record the narrowing-cast obligation, then emit the
+                // runtime trap per the emission mode. The record is
+                // independent of `--checks` (FR-1); under `Undischarged` the
+                // resolved verdict gates the check (P4); under `All` the gate
+                // is constant true (FR-5 — identical emitted code).
+                let verdict = self.record_cast_obligation(from_ty, to_ty, &st, name_abs);
+                if self.emit_subtype_check(verdict) {
                     let tmp = self.temp_base_slot();
                     self.emit_op(cur, lir::OpKind::Dup { ty: to_id }, name_abs)?;
                     self.emit_op(
@@ -493,11 +499,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                     )?;
                     self.emit_subtype_range_trap(cur, tmp, to_id, &st, name_abs)?;
                 }
-                // C3 extraction (P2): one obligation per narrowing `as T` cast,
-                // recorded independently of `--checks` (FR-1). v1 provenance is
-                // opaque (`$top` operand) — the value path is untracked until
-                // P5's interval engine.
-                self.record_cast_obligation(from_ty, to_ty, &st, name_abs);
             }
         }
         Ok(cur)

@@ -192,14 +192,14 @@ fn hash_invariant_under_formatting() {
     );
 
     // Golden pin for the P1 rp2350 descriptor. Re-pinned when the canonical
-    // format gained the per-aperture scratch flag (P8 audit): a bus aperture
-    // aliasing a [memory] region must declare it, and the declaration folds
-    // into the hash.
-    assert_eq!(
-        ha,
-        0xfad8_5c4d_1071_ddec,
-        "rp2350 platform_hash golden must be stable"
-    );
+    // format gained the per-aperture scratch flag (P8 audit), when it gained
+    // the `[verification]` profile grants (P3 slice), and when the amended
+    // §6.4 dropped the declared `N_main` grant (format v6 — N_main is derived
+    // from the runtime binary's geometry and hashes nothing here): the ISR
+    // grant still folds into the hash so a budget change invalidates cached
+    // artifacts exactly as a board change would.
+    eprintln!("HASH_BASE={:#018x}", ha);
+    assert_eq!(ha, 0xc5aa_6dde_3c6d_227c);
 }
 
 #[test]
@@ -218,8 +218,8 @@ fn hash_changes_on_semantic_edit() {
         "changing a register write_kind must change platform_hash"
     );
     // Pin both hex values so a semantic drift is caught on either side.
-    assert_eq!(h_base, 0xfad8_5c4d_1071_ddec);
-    assert_eq!(h_flipped, 0xc911_ad7a_bc32_806d);
+    assert_eq!(h_base, 0xc5aa_6dde_3c6d_227c);
+    assert_eq!(h_flipped, 0x70a1_9719_a348_e02d);
 }
 
 #[test]

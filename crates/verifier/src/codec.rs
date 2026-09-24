@@ -170,6 +170,18 @@ fn write_formula(out: &mut Vec<u8>, f: &Formula) {
             write_i64(out, *hi);
             out.push(b'}');
         }
+        Formula::OffsetLE { off, width, size } => {
+            out.extend_from_slice(b"{\"op\":\"OffsetLE\",\"off\":");
+            match off {
+                Some(off) => write_i64(out, *off as i64),
+                None => out.extend_from_slice(b"null"),
+            }
+            out.extend_from_slice(b",\"width\":");
+            write_i64(out, *width as i64);
+            out.extend_from_slice(b",\"size\":");
+            write_i64(out, *size as i64);
+            out.push(b'}');
+        }
     }
 }
 
@@ -203,12 +215,19 @@ fn write_assumption(out: &mut Vec<u8>, a: &Assumption) {
             write_i64(out, *hi);
             out.push(b'}');
         }
+        Assumption::ApertureSize { aperture, size } => {
+            out.extend_from_slice(b"{\"kind\":\"aperture-size\",\"aperture\":");
+            write_i64(out, *aperture as i64);
+            out.extend_from_slice(b",\"size\":");
+            write_i64(out, *size as i64);
+            out.push(b'}');
+        }
     }
 }
 
 /// Write `s` as a JSON string with escaping. Identifiers are ASCII in
 /// practice; this handles the full escape surface anyway.
-fn write_str(out: &mut Vec<u8>, s: &str) {
+pub(crate) fn push_str_json(out: &mut Vec<u8>, s: &str) {
     out.push(b'"');
     for &b in s.as_bytes() {
         match b {
@@ -230,6 +249,10 @@ fn write_str(out: &mut Vec<u8>, s: &str) {
     out.push(b'"');
 }
 
+fn write_str(out: &mut Vec<u8>, s: &str) {
+    push_str_json(out, s);
+}
+
 /// Two lowercase hex digits for a byte (control-char JSON escapes).
 fn format_hex2(b: u8) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
@@ -240,7 +263,7 @@ fn format_hex2(b: u8) -> String {
 }
 
 /// Write `v` as a JSON integer (decimal; negative allowed).
-fn write_i64(out: &mut Vec<u8>, mut v: i64) {
+pub(crate) fn push_i64_json(out: &mut Vec<u8>, mut v: i64) {
     if v == i64::MIN {
         out.extend_from_slice(b"-9223372036854775808");
         return;
@@ -264,6 +287,10 @@ fn write_i64(out: &mut Vec<u8>, mut v: i64) {
     for i in (0..n).rev() {
         out.push(buf[i]);
     }
+}
+
+fn write_i64(out: &mut Vec<u8>, v: i64) {
+    push_i64_json(out, v);
 }
 
 // ---------------------------------------------------------------------------
@@ -695,6 +722,9 @@ impl<'a> Reader<'a> {
         let mut value: Option<Oel> = None;
         let mut lo: Option<i64> = None;
         let mut hi: Option<i64> = None;
+        let mut off: Option<Option<u32>> = None;
+        let mut width: Option<u32> = None;
+        let mut size: Option<u32> = None;
         loop {
             self.skip_ws();
             match self.peek() {
@@ -715,16 +745,41 @@ impl<'a> Reader<'a> {
                 "value" => value = Some(self.parse_oel()?),
                 "lo" => lo = Some(self.parse_i64()?),
                 "hi" => hi = Some(self.parse_i64()?),
+                "off" => off = Some(self.parse_nullable_u32()?),
+                "width" => width = Some(self.parse_u64()? as u32),
+                "size" => size = Some(self.parse_u64()? as u32),
                 _ => self.skip_value()?,
             }
         }
-        let (Some(op), Some(value), Some(lo), Some(hi)) = (op, value, lo, hi) else {
-            return self.err();
-        };
+        let Some(op) = op else { return self.err() };
         match op.as_str() {
-            "InRange" => Ok(Formula::InRange { value, lo, hi }),
+            "InRange" => {
+                let (Some(value), Some(lo), Some(hi)) = (value, lo, hi) else {
+                    return self.err();
+                };
+                Ok(Formula::InRange { value, lo, hi })
+            }
+            "OffsetLE" => {
+                let (Some(off), Some(width), Some(size)) = (off, width, size) else {
+                    return self.err();
+                };
+                Ok(Formula::OffsetLE { off, width, size })
+            }
             _ => self.err(),
         }
+    }
+
+    /// `null` (dynamic offset) or a number.
+    fn parse_nullable_u32(&mut self) -> Result<Option<u32>, CodecError> {
+        self.skip_ws();
+        if self.peek() == Some(b'n') {
+            if self.b.get(self.i..self.i + 4) == Some(b"null") {
+                self.i += 4;
+                return Ok(None);
+            }
+            return self.err();
+        }
+        self.parse_u64().map(|v| Some(v as u32))
     }
 
     fn parse_oel(&mut self) -> Result<Oel, CodecError> {
@@ -797,43 +852,60 @@ impl<'a> Reader<'a> {
                 self.i += 1;
                 break;
             }
-            self.expect(b'{')?;
-            let mut kind: Option<String> = None;
-            let mut name: Option<String> = None;
-            let mut lo: Option<i64> = None;
-            let mut hi: Option<i64> = None;
-            loop {
-                self.skip_ws();
-                match self.peek() {
-                    Some(b'}') => {
-                        self.i += 1;
-                        break;
-                    }
-                    Some(b',') => {
-                        self.i += 1;
-                    }
-                    _ => {}
-                }
-                self.skip_ws();
-                let key = self.parse_string()?;
-                self.expect(b':')?;
-                match key.as_str() {
-                    "kind" => kind = Some(self.parse_string()?),
-                    "name" => name = Some(self.parse_string()?),
-                    "lo" => lo = Some(self.parse_i64()?),
-                    "hi" => hi = Some(self.parse_i64()?),
-                    _ => self.skip_value()?,
-                }
-            }
-            let (Some(kind), Some(name), Some(lo), Some(hi)) = (kind, name, lo, hi) else {
-                return self.err();
-            };
-            match kind.as_str() {
-                "subtype-range" => out.push(Assumption::SubtypeRange { name, lo, hi }),
-                _ => return self.err(),
-            }
+            out.push(self.parse_assumption()?);
         }
         Ok(out)
+    }
+
+    fn parse_assumption(&mut self) -> Result<Assumption, CodecError> {
+        self.expect(b'{')?;
+        let mut kind: Option<String> = None;
+        let mut name: Option<String> = None;
+        let mut lo: Option<i64> = None;
+        let mut hi: Option<i64> = None;
+        let mut aperture: Option<u16> = None;
+        let mut size: Option<u32> = None;
+        loop {
+            self.skip_ws();
+            match self.peek() {
+                Some(b'}') => {
+                    self.i += 1;
+                    break;
+                }
+                Some(b',') => {
+                    self.i += 1;
+                }
+                _ => {}
+            }
+            self.skip_ws();
+            let key = self.parse_string()?;
+            self.expect(b':')?;
+            match key.as_str() {
+                "kind" => kind = Some(self.parse_string()?),
+                "name" => name = Some(self.parse_string()?),
+                "lo" => lo = Some(self.parse_i64()?),
+                "hi" => hi = Some(self.parse_i64()?),
+                "aperture" => aperture = Some(self.parse_u64()? as u16),
+                "size" => size = Some(self.parse_u64()? as u32),
+                _ => self.skip_value()?,
+            }
+        }
+        let Some(kind) = kind else { return self.err() };
+        match kind.as_str() {
+            "subtype-range" => {
+                let (Some(name), Some(lo), Some(hi)) = (name, lo, hi) else {
+                    return self.err();
+                };
+                Ok(Assumption::SubtypeRange { name, lo, hi })
+            }
+            "aperture-size" => {
+                let (Some(aperture), Some(size)) = (aperture, size) else {
+                    return self.err();
+                };
+                Ok(Assumption::ApertureSize { aperture, size })
+            }
+            _ => self.err(),
+        }
     }
 
     fn parse_string_array(&mut self) -> Result<Vec<String>, CodecError> {
@@ -1056,8 +1128,155 @@ impl<'a> Reader<'a> {
 }
 
 // ---------------------------------------------------------------------------
-// Lib tests (dev-dependency `serde_json` powers the cross-check parser only)
+// Report writer (static-verification.md §6.5, slice P3)
 // ---------------------------------------------------------------------------
+
+/// Serialize a `VerifyReport` to JSON bytes (fixed key order — §6.5 field
+/// order; deterministic, FR-17). `tyu` builds the model; this is the single
+/// report serializer.
+pub fn encode_report(report: &crate::report::VerifyReport) -> Result<Vec<u8>, CodecError> {
+    let out = write_report_bytes(report);
+    if out.len() > OBL_ARTIFACT_MAX_BYTES {
+        return Err(CodecError::TooLarge { size: out.len() });
+    }
+    Ok(out)
+}
+
+fn write_report_bytes(r: &crate::report::VerifyReport) -> Vec<u8> {
+    let mut out = Vec::with_capacity(2048);
+    out.extend_from_slice(b"{\"schema\":");
+    write_str(&mut out, &r.schema);
+    out.extend_from_slice(b",\"tool\":{\"name\":");
+    write_str(&mut out, &r.tool.name);
+    out.extend_from_slice(b",\"version\":");
+    write_str(&mut out, &r.tool.version);
+    out.extend_from_slice(b"},\"semantics\":");
+    write_str(&mut out, &r.semantics);
+    out.extend_from_slice(b",\"policy\":");
+    write_str(&mut out, &r.policy);
+    write_report_modules(&mut out, &r.modules);
+    write_report_contexts(&mut out, &r.contexts);
+    out.extend_from_slice(b",\"open\":[");
+    for (i, o) in r.open.iter().enumerate() {
+        if i != 0 {
+            out.push(b',');
+        }
+        out.extend_from_slice(b"{\"id\":");
+        write_str(&mut out, &o.id);
+        out.extend_from_slice(b",\"kind\":");
+        write_str(&mut out, &o.kind);
+        out.extend_from_slice(b",\"module\":");
+        write_str(&mut out, &o.module);
+        out.extend_from_slice(b",\"word\":");
+        write_str(&mut out, &o.word);
+        out.extend_from_slice(b",\"site\":");
+        write_str(&mut out, &o.site);
+        out.extend_from_slice(b",\"line\":");
+        write_i64(&mut out, o.line as i64);
+        out.push(b'}');
+    }
+    out.extend_from_slice(b"],\"assumed\":[");
+    for (i, a) in r.assumed.iter().enumerate() {
+        if i != 0 {
+            out.push(b',');
+        }
+        out.extend_from_slice(b"{\"id\":");
+        write_str(&mut out, &a.id);
+        out.extend_from_slice(b",\"kind\":");
+        write_str(&mut out, &a.kind);
+        out.extend_from_slice(b",\"module\":");
+        write_str(&mut out, &a.module);
+        out.extend_from_slice(b",\"word\":");
+        write_str(&mut out, &a.word);
+        out.extend_from_slice(b",\"site\":");
+        write_str(&mut out, &a.site);
+        out.extend_from_slice(b",\"line\":");
+        write_i64(&mut out, a.line as i64);
+        if let Some(j) = &a.justification {
+            out.extend_from_slice(b",\"justification\":");
+            write_str(&mut out, j);
+        }
+        out.push(b'}');
+    }
+    out.extend_from_slice(b"],\"assumptions_trusted\":[");
+    for (i, a) in r.assumptions_trusted.iter().enumerate() {
+        if i != 0 {
+            out.push(b',');
+        }
+        out.extend_from_slice(b"{\"kind\":");
+        write_str(&mut out, &a.kind);
+        out.extend_from_slice(b",\"what\":");
+        write_str(&mut out, &a.what);
+        out.push(b'}');
+    }
+    out.extend_from_slice(b"],\"stale_verdicts\":");
+    write_i64(&mut out, r.stale_verdicts as i64);
+    out.extend_from_slice(b",\"emitted_checks\":{\"subtype_range\":");
+    write_i64(&mut out, r.emitted_checks.subtype_range as i64);
+    out.extend_from_slice(b",\"contract\":");
+    write_i64(&mut out, r.emitted_checks.contract as i64);
+    out.extend_from_slice(b",\"mmio_bounds\":");
+    write_i64(&mut out, r.emitted_checks.mmio_bounds as i64);
+    out.extend_from_slice(b",\"data_stack_guards\":");
+    out.extend_from_slice(if r.emitted_checks.data_stack_guards {
+        b"true"
+    } else {
+        b"false"
+    });
+    out.extend_from_slice(b"}}");
+    out
+}
+
+fn write_report_modules(out: &mut Vec<u8>, modules: &[crate::report::ModuleAccounting]) {
+    out.extend_from_slice(b",\"modules\":[");
+    for (i, m) in modules.iter().enumerate() {
+        if i != 0 {
+            out.push(b',');
+        }
+        out.extend_from_slice(b"{\"name\":");
+        write_str(out, &m.name);
+        out.extend_from_slice(b",\"classes\":{");
+        for (j, c) in m.classes.iter().enumerate() {
+            if j != 0 {
+                out.push(b',');
+            }
+            write_str(out, &c.kind);
+            out.extend_from_slice(b":{\"total\":");
+            write_i64(out, c.total as i64);
+            out.extend_from_slice(b",\"discharged\":");
+            write_i64(out, c.discharged as i64);
+            out.extend_from_slice(b",\"assumed\":");
+            write_i64(out, c.assumed as i64);
+            out.extend_from_slice(b",\"open\":");
+            write_i64(out, c.open as i64);
+            out.push(b'}');
+        }
+        out.extend_from_slice(b"}}");
+    }
+    out.extend_from_slice(b"]");
+}
+
+fn write_report_contexts(out: &mut Vec<u8>, c: &crate::report::StackContextAccounting) {
+    out.extend_from_slice(b",\"contexts\":{\"stack\":{\"main\":{\"high\":");
+    write_i64(out, c.main.high as i64);
+    out.extend_from_slice(b",\"top\":");
+    out.extend_from_slice(if c.main.top { b"true" } else { b"false" });
+    out.extend_from_slice(b",\"budget\":");
+    write_i64(out, c.main.budget as i64);
+    out.extend_from_slice(b",\"verdict\":");
+    write_str(out, &c.main.verdict);
+    out.extend_from_slice(b"},\"isr\":{\"max_high\":");
+    write_i64(out, c.isr.max_high as i64);
+    out.extend_from_slice(b",\"budget\":");
+    write_i64(out, c.isr.budget as i64);
+    out.extend_from_slice(b",\"handlers\":");
+    write_i64(out, c.isr.handlers as i64);
+    out.extend_from_slice(b",\"verdict\":");
+    write_str(out, &c.isr.verdict);
+    out.extend_from_slice(b"},\"guards\":");
+    write_str(out, &c.guards);
+    out.extend_from_slice(b"}}");
+}
 
 #[cfg(test)]
 mod tests {
@@ -1071,6 +1290,11 @@ mod tests {
     fn sample_set() -> OblSet {
         let mut ctx = ExtractionCtx::new(b"Bank");
         ctx.begin_word(b"clamp");
+        let mut assumptions = Vec::new();
+        assumptions.push(crate::model::Assumption::ApertureSize {
+            aperture: 0,
+            size: 65536,
+        });
         ctx.record(
             Kind::SubtypeRange,
             Formula::InRange {
@@ -1083,8 +1307,29 @@ mod tests {
             12,
             8,
             Provenance::Opaque,
+            assumptions,
         );
         ctx.push_subtype_fact(b"Percent", 0, 100);
+        // An emulated-aperture access (P3): OffsetLE with a const offset.
+        ctx.begin_word(b"read");
+        let mut ctx = ctx;
+        let mut mmio_assumptions = Vec::new();
+        mmio_assumptions.push(crate::model::Assumption::ApertureSize {
+            aperture: 0,
+            size: 65536,
+        });
+        ctx.record(
+            Kind::MmioBounds,
+            Formula::OffsetLE {
+                off: Some(0x1000),
+                width: 4,
+                size: 65536,
+            },
+            4,
+            10,
+            Provenance::Direct,
+            mmio_assumptions,
+        );
         ctx.set().clone()
     }
 
@@ -1199,6 +1444,6 @@ mod tests {
         doc = doc.replace(",\"facts\"", ",\"future_extra\":{\"a\":1},\"facts\"");
         let parsed = read_obl(doc.as_bytes()).expect("additive keys are skipped");
         assert_eq!(parsed.module, "Bank");
-        assert_eq!(parsed.obligations.len(), 1);
+        assert_eq!(parsed.obligations.len(), 2);
     }
 }

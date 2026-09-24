@@ -130,6 +130,7 @@ pub fn emit_ir(
             &sig,
             &mut arena,
             None,
+            None,
             &mut null_obs,
         )?;
         lir::verify_word(out_words.word).map_err(|e| TcError::InternalError {
@@ -328,6 +329,7 @@ pub fn emit_stackcheck(
                 &sig,
                 &mut arena,
                 None,
+                None,
                 &mut obs,
             )
             .map_err(|e| TcError::InternalError {
@@ -354,10 +356,11 @@ pub fn for_each_ir_word<E, F>(
     resources: &mut ResourceDb,
     descriptor: Option<&codegen_core::compiled_desc::CompiledDescriptor>,
     mut extraction: Option<&mut verifier::model::ExtractionCtx>,
+    verdicts: Option<&verifier::verdict::Verdicts>,
     mut f: F,
 ) -> Result<(), ForEachIrError<E>>
 where
-    F: FnMut(&lir::Word) -> Result<(), E>,
+    F: FnMut(&lir::Word, Option<&verifier::model::ExtractionCtx>) -> Result<(), E>,
 {
     let mmio = build_mmio_db(module, src, descriptor).map_err(ForEachIrError::Type)?;
     let nominals = build_nominal_db(module, src).map_err(ForEachIrError::Type)?;
@@ -425,6 +428,7 @@ where
             &sig,
             &mut arena,
             extraction.as_deref_mut(),
+            verdicts,
             &mut null_obs,
         )
         .map_err(ForEachIrError::Type)?;
@@ -443,7 +447,9 @@ where
                 out_words.word.performs,
             );
         }
-        f(out_words.word).map_err(ForEachIrError::Consumer)?;
+        // P4: the codegen consumer reads the current word's mmio elision state
+        // (shared borrow) while the word is current.
+        f(out_words.word, extraction.as_deref()).map_err(ForEachIrError::Consumer)?;
         for w in out_words.extra_words.iter() {
             lir::verify_word(w)
                 .map_err(|e| TcError::InternalError {
@@ -451,7 +457,7 @@ where
                     span: e.span(),
                 })
                 .map_err(ForEachIrError::Type)?;
-            f(w).map_err(ForEachIrError::Consumer)?;
+            f(w, extraction.as_deref()).map_err(ForEachIrError::Consumer)?;
         }
     }
     Ok(())
@@ -503,6 +509,10 @@ fn local_summary_env(
                 allow_raw_casts,
                 &sig,
                 &mut arena,
+                None,
+                // The fixpoint forecasts per-word summaries: no verdicts, so
+                // every check is accounted (conservative — the final pass may
+                // skip discharged sites, never the reverse).
                 None,
                 &mut null_obs,
             )?;

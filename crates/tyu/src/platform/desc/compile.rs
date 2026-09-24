@@ -159,6 +159,9 @@ pub fn compile(desc: &Descriptor) -> Result<CompiledDescriptor, DescriptorError>
         devices,
         device_count: desc.devices.len(),
         platform_hash: canonical::platform_hash(desc),
+        verification: codegen_core::compiled_desc::VerificationGrants {
+            isr_stack_slots: desc.verification.isr_stack_slots,
+        },
     })
 }
 

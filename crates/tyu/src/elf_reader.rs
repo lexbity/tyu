@@ -146,6 +146,50 @@ fn cstr_at(strtab: &[u8], off: usize) -> Option<&[u8]> {
     Some(&strtab[off..end])
 }
 
+/// The section-relative value (`st_value`) of the first *defined* global
+/// symbol `name` in an ELF object's symbol table, or `None` when the object
+/// is not ELF, carries no `.symtab`, or does not define the name.
+///
+/// In a relocatable object the two runtime labels `__lang_ds_base` /
+/// `__lang_ds_limit` both live in `.bss`, so the difference of their
+/// `st_value`s is the data-stack reservation in bytes regardless of the final
+/// link address — this is the derivation source for the main context's
+/// `bounded-stack(N_main)` budget (static-verification.md §6.4, amended:
+/// geometry comes from the runtime binary, never a hand-declared grant).
+pub fn symbol_value(data: &[u8], name: &[u8]) -> Option<u64> {
+    let (symtab, strtab, elf64) = symtab_and_strtab(data)?;
+    // Elf64_Sym: st_name u32@0, st_info u8@4, st_other u8@5, st_shndx u16@6,
+    //            st_value u64@8; entry 24 bytes.
+    // Elf32_Sym: st_name u32@0, st_value u32@4, st_shndx u16@14; entry 16 bytes.
+    let (entry_size, shndx_off, value_off, value_len) = if elf64 {
+        (24usize, 6usize, 8usize, 8usize)
+    } else {
+        (16usize, 14usize, 4usize, 4usize)
+    };
+    let mut off = 0;
+    while off + entry_size <= symtab.len() {
+        let st_name = u32::from_le_bytes(symtab[off..off + 4].try_into().ok()?);
+        let st_shndx =
+            u16::from_le_bytes(symtab[off + shndx_off..off + shndx_off + 2].try_into().ok()?);
+        let defined = st_shndx != 0;
+        let value = u64::from_le_bytes(
+            symtab[off + value_off..off + value_off + value_len]
+                .try_into()
+                .ok()?,
+        );
+        off += entry_size;
+        // SHN_UNDEF == 0; the all-null entry has st_name == 0.
+        if !defined || st_name == 0 {
+            continue;
+        }
+        let sym_name = cstr_at(strtab, st_name as usize)?;
+        if sym_name == name {
+            return Some(value);
+        }
+    }
+    None
+}
+
 /// Locate the object's symbol table together with its linked string table.
 /// Returns `(symtab, strtab, is_elf64)`, or `None` for non-ELF data or when
 /// no `.symtab` is present.

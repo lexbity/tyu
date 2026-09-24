@@ -1488,6 +1488,7 @@ rung = "{rung}"
                     debug_agent: None,
                 },
                 secure_boot: None,
+                verification: None,
             },
         };
 

@@ -16,6 +16,14 @@ path = "."
 startup = "linux-x86_64-hosted.asm"
 linker = ""
 
+[verification]
+# ISR bounded-stack(N_isr) grant (static-verification.md §6.4, amended).
+# N_main is NOT declared: it is derived from the runtime binary's own
+# data-stack geometry (__lang_ds_limit - __lang_ds_base over slot_bytes) at
+# report-composition time - bounds are computed, never hand-declared
+# (stack-bound-analysis.md §13).
+isr_stack_slots = 32   # N_isr; ISRs are masked (no nesting) so one grant covers all handlers
+
 [capabilities.gpio]
 glue = "platform/gpio"
 

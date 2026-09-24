@@ -21,6 +21,7 @@ pub fn validate(desc: &Descriptor, pack_root: Option<&Path>) -> Vec<DescriptorEr
 
     validate_apertures(desc, &mut errors);
     validate_devices(desc, &mut errors);
+    validate_verification(desc, &mut errors);
     validate_allocator(desc, pack_root, &mut errors);
     validate_metal_trust(desc, pack_root, &mut errors);
 
@@ -229,6 +230,21 @@ fn validate_register(d: &DeviceMap, r: &RegisterRow, errors: &mut Vec<Descriptor
             "device {} '{}' register '{}': mask 0x{:x} exceeds width {} bits",
             d.map, d.instance, r.name, r.mask, r.width
         )));
+    }
+}
+
+fn validate_verification(desc: &Descriptor, errors: &mut Vec<DescriptorError>) {
+    use super::E_DESC_VERIFICATION_INVALID;
+    let e = |detail: String| DescriptorError::new(E_DESC_VERIFICATION_INVALID, detail);
+
+    // Rule: `isr_stack_slots` must be positive (default 32 when omitted).
+    // `data_stack_slots` is not a descriptor field any more (amended §6.4:
+    // N_main is derived from the runtime binary's geometry); a stale key is
+    // rejected at parse time with a migration message.
+    if desc.verification.isr_stack_slots == 0 {
+        errors.push(e(
+            "[verification] isr_stack_slots must be > 0 (default 32 when omitted)".into(),
+        ));
     }
 }
 
@@ -734,5 +750,78 @@ registers = [
         let errors = validate(&parse(text), None);
         assert!(errors.len() >= 3, "expected multiple violations: {:?}", errors);
         assert!(codes(text).iter().all(|c| *c == E_DESC_INVALID));
+    }
+
+    // -----------------------------------------------------------------------
+    // [verification] profile grants (slice P3, E6403)
+    // -----------------------------------------------------------------------
+
+    fn verification_pack(verification: &str) -> String {
+        format!(
+            r#"
+[platform]
+name = "demo"
+schema = 2
+family = "demo"
+[memory]
+sram = {{ name = "SRAM", origin = 0x20000000, length = 0x10000 }}
+ds_region = "SRAM"
+ds_size = 0x4000
+{verification}
+"#
+        )
+    }
+
+    #[test]
+    fn verification_absent_is_defaulted() {
+        let desc = parse(&verification_pack(""));
+        assert_eq!(desc.verification.isr_stack_slots, 32);
+        assert!(validate(&desc, None).is_empty());
+    }
+
+    #[test]
+    fn verification_isr_grant_passes() {
+        let desc = parse(&verification_pack(
+            r#"[verification]
+isr_stack_slots = 32
+"#,
+        ));
+        assert!(validate(&desc, None).is_empty(), "{:?}", validate(&desc, None));
+    }
+
+    #[test]
+    fn removed_data_stack_slots_key_rejected_with_migration_message() {
+        // Amended §6.4: N_main is derived from the runtime binary's geometry,
+        // never hand-declared — a stale `data_stack_slots` key must fail loud
+        // (E6403) with the migration message, never silently ignore.
+        let err = parse_descriptor(&verification_pack(
+            r#"[verification]
+data_stack_slots = 2048
+"#,
+        ))
+        .unwrap_err();
+        assert_eq!(err.code, 6403);
+        assert!(
+            err.detail.contains("data_stack_slots was removed"),
+            "{:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn verification_zero_isr_slots_rejected() {
+        let desc = parse(&verification_pack(
+            r#"[verification]
+isr_stack_slots = 0
+"#,
+        ));
+        let errors = validate(&desc, None);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.code == 6403 && e.detail.contains("isr_stack_slots must be > 0")),
+            "{:?}",
+            errors
+        );
     }
 }

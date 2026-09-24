@@ -79,6 +79,7 @@ fn compile_fixture(fixture: &str, target: Target) -> String {
         None,
         target.spec().mmio_apertures,
         false,
+        None,
     );
 
     let asm_path = out_dir.join("Main.asm");

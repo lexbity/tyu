@@ -140,20 +140,35 @@ pub enum Oel {
 
 /// Obligation head predicates (Q2). `InRange(value, lo, hi)` is the head every
 /// subtype-range site lowers to — the exact predicate `emit_subtype_range_trap`
-/// implements at runtime.
+/// implements at runtime. `OffsetLE(off, width, size)` is the head every
+/// emulated-aperture MMIO access lowers to — the exact predicate the x86
+/// `emit_mmio_bounds_check` implements (slice P3, Q8): the access's
+/// aperture-relative byte offset plus its width must stay within the
+/// aperture's size.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Formula {
     InRange { value: Oel, lo: i64, hi: i64 },
+    /// `off` is the aperture-relative byte offset of the access. `None`
+    /// means the offset is not compile-time known (future dynamic-offset
+    /// accesses) — such an obligation is open by construction.
+    OffsetLE { off: Option<u32>, width: u32, size: u32 },
 }
 
-/// Trusted facts a formula may rely on (Q2 `assumptions`; T2 in Q14). P2 emits
-/// no assumptions for the C1–C3 subtype sites (the range travels in the
-/// formula itself); the enum is the closed set from which later slices add
-/// descriptor facts (register ranges, stack geometry).
+/// Trusted facts a formula may rely on (Q2 `assumptions`; T2 in Q14). P2's
+/// subtype sites emit none (the range travels in the formula itself); P3's
+/// `mmio-bounds` sites carry the aperture-size fact the offset must be proven
+/// against.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Assumption {
     /// The module declares a subtype with this range.
-    SubtypeRange { name: String, lo: i64, hi: i64 },
+    SubtypeRange {
+        name: String,
+        lo: i64,
+        hi: i64,
+    },
+    /// A descriptor aperture with this id and byte size (the fact an
+    /// `OffsetLE` discharge counts as trusted — T2).
+    ApertureSize { aperture: u16, size: u32 },
 }
 
 /// Source span as *debug info only* — never part of an obligation's identity.
@@ -188,6 +203,23 @@ pub struct Obligation {
     /// formulas from `$top` placeholders. Appended so v1 writers remain
     /// readable by earlier consumers (readers skip unknown keys).
     pub provenance: Provenance,
+}
+
+/// The resolved build-time verdict of one obligation (slice P4, §6.2/§7.4):
+/// the emission decision record behind the verdicts echo and the report's
+/// per-class accounting. Appended to [`ExtractionCtx`] in the exact order of
+/// `OblSet::obligations` — one entry per record, same ordinals.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedVerdict {
+    pub id: String,
+    pub id_hash: String,
+    pub kind: Kind,
+    pub status: crate::verdict::VerdictStatus,
+    /// Discharged: the discharge method (`"descriptor"` in-tree, or the
+    /// verdicts file's own `method`).
+    pub method: Option<String>,
+    /// Assumed: the human justification recorded in the verdicts file.
+    pub justification: Option<String>,
 }
 
 /// A declared word's computed facts (Q7, §6.1 `facts.words`): the stack-bound
@@ -243,12 +275,30 @@ pub struct OblSet {
 /// `build_ir_word`: per-module fact tables plus per-(word, kind) occurrence
 /// ordinals (Q3). Obligation ids are built here — one canonical place, one
 /// hash computation.
+///
+/// Slice P4 additions: the per-obligation [`ResolvedVerdict`] echo
+/// (`resolved` — one entry per obligation, in record order), the per-word
+/// MMIO elision bookkeeping that feeds the codegen skip flag and the
+/// `emitted.mmio_bounds` accounting (Q8), and the emitted-contract-trap
+/// counter behind the report's `emitted.contract` honesty field (FR-15).
 pub struct ExtractionCtx {
     set: OblSet,
     /// Current word's canonical name (set by `begin_word`).
     word: Vec<u8>,
     /// Per-kind occurrence ordinals for the current word.
     counters: [u32; Kind::COUNT],
+    /// P4: resolved verdicts, one per obligation record, push order.
+    resolved: Vec<ResolvedVerdict>,
+    /// P4: per-word MMIO elision state (Q8) — `word_mmio_open` is latched the
+    /// moment any mmio-bounds obligation this word stays open; the codegen
+    /// closure reads `word_mmio_all_discharged()` to arm the skip flag. The
+    /// emitted-check COUNT lives in the driver (it observes the actual
+    /// `emit_word` calls, quotation words included) — this is per-word state
+    /// only.
+    word_mmio_open: bool,
+    /// P4: contract traps (needs/ensures) actually emitted — the honesty
+    /// count behind the report's `emitted.contract` field (FR-15).
+    contract_emitted: u32,
 }
 
 impl ExtractionCtx {
@@ -267,6 +317,9 @@ impl ExtractionCtx {
             },
             word: Vec::new(),
             counters: [0; Kind::COUNT],
+            resolved: Vec::new(),
+            word_mmio_open: false,
+            contract_emitted: 0,
         }
     }
 
@@ -275,6 +328,17 @@ impl ExtractionCtx {
     pub fn begin_word(&mut self, word: &[u8]) {
         self.word = word.to_vec();
         self.counters = [0; Kind::COUNT];
+        self.word_mmio_open = false;
+    }
+
+    /// The module's canonical name (the artifact's `module` field).
+    pub fn current_module(&self) -> &str {
+        &self.set.module
+    }
+
+    /// The current word's canonical name.
+    pub fn current_word(&self) -> &[u8] {
+        &self.word
     }
 
     /// Record one module subtype fact (iterated in declaration order).
@@ -311,6 +375,14 @@ impl ExtractionCtx {
 
     /// Record one obligation at its extraction site. The occurrence ordinal is
     /// assigned here, deterministically (lowering order is deterministic).
+    /// `assumptions` carries the trusted facts the formula relies on (T2) —
+    /// empty for the C1–C3 subtype sites.
+    ///
+    /// Returns the canonical `(id, id_hash)` the site was recorded under —
+    /// the caller resolves the verdict against it (P4: the emission decision
+    /// consults `veverifier::verdict::Verdicts::lookup` then the in-tree
+    /// rule) and pushes a matching [`ResolvedVerdict`] via
+    /// [`ExtractionCtx::push_resolved`].
     pub fn record(
         &mut self,
         kind: Kind,
@@ -318,13 +390,15 @@ impl ExtractionCtx {
         line: u32,
         col: u32,
         provenance: Provenance,
-    ) {
+        assumptions: Vec<Assumption>,
+    ) -> (String, String) {
         let occurrence = self.counters[kind.idx()];
         self.counters[kind.idx()] = occurrence.wrapping_add(1);
         let id = canonical_id(&self.set.module, &self.word, kind, occurrence);
+        let id_hash = format_hex(fnv1a64(id.as_bytes()));
         self.set.obligations.push(Obligation {
-            id_hash: format_hex(fnv1a64(id.as_bytes())),
-            id,
+            id_hash: id_hash.clone(),
+            id: id.clone(),
             kind,
             site: Site {
                 word: utf8_lossy(&self.word),
@@ -332,9 +406,50 @@ impl ExtractionCtx {
                 span: SpanInfo { line, col },
             },
             formula,
-            assumptions: Vec::new(),
+            assumptions,
             provenance,
         });
+        (id, id_hash)
+    }
+
+    /// Append one resolved verdict (P4). MUST be called exactly once per
+    /// `record`, immediately after it, so `resolved` stays index-aligned with
+    /// `set.obligations`.
+    pub fn push_resolved(&mut self, r: ResolvedVerdict) {
+        self.resolved.push(r);
+    }
+
+    /// The resolved verdicts, in obligation record order.
+    pub fn resolved(&self) -> &[ResolvedVerdict] {
+        &self.resolved
+    }
+
+    // --- P4: MMIO elision state (Q8, per-word) ---
+
+    /// Record one mmio-bounds access verdict for the current word: latches
+    /// `open` (once any access stays open, the word's checks are all kept).
+    pub fn note_mmio_verdict(&mut self, open: bool) {
+        self.word_mmio_open |= open;
+    }
+
+    /// True when every mmio-bounds obligation recorded for the current word
+    /// was discharged (vacuously true with no accesses). The codegen skip flag
+    /// is armed from this — per-word granularity, never eliding an open site
+    /// (FR-13).
+    pub fn word_mmio_all_discharged(&self) -> bool {
+        !self.word_mmio_open
+    }
+
+    // --- P4: emitted contract traps (report honesty, FR-15) ---
+
+    /// Note one emitted contract trap (needs/ensures under the emission path).
+    pub fn note_emitted_contract(&mut self) {
+        self.contract_emitted = self.contract_emitted.saturating_add(1);
+    }
+
+    /// Contract checks that made it into the object (`emitted.contract`).
+    pub fn contract_emitted(&self) -> u32 {
+        self.contract_emitted
     }
 
     /// Borrow the completed set (for writing the artifact).

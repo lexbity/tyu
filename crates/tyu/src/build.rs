@@ -139,6 +139,17 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
             .wrapping_mul(0x100000001b3)
             .wrapping_add(h);
     }
+    // P4: the verify mode changes langc's emission (`--checks=undischarged`
+    // elides discharged sites; `--verify=off` keeps every check — FR-22), so
+    // it MUST change the object cache key: an off-build object would
+    // otherwise satisfy an on-build lookup and the report's `emitted_checks`
+    // would disagree with the object (FR-16).
+    match args.verify {
+        crate::args::VerifyMode::Off => {
+            compiler_fp = cache::fnv1a_u64(&compiler_fp.to_le_bytes()).wrapping_add(1);
+        }
+        crate::args::VerifyMode::On => {}
+    }
 
     // Pre-compute content hashes for every module path.
     let mut path_to_hash: BTreeMap<PathBuf, u64> = BTreeMap::new();
@@ -156,6 +167,7 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
 
     // Compile each module in dependency order.
     let mut module_objs: Vec<PathBuf> = Vec::new();
+    let mut module_obl: Vec<(String, Option<PathBuf>)> = Vec::new();
     for module in &modules {
         let inputs_fp = {
             let own_hash = path_to_hash.get(&module.path).copied().unwrap_or(0);
@@ -168,7 +180,7 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
             .or_default()
             .push(inputs_fp);
 
-        let obj_path = compile_module(
+        let compiled = compile_module(
             &langc,
             target,
             module,
@@ -182,8 +194,10 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
             abi_hash,
             triple,
             feature_set,
+            args.verify,
         )?;
-        module_objs.push(obj_path);
+        module_objs.push(compiled.object_path);
+        module_obl.push((module.name.clone(), compiled.obl_path));
     }
 
     let mode = effective_build_mode(args, target);
@@ -231,6 +245,21 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
     // Persist cache (and prune stale artifacts from this out-dir first).
     prune_out_dir(&out_dir, &mut cache, &built_fps, build_started)?;
     cache.save()?;
+
+    // P3/P4: compose the verification report from every module's obligation
+    // artifact + verdict echo (§7.3: per-context stack-budget verdicts +
+    // per-module class accounting; §6.5: the `emitted_checks` honesty block
+    // summed from each echo) and write `<out_dir>/verify-report.json`.
+    // Written only for a produced image (a link/pack failure leaves no report
+    // behind). Enforces the verify policy (E6410, FR-18) and prints the
+    // one-line accounting summary (NFR-9).
+    super::verify::compose_and_write_report(
+        &ctx,
+        &module_obl,
+        modules.last().map(|m| m.name.as_str()),
+        args.verify,
+        args.verify_policy,
+    )?;
 
     Ok(BuildOutcome {
         final_image,
@@ -862,6 +891,16 @@ fn expected_object_path(src: &Path, out_dir: &Path) -> PathBuf {
 /// `out_dir` under a source-keyed `<Module>-<inputs_fp>.o`.  Using a scratch
 /// directory (rather than `out_dir` directly) means two concurrent builds that
 /// share an `out_dir` can never cross-wire the shared `<Module>.o` slot.
+///
+/// P4 (`--verify=on`, the default): langc additionally receives
+/// `--checks=undischarged --verdicts=<cache>` where the verdicts cache lives
+/// at `<out_dir>/.tyu-verify/<Module>-<inputs_fp>.verdicts.json` (§7.4). On a
+/// cache miss the file starts empty (the in-tree discharger still resolves the
+/// descriptor-dischargeable sites); langc echoes the resolved verdicts +
+/// emitted accounting into `<scratch>/<Module>.verdicts.inTree.json`, which is
+/// re-homed over the cache slot via rename — so the next identical build
+/// resolves from cache (Q11/FR-17). `--verify=off` passes exactly today's
+/// argv (FR-22).
 fn compile_module(
     langc: &Path,
     _target: Target,
@@ -876,13 +915,36 @@ fn compile_module(
     abi_hash: u64,
     triple: &str,
     feature_set: FeatureSet,
-) -> Result<PathBuf, TyuError> {
+    verify: crate::args::VerifyMode,
+) -> Result<CompiledModule, TyuError> {
     let features = feature_set.bits();
-    // Check cache first.
+    // Check cache first. The obligation artifact rides beside the object under
+    // the same source-keyed fingerprint name; a cache hit returns the paths.
     if let Some(cached) = cache.lookup(compiler_fp, inputs_fp, abi_hash, features) {
         if cached.object_path.exists() {
-            eprintln!("tyu: cache hit for '{}'", module.path.display());
-            return Ok(cached.object_path);
+            let obl_path = out_dir.join(rehomed_obl_filename(module, inputs_fp));
+            // P4: the verdicts echo must be present AND schema-valid for the
+            // report composition to be honest — a missing/corrupt slot
+            // invalidates the cache entry (treated as a miss, §7.4: self-
+            // healing, never a stale-echo report).
+            let verdicts_slot = out_dir
+                .join(".tyu-verify")
+                .join(format!("{}-{:016x}.verdicts.json", module.name, inputs_fp));
+            let verdicts_usable = verifier::verdict::read_verdicts(
+                &fs::read(&verdicts_slot).unwrap_or_default(),
+            )
+            .is_ok();
+            if verdicts_usable {
+                eprintln!("tyu: cache hit for '{}'", module.path.display());
+                return Ok(CompiledModule {
+                    object_path: cached.object_path,
+                    obl_path: obl_path.exists().then_some(obl_path),
+                });
+            }
+            eprintln!(
+                "tyu: cache miss for '{}' (verdicts echo missing/invalid)",
+                module.path.display()
+            );
         }
     }
 
@@ -893,6 +955,23 @@ fn compile_module(
     cmd.arg("--emit=obj");
     cmd.arg(format!("--target={}", triple));
     cmd.arg(format!("--out-dir={}", scratch.display()));
+    // P3: extract the obligation artifact alongside the object so the image
+    // verification report can be composed. Binaries are unchanged (the
+    // artifact is the only new output; FR-22 holds).
+    cmd.arg("--write-obl");
+    // P4: verdict-driven emission (default). The verdicts file is the
+    // `.tyu-verify` cache slot for this module/fingerprint: created empty on a
+    // miss, re-homed from langc's echo on success (§7.4). `--verify=off`
+    // passes no --checks/--verdicts flags (today's argv — FR-22) but still
+    // re-homes the echo, so the report's accounting is honest in both modes.
+    let verdicts_slot = out_dir
+        .join(".tyu-verify")
+        .join(format!("{}-{:016x}.verdicts.json", module.name, inputs_fp));
+    if verify == crate::args::VerifyMode::On {
+        let path = ensure_verdicts_cache_file(&verdicts_slot)?;
+        cmd.arg("--checks=undischarged");
+        cmd.arg(format!("--verdicts={}", path.display()));
+    }
 
     if let Some(sr) = sysroot {
         cmd.arg(format!("--sysroot={}", sr.display()));
@@ -941,12 +1020,57 @@ fn compile_module(
     // owns an artifact nothing else can overwrite.
     let obj_path = rehome_object(&module.name, inputs_fp, &scratch, out_dir)?;
 
+    // The obligation artifact `<Module>.obl.json` rides beside the object
+    // under the same fingerprint discipline (P3) — the composition step reads
+    // it for the verify-report.
+    let obl_path = rehome_obl(&module.name, inputs_fp, &scratch, out_dir)?;
+
+    // P4: re-home langc's verdicts echo `<Module>.verdicts.inTree.json` over
+    // the `.tyu-verify` cache slot (atomic rename — §7.4's temp+rehome
+    // discipline). langc writes the echo whenever it extracted obligations
+    // (`--write-obl`, always on in tyu), so the cache slot ends up holding the
+    // resolved verdicts after every build; a later identical build reads it
+    // back as its `--verdicts` input (Q11/FR-17).
+    {
+        let echo = scratch.join(format!("{}.verdicts.inTree.json", module.name));
+        if !echo.exists() {
+            let _ = fs::remove_dir_all(&scratch);
+            return Err(TyuError::Build(format!(
+                "langc produced no '{}.verdicts.inTree.json' in '{}'",
+                module.name,
+                scratch.display(),
+            )));
+        }
+        if let Some(dir) = verdicts_slot.parent() {
+            fs::create_dir_all(dir).map_err(TyuError::Io)?;
+        }
+        fs::rename(&echo, &verdicts_slot).map_err(|e| {
+            TyuError::Build(format!(
+                "re-homing verdicts echo '{}' -> '{}': {}",
+                echo.display(),
+                verdicts_slot.display(),
+                e,
+            ))
+        })?;
+    }
+
     // The scratch directory is per-process and per-compilation; drop it now.
     let _ = fs::remove_dir_all(&scratch);
 
     cache.insert(compiler_fp, inputs_fp, abi_hash, features, triple, &obj_path)?;
 
-    Ok(obj_path)
+    Ok(CompiledModule {
+        object_path: obj_path,
+        obl_path: Some(obl_path),
+    })
+}
+
+/// The object + obligation-artifact pair produced for one module.
+#[derive(Debug, Clone)]
+pub struct CompiledModule {
+    pub object_path: PathBuf,
+    /// The re-homed `<Module>-<inputs_fp>.obl.json`, when present.
+    pub obl_path: Option<PathBuf>,
 }
 
 /// Move `langc`'s output object `<scratch>/<ModuleName>.o` to a
@@ -982,6 +1106,95 @@ fn rehome_object(
         ))
     })?;
     Ok(unique_obj)
+}
+
+/// The source-keyed filename of a module's obligation artifact
+/// (`<Module>-<inputs_fp:016x>.obl.json`) — the same fingerprint discipline as
+/// the re-homed object, so cache hits and stale pruning treat both alike.
+fn rehomed_obl_filename(module: &ModuleNode, inputs_fp: u64) -> String {
+    format!("{}-{:016x}.obl.json", module.name, inputs_fp)
+}
+
+/// Move `langc`'s obligation artifact `<scratch>/<Module>.obl.json` to the
+/// source-keyed `<out_dir>/<Module>-<inputs_fp>.obl.json`.
+fn rehome_obl(
+    module_name: &str,
+    inputs_fp: u64,
+    scratch: &Path,
+    out_dir: &Path,
+) -> Result<PathBuf, TyuError> {
+    let langc_obl = scratch.join(format!("{module_name}.obl.json"));
+    if !langc_obl.exists() {
+        return Err(TyuError::Build(format!(
+            "langc produced no '{module_name}.obl.json' in '{}'",
+            scratch.display(),
+        )));
+    }
+    let unique_obl = out_dir.join(format!("{module_name}-{inputs_fp:016x}.obl.json"));
+    fs::rename(&langc_obl, &unique_obl).map_err(|e| {
+        TyuError::Build(format!(
+            "re-homing '{}' -> '{}': {}",
+            langc_obl.display(),
+            unique_obl.display(),
+            e,
+        ))
+    })?;
+    Ok(unique_obl)
+}
+
+/// Ensure the `.tyu-verify` verdicts cache slot exists for `(module, fp)`
+/// (static-verification.md §7.4). On a miss, write an *empty but valid*
+/// verdicts file ([`verifier::verdict::encode_verdicts`] with no records):
+/// langc resolves the in-tree (descriptor-dischargeable) sites itself and
+/// echoes the resolved set back over this slot. A *corrupt* existing entry is
+/// treated as a miss (self-healing: re-derived from langc, never passed to it
+/// as-is — a hostile/garbled cache can only cause more checking or a clean
+/// rebuild, R10). Written via temp file + rename (the scratch+rehome
+/// discipline), so concurrent builds sharing the out-dir cannot observe a
+/// torn file.
+fn ensure_verdicts_cache_file(slot: &Path) -> Result<PathBuf, TyuError> {
+    if slot.exists() {
+        let valid = fs::read(slot)
+            .ok()
+            .and_then(|b| verifier::verdict::read_verdicts(&b).ok())
+            .is_some();
+        if valid {
+            return Ok(slot.to_path_buf());
+        }
+        // Corrupt/stale entry — drop it and re-derive (a miss).
+        let _ = fs::remove_file(slot);
+    }
+    let dir = slot
+        .parent()
+        .ok_or_else(|| TyuError::Build(format!("verdicts slot '{}' has no parent dir", slot.display())))?;
+    fs::create_dir_all(dir).map_err(TyuError::Io)?;
+    let bytes = verifier::verdict::encode_verdicts(
+        "tyu",
+        env!("CARGO_PKG_VERSION"),
+        &[],
+        0,
+        &verifier::verdict::EmittedChecksData::default(),
+    )
+    .map_err(|e| {
+        TyuError::Build(format!("encoding empty verdicts cache: {e:?}"))
+    })?;
+    let tmp = dir.join(format!(
+        ".{}.tmp{}",
+        slot.file_name().and_then(|n| n.to_str()).unwrap_or("verdicts"),
+        std::process::id(),
+    ));
+    fs::write(&tmp, &bytes).map_err(|e| {
+        TyuError::Build(format!("writing '{}': {}", tmp.display(), e))
+    })?;
+    fs::rename(&tmp, slot).map_err(|e| {
+        TyuError::Build(format!(
+            "re-homing '{}' -> '{}': {}",
+            tmp.display(),
+            slot.display(),
+            e,
+        ))
+    })?;
+    Ok(slot.to_path_buf())
 }
 
 /// Remove stale artifacts from a custom `--out-dir`:
@@ -1026,7 +1239,9 @@ fn prune_out_dir(
             continue;
         }
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        let Some((module, fp)) = parse_rehomed_object_name(name) else {
+        let is_obl = name.ends_with(".obl.json");
+        let rehomed = parse_rehomed_object_name(name).or_else(|| parse_rehomed_obl_name(name));
+        let Some((module, fp)) = rehomed else {
             continue;
         };
         let current = current_fps
@@ -1036,16 +1251,59 @@ fn prune_out_dir(
         if current || !predates(&path) {
             continue;
         }
-        let referenced = live.contains(&path);
         // Stale fingerprint of a module rebuilt here, or an orphan with no
-        // cache record — either way the object is dead.
-        if current_fps.contains_key(&module) || !referenced {
+        // cache record — either way the artifact is dead. Obligation artifacts
+        // (`<Mod>-<fp>.obl.json`) HAVE no cache records (they are re-derived
+        // from source on every compile), so a shared out-dir must keep another
+        // program's obl for its own next cache-hit build: they are pruned only
+        // when a module in THIS build superseded the fingerprint.
+        let referenced = live.contains(&path);
+        let stale_in_build = current_fps.contains_key(&module);
+        let dead = if is_obl {
+            stale_in_build
+        } else {
+            stale_in_build || !referenced
+        };
+        if dead {
             removed.push(path.clone());
             let _ = fs::remove_file(&path);
         }
     }
     if !removed.is_empty() {
         cache.remove_objects(&removed);
+    }
+
+    // P4: prune stale verdicts-cache entries in `<out_dir>/.tyu-verify/` with
+    // the same discipline as the re-homed obl artifacts: an entry whose
+    // (module, fp) fingerprint was superseded by THIS build, or which predates
+    // this build and names a module that no longer exists in it, is reclaimed.
+    let verify_dir = out_dir.join(".tyu-verify");
+    let entries = fs::read_dir(&verify_dir);
+    if let Ok(entries) = entries {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|n| n.to_str()).map(String::from) else {
+                continue;
+            };
+            let Some((module, fp)) = parse_rehomed_verdicts_name(&name) else {
+                continue;
+            };
+            let current = current_fps
+                .get(&module)
+                .map(|fps| fps.contains(&fp))
+                .unwrap_or(false);
+            let stale_in_build = current_fps.contains_key(&module);
+            let dead = if current {
+                false
+            } else {
+                // Never touch a module not part of this build if its artifact
+                // is newer than the build start (concurrent-build safety).
+                stale_in_build || predates(&path)
+            };
+            if dead {
+                let _ = fs::remove_file(&path);
+            }
+        }
     }
     Ok(())
 }
@@ -1060,7 +1318,23 @@ fn is_scratch_dir(path: &Path) -> bool {
 
 /// Split a re-homed `<Module>-<inputs_fp:016x>.o` name into `(module, fp)`.
 fn parse_rehomed_object_name(name: &str) -> Option<(String, u64)> {
-    let stem = name.strip_suffix(".o")?;
+    parse_rehomed_fp_name(name, ".o")
+}
+
+/// Split a re-homed `<Module>-<inputs_fp:016x>.obl.json` name into
+/// `(module, fp)`.
+fn parse_rehomed_obl_name(name: &str) -> Option<(String, u64)> {
+    parse_rehomed_fp_name(name, ".obl.json")
+}
+
+/// Split a `.tyu-verify/<Module>-<inputs_fp:016x>.verdicts.json` name into
+/// `(module, fp)` (slice P4 §7.4).
+fn parse_rehomed_verdicts_name(name: &str) -> Option<(String, u64)> {
+    parse_rehomed_fp_name(name, ".verdicts.json")
+}
+
+fn parse_rehomed_fp_name(name: &str, suffix: &str) -> Option<(String, u64)> {
+    let stem = name.strip_suffix(suffix)?;
     let (module, fp) = stem.rsplit_once('-')?;
     if fp.len() != 16 || !fp.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
@@ -1072,8 +1346,10 @@ fn parse_rehomed_object_name(name: &str) -> Option<(String, u64)> {
 /// Assemble the runtime unit `stem` (e.g. `"runtime"`, `"concurrency"`) for
 /// the given target, producing `<out_dir>/<stem>.o`.
 ///
-/// This is the extracted helper from the original monolithic `assemble_runtime`
-/// (DEBT-2).  `runtime_dir` is `<workspace_root>/runtime/<triple>`.
+/// `rt_dir` is the per-target runtime directory: the selected platform pack's
+/// metal `path` (relative to the pack root) when a platform is selected,
+/// otherwise `<workspace_root>/runtime/<triple>` (see
+/// `assemble_runtime_with_mode`).
 fn assemble_unit(
     target: Target,
     rt_dir: &Path,

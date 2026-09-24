@@ -108,6 +108,12 @@ pub fn canonical_bytes(desc: &Descriptor) -> Vec<u8> {
         encode_str(&mut out, w);
     }
 
+    // Verification grant (static-verification.md §6.4, amended): N_isr only.
+    // N_main is derived from the runtime binary's geometry and never declared,
+    // so it hashes nothing here. The effective value hashes identically
+    // whether declared explicitly or defaulted (isr → 32).
+    encode_u32(&mut out, desc.verification.isr_stack_slots);
+
     // Semantics and schema versions folded in (D-5, FR-19).
     encode_u32(&mut out, MMIO_SEM_VER);
     encode_u32(&mut out, DESCRIPTOR_SCHEMA);

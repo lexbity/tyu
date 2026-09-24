@@ -85,6 +85,14 @@ pub struct X86_64HostedBackend<'a> {
     pub mmio_apertures: [MmioApertureSpec; 8],
     pub mmio_aperture_count: usize,
 
+    // --- P4: emulated-aperture bounds-check elision (Q8) ---
+    /// When true, `emit_mmio_bounds_check` skips the C7 check: the lowering
+    /// resolved every mmio-bounds obligation of the word being emitted as
+    /// discharged (per-word granularity, set immediately before each
+    /// `emit_word`). Only armed under `--checks=undischarged` — `--checks=all`
+    /// output is byte-identical to today (FR-5).
+    pub mmio_checks_discharged: bool,
+
     // --- S2 Phase 1: modinfo collection ---
     pub(crate) mi_exports: [ModInfoExport; 64],
     pub(crate) mi_export_count: usize,
@@ -168,6 +176,7 @@ impl<'a> X86_64HostedBackend<'a> {
             mi_aperture_count: 0,
             mmio_apertures: [MmioApertureSpec::EMPTY; 8],
             mmio_aperture_count: 0,
+            mmio_checks_discharged: false,
         }
     }
 
@@ -379,6 +388,10 @@ impl<'a> CodegenBackend for X86_64HostedBackend<'a> {
 
     fn set_platform_hash(&mut self, hash: u64) {
         self.platform_hash = hash;
+    }
+
+    fn set_mmio_checks_discharged(&mut self, elide: bool) {
+        self.mmio_checks_discharged = elide;
     }
 }
 

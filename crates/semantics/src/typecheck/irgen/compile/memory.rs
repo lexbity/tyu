@@ -4,6 +4,13 @@ use crate::typecheck::mmio::MmioAccessMeta;
 use crate::typecheck::place::parse_place_path;
 use crate::typecheck::value::PLACE_NONE;
 
+/// The access width in bytes the runtime bounds check compares against the
+/// aperture (the register's width — field ops are read-modify-write over the
+/// whole register, matching the codegen `emit_mmio_bounds_check` width).
+fn mmio_width(reg_ty: crate::types::TypeAtom) -> u32 {
+    crate::typecheck::mmio::mmio_type_width_bytes(reg_ty.as_bytes()).unwrap_or(1)
+}
+
 /// R2 (D-3): reject an access wider than the register's `atomic_max` (E3643).
 fn check_atomic_width(
     reg_ty: crate::types::TypeAtom,
@@ -617,6 +624,12 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                         }
                     }
                     check_atomic_width(reg.reg_ty, reg.meta, name_abs)?;
+                    self.record_mmio_bounds_obligation(
+                        reg.aperture,
+                        reg.offset,
+                        mmio_width(reg.reg_ty),
+                        name_abs,
+                    );
                     push(stack, sp, Value::Plain(reg.reg_ty))?;
                     let tid = self.ty_id_of_type(reg.reg_ty, name_abs)?;
                     self.emit_op(
@@ -642,6 +655,12 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                         }
                     }
                     check_atomic_width(reg.reg_ty, reg.meta, name_abs)?;
+                    self.record_mmio_bounds_obligation(
+                        reg.aperture,
+                        reg.offset,
+                        mmio_width(reg.reg_ty),
+                        name_abs,
+                    );
                     push(stack, sp, Value::Plain(reg.reg_ty))?;
                     let tid = self.ty_id_of_type(reg.reg_ty, name_abs)?;
                     self.emit_op(
@@ -665,6 +684,12 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                         return Err(TcError::MmioTypedMismatch { span: name_abs });
                     }
                     check_atomic_width(field.reg_ty, field.meta, name_abs)?;
+                    self.record_mmio_bounds_obligation(
+                        field.aperture,
+                        field.offset,
+                        mmio_width(field.reg_ty),
+                        name_abs,
+                    );
                     let (mask, shift) = field_mask_shift(&field.field);
                     push(stack, sp, Value::Plain(field.field.ty))?;
                     let reg_tid = self.ty_id_of_type(field.reg_ty, name_abs)?;
@@ -731,6 +756,12 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                         return Err(TcError::ReturnTypeMismatch { span: name_abs });
                     }
                     check_store_semantics(reg.reg_ty, reg.meta, name_abs)?;
+                    self.record_mmio_bounds_obligation(
+                        reg.aperture,
+                        reg.offset,
+                        mmio_width(reg.reg_ty),
+                        name_abs,
+                    );
                     let tid = self.ty_id_of_type(reg.reg_ty, name_abs)?;
                     self.emit_op(
                         cur,
@@ -759,6 +790,12 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                         return Err(TcError::ReturnTypeMismatch { span: name_abs });
                     }
                     check_store_semantics(reg.reg_ty, reg.meta, name_abs)?;
+                    self.record_mmio_bounds_obligation(
+                        reg.aperture,
+                        reg.offset,
+                        mmio_width(reg.reg_ty),
+                        name_abs,
+                    );
                     let tid = self.ty_id_of_type(reg.reg_ty, name_abs)?;
                     self.emit_op(
                         cur,
@@ -791,6 +828,12 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                         return Err(TcError::MmioPhantomRead { span: name_abs });
                     }
                     check_atomic_width(field.reg_ty, field.meta, name_abs)?;
+                    self.record_mmio_bounds_obligation(
+                        field.aperture,
+                        field.offset,
+                        mmio_width(field.reg_ty),
+                        name_abs,
+                    );
                     let (mask, shift) = field_mask_shift(&field.field);
                     let reg_tid = self.ty_id_of_type(field.reg_ty, name_abs)?;
                     let tid = self.ty_id_of_type(field.field.ty, name_abs)?;

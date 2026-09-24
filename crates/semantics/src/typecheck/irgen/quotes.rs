@@ -190,6 +190,9 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 // sites are covered by P5's interval engine under the caller
                 // word's context.
                 None,
+                // No verdicts either: quote emissions are inherited from the
+                // caller (P4 keeps quote checks, conservative).
+                None,
                 arena,
                 sig,
                 name,

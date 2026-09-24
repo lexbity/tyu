@@ -111,6 +111,14 @@ pub fn format_descriptor_report(desc: &Descriptor) -> String {
         let _ = writeln!(&mut out, "metal.trust {}", words.join(", "));
     }
 
+    // Verification grant (§6.4 amended, slice P3). N_main is derived from the
+    // runtime binary's geometry, not declared.
+    let _ = writeln!(
+        &mut out,
+        "verification isr_stack_slots={} (N_main derived from runtime geometry)",
+        desc.verification.isr_stack_slots,
+    );
+
     out
 }
 

@@ -63,7 +63,8 @@ const EQUIVALENT_FILES: &[(&str, &str)] = &[
         "platforms/riscv32-unknown-none/include/semihosting-riscv.s",
     ),
     // x86_64-unknown-none generic pack (runtime + concurrency units were
-    // lifted; dynamic_entry.asm has no runtime/ counterpart)
+    // lifted; dynamic_entry.asm DOES have a runtime/ counterpart — see the
+    // armv7m/riscv32 entries above, and platforms/x86_64-unknown-none/metal/)
     (
         "runtime/x86_64-unknown-none/concurrency.asm",
         "platforms/x86_64-unknown-none/metal/concurrency.asm",

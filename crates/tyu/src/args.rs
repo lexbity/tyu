@@ -101,6 +101,8 @@ impl DeployArgs {
             metal_kek: None,
             metal_encrypt_mode: None,
             verbose: false,
+            verify: VerifyMode::On,
+            verify_policy: VerifyPolicy::OpenOk,
         }
     }
 }
@@ -125,6 +127,10 @@ pub struct BuildArgs {
     pub metal_encrypt_mode: Option<EncryptMode>,
     /// `-v`/`--verbose`: report per-module platform_hash + aperture table.
     pub verbose: bool,
+    /// P4: verdict-driven emission (default On; Off = FR-22 legacy path).
+    pub verify: VerifyMode,
+    /// P4: policy on open/assumed obligations (default open-ok).
+    pub verify_policy: VerifyPolicy,
 }
 
 /// Arguments for the `run` subcommand.
@@ -146,6 +152,10 @@ pub struct RunArgs {
     pub metal_kek: Option<String>,
     pub metal_encrypt_mode: Option<EncryptMode>,
     pub verbose: bool,
+    /// P4: verdict-driven emission (default On; Off = FR-22 legacy path).
+    pub verify: VerifyMode,
+    /// P4: policy on open/assumed obligations (default open-ok).
+    pub verify_policy: VerifyPolicy,
 }
 
 impl RunArgs {
@@ -165,6 +175,8 @@ impl RunArgs {
             metal_kek: self.metal_kek.clone(),
             metal_encrypt_mode: self.metal_encrypt_mode,
             verbose: false,
+            verify: self.verify,
+            verify_policy: self.verify_policy,
         }
     }
 }
@@ -193,6 +205,59 @@ pub struct TestArgs {
 pub enum ReportFormat {
     Human,
     Json,
+}
+
+/// Slice P4 (static-verification.md §10/§7.4): whether `tyu build` runs the
+/// verification pipeline — `--checks=undischarged --verdicts=…` to langc with
+/// per-module verdict caching — or reproduces the pre-P4 build exactly
+/// (`--verify=off`, FR-22: today's argv to langc).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerifyMode {
+    /// Default: verdict-driven emission under `--checks=undischarged`.
+    On,
+    /// Legacy: `--checks=all`-equivalent behavior, byte-identical images.
+    Off,
+}
+
+/// Slice P4 (static-verification.md §4 Q10, FR-18): the build-time policy on
+/// open and assumed obligations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerifyPolicy {
+    /// Default: open obligations are retained (checks emitted); build succeeds.
+    OpenOk,
+    /// E6410: fail the build listing every open obligation with a location.
+    NoOpen,
+    /// E6410: fail on open obligations AND on assumed verdicts.
+    NoOpenNoAssumptions,
+}
+
+impl VerifyPolicy {
+    pub fn parse(v: &str) -> Option<Self> {
+        match v {
+            "open-ok" => Some(VerifyPolicy::OpenOk),
+            "no-open" => Some(VerifyPolicy::NoOpen),
+            "no-open-no-assumptions" => Some(VerifyPolicy::NoOpenNoAssumptions),
+            _ => None,
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            VerifyPolicy::OpenOk => "open-ok",
+            VerifyPolicy::NoOpen => "no-open",
+            VerifyPolicy::NoOpenNoAssumptions => "no-open-no-assumptions",
+        }
+    }
+}
+
+impl VerifyMode {
+    pub fn parse(v: &str) -> Option<Self> {
+        match v {
+            "on" => Some(VerifyMode::On),
+            "off" => Some(VerifyMode::Off),
+            _ => None,
+        }
+    }
 }
 
 pub fn parse() -> Command {
@@ -239,6 +304,10 @@ fn print_usage() {
     eprintln!("  --sysroot=<dir>     Sysroot directory");
     eprintln!("  --out-dir=<dir>     Output directory");
     eprintln!("  -I <dir>            Add include directory");
+    eprintln!("  --verify=on|off     Verdict-driven checks (default on; off = legacy path)");
+    eprintln!(
+        "  --verify-policy=open-ok|no-open|no-open-no-assumptions\n                      Open/assumed policy (default open-ok)"
+    );
     eprintln!();
     eprintln!("Test options:");
     eprintln!("  --target=<triple>   Target triple (default: x86_64-unknown-linux-gnu)");
@@ -290,6 +359,8 @@ fn parse_common(args: &[String], extra_known: &[&str]) -> Result<CommonArgs, ()>
     let mut metal_kek: Option<String> = None;
     let mut metal_encrypt_mode: Option<EncryptMode> = None;
     let mut verbose = false;
+    let mut verify = VerifyMode::On;
+    let mut verify_policy = VerifyPolicy::OpenOk;
 
     let mut i = 0;
     while i < args.len() {
@@ -335,8 +406,7 @@ fn parse_common(args: &[String], extra_known: &[&str]) -> Result<CommonArgs, ()>
             metal_sign_key = Some(val.to_string());
         } else if let Some(val) = a.strip_prefix("--metal-kek=") {
             metal_kek = Some(val.to_string());
-        } else if let Some(val) = a
-            .strip_prefix("--metal-encrypt=")
+        } else if let Some(val) = a.strip_prefix("--metal-encrypt=")
             .or_else(|| a.strip_prefix("--metal-enc="))
         {
             metal_encrypt_mode = match val {
@@ -344,6 +414,25 @@ fn parse_common(args: &[String], extra_known: &[&str]) -> Result<CommonArgs, ()>
                 "device" => Some(EncryptMode::Device),
                 _ => {
                     eprintln!("tyu: invalid --metal-encrypt '{}'", val);
+                    return Err(());
+                }
+            };
+        } else if let Some(val) = a.strip_prefix("--verify=") {
+            verify = match VerifyMode::parse(val) {
+                Some(v) => v,
+                None => {
+                    eprintln!("tyu: invalid --verify '{}' (expected on|off)", val);
+                    return Err(());
+                }
+            };
+        } else if let Some(val) = a.strip_prefix("--verify-policy=") {
+            verify_policy = match VerifyPolicy::parse(val) {
+                Some(p) => p,
+                None => {
+                    eprintln!(
+                        "tyu: invalid --verify-policy '{}' (expected open-ok|no-open|no-open-no-assumptions)",
+                        val
+                    );
                     return Err(());
                 }
             };
@@ -392,6 +481,8 @@ fn parse_common(args: &[String], extra_known: &[&str]) -> Result<CommonArgs, ()>
         metal_sign_key,
         metal_kek,
         metal_encrypt_mode,
+        verify,
+        verify_policy,
     })
 }
 
@@ -421,6 +512,8 @@ struct CommonArgs {
     metal_kek: Option<String>,
     metal_encrypt_mode: Option<EncryptMode>,
     verbose: bool,
+    verify: VerifyMode,
+    verify_policy: VerifyPolicy,
 }
 
 fn parse_build(args: &[String]) -> Command {
@@ -450,6 +543,8 @@ fn parse_build(args: &[String]) -> Command {
         metal_kek: common.metal_kek,
         metal_encrypt_mode: common.metal_encrypt_mode,
         verbose: common.verbose,
+        verify: common.verify,
+        verify_policy: common.verify_policy,
     })
 }
 
@@ -504,6 +599,8 @@ fn parse_run(args: &[String]) -> Command {
         metal_kek: common.metal_kek,
         metal_encrypt_mode: common.metal_encrypt_mode,
         verbose: common.verbose,
+        verify: common.verify,
+        verify_policy: common.verify_policy,
     })
 }
 

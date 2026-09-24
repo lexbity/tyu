@@ -1,6 +1,6 @@
 platform rp2350: ok
 descriptor rp2350 schema=2 family=rp2350
-platform-hash 0xba4f95b2a4a8eb61
+platform-hash 0x38bd5d8d616aa461
 apertures 3
   [0] apb kind=bus bind=arm-thumb-ldr-literal base=0x40000000 size=0x1000000
   [1] pio kind=bus bind=arm-thumb-ldr-literal base=0x50200000 size=0x200000
@@ -712,3 +712,4 @@ devices 14
 allocator (none)
 scoped metadata_slots_max=64
 metal.trust platform.gpio.init, platform.gpio.read, platform.gpio.write, platform.mem.region-alloc, platform.mem.region-create, platform.mem.region-destroy, platform.mem.region-reset, platform.time.now_us, platform.time.reboot, platform.uart.init, platform.uart.rx, platform.uart.tx, testio.exit, testio.write-byte, testio.write-str
+verification isr_stack_slots=32 (N_main derived from runtime geometry)

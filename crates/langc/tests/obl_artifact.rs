@@ -50,17 +50,24 @@ fn fresh_dir(tag: &str) -> PathBuf {
 /// Compile `source` with `--emit=obligations` into a fresh dir; returns the
 /// artifact filename (`<Module>.obl.json`) and bytes on success.
 fn emit_obligations(tag: &str, source: &str) -> (String, Vec<u8>) {
+    emit_obligations_with(tag, source, &[])
+}
+
+/// Like [`emit_obligations`], with extra langc args (`--platform=…` for MMIO).
+fn emit_obligations_with(tag: &str, source: &str, extra: &[&str]) -> (String, Vec<u8>) {
     let dir = fresh_dir(tag);
     let mod_path = dir.join("in.mod");
     fs::write(&mod_path, source).unwrap();
     let out_dir = dir.join("out");
     fs::create_dir_all(&out_dir).unwrap();
-    let output = Command::new(langc_exe())
-        .arg("--emit=obligations")
-        .arg(format!("--out-dir={}", out_dir.display()))
-        .arg(mod_path.to_str().unwrap())
-        .output()
-        .expect("langc invocation");
+    let mut cmd = Command::new(langc_exe());
+    cmd.arg("--emit=obligations")
+        .arg(format!("--out-dir={}", out_dir.display()));
+    for a in extra {
+        cmd.arg(a);
+    }
+    cmd.arg(mod_path.to_str().unwrap());
+    let output = cmd.output().expect("langc invocation");
     assert!(
         output.status.success(),
         "langc --emit=obligations failed:\n{}",
@@ -73,6 +80,8 @@ fn emit_obligations(tag: &str, source: &str) -> (String, Vec<u8>) {
         "P"
     } else if source.contains("module C;") {
         "C"
+    } else if source.contains("module MmioWin;") {
+        "MmioWin"
     } else {
         "R"
     };
@@ -355,4 +364,99 @@ fn typecheck_failure_writes_no_artifact() {
         "failed compile must leave no artifact behind"
     );
     let _ = fs::remove_dir_all(&dir);
+}
+
+// ---------------------------------------------------------------------------
+// P3: emulated-aperture MMIO obligations (compound with §7.3 accounting)
+// ---------------------------------------------------------------------------
+
+const MMIO_MOD: &str = "\
+module MmioWin;
+register-map GPIO
+  0x00 DATA u32 rw {
+    LO 0..3 u32 rw
+  }
+end;
+const gpio = GPIO @ board.gpio;
+: read ( -- u32 )
+  &gpio.DATA @u32
+;
+: write ( u32 -- )
+  drop &!gpio.DATA 0 as u32 !u32
+;
+: read_field ( -- u32 )
+  gpio.DATA.LO @
+;
+end;
+";
+
+/// Every emulated-aperture access emits an `mmio-bounds` obligation carrying
+/// the resolved constant offset, the access width (register width — matching
+/// the codegen bounds check), the aperture size, and the aperture-size as a
+/// trusted descriptor assumption (T2). Metal boards (bus apertures only) emit
+/// none (Q8).
+#[test]
+fn mmio_bounds_obligations_per_access() {
+    let hosted = workspace_root().join("runtime");
+    let (_name, bytes) = emit_obligations_with(
+        "mmio",
+        MMIO_MOD,
+        &[&format!("--platform={}", hosted.display())],
+    );
+    let set = read_obl(&bytes).expect("artifact must round-trip through the codec");
+
+    let mmio_records: Vec<_> = set
+        .obligations
+        .iter()
+        .filter(|o| o.kind == verifier::model::Kind::MmioBounds)
+        .collect();
+    // read (reg load), write (reg store), read_field (field load) — one
+    // obligation per access.
+    assert_eq!(mmio_records.len(), 3, "one obligation per access");
+    for o in &mmio_records {
+        assert_eq!(
+            o.formula,
+            verifier::model::Formula::OffsetLE {
+                off: Some(0),
+                width: 4,
+                size: 0x10000,
+            }
+        );
+        assert_eq!(o.provenance, verifier::model::Provenance::Direct);
+        assert_eq!(
+            o.assumptions,
+            vec![verifier::model::Assumption::ApertureSize {
+                aperture: 0,
+                size: 0x10000,
+            }]
+        );
+    }
+    assert_eq!(
+        mmio_records[0].id,
+        "MmioWin::read::mmio-bounds::0",
+        "ids follow the canonical per-word per-kind ordinals"
+    );
+}
+
+/// A bus-only descriptor (the ARMv7M pack — aperture 0 is bus-kind) carries
+/// no emulated apertures, so an MMIO module against it yields zero
+/// `mmio-bounds` obligations (Q8: a metal board with bus apertures only has
+/// no emulated-aperture accesses).
+#[test]
+fn bus_only_descriptor_yields_no_mmio_bounds_obligations() {
+    let arm = workspace_root().join("platforms/armv7m-unknown-none");
+    let (_name, bytes) = emit_obligations_with(
+        "bus-only-mmio",
+        MMIO_MOD,
+        &[&format!("--platform={}", arm.display())],
+    );
+    let set = read_obl(&bytes).expect("artifact must round-trip through the codec");
+    assert_eq!(
+        set.obligations
+            .iter()
+            .filter(|o| o.kind == verifier::model::Kind::MmioBounds)
+            .count(),
+        0,
+        "bus-only descriptors carry no emulated-aperture obligations"
+    );
 }

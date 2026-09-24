@@ -39,6 +39,22 @@ pub struct PlatformManifest {
     pub test: TestSection,
     #[serde(default)]
     pub secure_boot: Option<SecureBootSection>,
+    /// The `[verification]` profile grants (static-verification.md §6.4).
+    /// The descriptor model (`platform::desc`) is the compiler-facing owner;
+    /// this copy is for `tyu platform` reporting and must agree with it.
+    #[serde(default)]
+    pub verification: Option<VerificationSection>,
+}
+
+/// The v1-model view of `[verification]` (static-verification.md §6.4,
+/// amended): the ISR context's declared `bounded-stack(N_isr)` grant.
+/// `N_main` is not declared anywhere — it is derived from the runtime
+/// binary's data-stack geometry at report-composition time.
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct VerificationSection {
+    /// `N_isr`; defaults to 32 at use (FR-10).
+    #[serde(default)]
+    pub isr_stack_slots: Option<u32>,
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -519,6 +535,19 @@ pub fn info_report(root: &Path, name: &str, isa_filter: Option<&str>) -> Result<
             secure_boot.supported, secure_boot.encryption_implies_secure_boot,
         )
         .map_err(|e| TyuError::Platform(e.to_string()))?;
+    }
+    match &pack.manifest.verification {
+        Some(v) => writeln!(
+            &mut out,
+            "  verification: isr_stack_slots={} (N_main derived from runtime geometry)",
+            v.isr_stack_slots
+                .map(|n| n.to_string())
+                .as_deref()
+                .unwrap_or("32"),
+        )
+        .map_err(|e| TyuError::Platform(e.to_string()))?,
+        None => writeln!(&mut out, "  verification: (none)")
+            .map_err(|e| TyuError::Platform(e.to_string()))?,
     }
     Ok(out)
 }

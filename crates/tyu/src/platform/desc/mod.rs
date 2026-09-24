@@ -38,6 +38,10 @@ pub const E_DESC_UNKNOWN_KIND: u16 = 3646;
 /// Descriptor schema/validation failure with a specific reason (D-11 / E3647).
 pub const E_DESC_INVALID: u16 = 3647;
 
+/// The `[verification]` profile-grants section is invalid
+/// (static-verification.md FR-19 / §6.4 — the 64xx artifact band).
+pub const E_DESC_VERIFICATION_INVALID: u16 = 6403;
+
 /// A single descriptor error: a diagnostic code (E3646/E3647) and a
 /// human-actionable reason. The validator returns one per violation.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -72,6 +76,8 @@ pub struct Descriptor {
     pub scoped: Option<ScopedSpec>,
     pub metal_trust: Vec<String>,
     pub memory: MemoryModel,
+    /// The `[verification]` profile grants (static-verification.md §6.4).
+    pub verification: VerificationSpec,
 }
 
 impl Descriptor {
@@ -266,6 +272,32 @@ pub struct AllocatorSpec {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ScopedSpec {
     pub metadata_slots_max: u32,
+}
+
+/// The `[verification]` grant (static-verification.md §6.4, amended): the
+/// ISR context's declared `bounded-stack(N_isr)` budget.
+///
+/// `N_main` is deliberately absent: it is *derived* from the runtime binary's
+/// own data-stack geometry (`__lang_ds_limit − __lang_ds_base`, over the
+/// target's `slot_bytes`) at report-composition time — bounds are computed,
+/// never hand-declared (stack-bound-analysis.md §13). Declaring it in the
+/// pack duplicated a number the runtime asm already owns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VerificationSpec {
+    /// `N_isr` — the ISR context's grant. Defaults to 32 (today's hardcoded
+    /// `N_isr`, FR-10 compatibility) when the section omits it; §6: ISRs run
+    /// masked (no nesting) so one grant covers all handlers (max rule). The
+    /// ISR data-stack region has no runtime symbol yet, so this stays a
+    /// per-pack policy number (listed as a trusted assumption when used).
+    pub isr_stack_slots: u32,
+}
+
+impl Default for VerificationSpec {
+    fn default() -> Self {
+        Self {
+            isr_stack_slots: codegen_core::compiled_desc::DEFAULT_ISR_STACK_SLOTS,
+        }
+    }
 }
 
 /// The `[memory]` regions a descriptor's allocator may name.

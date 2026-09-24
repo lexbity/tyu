@@ -16,7 +16,7 @@
 use super::{
     full_mask, AccessKind, AllocatorSpec, BarrierKind, Descriptor, DescriptorError, DeviceMap,
     E_DESC_INVALID, E_DESC_UNKNOWN_KIND, MmioAperture, MemoryModel, MemoryRegionSpec, ReadKind,
-    RegisterRow, ScopedSpec, ApertureKind, WriteKind,
+    RegisterRow, ScopedSpec, VerificationSpec, ApertureKind, WriteKind,
 };
 
 /// Parse a platform.toml text into a validated-at-parse descriptor.
@@ -115,6 +115,33 @@ pub fn parse_descriptor(text: &str) -> Result<Option<Descriptor>, DescriptorErro
         .map(|t| t.words.clone())
         .unwrap_or_default();
 
+    let verification = match &raw.verification {
+        None => VerificationSpec::default(),
+        Some(v) => {
+            // Amended §6.4: `data_stack_slots` was removed — N_main is
+            // derived from the runtime binary's geometry, never hand-declared
+            // (stack-bound-analysis.md §13). Acknowledge the key to fail loud
+            // with a migration message instead of a generic unknown-field
+            // error.
+            if v.data_stack_slots.is_some() {
+                return Err(DescriptorError::new(
+                    super::E_DESC_VERIFICATION_INVALID,
+                    String::from(
+                        "[verification] data_stack_slots was removed (static-verification.md \
+                         §6.4 amendment): N_main is derived from the runtime binary's \
+                         data-stack geometry (__lang_ds_limit − __lang_ds_base); delete the \
+                         key from the pack",
+                    ),
+                ));
+            }
+            VerificationSpec {
+                isr_stack_slots: v.isr_stack_slots.unwrap_or(
+                    codegen_core::compiled_desc::DEFAULT_ISR_STACK_SLOTS,
+                ),
+            }
+        }
+    };
+
     Ok(Some(Descriptor {
         schema,
         name: platform.name,
@@ -126,6 +153,7 @@ pub fn parse_descriptor(text: &str) -> Result<Option<Descriptor>, DescriptorErro
         scoped,
         metal_trust,
         memory: memory_model(&raw.memory),
+        verification,
     }))
 }
 
@@ -271,6 +299,22 @@ struct RawManifest {
     platform: Option<RawPlatformSection>,
     #[serde(default)]
     memory: Option<RawMemory>,
+    /// `[verification]` (static-verification.md §6.4, amended) — optional
+    /// ISR grant; absence keeps the default (`N_isr` 32). `N_main` is derived
+    /// from the runtime binary's geometry, never declared.
+    #[serde(default)]
+    verification: Option<RawVerification>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawVerification {
+    /// Acknowledged only to fail loud with a migration message: the key was
+    /// removed by the amended §6.4 (N_main is derived, never hand-declared).
+    #[serde(default)]
+    data_stack_slots: Option<u32>,
+    #[serde(default)]
+    isr_stack_slots: Option<u32>,
 }
 
 // v1 fields (`compiler_interface`, `isa`) are acknowledged so

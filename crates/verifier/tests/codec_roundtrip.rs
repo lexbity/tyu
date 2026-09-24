@@ -59,6 +59,7 @@ fn sample_set() -> verifier::model::OblSet {
         0,
         0,
         Provenance::Direct,
+        Vec::new(),
     );
     ctx.record(
         Kind::SubtypeRange,
@@ -76,8 +77,37 @@ fn sample_set() -> verifier::model::OblSet {
         7,
         3,
         Provenance::Opaque,
+        Vec::new(),
     );
 
+    // reg_read ( u32 -- u32 ): an emulated-aperture access (P3) — the
+    // OffsetLE head with the aperture-size descriptor assumption.
+    ctx.begin_word(b"reg_read");
+    ctx.push_word_fact(
+        b"reg_read",
+        ir::StackBound {
+            net: 0,
+            high: ir::High::Slots(2),
+        },
+        ir::EffectSet::from_bits(ir::EffectSet::MMIO),
+    );
+    let mut mmio_assumptions = Vec::new();
+    mmio_assumptions.push(verifier::model::Assumption::ApertureSize {
+        aperture: 0,
+        size: 65536,
+    });
+    ctx.record(
+        Kind::MmioBounds,
+        Formula::OffsetLE {
+            off: Some(0x1000),
+            width: 4,
+            size: 65536,
+        },
+        4,
+        10,
+        Provenance::Direct,
+        mmio_assumptions,
+    );
     // bounded_inc ( Percent -- Percent ): param check, cast, return check.
     ctx.begin_word(b"bounded_inc");
     ctx.push_word_fact(
@@ -100,6 +130,8 @@ fn sample_set() -> verifier::model::OblSet {
         0,
         0,
         Provenance::Direct,
+
+        Vec::new(),
     );
     ctx.record(
         Kind::SubtypeRange,
@@ -117,6 +149,8 @@ fn sample_set() -> verifier::model::OblSet {
         12,
         14,
         Provenance::Opaque,
+
+        Vec::new(),
     );
     ctx.record(
         Kind::SubtypeRange,
@@ -130,6 +164,8 @@ fn sample_set() -> verifier::model::OblSet {
         0,
         0,
         Provenance::Direct,
+
+        Vec::new(),
     );
 
     ctx.into_set()

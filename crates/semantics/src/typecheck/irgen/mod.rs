@@ -21,6 +21,7 @@ use crate::typecheck::value::{PlaceId, Value, PARAM_BASE, PLACE_NONE};
 use crate::types::{TypeAtom, WordEntry, WordSig};
 use alloc::boxed::Box;
 use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 use core::mem::MaybeUninit;
 use frontend::fixed::FixedVec;
 use frontend::lex::Lexer;
@@ -28,7 +29,8 @@ use frontend::parse::{AttrAst, DeclAst};
 use frontend::span::Span;
 use frontend::token::{Token, TokenKind};
 use ir::{self as lir, CapSet, EffectSet, High, StackBound};
-use verifier::model::{ExtractionCtx, Formula, Kind as OblKind, Oel, Provenance};
+use verifier::model::{ExtractionCtx, Formula, Kind as OblKind, Oel, Provenance, ResolvedVerdict};
+use verifier::verdict::{Verdicts, VerdictStatus};
 
 pub mod arena;
 mod compile;
@@ -84,6 +86,12 @@ struct IrWordGen<'a, 'r> {
     /// per-word-local, so obligation ids keyed on them would collide across
     /// words; their sites are covered in P5 under the caller word.
     extraction: Option<&'a mut ExtractionCtx>,
+    /// P4: the validated verdicts file (`--checks=undischarged`). The record
+    /// sites resolve each obligation against it (Q3: id+id_hash lookup,
+    /// fail-closed) and fall back to the in-tree rule / open. `None` under
+    /// every other checks mode — the verdict consult is compiled out (FR-5),
+    /// so `--checks=all` stays the same machine code as today.
+    verdicts: Option<&'a Verdicts>,
     sig: WordSig,
 
     locals: [TypeAtom; 64],
@@ -130,6 +138,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         checks: ChecksMode,
         allow_raw_casts: bool,
         extraction: Option<&'a mut ExtractionCtx>,
+        verdicts: Option<&'a Verdicts>,
         arena: &mut arena::ArenaAllocator,
         sig: WordSig,
         name: lir::Atom,
@@ -277,6 +286,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             checks,
             allow_raw_casts,
             extraction,
+            verdicts,
             sig,
             locals: [TypeAtom::EMPTY; 64],
             local_tys: [TypeAtom::EMPTY; 64],
@@ -577,12 +587,82 @@ fn var_out_ref(i: usize) -> String {
 }
 
 impl<'a, 'r> IrWordGen<'a, 'r> {
+    /// Resolve an obligation's build-time verdict (slice P4): the verdicts
+    /// file wins when it carries a matching `(id, id_hash)` record (Q3);
+    /// otherwise the in-tree rule (`in_tree` — P4 discharges only
+    /// `mmio-bounds` via the descriptor arithmetic) applies; otherwise the
+    /// site is Open. Under every checks mode other than `Undischarged` the
+    /// consult is compiled out (FR-5): every obligation resolves Open, so the
+    /// emitted code is byte-identical to `--checks=all`.
+    fn resolve_site(
+        &self,
+        kind: OblKind,
+        id: &str,
+        id_hash: &str,
+        in_tree: Option<VerdictStatus>,
+    ) -> ResolvedVerdict {
+        if self.checks == ChecksMode::Undischarged {
+            if let Some(v) = self.verdicts {
+                if let Some(rec) = v.lookup(id, id_hash) {
+                    return ResolvedVerdict {
+                        id: id.to_string(),
+                        id_hash: id_hash.to_string(),
+                        kind,
+                        status: rec.status,
+                        method: rec.method.clone(),
+                        justification: rec.justification.clone(),
+                    };
+                }
+            }
+            if let Some(s) = in_tree {
+                let method = if s == VerdictStatus::Discharged {
+                    Some("descriptor".to_string())
+                } else {
+                    None
+                };
+                return ResolvedVerdict {
+                    id: id.to_string(),
+                    id_hash: id_hash.to_string(),
+                    kind,
+                    status: s,
+                    method,
+                    justification: None,
+                };
+            }
+        }
+        ResolvedVerdict {
+            id: id.to_string(),
+            id_hash: id_hash.to_string(),
+            kind,
+            status: VerdictStatus::Open,
+            method: None,
+            justification: None,
+        }
+    }
+
+    /// The emission decision for a subtype-range site (C1/C2/C3), slice P4:
+    /// `All` emits unconditionally (FR-5: byte-identical to today's path);
+    /// `Undischarged` emits only at open verdicts; `Off`/`Contracts` never
+    /// (the obligation is still recorded — FR-1).
+    fn emit_subtype_check(&self, verdict: VerdictStatus) -> bool {
+        match self.checks {
+            ChecksMode::All => true,
+            ChecksMode::Undischarged => verdict.is_open(),
+            ChecksMode::Off | ChecksMode::Contracts => false,
+        }
+    }
+
     /// C1 site: record a `subtype-range` obligation for a subtype-typed word
     /// input at the callee-entry prologue (static-verification.md §7.1).
     /// Emitted independently of `--checks` (FR-1): the artifact is complete
-    /// even when the runtime trap is not inserted.
-    pub(super) fn record_subtype_param_obligation(&mut self, i: usize, st: &SubtypeInfo) {
-        if let Some(ctx) = self.extraction.as_mut() {
+    /// even when the runtime trap is not inserted. Returns the site's verdict
+    /// (P4: the emission decision).
+    pub(super) fn record_subtype_param_obligation(&mut self, i: usize, st: &SubtypeInfo) -> VerdictStatus {
+        let (id, id_hash) = {
+            let ctx = match self.extraction.as_mut() {
+                Some(c) => c,
+                None => return VerdictStatus::Open,
+            };
             ctx.record(
                 OblKind::SubtypeRange,
                 Formula::InRange {
@@ -595,14 +675,25 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 0,
                 0,
                 Provenance::Direct,
-            );
+                Vec::new(),
+            )
+        };
+        let r = self.resolve_site(OblKind::SubtypeRange, &id, &id_hash, None);
+        let status = r.status;
+        if let Some(ctx) = self.extraction.as_mut() {
+            ctx.push_resolved(r);
         }
+        status
     }
 
     /// C2 site: record a `subtype-range` obligation for a subtype-typed return
-    /// value at the epilogue.
-    pub(super) fn record_subtype_return_obligation(&mut self, i: usize, st: &SubtypeInfo) {
-        if let Some(ctx) = self.extraction.as_mut() {
+    /// value at the epilogue. Returns the site's verdict.
+    pub(super) fn record_subtype_return_obligation(&mut self, i: usize, st: &SubtypeInfo) -> VerdictStatus {
+        let (id, id_hash) = {
+            let ctx = match self.extraction.as_mut() {
+                Some(c) => c,
+                None => return VerdictStatus::Open,
+            };
             ctx.record(
                 OblKind::SubtypeRange,
                 Formula::InRange {
@@ -615,22 +706,34 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 0,
                 0,
                 Provenance::Direct,
-            );
+                Vec::new(),
+            )
+        };
+        let r = self.resolve_site(OblKind::SubtypeRange, &id, &id_hash, None);
+        let status = r.status;
+        if let Some(ctx) = self.extraction.as_mut() {
+            ctx.push_resolved(r);
         }
+        status
     }
 
     /// C3 site: record a `subtype-range` obligation for an `as T` narrowing
     /// cast (names.rs `compile_cast`). v1 provenance is `$top` — the cast
     /// operand's value flow is not tracked until P5's interval engine — so the
     /// record carries `Provenance::Opaque` and can be discharged by no one.
+    /// Returns the site's verdict.
     pub(super) fn record_cast_obligation(
         &mut self,
         from_ty: TypeAtom,
         to_ty: TypeAtom,
         st: &SubtypeInfo,
         span: Span,
-    ) {
-        if let Some(ctx) = self.extraction.as_mut() {
+    ) -> VerdictStatus {
+        let (id, id_hash) = {
+            let ctx = match self.extraction.as_mut() {
+                Some(c) => c,
+                None => return VerdictStatus::Open,
+            };
             let (line, col) = span_line_col(self.src, span);
             ctx.record(
                 OblKind::SubtypeRange,
@@ -651,8 +754,90 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 line,
                 col,
                 Provenance::Opaque,
-            );
+                Vec::new(),
+            )
+        };
+        let r = self.resolve_site(OblKind::SubtypeRange, &id, &id_hash, None);
+        let status = r.status;
+        if let Some(ctx) = self.extraction.as_mut() {
+            ctx.push_resolved(r);
         }
+        status
+    }
+
+    /// C7 site: record an `mmio-bounds` obligation per emulated-aperture
+    /// access (slice P3, Q8). The runtime check (`emit_mmio_bounds_check`,
+    /// x86) proves `off + width ≤ size`; the aperture SIZE is listed as a
+    /// trusted descriptor assumption (T2). Only emulated apertures produce
+    /// obligations — metal boards have zero `mmio-bounds` records (Q8).
+    ///
+    /// P4: the in-tree descriptor discharge resolves the site to `Discharged`
+    /// exactly when `off + width ≤ size` — the same arithmetic the runtime
+    /// check performs, so eliding at a discharged site is sound (and a
+    /// verdicts-file record can also discharge it). An open access is fed to
+    /// the per-word elision accounting so the codegen skip flag never arms
+    /// for a word with an open site (FR-13).
+    pub(super) fn record_mmio_bounds_obligation(
+        &mut self,
+        aperture: u16,
+        offset: u32,
+        width: u32,
+        span: Span,
+    ) -> VerdictStatus {
+        if self.extraction.is_none() {
+            return VerdictStatus::Open;
+        }
+        let Some(descriptor) = self.descriptor else {
+            return VerdictStatus::Open;
+        };
+        let Some(spec) = descriptor.apertures().iter().find(|w| w.id == aperture) else {
+            return VerdictStatus::Open;
+        };
+        if spec.kind != codegen_core::MmioApertureKind::Emulated {
+            return VerdictStatus::Open;
+        }
+        let in_tree = if offset.saturating_add(width) <= spec.size {
+            Some(VerdictStatus::Discharged)
+        } else {
+            Some(VerdictStatus::Open)
+        };
+        let (id, id_hash) = {
+            let ctx = match self.extraction.as_mut() {
+                Some(c) => c,
+                None => return VerdictStatus::Open,
+            };
+            let (line, col) = span_line_col(self.src, span);
+            let (id, id_hash) = ctx.record(
+                OblKind::MmioBounds,
+                Formula::OffsetLE {
+                    // The typechecker resolves every emulated access to a
+                    // compile-time aperture-relative offset (dynamic MMIO
+                    // indexing is rejected — E3606 family); `Some` is exact.
+                    // `None` is reserved for a future dynamic-offset access
+                    // and stays open by construction.
+                    off: Some(offset),
+                    width,
+                    size: spec.size,
+                },
+                line,
+                col,
+                Provenance::Direct,
+                // T2 / Q2: the aperture size is a *descriptor* fact the
+                // formula relies on — listed so reports count it as trusted.
+                alloc::vec![verifier::model::Assumption::ApertureSize {
+                    aperture,
+                    size: spec.size,
+                }],
+            );
+            (id, id_hash)
+        };
+        let r = self.resolve_site(OblKind::MmioBounds, &id, &id_hash, in_tree);
+        let status = r.status;
+        if let Some(ctx) = self.extraction.as_mut() {
+            ctx.note_mmio_verdict(status.is_open());
+            ctx.push_resolved(r);
+        }
+        status
     }
 
     pub(super) fn finish(mut self, span: Span) -> Result<IrWordOutput<'r>, TcError> {
@@ -825,6 +1010,7 @@ pub fn build_ir_word<'r>(
     sig: &WordSig,
     arena: &mut arena::ArenaAllocator,
     extraction: Option<&mut ExtractionCtx>,
+    verdicts: Option<&Verdicts>,
     observer: &mut dyn TypecheckObserver,
 ) -> Result<IrWordOutput<'r>, TcError> {
     let name = lir_atom(slice_span(src, decl.name))?;
@@ -840,6 +1026,7 @@ pub fn build_ir_word<'r>(
         checks,
         allow_raw_casts,
         extraction,
+        verdicts,
         arena,
         *sig,
         name,
@@ -862,8 +1049,14 @@ pub fn build_ir_word<'r>(
     }
 
     // Determine stack ceiling: ISR bodies get a smaller budget (N_isr), main gets N_main.
+    // N_isr comes from the compiled descriptor's `[verification] isr_stack_slots`
+    // grant (static-verification.md §6.4, slice P3 — replaces the hardcoded 32;
+    // FR-10 keeps 32 as the default when the grant is absent).
     let ceiling: High = if is_isr {
-        High::Slots(32) // N_isr — limited budget for interrupt handlers
+        let n_isr = descriptor
+            .map(|d| d.verification.isr_stack_slots)
+            .unwrap_or(codegen_core::compiled_desc::DEFAULT_ISR_STACK_SLOTS);
+        High::Slots(n_isr)
     } else {
         High::Top // No ceiling for ordinary words (checked at entry)
     };

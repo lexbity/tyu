@@ -22,6 +22,14 @@ sram = { name = "SRAM", origin = 0x20000000, length = 0x00010000 }
 ds_region = "SRAM"
 ds_size = 0x4000
 
+[verification]
+# ISR bounded-stack(N_isr) grant (static-verification.md §6.4, amended).
+# N_main is NOT declared: it is derived from the runtime binary's own
+# data-stack geometry (__lang_ds_limit - __lang_ds_base over slot_bytes) at
+# report-composition time - bounds are computed, never hand-declared
+# (stack-bound-analysis.md §13).
+isr_stack_slots = 32   # N_isr; ISRs are masked (no nesting) so one grant covers all handlers
+
 [features.concurrency]
 unit = "concurrency.asm"
 

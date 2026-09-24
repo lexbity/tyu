@@ -37,6 +37,25 @@ fn codegen_error_message(code: u32) -> &'static [u8] {
     }
 }
 
+/// Count the emulated-aperture MMIO access ops in a word (P4): one runtime
+/// bounds check is emitted per access unless the word elides them, so this is
+/// the honest `emitted.mmio_bounds` per-word count (FR-15).
+fn count_mmio_ops(w: &ir::Word) -> u32 {
+    let mut n: u32 = 0;
+    for b in w.blocks.iter() {
+        for op in b.ops.iter() {
+            match op.kind {
+                ir::OpKind::MmioVolLoad { .. }
+                | ir::OpKind::MmioVolStore { .. }
+                | ir::OpKind::MmioVolLoadField { .. }
+                | ir::OpKind::MmioVolStoreField { .. } => n += 1,
+                _ => {}
+            }
+        }
+    }
+    n
+}
+
 #[cfg(test)]
 mod tests {
     use super::codegen_error_message;
@@ -201,7 +220,8 @@ pub fn emit_asm_driver(
         &mut resources,
         descriptor,
         None, // --emit=asm: no obligation extraction (P2 scope is obl/obj)
-        |w| {
+        None,
+        |w, _ctx| {
             // Feature gate check — reject gated ops before codegen.
             if check_word_for_gate(w, feature_set, input_path, src) {
                 gate_hit = true;
@@ -284,12 +304,17 @@ pub fn emit_obj_driver(
     descriptor: Option<&CompiledDescriptor>,
     mmio_apertures: &[MmioApertureSpec],
     write_obl: bool,
+    verdicts: Option<&verifier::verdict::Verdicts>,
 ) -> i32 {
     let module_name = slice_span(src, module.name);
-    // P2: `--write-obl` opt-in — extract obligations alongside the object and
-    // write `<Module>.obl.json`. `None` keeps the default fast path exactly
-    // today's path (FR-22): no extraction, no extra output.
-    let mut extract_ctx = (write_obl).then(|| ExtractionCtx::new(module_name));
+    // P2/P4: extract obligations alongside the object and write
+    // `<Module>.obl.json`. Extraction runs under `--write-obl` (the default
+    // 'tyu build' path) and is IMPLIED by `--checks=undischarged` — the
+    // emission decision consults each site's resolved verdict, so every site
+    // must be recorded. `None` keeps the default fast path exactly today's
+    // path (FR-22).
+    let undischarged = checks == ChecksMode::Undischarged;
+    let mut extract_ctx = (write_obl || undischarged).then(|| ExtractionCtx::new(module_name));
     let mut path_buf = [0u8; 512];
     let asm_path = match join_path(&mut path_buf, out_dir, module_name, b".asm") {
         Some(p) => p,
@@ -409,6 +434,10 @@ pub fn emit_obj_driver(
         }
     };
     let mut gate_hit = false;
+    // P4: emitted mmio-bounds checks observed at the codegen boundary (words
+    // whose checks stayed: any open access, or a quotation word — the echo's
+    // `emitted.mmio_bounds` honesty count, FR-15).
+    let mut emitted_mmio: u32 = 0;
     match semantics::typecheck::for_each_ir_word(
         module,
         src,
@@ -419,10 +448,25 @@ pub fn emit_obj_driver(
         &mut resources,
         descriptor,
         extract_ctx.as_mut(),
-        |w| {
+        verdicts,
+        |w, ctx| {
             if check_word_for_gate(w, feature_set, input_path, src) {
                 gate_hit = true;
                 return Ok(());
+            }
+            // P4 (Q8): the per-word mmio elision signal. Only armed under
+            // `--checks=undischarged`, and only when every mmio-bounds
+            // obligation recorded for THIS word was discharged — a word with
+            // any open access retains all its checks (FR-13). Quotation words
+            // (`_quot_*`) record no obligations (P2), so they always keep
+            // their checks — conservative, never an elision without a
+            // discharge record.
+            let elide_mmio = undischarged
+                && !w.name.as_bytes().starts_with(b"_quot_")
+                && ctx.map(|c| c.word_mmio_all_discharged()).unwrap_or(false);
+            gen.set_mmio_checks_discharged(elide_mmio);
+            if !elide_mmio {
+                emitted_mmio = emitted_mmio.saturating_add(count_mmio_ops(w));
             }
             gen.emit_word(w)
         },
@@ -541,6 +585,70 @@ pub fn emit_obj_driver(
                 return 2;
             }
         }
+
+        // P4: verdict echo `<Module>.verdicts.inTree.json` — the resolved
+        // (non-open) verdicts, the module's stale-verdicts count, and the
+        // honest `emitted` check accounting (FR-15). The echo is itself a
+        // valid `--verdicts` input, which is what makes tyu's `.tyu-verify`
+        // cache round-trip (Q11/§7.4); consumers that do not participate keep
+        // the default code path (FR-22).
+        let resolved = ctx.resolved();
+        let mut records: alloc::vec::Vec<verifier::verdict::VerdictRecord> =
+            alloc::vec::Vec::new();
+        for r in resolved.iter() {
+            if r.status.is_open() {
+                continue;
+            }
+            records.push(verifier::verdict::VerdictRecord {
+                id: r.id.clone(),
+                id_hash: r.id_hash.clone(),
+                status: r.status,
+                method: r.method.clone(),
+                proof_ref: None,
+                justification: r.justification.clone(),
+            });
+        }
+        let stale = match verdicts {
+            Some(v) => v.stale_count(&ctx.set().obligations),
+            None => 0,
+        };
+        let subtype_emitted = resolved
+            .iter()
+            .filter(|r| {
+                r.kind == verifier::model::Kind::SubtypeRange && r.status.is_open()
+            })
+            .count() as u32;
+        let emitted = verifier::verdict::EmittedChecksData {
+            subtype_range: subtype_emitted,
+            contract: ctx.contract_emitted(),
+            mmio_bounds: emitted_mmio,
+        };
+        let echo = match verifier::verdict::encode_verdicts(
+            "langc",
+            "0.1.0",
+            &records,
+            stale,
+            &emitted,
+        ) {
+            Ok(b) => b,
+            Err(_) => {
+                let _ = diag::error_simple(6402, b"failed to encode verdicts echo");
+                return 2;
+            }
+        };
+        let mut echo_buf = [0u8; 512];
+        let echo_path = match join_path(&mut echo_buf, out_dir, module_name, b".verdicts.inTree.json")
+        {
+            Some(p) => p,
+            None => {
+                let _ = diag::error_simple(1013, b"output path too long");
+                return 2;
+            }
+        };
+        if fs::write_file(echo_path, &echo).is_err() {
+            let _ = diag::error_simple(1015, b"failed to write output verdicts echo");
+            return 2;
+        }
     }
 
     0
@@ -598,7 +706,8 @@ pub fn emit_obl_driver(
         &mut resources,
         descriptor,
         Some(&mut ctx),
-        |_w| Ok::<(), ()>(()),
+        None,
+        |_w, _ctx| Ok::<(), ()>(()),
     ) {
         Ok(()) => {}
         Err(semantics::typecheck::ForEachIrError::Type(e)) => {

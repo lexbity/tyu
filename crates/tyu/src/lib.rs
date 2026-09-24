@@ -25,3 +25,4 @@ pub mod runner;
 pub mod test_cmd;
 pub mod test_helpers;
 pub mod toolchain;
+pub mod verify;

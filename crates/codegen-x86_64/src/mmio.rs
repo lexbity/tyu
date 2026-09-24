@@ -25,6 +25,12 @@ pub fn emit_mmio_bounds_check(
     width: u32,
     span: Span,
 ) -> Result<(), CodegenError> {
+    // P4 (Q8): every mmio-bounds obligation of this word carried a discharged
+    // verdict, so the check provably never fires — skip it (codegen flag,
+    // armed per-word by the lowering under --checks=undischarged).
+    if gen.mmio_checks_discharged {
+        return Ok(());
+    }
     let size = emulated_aperture_size(gen)?;
     let ok = gen.fresh_label();
     let max = size.saturating_sub(width);

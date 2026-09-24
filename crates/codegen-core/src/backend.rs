@@ -41,6 +41,15 @@ pub trait CodegenBackend {
     /// or 0 for an unplatformed (MMIO-free) module. Stamped into the
     /// `.lang.modinfo` v4 header; the loader enforces it (E5220).
     fn set_platform_hash(&mut self, _hash: u64) {}
+
+    /// Slice P4 (static-verification.md §6.2/§7.2): when `elide` is true the
+    /// backend is told that every emulated-aperture MMIO bounds obligation of
+    /// the word being emitted carries a discharged verdict, so the C7 bounds
+    /// check can be skipped. Per-word granularity (Q8) — a word with any open
+    /// access must retain all checks; the lowering only arms this from
+    /// `Undischarged` mode, so `--checks=all` output is untouched (FR-5).
+    /// Default no-op: backends without emulated-aperture checks ignore it.
+    fn set_mmio_checks_discharged(&mut self, _elide: bool) {}
 }
 
 /// Merge one aperture-use entry into a backend's module aperture table (P6 §5.5):
