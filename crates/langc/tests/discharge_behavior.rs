@@ -143,10 +143,13 @@ fn checks_all_emits_every_subtype_site() {
 }
 
 #[test]
-fn discharged_param_site_removes_exactly_its_trap_pair() {
-    // Discharge `bounded_inc`'s C1 param-entry check (occurrence 0 of the
-    // subtype-range sites — the prologue emits C1 before the body's C3 and
-    // epilogue C2, so it is the first).
+fn discharged_param_site_removes_its_trap_pair() {
+    // Under P5 the interval engine ALSO discharges in-tree: the file
+    // discharges bounded_inc's C1 param (occurrence 0); the engine discharges
+    // bounded_inc's C2 return (the body cast narrows its value to [0,100])
+    // and main's C3 cast (operand [50,50]). Only bounded_inc's C1... no:
+    // after the engine runs, the only OPEN subtype site is bounded_inc's C3
+    // cast (operand ⊤ — 1 + on an unknown caller value).
     let (id, id_hash) = site_of("bounded_inc", 0);
     let rec = VerdictRecord {
         id: id.clone(),
@@ -161,29 +164,28 @@ fn discharged_param_site_removes_exactly_its_trap_pair() {
     let (asm_und, out_dir) = compile_bank("und", true, Some(&vf));
     let base = trap_count(&asm_all);
     let und = trap_count(&asm_und);
-    // A subtype check is exactly two TrapIfFalse sites (lower + upper bound),
-    // so discharging one check removes exactly two trap sites (FR-5/FR-16
-    // bijection — the canonical form from slice P1).
+    // base has 4 sites × 2 traps = 8. Three sites close (file C1 + in-tree
+    // C2/C3s) → 1 open site → 2 traps.
+    assert_eq!(base, 8);
     assert_eq!(
         und,
-        base - 2,
-        "discharging {id} must remove exactly the two lower/upper trap sites"
+        2,
+        "file-discharged C1 + engine-discharged C2/main-C3 leave only the ⊤-cast open"
     );
 
-    // The echo records the discharged verdict and the honest emitted counts:
-    // 3 of the 4 subtype sites stay open → 6 trap sites remain (the .asm
-    // count above confirms base − 2), and `emitted.subtype_range` counts
-    // sites, not traps (FR-15 — the report's honesty field is per-site).
+    // The echo records every non-open verdict: the file one (source file)
+    // and the two in-tree ones, with the honest emitted counts.
     let echo_bytes = fs::read(out_dir.join("Bank.verdicts.inTree.json"))
         .expect("verdicts echo written under --write-obl");
     let echo = read_echo(&echo_bytes).expect("echo parses");
-    assert_eq!(echo.verdicts.records.len(), 1, "one discharged record");
+    assert_eq!(echo.verdicts.records.len(), 3, "file C1 + in-tree C2 + main C3");
     assert_eq!(
         echo.verdicts.records[0].status,
         VerdictStatus::Discharged
     );
     assert_eq!(echo.verdicts.records[0].method.as_deref(), Some("interval"));
-    assert_eq!(echo.emitted.subtype_range, 3, "emitted == open sites");
+    assert_eq!(echo.emitted.subtype_range, 1, "emitted == open sites");
+    assert_eq!(echo.in_tree_verdicts, 2, "engine closed two sites");
     assert_eq!(echo.stale_verdicts, 0);
 }
 
@@ -214,8 +216,9 @@ fn undischarged_without_verdicts_is_e6402() {
 #[test]
 fn hash_mismatched_record_fails_closed_and_counts_stale() {
     // A record with the right id but a wrong id_hash must NOT discharge the
-    // site (Q3: hash disagreement ⇒ stale ⇒ open ⇒ check retained), and the
-    // echo must count it as stale.
+    // site (Q3: hash disagreement ⇒ stale ⇒ open ⇒ check retained); the
+    // interval engine still discharges what it can (bounded_inc's C2 return +
+    // main's C3 cast), and the echo counts the mismatched record as stale.
     let (id, _real_hash) = site_of("bounded_inc", 0);
     let rec = VerdictRecord {
         id,
@@ -228,14 +231,14 @@ fn hash_mismatched_record_fails_closed_and_counts_stale() {
     let vf = write_verdicts("stale", &[rec]);
     let (asm_all, _) = compile_bank("base2", false, None);
     let (asm_und, out_dir) = compile_bank("und2", true, Some(&vf));
-    assert_eq!(
-        trap_count(&asm_und),
-        trap_count(&asm_all),
-        "a hash-mismatched verdict must fail closed: the check is retained"
-    );
+    // The stale record fails closed: bounded_inc's C1 stays open; the engine
+    // closes bounded_inc C2 + main C3 (4 traps), so 8 − 4 = 4 remain.
+    assert_eq!(trap_count(&asm_all), 8);
+    assert_eq!(trap_count(&asm_und), 4);
     let echo_bytes = fs::read(out_dir.join("Bank.verdicts.inTree.json")).unwrap();
     let echo = read_echo(&echo_bytes).unwrap();
-    assert_eq!(echo.verdicts.records.len(), 0, "no site discharged");
+    assert_eq!(echo.verdicts.records.len(), 2, "the two in-tree discharges");
+    assert_eq!(echo.emitted.subtype_range, 2, "open sites keep their checks");
     assert_eq!(echo.stale_verdicts, 1, "the mismatched record is stale");
 }
 
@@ -252,10 +255,11 @@ fn unknown_site_record_is_ignored_as_stale() {
     let vf = write_verdicts("unknown", &[rec]);
     let (asm_und, out_dir) = compile_bank("und3", true, Some(&vf));
     let (asm_all, _) = compile_bank("base3", false, None);
-    assert_eq!(trap_count(&asm_und), trap_count(&asm_all));
+    assert_eq!(trap_count(&asm_und), trap_count(&asm_all) - 4);
     let echo_bytes = fs::read(out_dir.join("Bank.verdicts.inTree.json")).unwrap();
     let echo = read_echo(&echo_bytes).unwrap();
     assert_eq!(echo.stale_verdicts, 1);
+    assert_eq!(echo.in_tree_verdicts, 2, "engine discharges unaffected by the file");
 }
 
 #[test]

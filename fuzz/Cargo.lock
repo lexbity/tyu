@@ -651,6 +651,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "toml",
+ "verifier",
  "zeroize",
 ]
 
@@ -659,9 +660,11 @@ name = "tyu-fuzz"
 version = "0.0.0"
 dependencies = [
  "arbitrary",
+ "ir",
  "libfuzzer-sys",
  "lmod",
  "tyu",
+ "verifier",
 ]
 
 [[package]]
@@ -678,6 +681,13 @@ checksum = "fc1de2c688dc15305988b563c3854064043356019f97a4b46276fe734c4f07ea"
 dependencies = [
  "crypto-common",
  "subtle",
+]
+
+[[package]]
+name = "verifier"
+version = "0.1.0"
+dependencies = [
+ "ir",
 ]
 
 [[package]]

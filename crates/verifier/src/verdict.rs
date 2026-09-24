@@ -274,6 +274,96 @@ fn push_record_json(out: &mut Vec<u8>, r: &VerdictRecord) {
     out.push(b'}');
 }
 
+/// Serialize a langc *echo* (the superset document `<Module>.verdicts.inTree.
+/// json`): a verdicts file plus the module's `stale_verdicts`, `emitted`
+/// accounting, `provably_failing` records, and open reasons (P4/P5). The
+/// result is itself a valid `--verdicts` input — unknown keys are skipped by
+/// the strict reader.
+pub fn encode_echo(
+    tool_name: &str,
+    tool_version: &str,
+    records: &[VerdictRecord],
+    stale_verdicts: u32,
+    emitted: &EmittedChecksData,
+    provably_failing: &[ProvablyFailingRecord],
+    open_reasons: &[OpenReasonRecord],
+    in_tree_verdicts: u32,
+) -> Result<Vec<u8>, VerdictError> {
+    let mut out = Vec::with_capacity(512);
+    out.extend_from_slice(b"{\"schema\":");
+    push_str_json(&mut out, VERDICTS_SCHEMA);
+    out.extend_from_slice(b",\"tool\":{\"name\":");
+    push_str_json(&mut out, tool_name);
+    out.extend_from_slice(b",\"version\":");
+    push_str_json(&mut out, tool_version);
+    out.extend_from_slice(b"},\"semantics\":");
+    push_str_json(&mut out, SEMANTICS_VERSION);
+    out.extend_from_slice(b",\"verdicts\":[");
+    for (i, r) in records.iter().enumerate() {
+        if i != 0 {
+            out.push(b',');
+        }
+        push_record_json(&mut out, r);
+    }
+    out.extend_from_slice(b"]");
+    if stale_verdicts != 0 {
+        out.extend_from_slice(b",\"stale_verdicts\":");
+        push_i64_json(&mut out, stale_verdicts as i64);
+    }
+    if emitted.subtype_range != 0 || emitted.contract != 0 || emitted.mmio_bounds != 0 {
+        out.extend_from_slice(b",\"emitted\":{\"subtype_range\":");
+        push_i64_json(&mut out, emitted.subtype_range as i64);
+        out.extend_from_slice(b",\"contract\":");
+        push_i64_json(&mut out, emitted.contract as i64);
+        out.extend_from_slice(b",\"mmio_bounds\":");
+        push_i64_json(&mut out, emitted.mmio_bounds as i64);
+        out.push(b'}');
+    }
+    if !provably_failing.is_empty() {
+        out.extend_from_slice(b",\"provably_failing\":[");
+        for (i, p) in provably_failing.iter().enumerate() {
+            if i != 0 {
+                out.push(b',');
+            }
+            out.extend_from_slice(b"{\"id\":");
+            push_str_json(&mut out, &p.id);
+            out.extend_from_slice(b",\"note\":");
+            push_str_json(&mut out, &p.note);
+            out.push(b'}');
+        }
+        out.push(b']');
+    }
+    if !open_reasons.is_empty() {
+        out.extend_from_slice(b",\"open_reasons\":[");
+        for (i, r) in open_reasons.iter().enumerate() {
+            if i != 0 {
+                out.push(b',');
+            }
+            out.extend_from_slice(b"{\"id\":");
+            push_str_json(&mut out, &r.id);
+            out.extend_from_slice(b",\"reason\":");
+            push_str_json(&mut out, &r.reason);
+            out.push(b'}');
+        }
+        out.push(b']');
+    }
+    if !records.is_empty() {
+        // The source split of the closed verdicts: `in_tree` passed in, the
+        // file-sourced remainder is `records - in_tree`.
+        let file = records.len() as u32 - core::cmp::min(records.len() as u32, in_tree_verdicts);
+        out.extend_from_slice(b",\"verdict_sources\":{\"file\":");
+        push_i64_json(&mut out, file as i64);
+        out.extend_from_slice(b",\"in_tree\":");
+        push_i64_json(&mut out, in_tree_verdicts as i64);
+        out.push(b'}');
+    }
+    out.push(b'}');
+    if out.len() > VERDICTS_FILE_MAX_BYTES {
+        return Err(VerdictError::TooLarge { size: out.len() });
+    }
+    Ok(out)
+}
+
 // ---------------------------------------------------------------------------
 // Reader
 // ---------------------------------------------------------------------------
@@ -308,15 +398,44 @@ pub fn read_echo(bytes: &[u8]) -> Result<Echo, VerdictError> {
         verdicts: doc.verdicts,
         stale_verdicts: doc.stale_verdicts,
         emitted: doc.emitted,
+        provably_failing: doc.provably_failing,
+        open_reasons: doc.open_reasons,
+        file_verdicts: doc.file_verdicts,
+        in_tree_verdicts: doc.in_tree_verdicts,
     })
 }
 
-/// The parsed verdicts echo (verdicts + stale count + emitted accounting).
+/// A `provably_failing` echo/report record (slice P5): the in-tree interval
+/// engine proved the site's value is *always* outside the target range — the
+/// check is retained; the site is reported for diagnosis (never discharged).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProvablyFailingRecord {
+    pub id: String,
+    /// Human-readable note (the interval reason).
+    pub note: String,
+}
+
+/// An open-reason record (slice P5, FR-18 quality bar): why an open
+/// obligation is not discharged (e.g. `"value interval <top> ..."`).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OpenReasonRecord {
+    pub id: String,
+    pub reason: String,
+}
+
+/// The parsed verdicts echo (verdicts + stale count + emitted accounting +
+/// provably-failing records + open reasons + discharge-source counts).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Echo {
     pub verdicts: Verdicts,
     pub stale_verdicts: u32,
     pub emitted: EmittedChecksData,
+    pub provably_failing: Vec<ProvablyFailingRecord>,
+    pub open_reasons: Vec<OpenReasonRecord>,
+    /// Discharge-source counts (`verdict_sources`, slice P5): closed verdicts
+    /// decided by the verdicts file vs the in-tree dischargers.
+    pub file_verdicts: u32,
+    pub in_tree_verdicts: u32,
 }
 
 struct VReader<'a> {
@@ -364,6 +483,10 @@ impl<'a> VReader<'a> {
         let mut records: Option<Vec<VerdictRecord>> = None;
         let mut stale_verdicts: Option<u32> = None;
         let mut emitted: Option<EmittedChecksData> = None;
+        let mut provably_failing: Option<Vec<ProvablyFailingRecord>> = None;
+        let mut open_reasons: Option<Vec<OpenReasonRecord>> = None;
+        let mut file_verdicts: Option<u32> = None;
+        let mut in_tree_verdicts: Option<u32> = None;
         loop {
             self.skip_ws();
             match self.peek() {
@@ -386,11 +509,18 @@ impl<'a> VReader<'a> {
                     let _ = self.parse_tool()?;
                 }
                 "verdicts" => records = Some(self.parse_records()?),
-                // Echo extras (P4): parsed here so typeu's report composition
+                // Echo extras (P4/P5): parsed here so tyu's report composition
                 // can read them back; the strict `read_verdicts` input path
                 // ignores them.
                 "stale_verdicts" => stale_verdicts = Some(self.parse_u32()?),
                 "emitted" => emitted = Some(self.parse_emitted()?),
+                "provably_failing" => provably_failing = Some(self.parse_pfi()?),
+                "open_reasons" => open_reasons = Some(self.parse_reasons()?),
+                "verdict_sources" => {
+                    let (f, t) = self.parse_verdict_sources()?;
+                    file_verdicts = Some(f);
+                    in_tree_verdicts = Some(t);
+                }
                 // Additive keys are skipped — readers tolerate future growth.
                 _ => self.skip_value()?,
             }
@@ -408,7 +538,143 @@ impl<'a> VReader<'a> {
             },
             stale_verdicts: stale_verdicts.unwrap_or(0),
             emitted: emitted.unwrap_or_default(),
+            provably_failing: provably_failing.unwrap_or_default(),
+            open_reasons: open_reasons.unwrap_or_default(),
+            file_verdicts: file_verdicts.unwrap_or(0),
+            in_tree_verdicts: in_tree_verdicts.unwrap_or(0),
         })
+    }
+
+    fn parse_verdict_sources(&mut self) -> Result<(u32, u32), VerdictError> {
+        self.expect(b'{')?;
+        let mut file = 0u32;
+        let mut in_tree = 0u32;
+        loop {
+            self.skip_ws();
+            match self.peek() {
+                Some(b'}') => {
+                    self.i += 1;
+                    break;
+                }
+                Some(b',') => {
+                    self.i += 1;
+                }
+                _ => {}
+            }
+            self.skip_ws();
+            let key = self.parse_string()?;
+            self.expect(b':')?;
+            match key.as_str() {
+                "file" => file = self.parse_u32()?,
+                "in_tree" => in_tree = self.parse_u32()?,
+                _ => self.skip_value()?,
+            }
+        }
+        Ok((file, in_tree))
+    }
+
+    fn parse_pfi(&mut self) -> Result<Vec<ProvablyFailingRecord>, VerdictError> {
+        self.expect(b'[')?;
+        let mut out = Vec::new();
+        loop {
+            self.skip_ws();
+            match self.peek() {
+                Some(b']') => {
+                    self.i += 1;
+                    break;
+                }
+                Some(b',') => {
+                    self.i += 1;
+                }
+                _ => {}
+            }
+            self.skip_ws();
+            if self.peek() == Some(b']') {
+                self.i += 1;
+                break;
+            }
+            self.expect(b'{')?;
+            let mut id: Option<String> = None;
+            let mut note: Option<String> = None;
+            loop {
+                self.skip_ws();
+                match self.peek() {
+                    Some(b'}') => {
+                        self.i += 1;
+                        break;
+                    }
+                    Some(b',') => {
+                        self.i += 1;
+                    }
+                    _ => {}
+                }
+                self.skip_ws();
+                let key = self.parse_string()?;
+                self.expect(b':')?;
+                match key.as_str() {
+                    "id" => id = Some(self.parse_string()?),
+                    "note" => note = Some(self.parse_string()?),
+                    _ => self.skip_value()?,
+                }
+            }
+            let (Some(id), Some(note)) = (id, note) else {
+                return self.err();
+            };
+            out.push(ProvablyFailingRecord { id, note });
+        }
+        Ok(out)
+    }
+
+    fn parse_reasons(&mut self) -> Result<Vec<OpenReasonRecord>, VerdictError> {
+        self.expect(b'[')?;
+        let mut out = Vec::new();
+        loop {
+            self.skip_ws();
+            match self.peek() {
+                Some(b']') => {
+                    self.i += 1;
+                    break;
+                }
+                Some(b',') => {
+                    self.i += 1;
+                }
+                _ => {}
+            }
+            self.skip_ws();
+            if self.peek() == Some(b']') {
+                self.i += 1;
+                break;
+            }
+            self.expect(b'{')?;
+            let mut id: Option<String> = None;
+            let mut reason: Option<String> = None;
+            loop {
+                self.skip_ws();
+                match self.peek() {
+                    Some(b'}') => {
+                        self.i += 1;
+                        break;
+                    }
+                    Some(b',') => {
+                        self.i += 1;
+                    }
+                    _ => {}
+                }
+                self.skip_ws();
+                let key = self.parse_string()?;
+                self.expect(b':')?;
+                match key.as_str() {
+                    "id" => id = Some(self.parse_string()?),
+                    "reason" => reason = Some(self.parse_string()?),
+                    _ => self.skip_value()?,
+                }
+            }
+            let (Some(id), Some(reason)) = (id, reason) else {
+                return self.err();
+            };
+            out.push(OpenReasonRecord { id, reason });
+        }
+        Ok(out)
     }
 
     fn parse_emitted(&mut self) -> Result<EmittedChecksData, VerdictError> {
@@ -741,6 +1007,10 @@ struct Doc {
     verdicts: Verdicts,
     stale_verdicts: u32,
     emitted: EmittedChecksData,
+    provably_failing: Vec<ProvablyFailingRecord>,
+    open_reasons: Vec<OpenReasonRecord>,
+    file_verdicts: u32,
+    in_tree_verdicts: u32,
 }
 
 #[cfg(test)]

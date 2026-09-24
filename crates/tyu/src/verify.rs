@@ -34,8 +34,8 @@ use verifier::codec::read_obl;
 use verifier::model::{Formula, Kind, Obligation, OblSet};
 use verifier::report::{
     AssumedObligation, ClassAccounting, EmittedChecks, IsrContextAccounting,
-    MainContextAccounting, ModuleAccounting, OpenObligation, StackContextAccounting,
-    ToolInfo, TrustedAssumption, VerifyReport,
+    MainContextAccounting, ModuleAccounting, OpenObligation, ProvablyFailing,
+    StackContextAccounting, ToolInfo, TrustedAssumption, VerifyReport,
 };
 use verifier::verdict::{read_echo, Echo, VerdictStatus};
 
@@ -151,6 +151,7 @@ pub fn compose(
         if let Some(set) = set {
             collect_open(set, echo, name, &mut report.open);
             collect_assumed(set, echo, name, &mut report.assumed);
+            collect_provably_failing(set, echo, name, &mut report.provably_failing);
         }
         // The honest emitted-check block: langc counted what it actually
         // emitted per word. Fallback (no echo: legagcy artifact): every
@@ -161,6 +162,8 @@ pub fn compose(
             emitted.contract += e.emitted.contract;
             emitted.mmio_bounds += e.emitted.mmio_bounds;
             stale_verdicts += e.stale_verdicts;
+            report.verdict_sources.file += e.file_verdicts;
+            report.verdict_sources.in_tree += e.in_tree_verdicts;
         } else if let Some(set) = set {
             let sub = set
                 .obligations
@@ -453,12 +456,20 @@ fn verdict_is_discharged(o: &Obligation) -> bool {
     }
 }
 
-/// Every obligation resolving open lands in the `open` list.
+/// Every obligation resolving open lands in the `open` list, carrying the
+/// interval engine's open-reason when one was recorded (P5, FR-18).
 fn collect_open(set: &OblSet, echo: Option<&Echo>, module: &str, out: &mut Vec<OpenObligation>) {
     for o in &set.obligations {
         if resolved_status(o, echo) != VerdictStatus::Open {
             continue;
         }
+        let reason = echo
+            .and_then(|e| {
+                e.open_reasons
+                    .iter()
+                    .find(|r| r.id == o.id)
+                    .map(|r| r.reason.clone())
+            });
         out.push(OpenObligation {
             id: o.id.clone(),
             kind: o.kind.as_str().to_string(),
@@ -466,6 +477,33 @@ fn collect_open(set: &OblSet, echo: Option<&Echo>, module: &str, out: &mut Vec<O
             word: o.site.word.clone(),
             site: format!("{}.{}", o.site.word, o.site.occurrence),
             line: o.site.span.line,
+            reason,
+        });
+    }
+}
+
+/// Every interval-proven out-of-range site lands in the report's
+/// `provably_failing` list with its note (P5 — the check is retained; the
+/// `no-open` diagnostics can point at why).
+fn collect_provably_failing(
+    set: &OblSet,
+    echo: Option<&Echo>,
+    module: &str,
+    out: &mut Vec<ProvablyFailing>,
+) {
+    let Some(echo) = echo else { return };
+    for p in &echo.provably_failing {
+        let Some(o) = set.obligations.iter().find(|o| o.id == p.id) else {
+            continue;
+        };
+        out.push(ProvablyFailing {
+            id: o.id.clone(),
+            kind: o.kind.as_str().to_string(),
+            module: module.to_string(),
+            word: o.site.word.clone(),
+            site: format!("{}.{}", o.site.word, o.site.occurrence),
+            line: o.site.span.line,
+            note: p.note.clone(),
         });
     }
 }

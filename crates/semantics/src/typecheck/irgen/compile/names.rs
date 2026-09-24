@@ -391,6 +391,10 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
 
         let from_id = self.ty_id_of_type(from_ty, name_abs)?;
         let to_id = self.ty_id_of_type(to_ty, name_abs)?;
+        // P5: the in-tree interval discharge evaluates the narrowing-cast
+        // obligation on the PRE-cast abstract value (captured before the
+        // `Cast` transfer narrows it to the subtype range).
+        let pre_cast = self.interp.top(cur);
         if name == b"bitcast" {
             self.emit_op(
                 cur,
@@ -483,9 +487,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 // C3: record the narrowing-cast obligation, then emit the
                 // runtime trap per the emission mode. The record is
                 // independent of `--checks` (FR-1); under `Undischarged` the
-                // resolved verdict gates the check (P4); under `All` the gate
-                // is constant true (FR-5 — identical emitted code).
-                let verdict = self.record_cast_obligation(from_ty, to_ty, &st, name_abs);
+                // resolved verdict (interval engine + verdicts file) gates
+                // the check (P5); under `All` the gate is constant true
+                // (FR-5 — identical emitted code).
+                let verdict =
+                    self.record_cast_obligation(from_ty, to_ty, &st, pre_cast, name_abs);
                 if self.emit_subtype_check(verdict) {
                     let tmp = self.temp_base_slot();
                     self.emit_op(cur, lir::OpKind::Dup { ty: to_id }, name_abs)?;

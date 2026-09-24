@@ -12,6 +12,8 @@ arbitrary = { version = "1", features = ["derive"] }
 libfuzzer-sys = "0.4"
 lmod = { path = "../crates/lmod" }
 tyu = { path = "../crates/tyu" }
+verifier = { path = "../crates/verifier" }
+ir = { path = "../crates/ir" }
 
 [[bin]]
 name = "parse_container"
@@ -28,5 +30,11 @@ doc = false
 [[bin]]
 name = "descriptor_parse"
 path = "fuzz_targets/descriptor_parse.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "verify_soundness"
+path = "fuzz_targets/verify_soundness.rs"
 test = false
 doc = false

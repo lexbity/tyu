@@ -61,6 +61,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
 
         let then_blk = self.new_block(&base_stack, base_sp, span)?;
         let else_blk = self.new_block(&base_stack, base_sp, span)?;
+        // P5: seed the branch entry states from the pre-BrIf abstract state
+        // (the branch-entry stack excludes the condition the BrIf consumes —
+        // `base_sp` truncation).
+        self.interp.seed_from(then_blk, cur, base_sp);
+        self.interp.seed_from(else_blk, cur, base_sp);
         self.emit_op(
             cur,
             lir::OpKind::BrIf {
@@ -108,6 +113,9 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         self.acc = pre_if_acc.compose(then_bound.branch_max(else_bound));
 
         let join_blk = self.new_block(&then_stack, then_sp, span)?;
+        // P5: the join's abstract entry state = hull of the branch-end states
+        // (§7.2 `BrIf` join row — precise where both ends are known).
+        self.interp.seed_join(join_blk, then_end, else_end, then_sp);
         self.emit_op(then_end, lir::OpKind::Br { target: join_blk }, span)?;
         self.emit_op(else_end, lir::OpKind::Br { target: join_blk }, span)?;
 
@@ -140,6 +148,9 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         let pre_while_acc = self.acc;
 
         let header = self.new_block(&base_stack, base_sp, span)?;
+        // P5: seed the loop header from the pre-loop abstract state (the Br
+        // is a no-op transfer).
+        self.interp.seed_from(header, cur, base_sp);
         self.emit_op(cur, lir::OpKind::Br { target: header }, span)?;
 
         let mut cond_stack = base_stack;
@@ -174,6 +185,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             },
             span,
         )?;
+        // P5: seed the body entry from the cond-false... the BrIf routed the
+        // (net-zero) cond state to both successors; the body/exit abstract
+        // states = the header state after the BrIf popped the condition.
+        self.interp.seed_from(body_blk, cond_end, base_sp);
+        self.interp.seed_from(after_blk, cond_end, base_sp);
 
         let mut body_stack = base_stack;
         let mut body_sp = base_sp;
@@ -211,6 +227,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             return Err(TcError::DivergeInBounded { span });
         }
         self.emit_op(body_end, lir::OpKind::Br { target: header }, span)?;
+        // P5: back-edge widening (FR-12: loop-carried slots widen to ⊤) and
+        // the loop-EXIT state reseeded from the (widened) header — a site
+        // after the loop sees the widened values.
+        self.interp.widen_loop(header, body_end, base_sp);
+        self.interp.seed_from(after_blk, header, base_sp);
 
         *stack = base_stack;
         *sp = base_sp;
@@ -236,6 +257,8 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         let pre_loop_acc = self.acc;
 
         let check_blk = self.new_block(&base_stack, base_sp, span)?;
+        // P5: seed the loop-check entry from the pre-loop abstract state.
+        self.interp.seed_from(check_blk, cur, base_sp);
         self.emit_op(cur, lir::OpKind::Br { target: check_blk }, span)?;
         let body_blk = self.new_block(&base_stack, base_sp, span)?;
         let after_blk = self.new_block(&base_stack, base_sp, span)?;
@@ -249,6 +272,9 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             },
             span,
         )?;
+        // P5: seed body/exit abstract states from the check state post-BrIf.
+        self.interp.seed_from(body_blk, check_blk, base_sp);
+        self.interp.seed_from(after_blk, check_blk, base_sp);
 
         let mut body_stack = base_stack;
         let mut body_sp = base_sp;
@@ -286,6 +312,9 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             return Err(TcError::DivergeInBounded { span });
         }
         self.emit_op(body_end, lir::OpKind::Br { target: check_blk }, span)?;
+        // P5: back-edge widening + loop-exit reseed (as in `while`).
+        self.interp.widen_loop(check_blk, body_end, base_sp);
+        self.interp.seed_from(after_blk, check_blk, base_sp);
 
         *stack = base_stack;
         *sp = base_sp;

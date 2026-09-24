@@ -205,7 +205,18 @@ pub struct Obligation {
     pub provenance: Provenance,
 }
 
-/// The resolved build-time verdict of one obligation (slice P4, §6.2/§7.4):
+/// Where a closed (discharged/assumed) verdict came from (slice P5 report
+/// accounting: `verdict_sources` counts external-file vs in-tree courses).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VerdictSource {
+    /// The verdicts file (`--verdicts`) carried the record (external proof /
+    /// human assumption).
+    File,
+    /// The in-tree discharger (interval engine or descriptor rule) decided.
+    InTree,
+}
+
+/// The resolved build-time verdict of one obligation (slice P4/P5, §6.2/§7.4):
 /// the emission decision record behind the verdicts echo and the report's
 /// per-class accounting. Appended to [`ExtractionCtx`] in the exact order of
 /// `OblSet::obligations` — one entry per record, same ordinals.
@@ -215,11 +226,20 @@ pub struct ResolvedVerdict {
     pub id_hash: String,
     pub kind: Kind,
     pub status: crate::verdict::VerdictStatus,
-    /// Discharged: the discharge method (`"descriptor"` in-tree, or the
-    /// verdicts file's own `method`).
+    /// Discharged: the discharge method (`"descriptor"` in-tree, `"interval"`
+    /// engine, or the verdicts file's own `method`).
     pub method: Option<String>,
     /// Assumed: the human justification recorded in the verdicts file.
     pub justification: Option<String>,
+    /// Slice P5: the interval engine proved the site's value is *always*
+    /// out of range — the check is retained and the site is reported
+    /// `provably_failing` (never a discharge).
+    pub provably_failing: bool,
+    /// Slice P5: an open-reason for `no-open` diagnostics (FR-18 quality bar;
+    /// e.g. `"value interval ⊤ ..."`).
+    pub reason: Option<String>,
+    /// Slice P5: the discharge source for the `verdict_sources` accounting.
+    pub source: VerdictSource,
 }
 
 /// A declared word's computed facts (Q7, §6.1 `facts.words`): the stack-bound

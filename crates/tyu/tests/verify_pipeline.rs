@@ -109,7 +109,10 @@ fn default_build_populates_cache_and_second_build_hits() {
     assert_eq!(entries.len(), 1, "one module → one verdicts cache slot: {entries:?}");
     let echo = fs::read(cache_dir.join(&entries[0])).unwrap();
     let parsed = verifier::verdict::read_echo(&echo).expect("echo is a valid verdicts/echo file");
-    assert_eq!(parsed.verdicts.records.len(), 0, "no site discharged in P4 (no in-tree subtype discharge)");
+    // P5: the interval engine discharged bounded_inc's C2 return + main's C3
+    // cast (body-cast narrow + [50,50] operand) — both recorded as in-tree.
+    assert_eq!(parsed.verdicts.records.len(), 2);
+    assert_eq!(parsed.in_tree_verdicts, 2);
 
     let report1 = fs::read(out_dir.join("verify-report.json")).unwrap();
 
@@ -161,7 +164,10 @@ fn corrupt_cache_slot_self_heals_as_a_miss() {
     let report = fs::read(out_dir.join("verify-report.json")).unwrap();
     let v: serde_json::Value = serde_json::from_slice(&report).unwrap();
     assert_eq!(v["policy"], "open-ok");
-    assert_eq!(v["modules"][0]["classes"]["subtype-range"]["open"], 4);
+    // P5: the engine discharged bounded_inc's C2 return + main's C3 cast, so
+    // the two ⊤-operand sites (bounded_inc C1+C3) remain open.
+    assert_eq!(v["modules"][0]["classes"]["subtype-range"]["open"], 2);
+    assert_eq!(v["modules"][0]["classes"]["subtype-range"]["discharged"], 2);
     // The slot has healed back into a valid file.
     let healed = fs::read(&slot).unwrap();
     verifier::verdict::read_echo(&healed).expect("slot healed into a valid echo");

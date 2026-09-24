@@ -870,6 +870,29 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                         return Err(TcError::ReturnTypeMismatch { span: name_abs });
                     }
                     let tid = self.ty_id_of_type(resolved, name_abs)?;
+                    // C4 (slice P5, FR-6): a typed store into a subtype-typed
+                    // place gets a `subtype-range` obligation on the STORED
+                    // value (the abstract stack top — the value the `Store`
+                    // consumes). When the verdict is open the range check is
+                    // emitted right here — new runtime code that closes the
+                    // P3-era soundness hole (`memory.rs:830` unchecked).
+                    if let Some(st) = find_subtype(self.subtypes, resolved) {
+                        let pre_store = self.interp.top(cur);
+                        let verdict = self.record_store_obligation(&st, pre_store, name_abs);
+                        if self.emit_subtype_check(verdict) {
+                            let tmp = self.temp_base_slot();
+                            self.emit_op(cur, lir::OpKind::Dup { ty: tid }, name_abs)?;
+                            self.emit_op(
+                                cur,
+                                lir::OpKind::LocalSet {
+                                    slot: tmp,
+                                    ty: tid,
+                                },
+                                name_abs,
+                            )?;
+                            self.emit_subtype_range_trap(cur, tmp, tid, &st, name_abs)?;
+                        }
+                    }
                     self.emit_op(cur, lir::OpKind::Store { ty: tid }, name_abs)?;
                     Ok(cur)
                 }

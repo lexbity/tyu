@@ -90,6 +90,10 @@ pub struct OpenObligation {
     /// `"<word>.<occurrence>"` — site shorthand.
     pub site: String,
     pub line: u32,
+    /// Slice P5: the open-reason from the interval engine (`"interval <top>
+    /// vs target [0, 100]"`), when one was recorded. Omitted by the writer
+    /// when `None` (schema-stable).
+    pub reason: Option<String>,
 }
 
 /// One assumed obligation (`assumed` list in §6.5, slice P4): a human
@@ -103,6 +107,29 @@ pub struct AssumedObligation {
     pub site: String,
     pub line: u32,
     pub justification: Option<String>,
+}
+
+/// One `provably_failing` record (`provably_failing` list in §6.5, slice P5):
+/// the interval engine proved the site's value is always outside the target
+/// range — the check is retained (never a discharge) and the report surfaces
+/// why.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProvablyFailing {
+    pub id: String,
+    pub kind: String,
+    pub module: String,
+    pub word: String,
+    pub site: String,
+    pub line: u32,
+    pub note: String,
+}
+
+/// The `verdict_sources` accounting (§6.5, slice P5): closed-verdict counts
+/// by course — external verdicts file vs the in-tree dischargers.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
+pub struct VerdictSources {
+    pub file: u32,
+    pub in_tree: u32,
 }
 
 /// The image-level `emitted_checks` honesty block (§6.5, slice P4): how many
@@ -139,6 +166,11 @@ pub struct VerifyReport {
     pub open: Vec<OpenObligation>,
     pub assumed: Vec<AssumedObligation>,
     pub assumptions_trusted: Vec<TrustedAssumption>,
+    /// Slice P5: interval-proven out-of-range sites (check retained — the
+    /// `provably_failing` honesty diagnostic; never a discharge).
+    pub provably_failing: Vec<ProvablyFailing>,
+    /// Slope P5: closed-verdict course counts (file vs in-tree).
+    pub verdict_sources: VerdictSources,
     /// Input verdicts that matched no obligation / disagreed on the hash
     /// (E6413-class staleness, fail-closed; FR-15).
     pub stale_verdicts: u32,
@@ -174,6 +206,8 @@ impl VerifyReport {
             open: Vec::new(),
             assumed: Vec::new(),
             assumptions_trusted: Vec::new(),
+            provably_failing: Vec::new(),
+            verdict_sources: VerdictSources::default(),
             stale_verdicts: 0,
             emitted_checks: EmittedChecks::default(),
         }

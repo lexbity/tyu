@@ -1173,6 +1173,10 @@ fn write_report_bytes(r: &crate::report::VerifyReport) -> Vec<u8> {
         write_str(&mut out, &o.site);
         out.extend_from_slice(b",\"line\":");
         write_i64(&mut out, o.line as i64);
+        if let Some(reason) = &o.reason {
+            out.extend_from_slice(b",\"reason\":");
+            write_str(&mut out, reason);
+        }
         out.push(b'}');
     }
     out.extend_from_slice(b"],\"assumed\":[");
@@ -1209,9 +1213,34 @@ fn write_report_bytes(r: &crate::report::VerifyReport) -> Vec<u8> {
         write_str(&mut out, &a.what);
         out.push(b'}');
     }
+    out.extend_from_slice(b"],\"provably_failing\":[");
+    for (i, p) in r.provably_failing.iter().enumerate() {
+        if i != 0 {
+            out.push(b',');
+        }
+        out.extend_from_slice(b"{\"id\":");
+        write_str(&mut out, &p.id);
+        out.extend_from_slice(b",\"kind\":");
+        write_str(&mut out, &p.kind);
+        out.extend_from_slice(b",\"module\":");
+        write_str(&mut out, &p.module);
+        out.extend_from_slice(b",\"word\":");
+        write_str(&mut out, &p.word);
+        out.extend_from_slice(b",\"site\":");
+        write_str(&mut out, &p.site);
+        out.extend_from_slice(b",\"line\":");
+        write_i64(&mut out, p.line as i64);
+        out.extend_from_slice(b",\"note\":");
+        write_str(&mut out, &p.note);
+        out.push(b'}');
+    }
     out.extend_from_slice(b"],\"stale_verdicts\":");
     write_i64(&mut out, r.stale_verdicts as i64);
-    out.extend_from_slice(b",\"emitted_checks\":{\"subtype_range\":");
+    out.extend_from_slice(b",\"verdict_sources\":{\"file\":");
+    write_i64(&mut out, r.verdict_sources.file as i64);
+    out.extend_from_slice(b",\"in_tree\":");
+    write_i64(&mut out, r.verdict_sources.in_tree as i64);
+    out.extend_from_slice(b"},\"emitted_checks\":{\"subtype_range\":");
     write_i64(&mut out, r.emitted_checks.subtype_range as i64);
     out.extend_from_slice(b",\"contract\":");
     write_i64(&mut out, r.emitted_checks.contract as i64);

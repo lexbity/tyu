@@ -3,6 +3,7 @@ use crate::iface::{export_iter, find_decl, find_word_decl};
 use crate::util::{
     check_word_for_gate, join_path, slice_span, try_load_module_file, MemOut, Stdout,
 };
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use codegen_core::compiled_desc::CompiledDescriptor;
 use codegen_core::{FeatureSet, MmioApertureSpec, Target};
@@ -16,7 +17,7 @@ use lmod::abi_hash;
 use lmod::modinfo;
 use semantics::typecheck::{self, ChecksMode, SubtypeInfo};
 use semantics::types::{TypeAtom, WordEntry, WordSig};
-use verifier::model::ExtractionCtx;
+use verifier::model::{ExtractionCtx, VerdictSource};
 
 struct DriverEnv {
     st_buf: [SubtypeInfo; 64],
@@ -623,12 +624,44 @@ pub fn emit_obj_driver(
             contract: ctx.contract_emitted(),
             mmio_bounds: emitted_mmio,
         };
-        let echo = match verifier::verdict::encode_verdicts(
+        // P5: provably-failing records (interval ∅ vs the target range, check
+        // retained) and open-reason records (FR-18 quality bar) ride the echo
+        // so the report's `no-open` diagnostics carry the why.
+        let provably_failing: alloc::vec::Vec<verifier::verdict::ProvablyFailingRecord> =
+            resolved
+                .iter()
+                .filter(|r| r.provably_failing)
+                .map(|r| verifier::verdict::ProvablyFailingRecord {
+                    id: r.id.clone(),
+                    note: r
+                        .reason
+                        .clone()
+                        .unwrap_or_else(|| "interval ∩ type range = ∅".to_string()),
+                })
+                .collect();
+        let open_reasons: alloc::vec::Vec<verifier::verdict::OpenReasonRecord> = resolved
+            .iter()
+            .filter(|r| r.status.is_open() && r.reason.is_some())
+            .map(|r| verifier::verdict::OpenReasonRecord {
+                id: r.id.clone(),
+                reason: r.reason.clone().unwrap_or_default(),
+            })
+            .collect();
+        // The discharge-source split (slice P5): how many closed verdicts
+        // came from the in-tree dischargers vs the verdicts file.
+        let in_tree_verdicts = resolved
+            .iter()
+            .filter(|r| !r.status.is_open() && r.source == VerdictSource::InTree)
+            .count() as u32;
+        let echo = match verifier::verdict::encode_echo(
             "langc",
             "0.1.0",
             &records,
             stale,
             &emitted,
+            &provably_failing,
+            &open_reasons,
+            in_tree_verdicts,
         ) {
             Ok(b) => b,
             Err(_) => {

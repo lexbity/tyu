@@ -102,11 +102,14 @@ fn metal_platform_build_reports_discharged_main_context() {
     assert_eq!(main["budget"], 16384);
     assert_eq!(v["contexts"]["stack"]["guards"], "retained");
 
-    // Per-module class accounting: Bank carries 4 subtype-range obligations,
-    // all open (no in-tree discharger before P5); the other kinds are zeroed.
+    // Per-module class accounting: Bank carries 4 subtype-range obligations —
+    // bounded_inc C1+C3+C2, main C3. P5's interval engine discharges
+    // bounded_inc's C2 return (the body cast narrows its value) and main's
+    // C3 cast (operand [50,50]); the two ⊤-operand sites stay open.
     let classes = &v["modules"][0]["classes"];
     assert_eq!(classes["subtype-range"]["total"], 4);
-    assert_eq!(classes["subtype-range"]["open"], 4);
+    assert_eq!(classes["subtype-range"]["open"], 2);
+    assert_eq!(classes["subtype-range"]["discharged"], 2);
     assert_eq!(classes["mmio-bounds"]["total"], 0);
 
     // The assumptions list carries the derived geometry that drove the

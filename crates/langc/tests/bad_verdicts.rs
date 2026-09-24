@@ -35,7 +35,7 @@ subtype Percent = i64 range 0..100;
   drop 0
 ;
 : main ( -- i64 )
-  0 as Percent drop 0
+  0
 ;
 end;
 ";
@@ -179,23 +179,23 @@ fn malformed_verdicts_fail_closed_e6402() {
 /// hostile file can only cause more checking, never less).
 #[test]
 fn mismatched_verdicts_fail_closed_to_more_checking() {
-    // Baseline trap count under an empty (valid) verdicts file: all sites
-    // open, all checks retained (f's C1 param check + main's C3 cast check =
-    // 2 sites × 2 TrapIfFalse = 4 trap sites).
-    expect_keep_all_checks("empty", HEADER.as_bytes(), 4);
+    // Baseline trap count under an empty (valid) verdicts file: the fixture's
+    // only subtype site is f's C1 param check (a ⊤ caller input — the engine
+    // cannot discharge it), 1 site × 2 TrapIfFalse = 2 trap sites.
+    expect_keep_all_checks("empty", HEADER.as_bytes(), 2);
 
     // Unknown id (matches no obligation).
     expect_keep_all_checks(
         "unknown-id",
         br#"{"schema":"tyu.verdicts/v1","tool":{"name":"t","version":"0"},"semantics":"tyu.ir-sem/1.0","verdicts":[{"id":"Bank::nope::subtype-range::9","id_hash":"1234567890abcdef","status":"discharged"}]}"#,
-        4,
+        2,
     );
 
     // Correct id, wrong hash — stale, fail-closed.
     expect_keep_all_checks(
         "wrong-hash",
         br#"{"schema":"tyu.verdicts/v1","tool":{"name":"t","version":"0"},"semantics":"tyu.ir-sem/1.0","verdicts":[{"id":"Bank::f::subtype-range::0","id_hash":"0000000000000000","status":"discharged"}]}"#,
-        4,
+        2,
     );
 
     // Duplicated records: deterministic first-match wins; both remain matched
@@ -204,13 +204,13 @@ fn mismatched_verdicts_fail_closed_to_more_checking() {
     expect_keep_all_checks(
         "duplicate-wrong-hash",
         br#"{"schema":"tyu.verdicts/v1","tool":{"name":"t","version":"0"},"semantics":"tyu.ir-sem/1.0","verdicts":[{"id":"Bank::f::subtype-range::0","id_hash":"0000000000000000","status":"discharged"},{"id":"Bank::f::subtype-range::0","id_hash":"0000000000000000","status":"assumed"}]}"#,
-        4,
+        2,
     );
 
     // Additive/unknown top-level keys are tolerated (schema grows additively).
     expect_keep_all_checks(
         "additive-keys",
         br#"{"schema":"tyu.verdicts/v1","tool":{"name":"t","version":"0"},"semantics":"tyu.ir-sem/1.0","future_extra":{"a":1},"verdicts":[],"stale_verdicts":0}"#,
-        4,
+        2,
     );
 }

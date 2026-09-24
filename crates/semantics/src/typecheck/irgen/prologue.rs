@@ -36,7 +36,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         // today's path (FR-5).
         for i in 0..n {
             if let Some(st) = find_subtype(self.subtypes, self.sig.inputs[i]) {
-                let verdict = self.record_subtype_param_obligation(i, &st);
+                let verdict = self.record_subtype_param_obligation(cur, i, &st);
                 if self.emit_subtype_check(verdict) {
                     self.emit_subtype_range_trap(
                         cur,
@@ -163,6 +163,10 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         // return; the record is independent of the emission decision (FR-1).
         {
             let n = self.sig.out_len as usize;
+            // P5: the outputs' abstract values, captured at epilogue entry
+            // (before the staging moves them to temp slots) — the in-tree
+            // discharge evaluates the return-value obligations from them.
+            let out_ivs = self.interp.state_or_fresh(cur).top_n_intervals(n);
             if self.checks == ChecksMode::All || self.checks == ChecksMode::Undischarged {
                 let base_stack = *stack;
                 let base_sp = *sp;
@@ -183,7 +187,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 }
                 for i in 0..n {
                     if let Some(st) = find_subtype(self.subtypes, self.sig.outputs[i]) {
-                        let verdict = self.record_subtype_return_obligation(i, &st);
+                        let verdict = self.record_subtype_return_obligation(i, &st, &out_ivs);
                         if self.emit_subtype_check(verdict) {
                             self.emit_subtype_range_trap(
                                 cur,
@@ -211,7 +215,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 // Off/Contracts: extraction only (FR-1).
                 for i in 0..n {
                     if let Some(st) = find_subtype(self.subtypes, self.sig.outputs[i]) {
-                        self.record_subtype_return_obligation(i, &st);
+                        self.record_subtype_return_obligation(i, &st, &out_ivs);
                     }
                 }
             }

@@ -29,7 +29,11 @@ use frontend::parse::{AttrAst, DeclAst};
 use frontend::span::Span;
 use frontend::token::{Token, TokenKind};
 use ir::{self as lir, CapSet, EffectSet, High, StackBound};
-use verifier::model::{ExtractionCtx, Formula, Kind as OblKind, Oel, Provenance, ResolvedVerdict};
+use verifier::interval::Interval;
+use verifier::interp::{InTreeVerdict, Linear};
+use verifier::model::{
+    ExtractionCtx, Formula, Kind as OblKind, Oel, Provenance, ResolvedVerdict, VerdictSource,
+};
 use verifier::verdict::{Verdicts, VerdictStatus};
 
 pub mod arena;
@@ -92,6 +96,13 @@ struct IrWordGen<'a, 'r> {
     /// every other checks mode — the verdict consult is compiled out (FR-5),
     /// so `--checks=all` stays the same machine code as today.
     verdicts: Option<&'a Verdicts>,
+    /// P5: the per-block abstract interval interpreter (static-verification.md
+    /// §7.2). Only stepped under `--checks=undischarged`; at each subtype
+    /// site the emission decision reads the current block's abstract state —
+    /// the discharge lives in the same function as the emit decision (P4
+    /// discipline). `Linear`'s seeds/joins/widenings are maintained by the
+    /// control-flow lowering (control.rs).
+    interp: Linear,
     sig: WordSig,
 
     locals: [TypeAtom; 64],
@@ -287,6 +298,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             allow_raw_casts,
             extraction,
             verdicts,
+            interp: Linear::new(sig.in_len as usize, 64),
             sig,
             locals: [TypeAtom::EMPTY; 64],
             local_tys: [TypeAtom::EMPTY; 64],
@@ -375,6 +387,15 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         // caller accounts the delta.
         if let Some(delta) = Self::op_stack_delta(&kind) {
             self.acc = self.acc.compose(delta);
+        }
+        // P5: step the abstract interpreter in lockstep (only under
+        // `--checks=undischarged`, where the interval states drive the
+        // subtype-site decisions). The engine's transfer table (§7.2) is
+        // shared with the differential harness.
+        if self.checks == ChecksMode::Undischarged {
+            self.interp.step(cur, &kind, &|tid| {
+                interp_sr(&self.word.types, self.subtypes, tid)
+            });
         }
         let op = lir::Op { kind, span };
         let b = self.block_mut(cur)?;
@@ -586,20 +607,35 @@ fn var_out_ref(i: usize) -> String {
     s
 }
 
+/// The subtype-range lookup the interval interpreter resolves `Cast` targets
+/// against (P5): maps an IR type id to `(min, max)` if it is a subtype of
+/// this module's declarations. Compiler-owned knowledge injected into the
+/// engine — the engine itself stays `semantics`-free.
+fn interp_sr(
+    types: &frontend::fixed::FixedVec<lir::Atom, 64>,
+    subtypes: &[SubtypeInfo],
+    tid: lir::TypeId,
+) -> Option<(i64, i64)> {
+    let atom = *types.get(tid.0 as usize)?;
+    let name = TypeAtom::new(atom.as_bytes())?;
+    find_subtype(subtypes, name).map(|st| (st.min, st.max))
+}
+
 impl<'a, 'r> IrWordGen<'a, 'r> {
-    /// Resolve an obligation's build-time verdict (slice P4): the verdicts
+    /// Resolve an obligation's build-time verdict (slice P4/P5): the verdicts
     /// file wins when it carries a matching `(id, id_hash)` record (Q3);
-    /// otherwise the in-tree rule (`in_tree` — P4 discharges only
-    /// `mmio-bounds` via the descriptor arithmetic) applies; otherwise the
-    /// site is Open. Under every checks mode other than `Undischarged` the
-    /// consult is compiled out (FR-5): every obligation resolves Open, so the
-    /// emitted code is byte-identical to `--checks=all`.
+    /// otherwise the in-tree rule (`in_tree` — P4's descriptor arithmetic for
+    /// `mmio-bounds`, P5's interval engine for `subtype-range` sites)
+    /// applies; otherwise the site is Open. Under every checks mode other
+    /// than `Undischarged` the consult is compiled out (FR-5): every
+    /// obligation resolves Open, so the emitted code is byte-identical to
+    /// `--checks=all`.
     fn resolve_site(
         &self,
         kind: OblKind,
         id: &str,
         id_hash: &str,
-        in_tree: Option<VerdictStatus>,
+        in_tree: Option<&InTreeVerdict>,
     ) -> ResolvedVerdict {
         if self.checks == ChecksMode::Undischarged {
             if let Some(v) = self.verdicts {
@@ -611,12 +647,19 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                         status: rec.status,
                         method: rec.method.clone(),
                         justification: rec.justification.clone(),
+                        provably_failing: false,
+                        reason: None,
+                        source: VerdictSource::File,
                     };
                 }
             }
-            if let Some(s) = in_tree {
-                let method = if s == VerdictStatus::Discharged {
-                    Some("descriptor".to_string())
+            if let Some(t) = in_tree {
+                let method = if t.status == VerdictStatus::Discharged {
+                    if kind == OblKind::MmioBounds {
+                        Some("descriptor".to_string())
+                    } else {
+                        Some("interval".to_string())
+                    }
                 } else {
                     None
                 };
@@ -624,9 +667,12 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                     id: id.to_string(),
                     id_hash: id_hash.to_string(),
                     kind,
-                    status: s,
+                    status: t.status,
                     method,
                     justification: None,
+                    provably_failing: t.provably_failing,
+                    reason: t.reason.clone(),
+                    source: VerdictSource::InTree,
                 };
             }
         }
@@ -637,6 +683,9 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             status: VerdictStatus::Open,
             method: None,
             justification: None,
+            provably_failing: false,
+            reason: None,
+            source: VerdictSource::InTree,
         }
     }
 
@@ -656,8 +705,15 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
     /// input at the callee-entry prologue (static-verification.md §7.1).
     /// Emitted independently of `--checks` (FR-1): the artifact is complete
     /// even when the runtime trap is not inserted. Returns the site's verdict
-    /// (P4: the emission decision).
-    pub(super) fn record_subtype_param_obligation(&mut self, i: usize, st: &SubtypeInfo) -> VerdictStatus {
+    /// (P4/P5: the emission decision). The interval engine evaluates the
+    /// input's abstract value (the callee's input local — `⊤` at entry, so
+    /// this site is open unless a verdicts file closes it).
+    pub(super) fn record_subtype_param_obligation(
+        &mut self,
+        cur: lir::BlockId,
+        i: usize,
+        st: &SubtypeInfo,
+    ) -> VerdictStatus {
         let (id, id_hash) = {
             let ctx = match self.extraction.as_mut() {
                 Some(c) => c,
@@ -678,7 +734,13 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 Vec::new(),
             )
         };
-        let r = self.resolve_site(OblKind::SubtypeRange, &id, &id_hash, None);
+        let in_tree = if self.checks == ChecksMode::Undischarged {
+            let iv = self.interp.local_interval(cur, i);
+            Some(InTreeVerdict::of_range(iv, st.min, st.max))
+        } else {
+            None
+        };
+        let r = self.resolve_site(OblKind::SubtypeRange, &id, &id_hash, in_tree.as_ref());
         let status = r.status;
         if let Some(ctx) = self.extraction.as_mut() {
             ctx.push_resolved(r);
@@ -687,8 +749,16 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
     }
 
     /// C2 site: record a `subtype-range` obligation for a subtype-typed return
-    /// value at the epilogue. Returns the site's verdict.
-    pub(super) fn record_subtype_return_obligation(&mut self, i: usize, st: &SubtypeInfo) -> VerdictStatus {
+    /// value at the epilogue. `out_ivs` are the abstract values of the word's
+    /// outputs captured at epilogue entry (before the staging moves them to
+    /// temp slots) — the interval engine discharges constant/in-range returns
+    /// (P5). Returns the site's verdict.
+    pub(super) fn record_subtype_return_obligation(
+        &mut self,
+        i: usize,
+        st: &SubtypeInfo,
+        out_ivs: &[Interval],
+    ) -> VerdictStatus {
         let (id, id_hash) = {
             let ctx = match self.extraction.as_mut() {
                 Some(c) => c,
@@ -709,7 +779,13 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 Vec::new(),
             )
         };
-        let r = self.resolve_site(OblKind::SubtypeRange, &id, &id_hash, None);
+        let in_tree = if self.checks == ChecksMode::Undischarged {
+            let iv = out_ivs.get(i).copied().unwrap_or(Interval::TOP);
+            Some(InTreeVerdict::of_range(iv, st.min, st.max))
+        } else {
+            None
+        };
+        let r = self.resolve_site(OblKind::SubtypeRange, &id, &id_hash, in_tree.as_ref());
         let status = r.status;
         if let Some(ctx) = self.extraction.as_mut() {
             ctx.push_resolved(r);
@@ -719,14 +795,17 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
 
     /// C3 site: record a `subtype-range` obligation for an `as T` narrowing
     /// cast (names.rs `compile_cast`). v1 provenance is `$top` — the cast
-    /// operand's value flow is not tracked until P5's interval engine — so the
-    /// record carries `Provenance::Opaque` and can be discharged by no one.
-    /// Returns the site's verdict.
+    /// operand's value flow is not tracked for external tools; **the in-tree
+    /// engine evaluates the cast's PRE-cast abstract value** (P5): discharges
+    /// provably-in-range operands and records provably-out-of-range operands
+    /// as `provably_failing` (the runtime trap is the cast C's semantics, so
+    /// the check is retained there). Returns the site's verdict.
     pub(super) fn record_cast_obligation(
         &mut self,
         from_ty: TypeAtom,
         to_ty: TypeAtom,
         st: &SubtypeInfo,
+        pre_cast: Interval,
         span: Span,
     ) -> VerdictStatus {
         let (id, id_hash) = {
@@ -757,7 +836,58 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 Vec::new(),
             )
         };
-        let r = self.resolve_site(OblKind::SubtypeRange, &id, &id_hash, None);
+        let in_tree = if self.checks == ChecksMode::Undischarged {
+            Some(InTreeVerdict::of_range(pre_cast, st.min, st.max))
+        } else {
+            None
+        };
+        let r = self.resolve_site(OblKind::SubtypeRange, &id, &id_hash, in_tree.as_ref());
+        let status = r.status;
+        if let Some(ctx) = self.extraction.as_mut() {
+            ctx.push_resolved(r);
+        }
+        status
+    }
+
+    /// C4 site (slice P5, soundness upgrade — FR-6): record a
+    /// `subtype-range` obligation for a store into a subtype-typed place,
+    /// evaluated over the STORED value's abstract interval (`pre_store`, the
+    /// stack top before the `Store` op). The artifact formula is `$top`
+    /// (opaque — stores are not externally re-derivable; Q4), the in-tree
+    /// engine decides. Returns the site's verdict.
+    pub(super) fn record_store_obligation(
+        &mut self,
+        st: &SubtypeInfo,
+        pre_store: Interval,
+        span: Span,
+    ) -> VerdictStatus {
+        let (id, id_hash) = {
+            let ctx = match self.extraction.as_mut() {
+                Some(c) => c,
+                None => return VerdictStatus::Open,
+            };
+            let (line, col) = span_line_col(self.src, span);
+            ctx.record(
+                OblKind::SubtypeRange,
+                Formula::InRange {
+                    value: Oel::Var {
+                        name: "$top".to_string(),
+                    },
+                    lo: st.min,
+                    hi: st.max,
+                },
+                line,
+                col,
+                Provenance::Opaque,
+                Vec::new(),
+            )
+        };
+        let in_tree = if self.checks == ChecksMode::Undischarged {
+            Some(InTreeVerdict::of_range(pre_store, st.min, st.max))
+        } else {
+            None
+        };
+        let r = self.resolve_site(OblKind::SubtypeRange, &id, &id_hash, in_tree.as_ref());
         let status = r.status;
         if let Some(ctx) = self.extraction.as_mut() {
             ctx.push_resolved(r);
@@ -797,9 +927,13 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             return VerdictStatus::Open;
         }
         let in_tree = if offset.saturating_add(width) <= spec.size {
-            Some(VerdictStatus::Discharged)
+            Some(InTreeVerdict {
+                status: VerdictStatus::Discharged,
+                provably_failing: false,
+                reason: None,
+            })
         } else {
-            Some(VerdictStatus::Open)
+            Some(InTreeVerdict::open("emulated aperture access past the aperture size"))
         };
         let (id, id_hash) = {
             let ctx = match self.extraction.as_mut() {
@@ -831,7 +965,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             );
             (id, id_hash)
         };
-        let r = self.resolve_site(OblKind::MmioBounds, &id, &id_hash, in_tree);
+        let r = self.resolve_site(OblKind::MmioBounds, &id, &id_hash, in_tree.as_ref());
         let status = r.status;
         if let Some(ctx) = self.extraction.as_mut() {
             ctx.note_mmio_verdict(status.is_open());
