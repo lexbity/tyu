@@ -1,0 +1,12 @@
+[package]
+name = "verifier"
+version = "0.1.0"
+edition = "2021"
+description = "Static verification subsystem: IR op semantics table, obligation model, interval discharge."
+
+[lib]
+
+[dependencies]
+ir = { path = "../ir" }
+serde = { version = "1", default-features = false, features = ["alloc"] }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }

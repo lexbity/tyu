@@ -701,7 +701,6 @@ impl<'a> RiscVBackend<'a> {
                 self.emit_riscv_store_field(_w, field_ty, mask, shift, read_kind, barrier)?;
                 Ok(())
             }
-            lir::OpKind::CheckSubtype { .. } => Err(CodegenError::UnsupportedCheckSubtype),
             _ => Err(CodegenError::UnsupportedOp {
                 op_name: b"emit_op",
             }),

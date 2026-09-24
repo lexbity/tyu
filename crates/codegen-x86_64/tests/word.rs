@@ -566,26 +566,6 @@ fn emit_addr_of_unsupported() {
     });
 }
 
-#[test]
-fn emit_check_subtype_unsupported() {
-    run_8mb!({
-        let w = single_block_word(
-            sig_0_1(TY_I64),
-            &[
-                OpKind::ConstI64(42),
-                OpKind::CheckSubtype { ty: TY_I64 },
-                OpKind::Drop { ty: TY_BOOL },
-                OpKind::Ret,
-            ],
-        );
-        let err = emit_err(&w);
-        assert!(
-            matches!(err, CodegenError::UnsupportedCheckSubtype),
-            "got: {err:?}"
-        );
-    });
-}
-
 // ---------------------------------------------------------------------------
 // Additional acceptance tests to meet test-count target
 // ---------------------------------------------------------------------------

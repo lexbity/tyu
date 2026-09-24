@@ -544,7 +544,6 @@ impl<'a> X86_64HostedBackend<'a> {
                 Ok(())
             }
 
-            lir::OpKind::CheckSubtype { .. } => Err(CodegenError::UnsupportedCheckSubtype),
             lir::OpKind::TrapIfFalse { code } => {
                 let ok = self.fresh_label();
                 self.out.write(b"  sub r15, 8\n");

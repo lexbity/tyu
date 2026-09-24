@@ -6,7 +6,14 @@
 //! The crate defines the load-bearing IR and related compatibility types used
 //! by the front end, semantics pass, and code generators.
 
-use frontend::{fixed::FixedVec, parse::Output, span::Span};
+// `Span`, `FixedVec`, and `Output` appear in public API positions (`Op.span`,
+// `OpKind::ConstStr`, every `FixedVec` field, `write_module`'s sink), so
+// consumers of those positions need the types themselves; re-export them
+// rather than forcing an otherwise-unneeded `frontend` dependency. The
+// `pub use` also brings them into this crate's scope.
+pub use frontend::fixed::FixedVec;
+pub use frontend::parse::Output;
+pub use frontend::span::Span;
 
 pub mod contract;
 
@@ -643,11 +650,6 @@ pub enum OpKind {
         barrier: BarrierKind,
     },
 
-    // Produces `bool` while preserving the value (so `trap_if_false` can consume the bool).
-    // Stack effect: `( ty -- ty bool )`
-    CheckSubtype {
-        ty: TypeId,
-    },
     TrapIfFalse {
         code: TrapCode,
     },
@@ -778,7 +780,6 @@ pub enum VerifyError {
     StoreAddrNotMutPtr { span: Span },
     MmioFieldAddrNotMmio { span: Span },
     MmioFieldTypeMismatch { span: Span },
-    CheckSubtypeTypeMismatch { span: Span },
     TrapIfFalseNotBool { span: Span },
     BrTargetNotFound { span: Span },
     BrStackDepthMismatch { span: Span },
@@ -819,7 +820,6 @@ impl VerifyError {
             VerifyError::StoreAddrNotMutPtr { .. } => 9021,
             VerifyError::MmioFieldAddrNotMmio { .. } => 9022,
             VerifyError::MmioFieldTypeMismatch { .. } => 9023,
-            VerifyError::CheckSubtypeTypeMismatch { .. } => 9024,
             VerifyError::TrapIfFalseNotBool { .. } => 9025,
             VerifyError::BrTargetNotFound { .. } => 9026,
             VerifyError::BrStackDepthMismatch { .. } => 9027,
@@ -860,7 +860,6 @@ impl VerifyError {
             | VerifyError::StoreAddrNotMutPtr { span }
             | VerifyError::MmioFieldAddrNotMmio { span }
             | VerifyError::MmioFieldTypeMismatch { span }
-            | VerifyError::CheckSubtypeTypeMismatch { span }
             | VerifyError::TrapIfFalseNotBool { span }
             | VerifyError::BrTargetNotFound { span }
             | VerifyError::BrStackDepthMismatch { span }
@@ -1281,14 +1280,6 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
                     }
                 }
                 let _ = write_kind;
-            }
-            OpKind::CheckSubtype { ty } => {
-                let v = pop(&mut stack, &mut sp, op.span)?;
-                if v != ty {
-                    return Err(VerifyError::CheckSubtypeTypeMismatch { span: op.span });
-                }
-                push(&mut stack, &mut sp, ty, op.span)?;
-                push(&mut stack, &mut sp, TY_BOOL, op.span)?;
             }
             OpKind::TrapIfFalse { .. } => {
                 let v = pop(&mut stack, &mut sp, op.span)?;
@@ -1725,10 +1716,6 @@ fn write_op(out: &mut impl Output, w: &Word, op: &Op) {
                 WriteKind::Plain => b"",
             });
             write_access_meta(out, read_kind, atomic_max, barrier);
-        }
-        OpKind::CheckSubtype { ty } => {
-            out.write(b"check_subtype ");
-            out.write(type_atom(w, ty).as_bytes());
         }
         OpKind::TrapIfFalse { code } => {
             out.write(b"trap_if_false ");

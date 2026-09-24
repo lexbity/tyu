@@ -58,7 +58,6 @@ pub fn arm_op_tier(op: &OpKind) -> OpSupport {
         OpKind::MmioVolStore { .. } => OpSupport::Supported,
         OpKind::MmioVolLoadField { .. } => OpSupport::Supported,
         OpKind::MmioVolStoreField { .. } => OpSupport::Supported,
-        OpKind::CheckSubtype { .. } => OpSupport::Unsupported,
     }
 }
 
@@ -104,6 +103,5 @@ pub fn riscv_op_tier(op: &OpKind) -> OpSupport {
         OpKind::MmioVolStore { .. } => OpSupport::Supported,
         OpKind::MmioVolLoadField { .. } => OpSupport::Supported,
         OpKind::MmioVolStoreField { .. } => OpSupport::Supported,
-        OpKind::CheckSubtype { .. } => OpSupport::Unsupported,
     }
 }

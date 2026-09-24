@@ -846,7 +846,6 @@ impl<'a> ArmThumbBackend<'a> {
                 }
                 Ok(())
             }
-            lir::OpKind::CheckSubtype { .. } => Err(CodegenError::UnsupportedCheckSubtype),
             _ => Err(CodegenError::UnsupportedOp {
                 op_name: b"emit_op",
             }),

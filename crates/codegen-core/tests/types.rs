@@ -124,7 +124,6 @@ fn codegen_error_named_variant_codes() {
         .code(),
         8009
     );
-    assert_eq!(CodegenError::UnsupportedCheckSubtype.code(), 8010);
     assert_eq!(CodegenError::StringLiteralCapacityExceeded.code(), 8011);
     assert_eq!(CodegenError::ScopedAllocationOverflow.code(), 8012);
     assert_eq!(CodegenError::ModInfoTooLarge.code(), 8013);

@@ -677,25 +677,6 @@ fn verify_rejects_mmio_store_field_type_mismatch() {
 }
 
 // ---------------------------------------------------------------------------
-// CheckSubtype type mismatch (9024)
-// ---------------------------------------------------------------------------
-
-#[test]
-fn verify_rejects_check_subtype_wrong_type() {
-    let w = word_with_single_block(
-        sig0_1(TY_I64),
-        &[
-            OpKind::ConstI64(42),
-            OpKind::CheckSubtype { ty: TY_BOOL },
-            OpKind::Drop { ty: TY_BOOL },
-            OpKind::Drop { ty: TY_I64 },
-            OpKind::Ret,
-        ],
-    );
-    assert_eq!(ir::verify_word(&w).unwrap_err().code(), 9024);
-}
-
-// ---------------------------------------------------------------------------
 // TrapIfFalse not bool (9025)
 // ---------------------------------------------------------------------------
 
@@ -1675,20 +1656,6 @@ fn verify_accepts_mmio_store() {
             OpKind::Ret,
         ],
         &[win(0, 0x2000)],
-    );
-    ir::verify_word(&w).unwrap();
-}
-
-#[test]
-fn verify_accepts_check_subtype() {
-    let w = word_with_single_block(
-        sig0_1(TY_I64),
-        &[
-            OpKind::ConstI64(42),
-            OpKind::CheckSubtype { ty: TY_I64 },
-            OpKind::Drop { ty: TY_BOOL },
-            OpKind::Ret,
-        ],
     );
     ir::verify_word(&w).unwrap();
 }

@@ -5,6 +5,7 @@ members = [
   "crates/hosted-rt",
   "crates/frontend",
   "crates/ir",
+  "crates/verifier",
   "crates/codegen-core",
   "crates/codegen-x86_64",
   "crates/codegen-arm",

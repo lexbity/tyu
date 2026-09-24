@@ -407,7 +407,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             lir::OpKind::Store { .. }
             | lir::OpKind::MmioVolStore { .. }
             | lir::OpKind::MmioVolStoreField { .. } => Some(NEG2),
-            lir::OpKind::CheckSubtype { .. } => Some(ONE),
             lir::OpKind::TrapIfFalse { .. } => Some(NEG1),
             // `BrIf` pops the condition, but the control-flow compilers
             // (`if`/`while`/`loop`) snapshot and reset `self.acc` around the

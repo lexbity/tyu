@@ -282,28 +282,6 @@ pub fn emit_obj_driver(
     descriptor: Option<&CompiledDescriptor>,
     mmio_apertures: &[MmioApertureSpec],
 ) -> i32 {
-    // Library modules have no entry point; only executables require `main`.
-    if !is_lib {
-        let main_decl = match find_word_decl(module, src, b"main") {
-            Some(d) => d,
-            None => {
-                let _ = diag::error_simple(7001, b"missing word: main");
-                return 2;
-            }
-        };
-        let main_sig = main_decl
-            .sig
-            .and_then(|s| semantics::typecheck::parse_word_sig(src, s).ok())
-            .unwrap_or(WordSig::empty());
-        if main_sig.out_len != 1 {
-            let _ = diag::error_simple(
-                1018,
-                b"for --emit=obj, main must return exactly one value (exit code)",
-            );
-            return 2;
-        }
-    }
-
     let module_name = slice_span(src, module.name);
     let mut path_buf = [0u8; 512];
     let asm_path = match join_path(&mut path_buf, out_dir, module_name, b".asm") {
@@ -448,6 +426,32 @@ pub fn emit_obj_driver(
         }
         Err(semantics::typecheck::ForEachIrError::Consumer(e)) => {
             let _ = diag::error_simple(e.code(), codegen_error_message(e.code()));
+            return 2;
+        }
+    }
+
+    // Entry gate: only executables require `main` returning one value. It runs
+    // AFTER the typecheck pass so a semantic error (e.g. E5030 ISR budget) is
+    // reported as itself instead of masking as "missing word: main"; asm is
+    // buffered to `mem` and only written after emit_postlude, so a gate
+    // failure here still leaves no partial output.
+    if !is_lib {
+        let main_decl = match find_word_decl(module, src, b"main") {
+            Some(d) => d,
+            None => {
+                let _ = diag::error_simple(7001, b"missing word: main");
+                return 2;
+            }
+        };
+        let main_sig = main_decl
+            .sig
+            .and_then(|s| semantics::typecheck::parse_word_sig(src, s).ok())
+            .unwrap_or(WordSig::empty());
+        if main_sig.out_len != 1 {
+            let _ = diag::error_simple(
+                1018,
+                b"for --emit=obj, main must return exactly one value (exit code)",
+            );
             return 2;
         }
     }

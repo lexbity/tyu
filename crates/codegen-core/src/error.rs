@@ -34,9 +34,6 @@ pub enum CodegenError {
     /// A type property (bit width / signedness) could not be determined.
     UnknownTypeProperties { type_id: lir::TypeId },
 
-    /// `CheckSubtype` IR op is not supported by the codegen backend.
-    UnsupportedCheckSubtype,
-
     /// Exceeded maximum number of string literals per word.
     StringLiteralCapacityExceeded,
 
@@ -70,7 +67,6 @@ impl CodegenError {
             Self::MalformedIr { .. } => 8007,
             Self::UnsupportedAddrOf => 8008,
             Self::UnknownTypeProperties { .. } => 8009,
-            Self::UnsupportedCheckSubtype => 8010,
             Self::StringLiteralCapacityExceeded => 8011,
             Self::ScopedAllocationOverflow => 8012,
             Self::ModInfoTooLarge => 8013,

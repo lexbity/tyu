@@ -189,10 +189,6 @@ fn all_ops() -> Vec<(OpKind, OpSupport)> {
             },
             OpSupport::Supported,
         ),
-        (
-            OpKind::CheckSubtype { ty: ir::TypeId(1) },
-            OpSupport::Unsupported,
-        ),
     ]
 }
 
