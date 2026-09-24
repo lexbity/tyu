@@ -184,6 +184,12 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 self.iso,
                 self.checks,
                 self.allow_raw_casts,
+                // Quote words compile with extraction disabled (P2): their
+                // internal `_quot_*` names are per-word-local, so obligation
+                // ids keyed on them would collide across words. Their subtype
+                // sites are covered by P5's interval engine under the caller
+                // word's context.
+                None,
                 arena,
                 sig,
                 name,

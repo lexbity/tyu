@@ -11,10 +11,17 @@
 //! or `langc`; it knows only `ir` and its own model, so external tool authors
 //! can reuse its types and codecs without the compiler.
 //!
-//! Currently implemented (slice P1): the normative IR op semantics table
-//! ([`semantics`]) that every later slice proves against.
+//! Currently implemented:
+//! - slice P1: the normative IR op semantics table ([`semantics`]) that every
+//!   later slice proves against;
+//! - slice P2: the obligation model ([`model`]) and `.obl.json` codecs
+//!   ([`codec`]) for the C1–C3 subtype-range sites.
 
 #![no_std]
 #![forbid(unsafe_code)]
 
+extern crate alloc;
+
+pub mod codec;
+pub mod model;
 pub mod semantics;

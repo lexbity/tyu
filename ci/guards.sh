@@ -32,6 +32,7 @@
 #   G18b P7 reference allocator words present per bare-metal target
 #        (arm/riscv metal.trust words + x86 __region_* arrays) and trap 26
 #        registered in the diag claim table.
+#   G19 `.obl.json` extraction is byte-deterministic across runs (P2, FR-17).
 #
 # Escape hatch: add `# guards: allow-no-tests` as a comment in the
 # package's Cargo.toml to suppress G1/G2 for that package.  This is
@@ -320,7 +321,7 @@ else
 fi
 
 missing_forbid=""
-for crate in crates/ir crates/codegen-core crates/codegen-arm crates/codegen-riscv crates/codegen-x86_64; do
+for crate in crates/ir crates/codegen-core crates/codegen-arm crates/codegen-riscv crates/codegen-x86_64 crates/verifier; do
     if ! grep -q '#!\[forbid(unsafe_code)\]' "$crate/src/lib.rs" 2>/dev/null; then
         missing_forbid="$missing_forbid $crate"
     fi
@@ -418,7 +419,7 @@ else
 fi
 
 host_panic_hits=$(grep -R -n -E 'panic!|unreachable!' \
-    crates/ir/src crates/semantics/src crates/codegen-core/src \
+    crates/ir/src crates/semantics/src crates/codegen-core/src crates/verifier/src \
     --include='*.rs' 2>/dev/null || true)
 host_panic_count=$(printf '%s\n' "$host_panic_hits" | sed '/^$/d' | wc -l | tr -d ' ')
 if [ "$host_panic_count" -eq 0 ]; then
@@ -622,6 +623,51 @@ if [ "$region_words_arm" -ge 2 ] && [ "$region_words_rv" -ge 2 ] && [ "$trust_ar
 else
     msg $RED "  G18b FAIL: P7 reference allocator incomplete (arm=$region_words_arm rv=$region_words_rv trust=$trust_arm/$trust_rv claim26=$claim26 x86=$x86_region)"
     failures=$((failures + 1))
+fi
+
+# --- G19: `.obl.json` extraction is byte-deterministic (P2, FR-17) ---
+# Two runs of `langc --emit=obligations` over the same source must produce
+# byte-identical artifacts (no clocks, no env, no iteration-order output).
+# Also: the reference fixture's artifact is committed as a golden and must not
+# drift silently (the exact-bytes suite in crates/langc/tests enforces this
+# under cargo; this gate re-checks determinism through the built binary).
+if command -v cargo >/dev/null 2>&1; then
+    g19_dir=$(mktemp -d "${TMPDIR:-/tmp}/tyu-guards-obl.XXXXXX")
+    cat > "$g19_dir/Bank.mod" <<'EOF'
+module Bank;
+subtype Percent = i64 range 0..100;
+subtype Counter = i64 range 0..1000000;
+: clamp ( i64 -- Percent )
+  dup 100 > [ drop 100 ] [ ] if
+  dup 0 < [ drop 0 ] [ ] if
+  as Percent
+;
+: bounded_inc ( Percent -- Percent ) 1 + as Percent ;
+: main ( -- Counter ) 50 as Percent bounded_inc as Counter ;
+end;
+EOF
+    if cargo build -q -p langc >/dev/null 2>&1; then
+        mkdir -p "$g19_dir/a" "$g19_dir/b"
+        if target/debug/langc --emit=obligations --out-dir="$g19_dir/a" "$g19_dir/Bank.mod" \
+           && target/debug/langc --emit=obligations --out-dir="$g19_dir/b" "$g19_dir/Bank.mod" \
+           && cmp -s "$g19_dir/a/Bank.obl.json" "$g19_dir/b/Bank.obl.json"; then
+            msg $GREEN "  G19: obl.json extraction is byte-deterministic (FR-17)"
+        else
+            msg $RED "  G19 FAIL: --emit=obligations is not byte-deterministic"
+            failures=$((failures + 1))
+        fi
+    else
+        msg $RED "  G19 FAIL: cargo build -p langc failed"
+        failures=$((failures + 1))
+    fi
+    rm -rf "$g19_dir"
+else
+    if [ "${CI:-}" ]; then
+        msg $RED "  G19 FAIL: determinism gate requires cargo under CI"
+        failures=$((failures + 1))
+    else
+        msg $YELLOW "  WARN: skipping obl determinism gate (no cargo)"
+    fi
 fi
 
 echo ""

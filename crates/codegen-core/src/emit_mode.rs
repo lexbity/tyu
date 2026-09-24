@@ -37,6 +37,11 @@ pub enum EmitMode {
     /// Use `--emit=obj` for any output that must be linked.
     Asm,
 
+    /// Extract verification obligations and write `<Module>.obl.json`
+    /// (static-verification.md slice P2). No codegen. A machine-readable,
+    /// versioned artifact — the obligation interface (Q1), not an object.
+    Obligations,
+
     /// Emit a relocatable object file. The sole production output path.
     ///
     /// The compiler runs the assembler on the generated text and produces an
@@ -47,11 +52,12 @@ pub enum EmitMode {
 
 impl EmitMode {
     /// All emit modes. Used for exhaustive iteration in tests.
-    pub const ALL: [EmitMode; 5] = [
+    pub const ALL: [EmitMode; 6] = [
         EmitMode::Ast,
         EmitMode::Ir,
         EmitMode::StackCheck,
         EmitMode::Asm,
+        EmitMode::Obligations,
         EmitMode::Obj,
     ];
 

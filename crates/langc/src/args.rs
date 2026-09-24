@@ -2,7 +2,7 @@ use codegen_core::{EmitMode, FeatureSet, Target};
 use hosted::{args::RawArgs, cstr, io};
 use semantics::typecheck::ChecksMode;
 
-pub const HELP: &[u8] = b"langc (tyu_lang) v0.1.0\n\nUSAGE:\n  langc [options] <file.mod|file.def>\n\nOPTIONS:\n  --help, -h                  Print help\n  --emit=ast                  Parse and dump AST (inspection)\n  --emit=ir                   Typecheck and dump IR (inspection)\n  --emit=tc                   Stack-trace typecheck dump (inspection)\n  --emit=asm                  Emit assembly text (inspection only, not assemblable standalone)\n  --emit=obj                  Emit relocatable object file (production output)\n  --lib                       Compile as a library (no main required, --emit=obj only)\n  -g                          Enable trap-with-location stubs\n  -I <path>                   Add include path\n  --checks=off|contracts|all  Checks insertion mode\n  --allow-raw-casts           Enable raw pointer casts\n  --features=<csv>            Image features to enable (default: all) [concurrency, module-loading]\n  --no-default-features       Start from empty feature set\n  --sysroot=<path>            Sysroot root directory\n  --out-dir=<path>            Output directory (--emit=obj)\n  --platform=<dir>            Platform pack directory; the compiled descriptor\n                              at <dir>/platform.desc sources MMIO aperture facts\n  --target=<triple>           Target triple, required for --emit=obj\n                              Supported: x86_64-unknown-linux-gnu\n                                         x86_64-unknown-none\n                                         armv7m-unknown-none\n                                         riscv32-unknown-none\n\n";
+pub const HELP: &[u8] = b"langc (tyu_lang) v0.1.0\n\nUSAGE:\n  langc [options] <file.mod|file.def>\n\nOPTIONS:\n  --help, -h                  Print help\n  --emit=ast                  Parse and dump AST (inspection)\n  --emit=ir                   Typecheck and dump IR (inspection)\n  --emit=tc                   Stack-trace typecheck dump (inspection)\n  --emit=asm                  Emit assembly text (inspection only, not assemblable standalone)\n  --emit=obligations          Extract verification obligations and write <Module>.obl.json\n                              (requires --out-dir; no codegen)\n  --emit=obj                  Emit relocatable object file (production output)\n  --write-obl                 Also write <Module>.obl.json beside the object (with --emit=obj)\n  --lib                       Compile as a library (no main required, --emit=obj only)\n  -g                          Enable trap-with-location stubs\n  -I <path>                   Add include path\n  --checks=off|contracts|all  Checks insertion mode\n  --allow-raw-casts           Enable raw pointer casts\n  --features=<csv>            Image features to enable (default: all) [concurrency, module-loading]\n  --no-default-features       Start from empty feature set\n  --sysroot=<path>            Sysroot root directory\n  --out-dir=<path>            Output directory (--emit=obj / --emit=obligations)\n  --platform=<dir>            Platform pack directory; the compiled descriptor\n                              at <dir>/platform.desc sources MMIO aperture facts\n  --target=<triple>           Target triple, required for --emit=obj\n                              Supported: x86_64-unknown-linux-gnu\n                                         x86_64-unknown-none\n                                         armv7m-unknown-none\n                                         riscv32-unknown-none\n\n";
 
 /// Validated compiler configuration.
 pub struct Config<'a> {
@@ -13,6 +13,9 @@ pub struct Config<'a> {
     pub allow_raw_casts: bool,
     pub unsafe_allow_5031: bool,
     pub is_lib: bool,
+    /// With `--emit=obj`, additionally write `<Module>.obl.json` (slice P2
+    /// opt-in; the default fast path is byte-identical to pre-P2 behavior).
+    pub write_obl: bool,
     pub input: &'a [u8],
     pub include_dirs: [&'a [u8]; 8],
     pub include_len: usize,
@@ -62,12 +65,14 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]], emit_diagnostics: bool) -> (Parse
     let mut emit_ir = false;
     let mut emit_asm = false;
     let mut emit_obj = false;
+    let mut emit_obl = false;
     let mut emit_tc = false;
     let mut debug_trap_loc = false;
     let mut checks = ChecksMode::All;
     let mut allow_raw_casts = false;
     let mut unsafe_allow_5031 = false;
     let mut is_lib = false;
+    let mut write_obl = false;
     let mut input: Option<&[u8]> = None;
     let mut include_dirs: [&[u8]; 8] = [&[]; 8];
     let mut include_len = 0usize;
@@ -106,8 +111,18 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]], emit_diagnostics: bool) -> (Parse
             i += 1;
             continue;
         }
+        if a == b"--emit=obligations" {
+            emit_obl = true;
+            i += 1;
+            continue;
+        }
         if a == b"--emit=obj" {
             emit_obj = true;
+            i += 1;
+            continue;
+        }
+        if a == b"--write-obl" {
+            write_obl = true;
             i += 1;
             continue;
         }
@@ -248,8 +263,12 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]], emit_diagnostics: bool) -> (Parse
         );
     }
 
-    let emit_count =
-        (emit_ast as u8) + (emit_ir as u8) + (emit_asm as u8) + (emit_obj as u8) + (emit_tc as u8);
+    let emit_count = (emit_ast as u8)
+        + (emit_ir as u8)
+        + (emit_asm as u8)
+        + (emit_obj as u8)
+        + (emit_tc as u8)
+        + (emit_obl as u8);
     if emit_count > 1 {
         maybe_emit_error(emit_diagnostics, 1005, b"choose a single --emit=...");
         return (ParseResult::Error(2), false);
@@ -258,7 +277,7 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]], emit_diagnostics: bool) -> (Parse
         maybe_emit_error(
             emit_diagnostics,
             1001,
-            b"use --emit=ast, --emit=ir, --emit=asm, --emit=tc, or --emit=obj",
+            b"use --emit=ast, --emit=ir, --emit=asm, --emit=tc, --emit=obligations, or --emit=obj",
         );
         return (ParseResult::Error(2), false);
     }
@@ -269,6 +288,8 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]], emit_diagnostics: bool) -> (Parse
         EmitMode::Ir
     } else if emit_tc {
         EmitMode::StackCheck
+    } else if emit_obl {
+        EmitMode::Obligations
     } else if emit_obj {
         EmitMode::Obj
     } else {
@@ -298,6 +319,7 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]], emit_diagnostics: bool) -> (Parse
             allow_raw_casts,
             unsafe_allow_5031,
             is_lib,
+            write_obl,
             input: input_path,
             include_dirs,
             include_len,
@@ -403,6 +425,42 @@ mod tests {
     #[test]
     fn emit_obj_requires_target() {
         assert_eq!(err_code(&[b"langc", b"--emit=obj", b"x.mod"]), 2);
+    }
+
+    #[test]
+    fn emit_obligations() {
+        let cfg = ok(&[b"langc", b"--emit=obligations", b"x.mod"]);
+        assert_eq!(cfg.emit, EmitMode::Obligations);
+        assert_eq!(cfg.write_obl, false);
+    }
+
+    #[test]
+    fn emit_obligations_does_not_require_target() {
+        // Extraction is a compiler inspection artifact: no codegen, no target.
+        let cfg = ok(&[b"langc", b"--emit=obligations", b"x.mod"]);
+        assert_eq!(cfg.emit, EmitMode::Obligations);
+        assert_eq!(cfg.target, None);
+    }
+
+    #[test]
+    fn write_obl_flag() {
+        let cfg = ok(&[
+            b"langc",
+            b"--emit=obj",
+            b"--target=x86_64-unknown-linux-gnu",
+            b"--write-obl",
+            b"x.mod",
+        ]);
+        assert_eq!(cfg.emit, EmitMode::Obj);
+        assert_eq!(cfg.write_obl, true);
+    }
+
+    #[test]
+    fn multiple_emit_includes_obligations() {
+        assert_eq!(
+            err_code(&[b"langc", b"--emit=ast", b"--emit=obligations", b"x.mod"]),
+            2
+        );
     }
 
     #[test]

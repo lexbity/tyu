@@ -11,3 +11,4 @@ doctest = false
 codegen-core = { path = "../codegen-core" }
 frontend = { path = "../frontend" }
 ir = { path = "../ir" }
+verifier = { path = "../verifier" }

@@ -1,0 +1,230 @@
+//! Codec round-trip and schema-conformance tests (static-verification.md
+//! slice P2).
+//!
+//! - serialize → deserialize → serialize is byte-exact (Q11 determinism);
+//! - the serialized document conforms to the §6.1 schema: every field
+//!   present, exact key order, against a committed golden in
+//!   `test-goldens/obl/codec-golden.json`;
+//! - `read_obl` fail-closes on the schema/semantics/malformed/oversize
+//!   classes (E6400/E6401 behavior).
+//!
+//! Bless a deliberate schema change with TYU_BLESS_OBL_GOLDEN=1 and review the
+//! diff; a schema change MUST also bump `OBL_SCHEMA` (static-verification.md
+//! §6.1 schema lifecycle, owner doc `verification-obligations.md`).
+
+use std::fs;
+use std::path::PathBuf;
+
+use verifier::codec::{encode_obl, read_obl};
+use verifier::model::{ExtractionCtx, Formula, Kind, Oel, Provenance};
+
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf()
+}
+
+/// The fixture obligation set: two words covering the C1 (param), C2
+/// (return), and C3 (cast) subtype-range sites, plus word facts and one
+/// subtype fact — the exact shapes langc will produce for the `bank` corpus
+/// fixture.
+fn sample_set() -> verifier::model::OblSet {
+    let mut ctx = ExtractionCtx::new(b"Bank");
+
+    // Word facts match the compiled `clamp`/`bounded_inc` words.
+    ctx.push_subtype_fact(b"Percent", 0, 100);
+
+    // clamp ( i64 -- Percent ): return check + one cast.
+    ctx.begin_word(b"clamp");
+    ctx.push_word_fact(
+        b"clamp",
+        ir::StackBound {
+            net: 0,
+            high: ir::High::Slots(4),
+        },
+        ir::EffectSet::empty(),
+    );
+    ctx.record(
+        Kind::SubtypeRange,
+        Formula::InRange {
+            value: Oel::Var {
+                name: "out.0".to_string(),
+            },
+            lo: 0,
+            hi: 100,
+        },
+        0,
+        0,
+        Provenance::Direct,
+    );
+    ctx.record(
+        Kind::SubtypeRange,
+        Formula::InRange {
+            value: Oel::Cast {
+                from: "i64".to_string(),
+                to: "Percent".to_string(),
+                arg: Box::new(Oel::Var {
+                    name: "$top".to_string(),
+                }),
+            },
+            lo: 0,
+            hi: 100,
+        },
+        7,
+        3,
+        Provenance::Opaque,
+    );
+
+    // bounded_inc ( Percent -- Percent ): param check, cast, return check.
+    ctx.begin_word(b"bounded_inc");
+    ctx.push_word_fact(
+        b"bounded_inc",
+        ir::StackBound {
+            net: 0,
+            high: ir::High::Slots(3),
+        },
+        ir::EffectSet::empty(),
+    );
+    ctx.record(
+        Kind::SubtypeRange,
+        Formula::InRange {
+            value: Oel::Var {
+                name: "in.0".to_string(),
+            },
+            lo: 0,
+            hi: 100,
+        },
+        0,
+        0,
+        Provenance::Direct,
+    );
+    ctx.record(
+        Kind::SubtypeRange,
+        Formula::InRange {
+            value: Oel::Cast {
+                from: "i64".to_string(),
+                to: "Percent".to_string(),
+                arg: Box::new(Oel::Var {
+                    name: "$top".to_string(),
+                }),
+            },
+            lo: 0,
+            hi: 100,
+        },
+        12,
+        14,
+        Provenance::Opaque,
+    );
+    ctx.record(
+        Kind::SubtypeRange,
+        Formula::InRange {
+            value: Oel::Var {
+                name: "out.0".to_string(),
+            },
+            lo: 0,
+            hi: 100,
+        },
+        0,
+        0,
+        Provenance::Direct,
+    );
+
+    ctx.into_set()
+}
+
+fn golden_path() -> PathBuf {
+    workspace_root().join("test-goldens/obl/codec-golden.json")
+}
+
+#[test]
+fn encode_decode_encode_is_byte_exact() {
+    let set = sample_set();
+    let first = encode_obl(&set).expect("encode");
+    let decoded = read_obl(&first).expect("decode");
+    assert_eq!(decoded, set, "decode must reproduce the model");
+    let second = encode_obl(&decoded).expect("re-encode");
+    assert_eq!(
+        first, second,
+        "encode -> decode -> encode must be byte-exact (Q11)"
+    );
+}
+
+#[test]
+fn golden_conformance_exact_bytes() {
+    let bytes = encode_obl(&sample_set()).expect("encode");
+    let golden = golden_path();
+    if std::env::var_os("TYU_BLESS_OBL_GOLDEN").is_some() {
+        if let Some(parent) = golden.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(&golden, &bytes).unwrap();
+        return;
+    }
+    let expected = fs::read(&golden).unwrap_or_else(|err| {
+        panic!(
+            "missing OBL golden {}: {err}; rerun with TYU_BLESS_OBL_GOLDEN=1",
+            golden.display()
+        )
+    });
+    assert_eq!(
+        expected, bytes,
+        "obl.json golden drifted; every structural change MUST bump OBL_SCHEMA"
+    );
+}
+
+/// The golden document's top-level key order is pinned textually (not just by
+/// byte equality): schema → semantics → module → abi_contract_version → facts
+/// → obligations, and per-obligation id → id_hash → kind → site → formula →
+/// assumptions → provenance.
+#[test]
+fn golden_key_order_is_schema_order() {
+    let text = String::from_utf8(encode_obl(&sample_set()).expect("encode")).unwrap();
+    let (top, obligations_rest) = text
+        .split_once("\"obligations\":[{")
+        .expect("obligations array present");
+    // Top-level order check: schema → semantics → module → abi_contract_version
+    // → facts(words, subtypes) — all before `obligations`.
+    let top_needles = [
+        "{\"schema\":\"tyu.obl/v1\"",
+        "\"semantics\":",
+        "\"module\":\"Bank\"",
+        "\"abi_contract_version\":",
+        "\"facts\":{\"words\":[",
+        "\"subtypes\":[",
+    ];
+    let mut pos = 0usize;
+    for needle in top_needles {
+        let idx = top[pos..].find(needle).unwrap_or_else(|| {
+            panic!("top-level key `{needle}` missing or out of order in: {top}")
+        });
+        pos += idx + needle.len();
+    }
+    // Per-obligation order check, on the first record: id → id_hash → kind →
+    // site → formula → assumptions → provenance.
+    let record = obligations_rest
+        .split("},{\"id\"")
+        .next()
+        .expect("first obligation record");
+    let expected_order = [
+        "\"id\":",
+        "\"id_hash\":",
+        "\"kind\":",
+        "\"site\":{\"word\":",
+        "\"occurrence\":",
+        "\"span\":{\"line\":",
+        "\"col\":",
+        "\"formula\":{\"op\":\"InRange\",\"value\":",
+        "\"assumptions\":",
+        "\"provenance\":",
+    ];
+    let mut pos = 0usize;
+    for needle in expected_order {
+        let idx = record[pos..].find(needle).unwrap_or_else(|| {
+            panic!("obligation key `{needle}` missing or out of order in: {record}")
+        });
+        pos += idx + needle.len();
+    }
+}

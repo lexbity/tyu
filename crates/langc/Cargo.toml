@@ -24,5 +24,4 @@ codegen-x86_64 = { path = "../codegen-x86_64" }
 codegen-arm   = { path = "../codegen-arm" }
 codegen-riscv = { path = "../codegen-riscv" }
 lmod           = { path = "../lmod" }
-
-[dev-dependencies]
+verifier       = { path = "../verifier" }

@@ -16,6 +16,7 @@ use lmod::abi_hash;
 use lmod::modinfo;
 use semantics::typecheck::{self, ChecksMode, SubtypeInfo};
 use semantics::types::{TypeAtom, WordEntry, WordSig};
+use verifier::model::ExtractionCtx;
 
 struct DriverEnv {
     st_buf: [SubtypeInfo; 64],
@@ -199,6 +200,7 @@ pub fn emit_asm_driver(
         allow_raw_casts,
         &mut resources,
         descriptor,
+        None, // --emit=asm: no obligation extraction (P2 scope is obl/obj)
         |w| {
             // Feature gate check — reject gated ops before codegen.
             if check_word_for_gate(w, feature_set, input_path, src) {
@@ -281,8 +283,13 @@ pub fn emit_obj_driver(
     feature_set: FeatureSet,
     descriptor: Option<&CompiledDescriptor>,
     mmio_apertures: &[MmioApertureSpec],
+    write_obl: bool,
 ) -> i32 {
     let module_name = slice_span(src, module.name);
+    // P2: `--write-obl` opt-in — extract obligations alongside the object and
+    // write `<Module>.obl.json`. `None` keeps the default fast path exactly
+    // today's path (FR-22): no extraction, no extra output.
+    let mut extract_ctx = (write_obl).then(|| ExtractionCtx::new(module_name));
     let mut path_buf = [0u8; 512];
     let asm_path = match join_path(&mut path_buf, out_dir, module_name, b".asm") {
         Some(p) => p,
@@ -411,6 +418,7 @@ pub fn emit_obj_driver(
         allow_raw_casts,
         &mut resources,
         descriptor,
+        extract_ctx.as_mut(),
         |w| {
             if check_word_for_gate(w, feature_set, input_path, src) {
                 gate_hit = true;
@@ -509,6 +517,112 @@ pub fn emit_obj_driver(
         return 2;
     }
 
+    // P2: `--write-obl` — write the obligation artifact only on full success
+    // (no partial outputs on failure). The extraction ran in the same
+    // lowering pass as codegen above.
+    if let Some(ctx) = extract_ctx.as_mut() {
+        let mut obl_buf = [0u8; 512];
+        let obl_path = match join_path(&mut obl_buf, out_dir, module_name, b".obl.json") {
+            Some(p) => p,
+            None => {
+                let _ = diag::error_simple(1013, b"output path too long");
+                return 2;
+            }
+        };
+        match verifier::codec::encode_obl(ctx.set()) {
+            Ok(bytes) => {
+                if fs::write_file(obl_path, &bytes).is_err() {
+                    let _ = diag::error_simple(1015, b"failed to write output .obl.json");
+                    return 2;
+                }
+            }
+            Err(_) => {
+                let _ = diag::error_simple(6401, b"failed to encode .obl.json artifact");
+                return 2;
+            }
+        }
+    }
+
+    0
+}
+
+/// `--emit=obligations` (static-verification.md slice P2): run the full
+/// lowering with obligation extraction and write `<Module>.obl.json` — no
+/// codegen. The artifact is complete for every C1/C2/C3 subtype-range site of
+/// the module's declared words regardless of `--checks` (FR-1).
+#[allow(clippy::too_many_arguments)]
+pub fn emit_obl_driver(
+    module: &ModuleAst,
+    src: &[u8],
+    search_dirs: &[&[u8]],
+    checks: ChecksMode,
+    allow_raw_casts: bool,
+    target: Target,
+    descriptor: Option<&CompiledDescriptor>,
+    out_dir: &[u8],
+) -> i32 {
+    let module_name = slice_span(src, module.name);
+    let mut obl_buf = [0u8; 512];
+    let obl_path = match join_path(&mut obl_buf, out_dir, module_name, b".obl.json") {
+        Some(p) => p,
+        None => {
+            let _ = diag::error_simple(1013, b"output path too long");
+            return 2;
+        }
+    };
+
+    let es = match init_env(module, src, search_dirs, target) {
+        Ok(e) => e,
+        Err(code) => {
+            let _ = diag::error_simple(code, b"environment init failed");
+            return 2;
+        }
+    };
+
+    let mut resources = match semantics::typecheck::db::build_resource_db(module, src) {
+        Ok(r) => r,
+        Err(e) => {
+            let _ = diag::error_simple(e.code(), b"typecheck error");
+            return 2;
+        }
+    };
+
+    let mut ctx = ExtractionCtx::new(module_name);
+    match semantics::typecheck::for_each_ir_word(
+        module,
+        src,
+        &es.env[..es.env_len],
+        &es.st_buf[..es.st_len],
+        checks,
+        allow_raw_casts,
+        &mut resources,
+        descriptor,
+        Some(&mut ctx),
+        |_w| Ok::<(), ()>(()),
+    ) {
+        Ok(()) => {}
+        Err(semantics::typecheck::ForEachIrError::Type(e)) => {
+            let _ = diag::error_simple(e.code(), b"typecheck error");
+            return 2;
+        }
+        // The extraction consumer is a no-op — the Consumer arm is unreachable.
+        Err(semantics::typecheck::ForEachIrError::Consumer(())) => {
+            let _ = diag::error_simple(6401, b"obligation extraction consumer failed");
+            return 2;
+        }
+    }
+
+    let bytes = match verifier::codec::encode_obl(ctx.set()) {
+        Ok(b) => b,
+        Err(_) => {
+            let _ = diag::error_simple(6401, b"failed to encode .obl.json artifact");
+            return 2;
+        }
+    };
+    if fs::write_file(obl_path, &bytes).is_err() {
+        let _ = diag::error_simple(1015, b"failed to write output .obl.json");
+        return 2;
+    }
     0
 }
 

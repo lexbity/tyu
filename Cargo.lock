@@ -444,6 +444,7 @@ dependencies = [
  "ir",
  "lmod",
  "semantics",
+ "verifier",
 ]
 
 [[package]]
@@ -752,6 +753,7 @@ dependencies = [
  "codegen-core",
  "frontend",
  "ir",
+ "verifier",
 ]
 
 [[package]]
@@ -1002,6 +1004,7 @@ dependencies = [
  "lmod",
  "loader-core",
  "tyu",
+ "verifier",
 ]
 
 [[package]]
@@ -1094,7 +1097,6 @@ name = "verifier"
 version = "0.1.0"
 dependencies = [
  "ir",
- "serde",
  "serde_json",
 ]
 

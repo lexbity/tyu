@@ -14,6 +14,7 @@ hosted-rt = { path = "../hosted-rt" }
 loader-core = { path = "../loader-core" }
 lmod = { path = "../lmod" }
 tyu = { path = "../tyu" }
+verifier = { path = "../verifier" }
 
 [features]
 default = []

@@ -19,6 +19,8 @@ use crate::typecheck::util::{
 };
 use crate::typecheck::value::{PlaceId, Value, PARAM_BASE, PLACE_NONE};
 use crate::types::{TypeAtom, WordEntry, WordSig};
+use alloc::boxed::Box;
+use alloc::string::{String, ToString};
 use core::mem::MaybeUninit;
 use frontend::fixed::FixedVec;
 use frontend::lex::Lexer;
@@ -26,6 +28,7 @@ use frontend::parse::{AttrAst, DeclAst};
 use frontend::span::Span;
 use frontend::token::{Token, TokenKind};
 use ir::{self as lir, CapSet, EffectSet, High, StackBound};
+use verifier::model::{ExtractionCtx, Formula, Kind as OblKind, Oel, Provenance};
 
 pub mod arena;
 mod compile;
@@ -75,6 +78,12 @@ struct IrWordGen<'a, 'r> {
     iso: &'a IsoDb,
     checks: ChecksMode,
     allow_raw_casts: bool,
+    /// Verification-obligation extraction (slice P2): `Some` only for the
+    /// final lowering of declared words — the fixpoint passes and quotation
+    /// words compile with `None`. Quotation internal names (`_quot_*`) are
+    /// per-word-local, so obligation ids keyed on them would collide across
+    /// words; their sites are covered in P5 under the caller word.
+    extraction: Option<&'a mut ExtractionCtx>,
     sig: WordSig,
 
     locals: [TypeAtom; 64],
@@ -120,6 +129,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         iso: &'a IsoDb,
         checks: ChecksMode,
         allow_raw_casts: bool,
+        extraction: Option<&'a mut ExtractionCtx>,
         arena: &mut arena::ArenaAllocator,
         sig: WordSig,
         name: lir::Atom,
@@ -266,6 +276,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             iso,
             checks,
             allow_raw_casts,
+            extraction,
             sig,
             locals: [TypeAtom::EMPTY; 64],
             local_tys: [TypeAtom::EMPTY; 64],
@@ -526,7 +537,124 @@ pub(super) enum SuspendBlocker {
     BorrowLive { frame_span: Span },
 }
 
+/// Source line/column of a span start, as *debug info only* (Q2 — spans never
+/// participate in obligation identity). `(0, 0)` means "no source location"
+/// for compiler-generated sites (prologue checks, epilogue checks).
+pub(super) fn span_line_col(src: &[u8], span: Span) -> (u32, u32) {
+    if span.start == 0 {
+        return (0, 0);
+    }
+    let mut line: u32 = 1;
+    let mut col: u32 = 1;
+    let end = core::cmp::min(span.start, src.len());
+    for &b in &src[..end] {
+        if b == b'\n' {
+            line += 1;
+            col = 1;
+        } else {
+            col += 1;
+        }
+    }
+    (line, col)
+}
+
+/// The `in.i` bound-variable name for input slot `i`. No `alloc::format!`:
+/// its machinery carries an unwinding landing pad the hosted `-nodefaultlibs`
+/// link cannot resolve (same rationale as `verifier::model::utf8_lossy`).
+fn var_in_ref(i: usize) -> String {
+    let mut s = String::with_capacity(8);
+    s.push_str("in.");
+    verifier::model::push_u32_decimal(&mut s, i as u32);
+    s
+}
+
+/// The `out.i` bound-variable name for output slot `i`.
+fn var_out_ref(i: usize) -> String {
+    let mut s = String::with_capacity(9);
+    s.push_str("out.");
+    verifier::model::push_u32_decimal(&mut s, i as u32);
+    s
+}
+
 impl<'a, 'r> IrWordGen<'a, 'r> {
+    /// C1 site: record a `subtype-range` obligation for a subtype-typed word
+    /// input at the callee-entry prologue (static-verification.md §7.1).
+    /// Emitted independently of `--checks` (FR-1): the artifact is complete
+    /// even when the runtime trap is not inserted.
+    pub(super) fn record_subtype_param_obligation(&mut self, i: usize, st: &SubtypeInfo) {
+        if let Some(ctx) = self.extraction.as_mut() {
+            ctx.record(
+                OblKind::SubtypeRange,
+                Formula::InRange {
+                    value: Oel::Var {
+                        name: var_in_ref(i),
+                    },
+                    lo: st.min,
+                    hi: st.max,
+                },
+                0,
+                0,
+                Provenance::Direct,
+            );
+        }
+    }
+
+    /// C2 site: record a `subtype-range` obligation for a subtype-typed return
+    /// value at the epilogue.
+    pub(super) fn record_subtype_return_obligation(&mut self, i: usize, st: &SubtypeInfo) {
+        if let Some(ctx) = self.extraction.as_mut() {
+            ctx.record(
+                OblKind::SubtypeRange,
+                Formula::InRange {
+                    value: Oel::Var {
+                        name: var_out_ref(i),
+                    },
+                    lo: st.min,
+                    hi: st.max,
+                },
+                0,
+                0,
+                Provenance::Direct,
+            );
+        }
+    }
+
+    /// C3 site: record a `subtype-range` obligation for an `as T` narrowing
+    /// cast (names.rs `compile_cast`). v1 provenance is `$top` — the cast
+    /// operand's value flow is not tracked until P5's interval engine — so the
+    /// record carries `Provenance::Opaque` and can be discharged by no one.
+    pub(super) fn record_cast_obligation(
+        &mut self,
+        from_ty: TypeAtom,
+        to_ty: TypeAtom,
+        st: &SubtypeInfo,
+        span: Span,
+    ) {
+        if let Some(ctx) = self.extraction.as_mut() {
+            let (line, col) = span_line_col(self.src, span);
+            ctx.record(
+                OblKind::SubtypeRange,
+                Formula::InRange {
+                    value: Oel::Cast {
+                        // No `String::from_utf8_lossy`: its toolchain build
+                        // carries an unwinding landing pad the hosted
+                        // `-nodefaultlibs` link cannot resolve.
+                        from: verifier::model::utf8_lossy(from_ty.as_bytes()),
+                        to: verifier::model::utf8_lossy(to_ty.as_bytes()),
+                        arg: Box::new(Oel::Var {
+                            name: "$top".to_string(),
+                        }),
+                    },
+                    lo: st.min,
+                    hi: st.max,
+                },
+                line,
+                col,
+                Provenance::Opaque,
+            );
+        }
+    }
+
     pub(super) fn finish(mut self, span: Span) -> Result<IrWordOutput<'r>, TcError> {
         self.fill_subtype_bases(span)?;
         self.fill_type_classes(span)?;
@@ -696,6 +824,7 @@ pub fn build_ir_word<'r>(
     allow_raw_casts: bool,
     sig: &WordSig,
     arena: &mut arena::ArenaAllocator,
+    extraction: Option<&mut ExtractionCtx>,
     observer: &mut dyn TypecheckObserver,
 ) -> Result<IrWordOutput<'r>, TcError> {
     let name = lir_atom(slice_span(src, decl.name))?;
@@ -710,6 +839,7 @@ pub fn build_ir_word<'r>(
         iso,
         checks,
         allow_raw_casts,
+        extraction,
         arena,
         *sig,
         name,

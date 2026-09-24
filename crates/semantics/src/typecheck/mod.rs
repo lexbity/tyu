@@ -129,6 +129,7 @@ pub fn emit_ir(
             allow_raw_casts,
             &sig,
             &mut arena,
+            None,
             &mut null_obs,
         )?;
         lir::verify_word(out_words.word).map_err(|e| TcError::InternalError {
@@ -326,6 +327,7 @@ pub fn emit_stackcheck(
                 allow_raw_casts,
                 &sig,
                 &mut arena,
+                None,
                 &mut obs,
             )
             .map_err(|e| TcError::InternalError {
@@ -351,6 +353,7 @@ pub fn for_each_ir_word<E, F>(
     allow_raw_casts: bool,
     resources: &mut ResourceDb,
     descriptor: Option<&codegen_core::compiled_desc::CompiledDescriptor>,
+    mut extraction: Option<&mut verifier::model::ExtractionCtx>,
     mut f: F,
 ) -> Result<(), ForEachIrError<E>>
 where
@@ -377,6 +380,14 @@ where
     )
     .map_err(ForEachIrError::Type)?;
 
+    // Module subtype facts feed the artifact's `facts.subtypes` (P2), in
+    // declaration order.
+    if let Some(ctx) = extraction.as_deref_mut() {
+        for st in subtypes {
+            ctx.push_subtype_fact(st.name.as_bytes(), st.min, st.max);
+        }
+    }
+
     for decl in module.decls.iter() {
         if decl.kind != DeclKind::Word {
             continue;
@@ -395,6 +406,10 @@ where
             })
             .map_err(ForEachIrError::Type)?;
         let mut null_obs = NullObserver;
+        // Reset per-word occurrence ordinals and set the current word (P2).
+        if let Some(ctx) = extraction.as_deref_mut() {
+            ctx.begin_word(slice_span(src, decl.name));
+        }
         let out_words = build_ir_word(
             decl,
             src,
@@ -409,6 +424,7 @@ where
             allow_raw_casts,
             &sig,
             &mut arena,
+            extraction.as_deref_mut(),
             &mut null_obs,
         )
         .map_err(ForEachIrError::Type)?;
@@ -418,6 +434,15 @@ where
                 span: e.span(),
             })
             .map_err(ForEachIrError::Type)?;
+        // Record the declared word's computed facts (bound, performs, diverge)
+        // into the artifact (P2) — from the same final IR word codegen sees.
+        if let Some(ctx) = extraction.as_deref_mut() {
+            ctx.push_word_fact(
+                slice_span(src, decl.name),
+                out_words.word.bound,
+                out_words.word.performs,
+            );
+        }
         f(out_words.word).map_err(ForEachIrError::Consumer)?;
         for w in out_words.extra_words.iter() {
             lir::verify_word(w)
@@ -478,6 +503,7 @@ fn local_summary_env(
                 allow_raw_casts,
                 &sig,
                 &mut arena,
+                None,
                 &mut null_obs,
             )?;
 

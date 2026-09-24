@@ -8,5 +8,6 @@ description = "Static verification subsystem: IR op semantics table, obligation 
 
 [dependencies]
 ir = { path = "../ir" }
-serde = { version = "1", default-features = false, features = ["alloc"] }
-serde_json = { version = "1", default-features = false, features = ["alloc"] }
+
+[dev-dependencies]
+serde_json = "1"

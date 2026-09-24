@@ -493,6 +493,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                     )?;
                     self.emit_subtype_range_trap(cur, tmp, to_id, &st, name_abs)?;
                 }
+                // C3 extraction (P2): one obligation per narrowing `as T` cast,
+                // recorded independently of `--checks` (FR-1). v1 provenance is
+                // opaque (`$top` operand) — the value path is untracked until
+                // P5's interval engine.
+                self.record_cast_obligation(from_ty, to_ty, &st, name_abs);
             }
         }
         Ok(cur)

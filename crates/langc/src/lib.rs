@@ -162,6 +162,20 @@ pub unsafe fn run(argc: isize, argv: *const *const hosted::c::c_char) -> i32 {
                 cfg.features,
                 descriptor,
                 mmio_apertures,
+                cfg.write_obl,
+            )
+        }
+        EmitMode::Obligations => {
+            let out_dir = cfg.out_dir.unwrap_or(b".");
+            driver::emit_obl_driver(
+                &module,
+                src,
+                &search_dirs[..search_len],
+                cfg.checks,
+                cfg.allow_raw_casts,
+                target,
+                descriptor,
+                out_dir,
             )
         }
     }

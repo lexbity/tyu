@@ -40,6 +40,16 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             }
         }
 
+        // C1 extraction (P2): one obligation per subtype-typed input, recorded
+        // independently of `--checks` (FR-1 — the artifact is complete even
+        // when the runtime trap is not inserted). Uses the SAME decision as the
+        // emission above (`find_subtype`); never re-derives it.
+        for i in 0..n {
+            if let Some(st) = find_subtype(self.subtypes, self.sig.inputs[i]) {
+                self.record_subtype_param_obligation(i, &st);
+            }
+        }
+
         let mut params_on_stack = false;
         if self.checks != ChecksMode::Off
             && (self.checks == ChecksMode::Contracts || self.checks == ChecksMode::All)
@@ -177,6 +187,17 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 stack[i] = base_stack[i];
             }
             *sp = base_sp;
+        }
+
+        // C2 extraction (P2): one obligation per subtype-typed output,
+        // recorded independently of `--checks` (FR-1).
+        {
+            let n = self.sig.out_len as usize;
+            for i in 0..n {
+                if let Some(st) = find_subtype(self.subtypes, self.sig.outputs[i]) {
+                    self.record_subtype_return_obligation(i, &st);
+                }
+            }
         }
 
         Ok(cur)

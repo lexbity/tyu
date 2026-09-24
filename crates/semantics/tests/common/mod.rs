@@ -183,6 +183,7 @@ pub fn check(
                 false,
                 &s,
                 &mut arena,
+                None,
                 &mut obs,
             ) {
                 Ok(_out_words) => on_result(Ok(())),
@@ -273,6 +274,7 @@ pub fn check_ok_with<F>(
                 false,
                 &s,
                 &mut arena,
+                None,
                 &mut obs,
             ) {
                 Ok(out_words) => on_word(out_words.word),
