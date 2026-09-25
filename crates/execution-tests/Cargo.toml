@@ -20,6 +20,7 @@ codegen-riscv = { path = "../codegen-riscv" }
 codegen-x86_64 = { path = "../codegen-x86_64" }
 frontend = { path = "../frontend" }
 ir = { path = "../ir" }
+serde_json = "1"
 
 [[test]]
 name    = "x86_64_none"

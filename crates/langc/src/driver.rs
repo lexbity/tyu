@@ -308,6 +308,7 @@ pub fn emit_obj_driver(
     mmio_apertures: &[MmioApertureSpec],
     write_obl: bool,
     verdicts: Option<&verifier::verdict::Verdicts>,
+    elide_ds_guards: bool,
 ) -> i32 {
     let module_name = slice_span(src, module.name);
     // P2/P4: extract obligations alongside the object and write
@@ -419,6 +420,12 @@ pub fn emit_obj_driver(
         let _ = diag::error_simple(e.code(), codegen_error_message(e.code()));
         return 2;
     }
+
+    // Slice P7 (Q5/FR-11): a per-image codegen input, forwarded by tyu only
+    // when its two-pass composition proved the image-level `stack-budget`
+    // obligation discharged. Deliberately independent of `--checks` — an
+    // image-level fact is not a per-site verdict.
+    gen.set_ds_guards_elided(elide_ds_guards);
 
     // Emit extrn declarations for all imported word symbols so the assembler
     // can resolve cross-module calls at link time.

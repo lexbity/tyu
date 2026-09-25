@@ -79,6 +79,7 @@ fn compile_with_apertures(apertures: &[MmioApertureSpec]) -> String {
         apertures,
         false,
         None,
+        false,
     );
     assert_eq!(status, 0, "object emission failed with {apertures:?}");
 

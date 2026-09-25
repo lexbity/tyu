@@ -94,7 +94,7 @@ pub fn emit_chan_make(gen: &mut X86_64HostedBackend<'_>) {
     gen.out.write(b":\n");
     gen.out.write(b"  mov [__chan_next], rax\n");
     gen.out.write(b"  mov rax, rdx\n");
-    ophelpers::emit_push_rax(gen.out);
+    ophelpers::emit_push_rax(gen.out, !gen.ds_guards_elided);
 }
 
 pub fn emit_chan_send(
@@ -418,5 +418,5 @@ pub fn emit_chan_recv(
     gen.out.write(b".chan_recv_wake_done_");
     write_u32(gen.out, wake);
     gen.out.write(b":\n");
-    ophelpers::emit_push_rax(gen.out);
+    ophelpers::emit_push_rax(gen.out, !gen.ds_guards_elided);
 }

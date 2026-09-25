@@ -51,6 +51,45 @@ const KIND_ORDER: [&str; 5] = [
     Kind::MmioBounds.as_str(),
 ];
 
+/// The slice-P7 two-pass elision decision (Q5/FR-11): whether the *whole
+/// image's* `stack-budget(main)` obligation is discharged — `high(main)`
+/// finite and ≤ the derived `N_main` — from the pass-1 extraction facts.
+/// Verdicts are the same strings the report carries: `"discharged"` makes
+/// elision legal; anything else keeps the guards with an open-with-reason
+/// report. Facts-unavailable modules (compiled without extraction) feed
+/// `None` and force open — fail-closed (absence can only cause more
+/// checking; §7.5).
+pub(crate) fn elision_main_verdict(
+    ctx: &BuildContext,
+    pass1_sets: &[(String, Option<OblSet>)],
+    root_module: Option<&str>,
+) -> String {
+    let n_main = derive_main_budget(ctx);
+    let d = main_context(pass1_sets, root_module, n_main);
+    d.verdict
+}
+
+/// The compose-time elision witness: the image's declared main-stack
+/// accounting plus the reported guard state. Passed by the two-pass builder
+/// (the *decision*) so the report's honesty block can never disagree with
+/// the codegen flag actually forwarded (§7 `emitted_checks` / FR-16).
+pub(crate) struct ElisionCtx {
+    guards: &'static str,
+    data_stack_guards_present: bool,
+}
+
+/// The image story (§7): `guards` names what the produced image actually
+/// contains — `"retained"` (every push guarded) or `"elided"` (the image
+/// level `stack-budget(main)` verdict discharged).
+const GUARDS_RETAINED: ElisionCtx = ElisionCtx {
+    guards: "retained",
+    data_stack_guards_present: true,
+};
+const GUARDS_ELIDED: ElisionCtx = ElisionCtx {
+    guards: "elided",
+    data_stack_guards_present: false,
+};
+
 /// Compose and write `<out_dir>/verify-report.json`, enforce the build policy
 /// (E6410, FR-18), and print the NFR-9 one-line accounting summary.
 pub fn compose_and_write_report(
@@ -60,8 +99,14 @@ pub fn compose_and_write_report(
     verify: VerifyMode,
     policy: VerifyPolicy,
     module_loading: bool,
+    elide_ds_guards: bool,
 ) -> Result<PathBuf, TyuError> {
-    let report = compose(ctx, module_obl, root_module, verify, policy, module_loading)?;
+    let elision = if elide_ds_guards {
+        &GUARDS_ELIDED
+    } else {
+        &GUARDS_RETAINED
+    };
+    let report = compose(ctx, module_obl, root_module, verify, policy, module_loading, elision)?;
     let bytes = verifier::codec::encode_report(&report)
         .map_err(|e| TyuError::Build(format!("verify-report encode failed: {e:?}")))?;
     let path = ctx.out_dir.join("verify-report.json");
@@ -89,13 +134,14 @@ pub fn compose_and_write_report(
 }
 
 /// Compose the report model (§7.3 + §6.5 P4 fields).
-pub fn compose(
+pub(crate) fn compose(
     ctx: &BuildContext,
     module_obl: &[(String, Option<PathBuf>)],
     root_module: Option<&str>,
     verify: VerifyMode,
     policy: VerifyPolicy,
     module_loading: bool,
+    elision: &ElisionCtx,
 ) -> Result<VerifyReport, TyuError> {
     // Load every module artifact + its verdicts echo; a missing one
     // (mixed-mode / pre-P4 cache) degrades to the P3 fallback, never a crash
@@ -142,7 +188,10 @@ pub fn compose(
     // Per-module class accounting + open/assumed lists + emitted/stale sums.
     let mut stale_verdicts: u32 = 0;
     let mut emitted = EmittedChecks::default();
-    emitted.data_stack_guards = true; // P7 elides the x86 data-stack guard.
+    // Slice P7: the honesty field names what the produced image actually
+    // contains — the two-pass builder forwards the codegen flag exactly when
+    // this is false (FR-16: report MUST agree with the object).
+    emitted.data_stack_guards = elision.data_stack_guards_present;
     for (i, (name, set)) in sets.iter().enumerate() {
         let echo = echoes[i].1.as_ref();
         let classes = classes_for(set.as_ref(), echo);
@@ -205,7 +254,7 @@ pub fn compose(
     report.contexts = StackContextAccounting {
         main: main.clone(),
         isr: isr.clone(),
-        guards: "retained".to_string(),
+        guards: elision.guards.to_string(),
     };
     report.stale_verdicts = stale_verdicts;
     report.emitted_checks = emitted;
@@ -321,7 +370,8 @@ fn verification_isr_grant(ctx: &BuildContext) -> Result<u32, TyuError> {
 /// `None` (→ `stack-budget(main)` open, fail-closed) when the runtime
 /// artifact is absent or does not define the geometry symbols: absence can
 /// only ever cause *more* checking, never less (§7.5 discipline).
-fn derive_main_budget(ctx: &BuildContext) -> Option<u32> {
+/// `pub(crate)` for the slice-P7 two-pass elision decision.
+pub(crate) fn derive_main_budget(ctx: &BuildContext) -> Option<u32> {
     let obj_path = ctx.out_dir.join("runtime.o");
     let data = std::fs::read(&obj_path).ok()?;
     let base = crate::elf_reader::symbol_value(&data, b"__lang_ds_base")?;
@@ -341,7 +391,10 @@ fn derive_main_budget(ctx: &BuildContext) -> Option<u32> {
 }
 
 /// The main context verdict (§7.3): `high(main) ≠ ⊤ ∧ high(main) ≤ N_main`.
-fn main_context(
+/// `pub(crate)` for the slice-P7 two-pass elision decision (the same
+/// accounting the report runs, reused verbatim so there is exactly one
+/// verdict definition).
+pub(crate) fn main_context(
     sets: &[(String, Option<OblSet>)],
     root_module: Option<&str>,
     n_main: Option<u32>,
@@ -707,6 +760,24 @@ mod tests {
         let m = main_context(&sets, Some("App"), Some(16384));
         assert_eq!(m.verdict, "open");
         assert!(m.top);
+    }
+
+    #[test]
+    fn main_context_boundary_exact_fit_is_discharged() {
+        // Fixture C (slice P7): the elision rule is `≤` — `high(main)` exactly
+        // equal to the derived `N_main` is still legal (the plan pins the
+        // boundary at the compose-level unit interface).
+        let sets = vec![set_with_main(16384, false)];
+        let m = main_context(&sets, Some("App"), Some(16384));
+        assert_eq!(m.verdict, "discharged");
+    }
+
+    #[test]
+    fn main_context_one_slot_over_is_open() {
+        // One slot past the budget flips the verdict — elision refused.
+        let sets = vec![set_with_main(16385, false)];
+        let m = main_context(&sets, Some("App"), Some(16384));
+        assert_eq!(m.verdict, "open");
     }
 
     #[test]

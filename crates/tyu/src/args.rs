@@ -103,6 +103,7 @@ impl DeployArgs {
             verbose: false,
             verify: VerifyMode::On,
             verify_policy: VerifyPolicy::OpenOk,
+            elide_stack_guards: false,
         }
     }
 }
@@ -131,6 +132,11 @@ pub struct BuildArgs {
     pub verify: VerifyMode,
     /// P4: policy on open/assumed obligations (default open-ok).
     pub verify_policy: VerifyPolicy,
+    /// Slice P7 (Q5/FR-11): `--elide-stack-guards` — two-pass elision of the
+    /// x86_64 data-stack overflow guards. tyu sets `--elide-ds-guards` on
+    /// langc only when its extraction pass + image composition prove the
+    /// image-level `stack-budget(main)` obligation discharged.
+    pub elide_stack_guards: bool,
 }
 
 /// Arguments for the `run` subcommand.
@@ -156,6 +162,8 @@ pub struct RunArgs {
     pub verify: VerifyMode,
     /// P4: policy on open/assumed obligations (default open-ok).
     pub verify_policy: VerifyPolicy,
+    /// Slice P7: image-level data-stack guard elision (two-pass).
+    pub elide_stack_guards: bool,
 }
 
 impl RunArgs {
@@ -177,6 +185,7 @@ impl RunArgs {
             verbose: false,
             verify: self.verify,
             verify_policy: self.verify_policy,
+            elide_stack_guards: self.elide_stack_guards,
         }
     }
 }
@@ -308,6 +317,9 @@ fn print_usage() {
     eprintln!(
         "  --verify-policy=open-ok|no-open|no-open-no-assumptions\n                      Open/assumed policy (default open-ok)"
     );
+    eprintln!(
+        "  --elide-stack-guards  Slice P7: two-pass elision of the x86 data-stack\n                      overflow guards, legal only when the image-level\n                      stack-budget(main) verdict is discharged (report:\n                      contexts.stack.guards = elided). Requires --verify=on"
+    );
     eprintln!();
     eprintln!("Test options:");
     eprintln!("  --target=<triple>   Target triple (default: x86_64-unknown-linux-gnu)");
@@ -361,6 +373,7 @@ fn parse_common(args: &[String], extra_known: &[&str]) -> Result<CommonArgs, ()>
     let mut verbose = false;
     let mut verify = VerifyMode::On;
     let mut verify_policy = VerifyPolicy::OpenOk;
+    let mut elide_stack_guards = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -436,6 +449,8 @@ fn parse_common(args: &[String], extra_known: &[&str]) -> Result<CommonArgs, ()>
                     return Err(());
                 }
             };
+        } else if a == "--elide-stack-guards" {
+            elide_stack_guards = true;
         } else if let Some(val) = a.strip_prefix("--sysroot=") {
             sysroot = Some(PathBuf::from(val));
         } else if let Some(val) = a.strip_prefix("--out-dir=") {
@@ -467,6 +482,18 @@ fn parse_common(args: &[String], extra_known: &[&str]) -> Result<CommonArgs, ()>
         PathBuf::from("target").join("tyu").join(triple)
     });
 
+    // Slice P7 (Q5): guard elision is a *verification verdict* — the legacy
+    // all-checks mode (`--verify=off`) has no discharge authority to elide
+    // against. Fail loudly rather than silently building a guarded image
+    // when the caller asked for elision.
+    if elide_stack_guards && verify == VerifyMode::Off {
+        eprintln!(
+            "tyu: --elide-stack-guards requires --verify=on \
+             (guard elision is a verification verdict; --verify=off is the legacy all-checks path)"
+        );
+        return Err(());
+    }
+
     Ok(CommonArgs {
         verbose,
         target,
@@ -483,6 +510,7 @@ fn parse_common(args: &[String], extra_known: &[&str]) -> Result<CommonArgs, ()>
         metal_encrypt_mode,
         verify,
         verify_policy,
+        elide_stack_guards,
     })
 }
 
@@ -514,6 +542,7 @@ struct CommonArgs {
     verbose: bool,
     verify: VerifyMode,
     verify_policy: VerifyPolicy,
+    elide_stack_guards: bool,
 }
 
 fn parse_build(args: &[String]) -> Command {
@@ -545,6 +574,7 @@ fn parse_build(args: &[String]) -> Command {
         verbose: common.verbose,
         verify: common.verify,
         verify_policy: common.verify_policy,
+        elide_stack_guards: common.elide_stack_guards,
     })
 }
 
@@ -601,6 +631,7 @@ fn parse_run(args: &[String]) -> Command {
         verbose: common.verbose,
         verify: common.verify,
         verify_policy: common.verify_policy,
+        elide_stack_guards: common.elide_stack_guards,
     })
 }
 

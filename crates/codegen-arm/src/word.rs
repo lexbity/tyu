@@ -25,7 +25,10 @@ fn type_class(w: &lir::Word, ty: lir::TypeId) -> lir::TypeClass {
 }
 
 fn prim_bits_signed(w: &lir::Word, ty: lir::TypeId) -> Option<(u16, bool)> {
-    prim_ty(w, ty).map(|prim| prim.bits_signed(32))
+    // Subtypes share their base's representation (subtype-typed typed
+    // load/store); everything else must already be a primitive.
+    let storage = lir::resolve_storage_type(w, ty)?;
+    prim_ty(w, storage).map(|prim| prim.bits_signed(32))
 }
 
 fn find_word_decl<'a>(

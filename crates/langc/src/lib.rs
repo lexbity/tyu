@@ -188,6 +188,7 @@ pub unsafe fn run(argc: isize, argv: *const *const hosted::c::c_char) -> i32 {
                 mmio_apertures,
                 cfg.write_obl,
                 verdicts.as_ref(),
+                cfg.elide_ds_guards,
             )
         }
         EmitMode::Obligations => {

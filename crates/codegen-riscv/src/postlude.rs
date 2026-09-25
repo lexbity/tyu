@@ -1,5 +1,6 @@
-use crate::ophelpers::write_u32;
+use crate::ophelpers::{slice_span, write_res_label, write_u32};
 use crate::RiscVBackend;
+use frontend::parse::DeclKind;
 use codegen_core::strings::decode_string_bytes;
 use codegen_core::{AsmMode, CodegenError};
 
@@ -35,6 +36,18 @@ impl<'a> RiscVBackend<'a> {
                 Ok(())
             }
             AsmMode::Object => {
+                // Resource storage globals (`.comm`), one per declared
+                // resource — the AddrOf{Runtime} lowering references these
+                // (mirrors the ARM backend's postlude).
+                let module_name = slice_span(self.src, self.module.name);
+                for d in self.module.decls.iter() {
+                    if d.kind != DeclKind::Resource {
+                        continue;
+                    }
+                    self.out.write(b"\t.comm ");
+                    write_res_label(self.out, module_name, slice_span(self.src, d.name));
+                    self.out.write(b",8,4\n");
+                }
                 RiscVBackend::emit_modinfo_section(self)?;
                 Ok(())
             }

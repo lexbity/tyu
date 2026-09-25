@@ -962,6 +962,42 @@ fn type_width_bytes(w: &Word, ty: TypeId) -> Option<u32> {
     Some(prim.bits(64) as u32 / 8)
 }
 
+/// Resolve a *storage* type to the primitive type whose representation it
+/// shares: a subtype resolves to its declared base (walking `subtype_bases`,
+/// cycle-guarded), everything else must already be a primitive. `None` for
+/// non-primitive composites (structs, slices, ...) — they have no single
+/// storage width.
+///
+/// This is the shared fix for typed load/store of subtype-typed values
+/// (formerly E8009 on x86 / `UnsupportedOp { Load/Store }` on ARM/RISC-V):
+/// a subtype's representation IS its base's representation, and
+/// `subtype_bases` is filled at word finalization — before any backend runs.
+pub fn resolve_storage_type(w: &Word, ty: TypeId) -> Option<TypeId> {
+    let mut cur = ty;
+    for _ in 0..=w.subtype_bases.len() {
+        let name = w.types.get(cur.0 as usize)?.as_bytes();
+        if Prim::from_type_name(name).is_some() {
+            return Some(cur);
+        }
+        let base = *w.subtype_bases.get(cur.0 as usize)?;
+        if base == TY_EMPTY || base == cur {
+            return None;
+        }
+        cur = base;
+    }
+    None
+}
+
+/// `(bits, signed)` of a type's storage representation, via
+/// [`resolve_storage_type`] — the width/signedness lookup typed load/store
+/// (and their per-backend lowering) must use. Pointer-width types resolve
+/// through their own prim; subtypes through their base chain.
+pub fn storage_bits_signed(w: &Word, ty: TypeId, ptr_bits: u16) -> Option<(u16, bool)> {
+    let base = resolve_storage_type(w, ty)?;
+    let name = w.types.get(base.0 as usize)?.as_bytes();
+    Some(Prim::from_type_name(name)?.bits_signed(ptr_bits))
+}
+
 /// Check that a volatile access at `place` (offset + width) stays inside the
 /// aperture its `MmioPlace` site declared. Best-effort within a block: sites
 /// recorded in the same block are correlated; a missing site (e.g. the place

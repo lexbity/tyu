@@ -42,6 +42,27 @@ pub fn write_hex(out: &mut dyn Output, v: u32) {
     out.write(&buf[..n]);
 }
 
+pub fn write_res_label(out: &mut dyn Output, module_name: &[u8], resource_name: &[u8]) {
+    // Same scheme as the ARM backend: fnv1a(module) mixed with the resource
+    // name, rendered `r_<16 hex>` — the postlude's `.comm` defines it.
+    let mut hash = fnv1a_u64(module_name);
+    hash ^= 0xff;
+    hash = hash.wrapping_mul(0x100000001b3);
+    for &b in resource_name {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    out.write(b"r_");
+    for i in (0..64).step_by(4).rev() {
+        let nib = ((hash >> i) & 0xf) as u8;
+        out.write(&[if nib < 10 {
+            b'0' + nib
+        } else {
+            b'a' + nib - 10
+        }]);
+    }
+}
+
 pub fn write_sym_label(out: &mut dyn Output, name: &[u8]) {
     let hash = fnv1a_u64(name);
     out.write(b"w_");

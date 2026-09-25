@@ -150,6 +150,76 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
         }
         crate::args::VerifyMode::On => {}
     }
+    // Slice P7 (Q5/FR-11): the guard-elision decision changes what pass 2
+    // emits (guards omitted vs present) — it MUST change the object cache
+    // key, exactly like the verify mode: an elided-build object would
+    // otherwise satisfy a guarded-build lookup and the object would disagree
+    // with the report's `emitted_checks.data_stack_guards` (FR-16).
+    if args.elide_stack_guards {
+        compiler_fp = cache::fnv1a_u64(&compiler_fp.to_le_bytes()).wrapping_add(64);
+    }
+
+    let mode = effective_build_mode(args, target);
+
+    // Slice P7 (Q5): guard elision is a per-image fact of the *single*
+    // derived data-stack geometry. A dynamic image loads modules into its own
+    // stack regions — there is no one `N_main` — so elision is refused there
+    // (loud, never a silent guarded build).
+    if args.elide_stack_guards && mode == BuildMode::Dynamic {
+        return Err(TyuError::Build(
+            "--elide-stack-guards requires a static link/load mode (a dynamic image's unit budgets are not a single derived geometry)"
+                .into(),
+        ));
+    }
+
+    // Slice P7: the two-pass decision. When elision is requested, the runtime
+    // is assembled FIRST (so the `N_main` geometry symbols exist for
+    // `derive_main_budget`), every module's facts are extracted (pass 1 —
+    // `--emit=obligations`, no codegen), and the image-level
+    // `stack-budget(main)` verdict decides whether pass 2 forwards
+    // `--elide-ds-guards`. One decision for the whole image (FR-11 per-image
+    // atomicity — all modules or none); the decision is written to a
+    // validated image-verdicts record (E6415 on a corrupt record) that the
+    // report's `guards` field is derived from.
+    let mut elide_ds = false;
+    let mut runtime_objs: Vec<PathBuf> = Vec::new();
+    if args.elide_stack_guards {
+        runtime_objs =
+            assemble_runtime_for_context_mode(&ctx, feature_set, mode)?;
+        let pass1 = extract_obligations_for_elision(
+            &langc,
+            &modules,
+            &args.include_dirs,
+            args.sysroot.as_deref(),
+            &out_dir,
+            platform_selection.as_ref().map(|s| s.pack.pack_root()),
+            feature_set,
+        )?;
+        let verdict = super::verify::elision_main_verdict(
+            &ctx,
+            &pass1,
+            modules.last().map(|m| m.name.as_str()),
+        );
+        elide_ds = verdict == "discharged";
+        let main = super::verify::main_context(
+            &pass1,
+            modules.last().map(|m| m.name.as_str()),
+            super::verify::derive_main_budget(&ctx),
+        );
+        let record = verifier::codec::ImageVerdicts { elided: elide_ds, main };
+        write_image_verdicts(&out_dir, &record)?;
+        if elide_ds {
+            eprintln!(
+                "tyu: eliding x86 data-stack guards (image stack-budget(main) discharged: {})",
+                record.main.verdict
+            );
+        } else {
+            eprintln!(
+                "tyu: keeping x86 data-stack guards (image stack-budget(main) = {})",
+                record.main.verdict
+            );
+        }
+    }
 
     // Pre-compute content hashes for every module path.
     let mut path_to_hash: BTreeMap<PathBuf, u64> = BTreeMap::new();
@@ -195,12 +265,12 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
             triple,
             feature_set,
             args.verify,
+            elide_ds,
         )?;
         module_objs.push(compiled.object_path);
         module_obl.push((module.name.clone(), compiled.obl_path));
     }
 
-    let mode = effective_build_mode(args, target);
     let (final_image, exec_image) = if mode == BuildMode::Dynamic {
         build_dynamic_image(
             &ctx,
@@ -213,7 +283,13 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
         )?
     } else {
         let mut objs = module_objs.clone();
-        let runtime_objs = assemble_runtime_for_context_mode(&ctx, feature_set, BuildMode::Static)?;
+        // Slice P7: the two-pass flow assembles the runtime BEFORE pass 1
+        // (for the `N_main` geometry); the single-pass flow assembles it here
+        // as before. `mode` is the *chosen* link/load mode — the runtime
+        // object set is mode-independent for the static path.
+        if runtime_objs.is_empty() {
+            runtime_objs = assemble_runtime_for_context_mode(&ctx, feature_set, BuildMode::Static)?;
+        }
         objs.extend(runtime_objs);
 
         if let Some(selection) = platform_selection.as_ref() {
@@ -260,6 +336,7 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
         args.verify,
         args.verify_policy,
         args.feature_set.contains(codegen_core::Feature::ModuleLoading),
+        elide_ds,
     )?;
 
     Ok(BuildOutcome {
@@ -917,6 +994,7 @@ fn compile_module(
     triple: &str,
     feature_set: FeatureSet,
     verify: crate::args::VerifyMode,
+    elide_ds_guards: bool,
 ) -> Result<CompiledModule, TyuError> {
     let features = feature_set.bits();
     // Check cache first. The obligation artifact rides beside the object under
@@ -972,6 +1050,12 @@ fn compile_module(
         let path = ensure_verdicts_cache_file(&verdicts_slot)?;
         cmd.arg("--checks=undischarged");
         cmd.arg(format!("--verdicts={}", path.display()));
+    }
+    // Slice P7 (Q5/FR-11): the *image-level* decision — all modules or none
+    // (per-image atomicity). A dedicated codegen input, never derived from
+    // `--checks`.
+    if elide_ds_guards {
+        cmd.arg("--elide-ds-guards");
     }
 
     if let Some(sr) = sysroot {
@@ -1080,6 +1164,124 @@ pub struct CompiledModule {
     pub object_path: PathBuf,
     /// The re-homed `<Module>-<inputs_fp>.obl.json`, when present.
     pub obl_path: Option<PathBuf>,
+}
+
+/// Slice P7 pass 1: extract every module's obligation facts
+/// (`langc --emit=obligations`, no codegen) into a per-process scratch dir,
+/// read each artifact back (`read_obl` — fail-closed, E6400/E6401), delete
+/// the scratch, and return `(module name → OblSet or None)`. `None` = the
+/// module produced no artifact (mixed-mode/compiled without extraction) —
+/// which forces the image verdict open (§7.3: absence can only cause more
+/// checking, never less). The scratch dir is an implicit include dir so
+/// callee `.obl.json` facts resolve for cross-module contracts (P6/Q7).
+fn extract_obligations_for_elision(
+    langc: &Path,
+    modules: &[ModuleNode],
+    include_dirs: &[PathBuf],
+    sysroot: Option<&Path>,
+    out_dir: &Path,
+    platform_dir: Option<&Path>,
+    feature_set: FeatureSet,
+) -> Result<Vec<(String, Option<verifier::model::OblSet>)>, TyuError> {
+    let scratch = out_dir.join(format!(".tyu-elide-pass1-{}", std::process::id()));
+    fs::create_dir_all(&scratch).map_err(TyuError::Io)?;
+    let mut sets: Vec<(String, Option<verifier::model::OblSet>)> = Vec::with_capacity(modules.len());
+    let fail = |e: TyuError| -> TyuError {
+        let _ = fs::remove_dir_all(&scratch);
+        e
+    };
+    for module in modules {
+        let mut cmd = Command::new(langc);
+        cmd.arg("--emit=obligations");
+        cmd.arg(format!("--out-dir={}", scratch.display()));
+        if let Some(sr) = sysroot {
+            cmd.arg(format!("--sysroot={}", sr.display()));
+        }
+        if let Some(dir) = platform_dir {
+            cmd.arg(format!("--platform={}", dir.display()));
+        }
+        for inc in include_dirs {
+            cmd.arg("-I");
+            cmd.arg(inc);
+        }
+        // The scratch holds this pass's own artifacts (callee obl facts for
+        // cross-module contract transclusion); out_dir holds the re-homed
+        // artifacts of *previous* builds (P6 Q7 include-dir search).
+        cmd.arg("-I").arg(&scratch);
+        cmd.arg("-I").arg(out_dir);
+        let mut flag_buf = [""; 8];
+        let n = feature_set.write_flags(&mut flag_buf);
+        if n > 0 {
+            cmd.arg(format!("--features={}", flag_buf[..n].join(",")));
+        }
+        if module.is_lib {
+            cmd.arg("--lib");
+        }
+        cmd.arg(&module.path);
+        let status = cmd
+            .status()
+            .map_err(|e| fail(TyuError::Build(format!("running langc: {e}"))))?;
+        if !status.success() {
+            return Err(fail(TyuError::Build(format!(
+                "pass-1 (obligations extraction) failed on '{}' (exit code {:?})",
+                module.path.display(),
+                status.code(),
+            ))));
+        }
+        let obl_path = scratch.join(format!("{}.obl.json", module.name));
+        let set = if obl_path.exists() {
+            let bytes = fs::read(&obl_path).map_err(|e| {
+                fail(TyuError::Build(format!(
+                    "reading pass-1 artifact '{}': {e}",
+                    obl_path.display()
+                )))
+            })?;
+            match verifier::codec::read_obl(&bytes) {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    return Err(fail(TyuError::Build(format!(
+                        "pass-1 artifact '{}' invalid (E{}): {e:?}",
+                        obl_path.display(),
+                        e.code()
+                    ))))
+                }
+            }
+        } else {
+            None
+        };
+        sets.push((module.name.clone(), set));
+    }
+    let _ = fs::remove_dir_all(&scratch);
+    Ok(sets)
+}
+
+/// Write the image-verdicts record (`.tyu-verify/image-verdicts.json`) —
+/// the durable, schema-validated evidence of the two-pass guard-elision
+/// decision. Written via temp file + rename (the scratch+rehome discipline,
+/// so concurrent builds sharing the out-dir cannot observe a torn file) and
+/// immediately read back + validated: a malformed record is E6415 (fail-loud
+/// — a corrupt decision record can never silently report a different guard
+/// state than the object actually has, FR-16).
+fn write_image_verdicts(out_dir: &Path, record: &verifier::codec::ImageVerdicts) -> Result<(), TyuError> {
+    let dir = out_dir.join(".tyu-verify");
+    fs::create_dir_all(&dir).map_err(TyuError::Io)?;
+    let bytes = verifier::codec::encode_image_verdicts(record)
+        .map_err(|e| TyuError::Build(format!("image-verdicts encode failed (E{}): {e:?}", e.code())))?;
+    let tmp = dir.join(format!(".image-verdicts.tmp-{}", std::process::id()));
+    fs::write(&tmp, &bytes).map_err(|e| TyuError::Build(format!("writing '{}': {e}", tmp.display())))?;
+    let final_path = dir.join("image-verdicts.json");
+    fs::rename(&tmp, &final_path)
+        .map_err(|e| TyuError::Build(format!("re-homing image verdicts: {e}")))?;
+    // Round-trip validation — E6415 on a corrupt/mismatched record.
+    let read_back = fs::read(&final_path)
+        .map_err(|e| TyuError::Build(format!("re-reading image verdicts: {e}")))?;
+    verifier::codec::read_image_verdicts(&read_back).map_err(|e| {
+        TyuError::Build(format!(
+            "image-verdicts record invalid (E{}): {e:?}",
+            e.code()
+        ))
+    })?;
+    Ok(())
 }
 
 /// Move `langc`'s output object `<scratch>/<ModuleName>.o` to a

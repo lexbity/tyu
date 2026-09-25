@@ -50,6 +50,20 @@ pub trait CodegenBackend {
     /// `Undischarged` mode, so `--checks=all` output is untouched (FR-5).
     /// Default no-op: backends without emulated-aperture checks ignore it.
     fn set_mmio_checks_discharged(&mut self, _elide: bool) {}
+
+    /// Slice P7 (static-verification.md Q5/FR-11): when `elide` is true, the
+    /// backend omits the per-push data-stack overflow guards (C8 —
+    /// `cmp <next>, r14 ; ja __stack_overflow`) because the *image-level*
+    /// `stack-budget(main)` obligation is discharged. This is a **per-image
+    /// codegen input, deliberately NOT derivable from `--checks`** (a
+    /// per-site verdict map cannot express an image-level fact): tyu forwards
+    /// `--elide-ds-guards` to langc only when its two-pass composition proved
+    /// the whole image fits its derived budget. The `__lang_ds_high`
+    /// high-water observability update is NOT elided — it is observability,
+    /// not a check (the harness's `measured ≤ declared` channel, §10).
+    /// Default no-op: backends without data-stack guards (ARM/RISC-V word
+    /// entry guards are native-stack geometry, out of scope — §2) ignore it.
+    fn set_ds_guards_elided(&mut self, _elide: bool) {}
 }
 
 /// Merge one aperture-use entry into a backend's module aperture table (P6 §5.5):

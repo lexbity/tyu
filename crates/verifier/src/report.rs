@@ -12,6 +12,12 @@ use alloc::vec::Vec;
 /// Schema identifier of `verify-report.json` artifacts.
 pub const REPORT_SCHEMA: &str = "tyu.verify-report/v1";
 
+/// Schema identifier of the image-verdicts record (slice P7, Q5/FR-11): the
+/// durable, validated evidence of the two-pass guard-elision decision —
+/// what the report's `contexts.stack.guards` will say is exactly what this
+/// record says (E6415 on a malformed record).
+pub const IMAGE_VERDICTS_SCHEMA: &str = "tyu.image-verdicts/v1";
+
 /// Tool/product identity (`tool` in §6.5).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ToolInfo {

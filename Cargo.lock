@@ -222,6 +222,7 @@ dependencies = [
  "lmod",
  "lmod-pack",
  "loader-core",
+ "serde_json",
  "tyu",
 ]
 

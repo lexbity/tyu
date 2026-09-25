@@ -93,6 +93,17 @@ pub struct X86_64HostedBackend<'a> {
     /// output is byte-identical to today (FR-5).
     pub mmio_checks_discharged: bool,
 
+    // --- Slice P7: data-stack guard elision (Q5/FR-11) ---
+    /// When true, the per-push data-stack overflow guards (C8 —
+    /// `cmp <next>, r14 ; ja __stack_overflow`) are omitted: the *image-level*
+    /// `stack-budget(main)` obligation was discharged by tyu's two-pass
+    /// composition. A per-image codegen input, deliberately NOT derived from
+    /// `--checks` (an image-level fact is not a per-site verdict). The
+    /// `__lang_ds_high` high-water update is NEVER elided — it is
+    /// observability (the `measured ≤ declared` harness channel, §10), not a
+    /// check.
+    pub ds_guards_elided: bool,
+
     // --- S2 Phase 1: modinfo collection ---
     pub(crate) mi_exports: [ModInfoExport; 64],
     pub(crate) mi_export_count: usize,
@@ -177,6 +188,7 @@ impl<'a> X86_64HostedBackend<'a> {
             mmio_apertures: [MmioApertureSpec::EMPTY; 8],
             mmio_aperture_count: 0,
             mmio_checks_discharged: false,
+            ds_guards_elided: false,
         }
     }
 
@@ -392,6 +404,10 @@ impl<'a> CodegenBackend for X86_64HostedBackend<'a> {
 
     fn set_mmio_checks_discharged(&mut self, elide: bool) {
         self.mmio_checks_discharged = elide;
+    }
+
+    fn set_ds_guards_elided(&mut self, elide: bool) {
+        self.ds_guards_elided = elide;
     }
 }
 

@@ -119,11 +119,11 @@ impl<'a> X86_64HostedBackend<'a> {
     ) -> Result<bool, CodegenError> {
         match op.kind {
             lir::OpKind::ConstI64(v) => {
-                emit_push_i64(self.out, v);
+                emit_push_i64(self.out, v, !self.ds_guards_elided);
                 Ok(true)
             }
             lir::OpKind::ConstBool(v) => {
-                emit_push_i64(self.out, if v { 1 } else { 0 });
+                emit_push_i64(self.out, if v { 1 } else { 0 }, !self.ds_guards_elided);
                 Ok(true)
             }
             lir::OpKind::ConstStr(span) => {
@@ -131,7 +131,7 @@ impl<'a> X86_64HostedBackend<'a> {
                 self.out.write(b"  mov rax, __lang_str_");
                 write_u32(self.out, id);
                 self.out.write(b"\n");
-                emit_push_rax(self.out);
+                emit_push_rax(self.out, !self.ds_guards_elided);
                 Ok(true)
             }
 
@@ -141,7 +141,7 @@ impl<'a> X86_64HostedBackend<'a> {
             } => {
                 self.uses_mmio = true;
                 let addr = self.mmio_aperture_addr(aperture, offset)?;
-                emit_push_u64(self.out, addr);
+                emit_push_u64(self.out, addr, !self.ds_guards_elided);
                 Ok(true)
             }
             lir::OpKind::AddrOf {
@@ -162,13 +162,13 @@ impl<'a> X86_64HostedBackend<'a> {
                     place.as_bytes(),
                 );
                 self.out.write(b"\n");
-                emit_push_rax(self.out);
+                emit_push_rax(self.out, !self.ds_guards_elided);
                 Ok(true)
             }
             lir::OpKind::MmioPlace { aperture, offset, .. } => {
                 self.uses_mmio = true;
                 let addr = self.mmio_aperture_addr(aperture, offset)?;
-                emit_push_u64(self.out, addr);
+                emit_push_u64(self.out, addr, !self.ds_guards_elided);
                 Ok(true)
             }
             lir::OpKind::PtrAddConst { offset, .. } => {
@@ -177,7 +177,7 @@ impl<'a> X86_64HostedBackend<'a> {
                 self.out.write(b"  add rax, ");
                 write_u32(self.out, offset);
                 self.out.write(b"\n");
-                emit_push_rax(self.out);
+                emit_push_rax(self.out, !self.ds_guards_elided);
                 Ok(true)
             }
             lir::OpKind::PtrAddIndex { scale, .. } => {
@@ -189,7 +189,7 @@ impl<'a> X86_64HostedBackend<'a> {
                 write_u32(self.out, scale);
                 self.out.write(b"\n");
                 self.out.write(b"  add rax, rcx\n");
-                emit_push_rax(self.out);
+                emit_push_rax(self.out, !self.ds_guards_elided);
                 Ok(true)
             }
 
@@ -214,11 +214,11 @@ impl<'a> X86_64HostedBackend<'a> {
                         self.out.write(b"  lea rax, [rsp+");
                         write_u32(self.out, offset);
                         self.out.write(b"]\n");
-                        emit_push_rax(self.out);
+                        emit_push_rax(self.out, !self.ds_guards_elided);
                         return Ok(true);
                     }
                     lir::TypeClass::RegionRef | lir::TypeClass::RegionRefMut => {
-                        emit_dup(self.out);
+                        emit_dup(self.out, !self.ds_guards_elided);
                         return Ok(true);
                     }
                     // D-13: an unmatched class is a loud error, never a
@@ -237,7 +237,7 @@ impl<'a> X86_64HostedBackend<'a> {
             }
 
             lir::OpKind::Dup { .. } => {
-                emit_dup(self.out);
+                emit_dup(self.out, !self.ds_guards_elided);
                 Ok(true)
             }
             lir::OpKind::Drop { .. } => {
@@ -323,7 +323,7 @@ impl<'a> X86_64HostedBackend<'a> {
                 Ok(true)
             }
             lir::OpKind::LocalGet { slot, .. } => {
-                emit_load_local(self.out, slot as u32);
+                emit_load_local(self.out, slot as u32, !self.ds_guards_elided);
                 Ok(true)
             }
 
@@ -409,7 +409,7 @@ impl<'a> X86_64HostedBackend<'a> {
                     self.out.write(b"  div rcx\n");
                     self.out.write(b"  add rax, r9\n");
                     self.out.write(b"  add rsp, 16\n");
-                    emit_push_rax(self.out);
+                    emit_push_rax(self.out, !self.ds_guards_elided);
                     return Ok(true);
                 }
                 if n == b"platform.task.yield" {

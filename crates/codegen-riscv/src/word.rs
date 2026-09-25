@@ -1,7 +1,10 @@
-use crate::ophelpers::{fnv1a_u64, slice_span, write_hex, write_sym_label, write_u32};
+use crate::ophelpers::{
+    fnv1a_u64, slice_span, write_hex, write_res_label, write_sym_label, write_u32,
+};
 use crate::RiscVBackend;
 use codegen_core::strings::STR_TABLE_CAP;
 use codegen_core::{AsmMode, CodegenError};
+use frontend::parse::DeclKind;
 use frontend::span::Span;
 use ir as lir;
 
@@ -11,7 +14,27 @@ fn prim_ty(w: &lir::Word, ty: lir::TypeId) -> Option<lir::Prim> {
 }
 
 fn prim_bits_signed(w: &lir::Word, ty: lir::TypeId) -> Option<(u16, bool)> {
-    prim_ty(w, ty).map(|prim| prim.bits_signed(32))
+    // Subtypes share their base's representation (subtype-typed typed
+    // load/store); everything else must already be a primitive.
+    let storage = lir::resolve_storage_type(w, ty)?;
+    prim_ty(w, storage).map(|prim| prim.bits_signed(32))
+}
+
+fn find_resource_decl<'a>(
+    module: &'a frontend::parse::ModuleAst,
+    src: &'a [u8],
+    name: &[u8],
+) -> Option<&'a frontend::parse::DeclAst> {
+    for d in module.decls.iter() {
+        if d.kind != DeclKind::Resource {
+            continue;
+        }
+        let dname = slice_span(src, d.name);
+        if dname == name {
+            return Some(d);
+        }
+    }
+    None
 }
 
 /// Compiler-computed class tag of a type (decision D-13). Backends dispatch
@@ -397,9 +420,25 @@ impl<'a> RiscVBackend<'a> {
                 Ok(true)
             }
             lir::OpKind::AddrOf {
+                place,
                 base: lir::AddrOfBase::Runtime,
                 ..
-            } => Err(CodegenError::UnsupportedAddrOf),
+            } => {
+                // Resource places lower to their `.comm`-declared storage
+                // symbol (postlude Object-mode), mirroring the ARM backend.
+                // Non-resource runtime places (field paths) are not yet
+                // lowered here — E8008.
+                if find_resource_decl(self.module, self.src, place.as_bytes()).is_none() {
+                    return Err(CodegenError::UnsupportedAddrOf);
+                }
+                self.out.write(b"\tla a0, ");
+                write_res_label(self.out, slice_span(self.src, self.module.name), place.as_bytes());
+                self.out.write(b"\n");
+                self.out.write(b"\tsw a0, 0(s2)\n\taddi s2, s2, 4\n");
+                self.out.write(b"\tsw zero, 0(s2)\n\taddi s2, s2, 4\n");
+                self.emit_ds_high_update();
+                Ok(true)
+            }
             lir::OpKind::PtrAddConst { offset, .. } => {
                 self.out.write(b"\taddi s2, s2, -8\n\tlw a0, 0(s2)\n");
                 if offset <= 2047 {

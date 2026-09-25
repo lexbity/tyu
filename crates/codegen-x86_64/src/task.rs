@@ -9,7 +9,7 @@ pub fn emit_task_spawn(gen: &mut X86_64HostedBackend<'_>, name: &[u8]) {
     crate::ophelpers::write_label(gen.out, name);
     gen.out.write(b"\n");
     gen.out.write(b"  call __task_spawn\n");
-    ophelpers::emit_push_rax(gen.out);
+    ophelpers::emit_push_rax(gen.out, !gen.ds_guards_elided);
 }
 
 pub fn emit_task_yield(gen: &mut X86_64HostedBackend<'_>) {

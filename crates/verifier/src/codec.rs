@@ -33,6 +33,10 @@ pub enum CodecError {
     SemanticsMismatch { found: String },
     /// Artifact exceeds the 16 MiB read-side cap (NFR-5) — fail closed.
     TooLarge { size: usize },
+    /// Slice P7: the image-verdicts record (E6415) — the guard-elision
+    /// decision evidence is malformed or version-mismatched; fail loud, the
+    /// guards stay (fail-closed to *retained* is never silent).
+    ImageVerdictsInvalid { found: String },
 }
 
 impl CodecError {
@@ -41,6 +45,7 @@ impl CodecError {
     pub fn code(&self) -> u32 {
         match self {
             CodecError::SchemaVersion { .. } => 6400,
+            CodecError::ImageVerdictsInvalid { .. } => 6415,
             _ => 6401,
         }
     }
@@ -1345,6 +1350,143 @@ pub fn encode_report(report: &crate::report::VerifyReport) -> Result<Vec<u8>, Co
         return Err(CodecError::TooLarge { size: out.len() });
     }
     Ok(out)
+}
+
+// ---------------------------------------------------------------------------
+// Slice P7: image-verdicts record (Q5/FR-11; E6415)
+// ---------------------------------------------------------------------------
+
+/// The image-level guard-elision decision record (`.tyu-verify/
+/// image-verdicts.json`): the durable, schema-validated evidence behind the
+/// report's `contexts.stack.guards` — what the report will say is exactly
+/// what this record says (FR-16 spirit; a malformed record is E6415,
+/// fail-loud, and the guards stay).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ImageVerdicts {
+    /// `true` when the image's `stack-budget(main)` obligation discharged and
+    /// pass 2 forwarded `--elide-ds-guards` (guards omitted).
+    pub elided: bool,
+    /// The main-context accounting the decision was made from (reported
+    /// `high`/`top`/budget/verdict), so the record explains itself.
+    pub main: crate::report::MainContextAccounting,
+}
+
+/// Serialize the two-pass elision decision. Fixed key order (Q11).
+pub fn encode_image_verdicts(v: &ImageVerdicts) -> Result<Vec<u8>, CodecError> {
+    let mut out = Vec::with_capacity(256);
+    out.extend_from_slice(b"{\"schema\":");
+    write_str(&mut out, crate::report::IMAGE_VERDICTS_SCHEMA);
+    out.extend_from_slice(b",\"semantics\":");
+    write_str(&mut out, crate::semantics::SEMANTICS_VERSION);
+    out.extend_from_slice(b",\"guards\":");
+    write_str(&mut out, if v.elided { "elided" } else { "retained" });
+    out.extend_from_slice(b",\"main\":{\"high\":");
+    write_i64(&mut out, v.main.high as i64);
+    out.extend_from_slice(b",\"top\":");
+    out.extend_from_slice(if v.main.top { b"true" } else { b"false" });
+    out.extend_from_slice(b",\"budget\":");
+    write_i64(&mut out, v.main.budget as i64);
+    out.extend_from_slice(b",\"verdict\":");
+    write_str(&mut out, &v.main.verdict);
+    out.extend_from_slice(b"}}");
+    if out.len() > OBL_ARTIFACT_MAX_BYTES {
+        return Err(CodecError::TooLarge { size: out.len() });
+    }
+    Ok(out)
+}
+
+/// Read + validate the image-verdicts record. A schema/semantics mismatch or
+/// a malformed shape is `ImageVerdictsInvalid` (E6415) — fail-loud: the
+/// guards are never silently treated as retained off a corrupt record.
+pub fn read_image_verdicts(bytes: &[u8]) -> Result<ImageVerdicts, CodecError> {
+    let mut r = Reader { b: bytes, i: 0 };
+    r.skip_ws();
+    if r.bump()? != b'{' {
+        return Err(CodecError::ImageVerdictsInvalid {
+            found: String::new(),
+        });
+    }
+    let mut schema: Option<String> = None;
+    let mut semantics: Option<String> = None;
+    let mut guards: Option<String> = None;
+    let mut high: u32 = 0;
+    let mut top = false;
+    let mut budget: u32 = 0;
+    let mut verdict: String = String::new();
+    loop {
+        r.skip_ws();
+        match r.peek() {
+            Some(b'}') => {
+                let _ = r.bump();
+                break;
+            }
+            Some(b',') => {
+                r.i += 1;
+            }
+            _ => {}
+        }
+        r.skip_ws();
+        let key = r.parse_string()?;
+        r.expect(b':')?;
+        match key.as_str() {
+            "schema" => schema = Some(r.parse_string()?),
+            "semantics" => semantics = Some(r.parse_string()?),
+            "guards" => guards = Some(r.parse_string()?),
+            "main" => {
+                r.expect(b'{')?;
+                loop {
+                    r.skip_ws();
+                    match r.peek() {
+                        Some(b'}') => {
+                            let _ = r.bump();
+                            break;
+                        }
+                        Some(b',') => {
+                            r.i += 1;
+                        }
+                        _ => {}
+                    }
+                    r.skip_ws();
+                    let k = r.parse_string()?;
+                    r.expect(b':')?;
+                    match k.as_str() {
+                        "high" => high = r.parse_u64()? as u32,
+                        "top" => top = r.parse_bool()?,
+                        "budget" => budget = r.parse_u64()? as u32,
+                        "verdict" => verdict = r.parse_string()?,
+                        _ => r.skip_value()?,
+                    }
+                }
+            }
+            _ => r.skip_value()?,
+        }
+    }
+    let found = schema.unwrap_or_default();
+    if found != crate::report::IMAGE_VERDICTS_SCHEMA {
+        return Err(CodecError::ImageVerdictsInvalid { found });
+    }
+    let sem = semantics.unwrap_or_default();
+    if sem != crate::semantics::SEMANTICS_VERSION {
+        return Err(CodecError::ImageVerdictsInvalid { found: sem });
+    }
+    let elided = match guards.as_deref() {
+        Some("elided") => true,
+        Some("retained") => false,
+        _ => {
+            return Err(CodecError::ImageVerdictsInvalid {
+                found: guards.unwrap_or_default(),
+            })
+        }
+    };
+    Ok(ImageVerdicts {
+        elided,
+        main: crate::report::MainContextAccounting {
+            high,
+            top,
+            budget,
+            verdict,
+        },
+    })
 }
 
 fn write_report_bytes(r: &crate::report::VerifyReport) -> Vec<u8> {

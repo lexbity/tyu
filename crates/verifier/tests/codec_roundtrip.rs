@@ -241,6 +241,50 @@ fn golden_conformance_exact_bytes() {
     );
 }
 
+/// Slice P7: the image-verdicts record (Q5/FR-11, E6415) — the durable,
+/// validated evidence of the two-pass guard-elision decision. Round-trips
+/// byte-exactly, and a malformed/version-mismatched record is E6415
+/// (fail-loud: the guards are never silently treated as retained off a
+/// corrupt record).
+#[test]
+fn image_verdicts_roundtrip_and_fail_closed() {
+    use verifier::codec::{encode_image_verdicts, read_image_verdicts, CodecError, ImageVerdicts};
+    use verifier::report::MainContextAccounting;
+
+    let rec = ImageVerdicts {
+        elided: true,
+        main: MainContextAccounting {
+            high: 12,
+            top: false,
+            budget: 16384,
+            verdict: "discharged".to_string(),
+        },
+    };
+    let bytes = encode_image_verdicts(&rec).expect("encode");
+    let back = read_image_verdicts(&bytes).expect("decode");
+    assert_eq!(back, rec, "image verdicts must round-trip");
+    assert!(bytes.starts_with(b"{\"schema\":\"tyu.image-verdicts/v1\",\"semantics\":\"tyu.ir-sem/1.0\",\"guards\":\"elided\""));
+
+    // A retained record round-trips too (the refused-elision state).
+    let retained = ImageVerdicts {
+        elided: false,
+        ..rec
+    };
+    let b2 = encode_image_verdicts(&retained).expect("encode");
+    assert!(read_image_verdicts(&b2).expect("decode").elided == false);
+
+    // Malformed input → E6415, never a silent default.
+    let err = read_image_verdicts(b"{\"schema\":\"tyu.image-verdicts/v9\"}").unwrap_err();
+    assert_eq!(err.code(), 6415);
+    let err = read_image_verdicts(b"not json at all").unwrap_err();
+    assert_eq!(err.code(), 6415);
+    let err = read_image_verdicts(
+        b"{\"schema\":\"tyu.image-verdicts/v1\",\"semantics\":\"tyu.ir-sem/1.0\",\"guards\":\"sometimes\"}",
+    )
+    .unwrap_err();
+    assert!(matches!(err, CodecError::ImageVerdictsInvalid { .. }));
+}
+
 /// The golden document's top-level key order is pinned textually (not just by
 /// byte equality): schema → semantics → module → abi_contract_version → facts
 /// → obligations, and per-obligation id → id_hash → kind → site → formula →

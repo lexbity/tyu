@@ -104,7 +104,7 @@ pub fn emit_region_create(gen: &mut X86_64HostedBackend<'_>) {
     gen.out.write(b"  mov [__region_size + r12*8], rsi\n");
     gen.out.write(b"  mov qword [__region_off + r12*8], 0\n");
     gen.out.write(b"  mov rax, r12\n");
-    ophelpers::emit_push_rax(gen.out);
+    ophelpers::emit_push_rax(gen.out, !gen.ds_guards_elided);
 }
 
 pub fn emit_region_alloc(gen: &mut X86_64HostedBackend<'_>) {
@@ -171,7 +171,7 @@ pub fn emit_region_alloc(gen: &mut X86_64HostedBackend<'_>) {
     gen.out.write(b"  mov rcx, [__region_base + rax*8]\n");
     gen.out.write(b"  add rcx, r8\n");
     gen.out.write(b"  mov rax, rcx\n");
-    ophelpers::emit_push_rax(gen.out);
+    ophelpers::emit_push_rax(gen.out, !gen.ds_guards_elided);
 }
 
 pub fn emit_region_reset(gen: &mut X86_64HostedBackend<'_>) {

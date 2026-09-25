@@ -29,10 +29,15 @@ pub fn emit_update_ds_high(out: &mut dyn Output) {
     out.write(b":\n");
 }
 
-pub fn emit_push_i64(out: &mut dyn Output, v: i64) {
-    out.write(b"  lea rax, [r15+8]\n");
-    out.write(b"  cmp rax, r14\n");
-    out.write(b"  ja __stack_overflow\n");
+pub fn emit_push_i64(out: &mut dyn Output, v: i64, guard: bool) {
+    // C8 guard: bound-check the next slot against r14 (`__lang_ds_limit`)
+    // BEFORE the write — fail-closed. Elided only under a discharged
+    // image-level stack-budget verdict (slice P7).
+    if guard {
+        out.write(b"  lea rax, [r15+8]\n");
+        out.write(b"  cmp rax, r14\n");
+        out.write(b"  ja __stack_overflow\n");
+    }
     if (i32::MIN as i64..=i32::MAX as i64).contains(&v) {
         // Fits in a sign-extended imm32: `mov r/m64, imm32` is encodable.
         out.write(b"  mov qword [r15], ");
@@ -49,10 +54,12 @@ pub fn emit_push_i64(out: &mut dyn Output, v: i64) {
     emit_update_ds_high(out);
 }
 
-pub fn emit_push_u64(out: &mut dyn Output, v: u64) {
-    out.write(b"  lea rax, [r15+8]\n");
-    out.write(b"  cmp rax, r14\n");
-    out.write(b"  ja __stack_overflow\n");
+pub fn emit_push_u64(out: &mut dyn Output, v: u64, guard: bool) {
+    if guard {
+        out.write(b"  lea rax, [r15+8]\n");
+        out.write(b"  cmp rax, r14\n");
+        out.write(b"  ja __stack_overflow\n");
+    }
     let as_i64 = v as i64;
     if as_i64 >= i32::MIN as i64 && as_i64 <= i32::MAX as i64 {
         // Fits in a sign-extended imm32: `mov r/m64, imm32` is encodable.
@@ -70,10 +77,12 @@ pub fn emit_push_u64(out: &mut dyn Output, v: u64) {
     emit_update_ds_high(out);
 }
 
-pub fn emit_push_rax(out: &mut dyn Output) {
-    out.write(b"  lea rcx, [r15+8]\n");
-    out.write(b"  cmp rcx, r14\n");
-    out.write(b"  ja __stack_overflow\n");
+pub fn emit_push_rax(out: &mut dyn Output, guard: bool) {
+    if guard {
+        out.write(b"  lea rcx, [r15+8]\n");
+        out.write(b"  cmp rcx, r14\n");
+        out.write(b"  ja __stack_overflow\n");
+    }
     out.write(b"  mov [r15], rax\n");
     out.write(b"  add r15, 8\n");
     emit_update_ds_high(out);
@@ -103,11 +112,13 @@ pub fn emit_i64(out: &mut dyn Output, mut v: i64) {
     out.write(&buf[..n]);
 }
 
-pub fn emit_dup(out: &mut dyn Output) {
+pub fn emit_dup(out: &mut dyn Output, guard: bool) {
     out.write(b"  mov rax, [r15-8]\n");
-    out.write(b"  lea rcx, [r15+8]\n");
-    out.write(b"  cmp rcx, r14\n");
-    out.write(b"  ja __stack_overflow\n");
+    if guard {
+        out.write(b"  lea rcx, [r15+8]\n");
+        out.write(b"  cmp rcx, r14\n");
+        out.write(b"  ja __stack_overflow\n");
+    }
     out.write(b"  mov [r15], rax\n");
     out.write(b"  add r15, 8\n");
     emit_update_ds_high(out);
@@ -160,10 +171,12 @@ pub fn emit_store_local(out: &mut dyn Output, idx: u32) {
     out.write(b"], rax\n");
 }
 
-pub fn emit_load_local(out: &mut dyn Output, idx: u32) {
-    out.write(b"  lea rax, [r15+8]\n");
-    out.write(b"  cmp rax, r14\n");
-    out.write(b"  ja __stack_overflow\n");
+pub fn emit_load_local(out: &mut dyn Output, idx: u32, guard: bool) {
+    if guard {
+        out.write(b"  lea rax, [r15+8]\n");
+        out.write(b"  cmp rax, r14\n");
+        out.write(b"  ja __stack_overflow\n");
+    }
     out.write(b"  mov rax, [rsp+");
     write_u32(out, idx * 8);
     out.write(b"]\n");
@@ -307,9 +320,9 @@ mod tests {
     #[test]
     fn data_stack_push_emits_overflow_guard() {
         let mut o = Collect(Vec::new());
-        emit_push_i64(&mut o, 42);
-        emit_push_u64(&mut o, 7);
-        emit_push_rax(&mut o);
+        emit_push_i64(&mut o, 42, true);
+        emit_push_u64(&mut o, 7, true);
+        emit_push_rax(&mut o, true);
         let asm = String::from_utf8(o.0).unwrap();
 
         // One guard per push, branching to the runtime trap on overflow.
@@ -334,6 +347,27 @@ mod tests {
         assert!(
             guard < write,
             "overflow guard must precede the slot write:\n{asm}"
+        );
+    }
+
+    /// Slice P7: with `guard = false` the C8 check is omitted but the
+    /// `__lang_ds_high` observability update is retained (it is not a check —
+    /// §10's `measured ≤ declared` channel runs against elided builds too).
+    #[test]
+    fn elided_push_omits_guard_keeps_high_water() {
+        let mut o = Collect(Vec::new());
+        emit_push_i64(&mut o, 42, false);
+        emit_dup(&mut o, false);
+        emit_load_local(&mut o, 0, false);
+        let asm = String::from_utf8(o.0).unwrap();
+        assert!(
+            !asm.contains("ja __stack_overflow"),
+            "elided pushes must carry no C8 guard:\n{asm}"
+        );
+        assert_eq!(
+            asm.matches("cmp r15, [__lang_ds_high]").count(),
+            3,
+            "every push keeps its high-water update (observability, not a check):\n{asm}"
         );
     }
 }

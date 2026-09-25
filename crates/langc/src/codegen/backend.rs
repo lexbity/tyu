@@ -65,4 +65,13 @@ impl<'a> CodegenBackend for Backend<'a> {
             b.set_mmio_checks_discharged(elide);
         }
     }
+
+    // Slice P7 (Q5/FR-11): the x86 data-stack guard is the only elidable C8
+    // site; ARM/RISC-V word-entry guards are native-stack geometry, out of
+    // scope (§2) — they keep the trait's no-op default.
+    fn set_ds_guards_elided(&mut self, elide: bool) {
+        if let Backend::X86(b) = self {
+            b.set_ds_guards_elided(elide);
+        }
+    }
 }
