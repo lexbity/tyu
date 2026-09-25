@@ -75,6 +75,14 @@ pub struct FixtureEntry {
     ///             fewer or more is a test failure.
     #[serde(default)]
     pub expects: Option<u32>,
+    /// Slice 8: the verification policy this fixture's *compile* is held to.
+    /// `None` (default) — the legacy `--checks=all` compile, zero behavior
+    /// change. `Some(no-open)` — the fixture compiles under
+    /// `--checks=undischarged` and the build fails if any obligation stays
+    /// open (E6410); `no-open-no-assumptions` additionally fails on assumed
+    /// verdicts. Adoption is per-suite, explicit.
+    #[serde(default)]
+    pub verify_policy: Option<crate::args::VerifyPolicy>,
 }
 
 /// The parsed test manifest.
@@ -507,6 +515,7 @@ requires = ["TaskScheduler"]
                     targets: Vec::new(),
                     poison: None,
                     expects: None,
+                    verify_policy: None,
                 })
                 .collect(),
             fixtures_cfg: FixturesCfg {

@@ -1,0 +1,19 @@
+# Slice-8 verify allowlist (static-verification.md §14 P8).
+#
+# Every OPEN obligation in the ci/verify-corpus builds must be justified
+# here (one `id<TAB>reason` per line); ci/guards.sh G20 fails on any open id
+# NOT in this list, and on any list entry that no longer occurs in the corpus
+# (self-cleaning — a stale entry means the justification is obsolete and must
+# be re-derived).
+#
+# The opens below are the *designed* open classes (Q4: memory not modeled,
+# callees cannot know their callers; Q5: callee-side preconditions on ⊤
+# inputs; FR-21: module-loading retains contract checks) plus the book's own
+# constant-out-of-range example, whose runtime trap is the *semantics* of
+# `as Percent` (a discharge would remove a trap that must fire).
+OpenCast::main::subtype-range::0	provably-failing out-of-range constant `150 as Percent` — the runtime trap is the cast's semantics (book ch03 compile-time-discharge example, retained)
+Contract::main::contract-pre::0	caller-side contract-pre at main's call to withdraw — open under module-loading retention (FR-21); discharge is external/SMT work
+Contract::pct-in-range::subtype-range::0	callee input ⊤ — a subtype param cannot be proven at the callee (Q4)
+Contract::pct-in-range::subtype-range::1	callee result derived from a ⊤ input — return provenance unproven (Q4)
+Contract::withdraw::contract-pre::0	callee-side needs contract-pre on a ⊤ input — the callee cannot know its callers (Q5/Q12)
+Contract::withdraw::subtype-range::0	callee input ⊤ — a subtype param cannot be proven at the callee (Q4)

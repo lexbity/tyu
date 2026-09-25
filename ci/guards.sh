@@ -33,6 +33,14 @@
 #        (arm/riscv metal.trust words + x86 __region_* arrays) and trap 26
 #        registered in the diag claim table.
 #   G19 `.obl.json` extraction is byte-deterministic across runs (P2, FR-17).
+#   G20 Verify corpus fully accounted against ci/verify-allowlist.txt (P8):
+#       every open obligation justified; no stale allowlist entries.
+#   G21 Every platform pack carries the `[verification]` grant and no retired
+#       hand-declared `data_stack_slots` key (amended §6.4, E6403).
+#   G22 Report honesty block agrees with the object on the corpus (FR-16,
+#       guard form).
+#   G23 NFR-10 doc gates: README doc map, ch03 both-policies example, ch04
+#       contract obligations/elision, error-registry E6410/E6413.
 #
 # Escape hatch: add `# guards: allow-no-tests` as a comment in the
 # package's Cargo.toml to suppress G1/G2 for that package.  This is
@@ -669,6 +677,200 @@ else
         msg $YELLOW "  WARN: skipping obl determinism gate (no cargo)"
     fi
 fi
+
+echo ""
+# --- G20: verify corpus accounted against the allowlist (slice P8) ---
+# Every OPEN obligation across the `ci/verify-corpus` builds must be
+# justified in `ci/verify-allowlist.txt` (id<TAB>reason); the gate fails on
+# any open id NOT in the list, and on any list entry that no longer occurs
+# (self-cleaning — a stale entry means the justification died and must be
+# re-derived). The corpus is built the way a user builds: hosted target,
+# default features, `--verify=on`.
+g20_fail=0
+if command -v python3 >/dev/null 2>&1 && command -v cargo >/dev/null 2>&1; then
+    if cargo build -q -p tyu >/dev/null 2>&1; then
+        g20_dir=$(mktemp -d "${TMPDIR:-/tmp}/tyu-guards-g20.XXXXXX")
+        allowlist="ci/verify-allowlist.txt"
+        seen=""
+        corpus_bad=0
+        for mod in ci/verify-corpus/*.mod; do
+            name=$(basename "$mod" .mod)
+            out="$g20_dir/$name"
+            if target/debug/tyu build --target=x86_64-unknown-linux-gnu --out-dir="$out" "$mod" >/dev/null 2>&1; then
+                : # build ok; inspect report below
+            else
+                msg $RED "  G20 FAIL: corpus module '$name' did not build"
+                corpus_bad=1
+                continue
+            fi
+            python3 - "$out/verify-report.json" "$allowlist" "$name" <<'PYEOF'
+import json, sys
+report, allowlist, name = sys.argv[1], sys.argv[2], sys.argv[3]
+d = json.load(open(report))
+opens = [o["id"] for o in d["open"]]
+allowed = set()
+with open(allowlist) as f:
+    for line in f:
+        line = line.rstrip("\n")
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split("\t")
+        if parts:
+            allowed.add(parts[0])
+unjustified = [i for i in opens if i not in allowed]
+print("G20 corpus", name, "open", len(opens))
+for i in unjustified:
+    print("UNJUSTIFIED", i)
+sys.exit(1 if unjustified else 0)
+PYEOF
+            rc=$?
+            if [ $rc -ne 0 ]; then
+                msg $RED "  G20 FAIL: '$name' has open obligations not in the allowlist"
+                g20_fail=1
+            fi
+            seen="$seen
+$(python3 - "$out/verify-report.json" <<'PYEOF'
+import json, sys
+d = json.load(open(sys.argv[1]))
+for o in d["open"]:
+    print(o["id"])
+PYEOF
+)"
+        done
+        if [ "$corpus_bad" -ne 0 ]; then
+            g20_fail=1
+        fi
+        # Self-cleaning: every allowlist id must still occur in the corpus.
+        stale=""
+        while IFS= read -r line; do
+            case "$line" in
+                ""|\#*) continue ;;
+            esac
+            id="${line%%$'\t'*}"
+            if ! printf '%s' "$seen" | grep -qx "$id"; then
+                stale="$stale $id"
+            fi
+        done < "$allowlist"
+        if [ -n "$stale" ]; then
+            msg $RED "  G20 FAIL: stale allowlist entries (no longer open in the corpus):$stale"
+            g20_fail=1
+        fi
+        rm -rf "$g20_dir"
+        if [ "$g20_fail" -eq 0 ]; then
+            msg $GREEN "  G20: verify corpus fully accounted against ci/verify-allowlist.txt"
+        fi
+    else
+        msg $YELLOW "  WARN: skipping G20 (cargo build -p tyu failed)"
+    fi
+else
+    if [ "${CI:-}" ]; then
+        msg $RED "  G20 FAIL: corpus gate requires cargo+python3 under CI"
+        g20_fail=1
+    else
+        msg $YELLOW "  WARN: skipping G20 (no cargo/python3)"
+    fi
+fi
+failures=$((failures + g20_fail))
+
+# --- G21: platform packs carry the `[verification]` geometry grant (P8) ---
+# Every in-tree platform pack must declare the ISR bounded-stack grant
+# (`isr_stack_slots`, the one *declared* budget — amended §6.4), and must NOT
+# carry the retired hand-declared `data_stack_slots` key (E6403 rejects it at
+# parse — the migrated packs must be clean so the lint has nothing to hide).
+g21_fail=0
+for manifest in platforms/*/platform.toml runtime/*.platform.toml; do
+    if [ ! -e "$manifest" ]; then
+        continue
+    fi
+    if ! grep -q '^\s*\[verification\]' "$manifest" || ! grep -q '^\s*isr_stack_slots' "$manifest"; then
+        msg $RED "  G21 FAIL: '$manifest' lacks the [verification] isr_stack_slots grant"
+        g21_fail=1
+    fi
+    if grep -q '^\s*data_stack_slots' "$manifest"; then
+        msg $RED "  G21 FAIL: '$manifest' still declares the retired hand-declared data_stack_slots key (E6403)"
+        g21_fail=1
+    fi
+done
+[ "$g21_fail" -eq 0 ] && msg $GREEN "  G21: every platform pack carries the [verification] grant (no retired data_stack_slots)"
+failures=$((failures + g21_fail))
+
+# --- G22: the report names the truth (FR-16, guard form, P8) ---
+# The open-cast corpus module's report must agree with the object: the
+# retained out-of-range constant trap is exactly one subtype check and a
+# provably-failing record (a discharge here would remove a trap that must
+# fire — the honest block says so, and the hosted image keeps its data-stack
+# guards).
+g22_fail=0
+if command -v python3 >/dev/null 2>&1 && command -v cargo >/dev/null 2>&1; then
+    if cargo build -q -p tyu >/dev/null 2>&1; then
+        g22_dir=$(mktemp -d "${TMPDIR:-/tmp}/tyu-guards-g22.XXXXXX")
+        if target/debug/tyu build --target=x86_64-unknown-linux-gnu --out-dir="$g22_dir" \
+            ci/verify-corpus/open-cast.mod >/dev/null 2>&1; then
+            python3 - "$g22_dir/verify-report.json" <<'PYEOF'
+import json, sys
+d = json.load(open(sys.argv[1]))
+em = d["emitted_checks"]
+assert em["subtype_range"] == 1, f"open-cast must retain exactly one subtype trap: {em}"
+assert em["data_stack_guards"] is True, "hosted image keeps its data-stack guards"
+pf = [p["id"] for p in d["provably_failing"]]
+assert any("main::subtype-range::0" in pid for pid in pf), f"report must name the provably-failing cast: {pf}"
+opens = [o["id"] for o in d["open"]]
+assert any("main::subtype-range::0" in oid for oid in opens), "the retained trap is an open obligation"
+PYEOF
+            g22_rc=$?
+            if [ $g22_rc -eq 0 ]; then
+                msg $GREEN "  G22: report honesty block agrees with the object (FR-16, guard form)"
+            else
+                msg $RED "  G22 FAIL: report/object bijection broken on the verified corpus"
+                g22_fail=1
+            fi
+        else
+            msg $RED "  G22 FAIL: open-cast corpus module did not build"
+            g22_fail=1
+        fi
+        rm -rf "$g22_dir"
+    else
+        msg $YELLOW "  WARN: skipping G22 (cargo build -p tyu failed)"
+    fi
+else
+    if [ "${CI:-}" ]; then
+        msg $RED "  G22 FAIL: honesty gate requires cargo+python3 under CI"
+        g22_fail=1
+    else
+        msg $YELLOW "  WARN: skipping G22 (no cargo/python3)"
+    fi
+fi
+failures=$((failures + g22_fail))
+
+# --- G23: NFR-10 doc gates (P8) ---
+# The verification docs are registered and teach the boundary as the norm:
+# README maps the design-doc suite, the book teaches the both-policies
+# example (ch03) and contract obligations/elision (ch04), and the error
+# registry names the artifact band codes.
+g23_fail=0
+if ! grep -q "ir-op-semantics" README.md \
+   || ! grep -q "verification-obligations" README.md \
+   || ! grep -q "static-verification" README.md; then
+    msg $RED "  G23 FAIL: README doc map must register the verification design docs"
+    g23_fail=1
+fi
+if ! grep -q 'E6410' devdocs/book_v3/appendix-b-error-registry.md \
+   || ! grep -q 'E6413' devdocs/book_v3/appendix-b-error-registry.md; then
+    msg $RED "  G23 FAIL: error-registry appendix must carry E6410/E6413"
+    g23_fail=1
+fi
+if ! grep -q "Compile-time discharge" devdocs/book_v3/ch03-types.md \
+   || ! grep -q "no-open" devdocs/book_v3/ch03-types.md; then
+    msg $RED "  G23 FAIL: ch03 must teach the both-policies compile-time-discharge example"
+    g23_fail=1
+fi
+if ! grep -q "Contract obligations and elision" devdocs/book_v3/ch04-contracts.md \
+   || ! grep -q "module-loading" devdocs/book_v3/ch04-contracts.md; then
+    msg $RED "  G23 FAIL: ch04 must teach contract obligations and dynamic-export retention"
+    g23_fail=1
+fi
+[ "$g23_fail" -eq 0 ] && msg $GREEN "  G23: NFR-10 doc gates (doc map, both-policies example, errors, contracts)"
+failures=$((failures + g23_fail))
 
 echo ""
 msg $GREEN "============================================"

@@ -876,14 +876,25 @@ fn run_single_suite(
     let def_path = out_dir.join(format!("{}.def", mod_name));
     let _ = std::fs::write(&def_path, &def_content);
 
-    // Compile the fixture as lib.
+    // Compile the fixture as lib. Slice 8: a suite that declares a
+    // `verify_policy` compiles the fixture under the verification pipeline
+    // and is then held to that policy (open obligations → E6410); the
+    // default (absent policy) is the legacy `--checks=all` compile.
     let mut objs: Vec<PathBuf> = Vec::new();
-
-    let fixture_o = compile_mod(&build_ctx, &fixture_path, true, feature_set)?;
+    let fixture_o = compile_mod(
+        &build_ctx,
+        &fixture_path,
+        true,
+        feature_set,
+        fixture.verify_policy,
+    )?;
+    if let Some(policy) = fixture.verify_policy {
+        enforce_fixture_verify_policy(&build_ctx, &names.module, policy)?;
+    }
     objs.push(fixture_o.clone());
 
-    // Compile the runner.
-    let runner_o = compile_mod(&build_ctx, &runner_path, false, feature_set)?;
+    // Compile the runner (infrastructure, never policy-adopted).
+    let runner_o = compile_mod(&build_ctx, &runner_path, false, feature_set, None)?;
     objs.push(runner_o);
 
     // Assemble runtime units.
@@ -1344,7 +1355,35 @@ fn source_tokens(src: &str) -> Vec<&str> {
 }
 
 /// Compile a .mod file with langc.
+///
+/// Slice 8: when the fixture declares a `verify_policy` (`no-open` /
+/// `no-open-no-assumptions`), the fixture compiles under the verification
+/// pipeline (`--checks=undischarged --write-obl --verdicts=<empty>` — the
+/// exact P4 default wiring: the in-tree discharger decides, a fresh empty
+/// verdicts file cannot close anything it should not) so the resolved
+/// obligation verdicts are auditable; the enforcement
+/// ([`enforce_fixture_verify_policy`]) then holds the fixture to its policy.
+/// Default (`None`) — the legacy `--checks=all` compile, zero behavior
+/// change (adoption is per-suite, explicit).
 fn compile_mod(
+    ctx: &build::BuildContext,
+    src: &Path,
+    is_lib: bool,
+    feature_set: FeatureSet,
+    verify_policy: Option<crate::args::VerifyPolicy>,
+) -> Result<PathBuf, TyuError> {
+    let Some(policy) = verify_policy else {
+        return compile_mod_legacy(ctx, src, is_lib, feature_set);
+    };
+    let sysroot = workspace_root().join("sysroot");
+    let mut include_dirs = vec![fixtures_dir()];
+    include_dirs.push(ctx.out_dir.clone());
+    compile_mod_pipeline(ctx, src, is_lib, feature_set, &sysroot, &include_dirs, policy)
+}
+
+/// The legacy single-module compile (pre-slice-8 behavior): langc
+/// `--emit=obj` with default `--checks=all`.
+fn compile_mod_legacy(
     ctx: &build::BuildContext,
     src: &Path,
     is_lib: bool,
@@ -1358,6 +1397,184 @@ fn compile_mod(
     include_dirs.push(ctx.out_dir.clone());
     build::compile_module_for_context(ctx, src, is_lib, Some(&sysroot), &include_dirs, feature_set)
         .map_err(|e| TyuError::Test(e.to_string()))
+}
+
+/// The verification-pipeline compile for a policy-adopting fixture: langc
+/// `--emit=obj --write-obl --checks=undischarged --verdicts=<empty>` — the
+/// same argv `tyu build` uses in its default mode (P4/Q11), with an
+/// *empty but valid* verdicts file so only the in-tree dischargers decide
+/// (a fresh file can never close a site it should not, §7.5).
+fn compile_mod_pipeline(
+    ctx: &build::BuildContext,
+    src: &Path,
+    is_lib: bool,
+    feature_set: FeatureSet,
+    sysroot: &Path,
+    include_dirs: &[PathBuf],
+    policy: crate::args::VerifyPolicy,
+) -> Result<PathBuf, TyuError> {
+    let _ = policy; // the argv does not depend on the specific policy here
+    let triple = std::str::from_utf8(ctx.target.triple()).map_err(|_| TyuError::NonUtf8Triple)?;
+    let langc = crate::toolchain::resolve_tool("langc")?;
+    let before: std::collections::HashSet<PathBuf> = std::fs::read_dir(&ctx.out_dir)
+        .ok()
+        .into_iter()
+        .flat_map(|rd| rd.filter_map(|e| e.ok()))
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("o"))
+        .collect();
+
+    // An empty-but-valid verdicts file for this fixture (deterministic name
+    // per fixture, so repeated runs share the slot and the cache discipline).
+    let slot_dir = ctx.out_dir.join(".tyu-verify");
+    std::fs::create_dir_all(&slot_dir).map_err(TyuError::Io)?;
+    let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("fixture");
+    let slot = slot_dir.join(format!("{stem}-policy.verdicts.json"));
+    let empty = verifier::verdict::encode_verdicts(
+        "tyu",
+        env!("CARGO_PKG_VERSION"),
+        &[],
+        0,
+        &verifier::verdict::EmittedChecksData::default(),
+    )
+    .map_err(|e| TyuError::Test(format!("encoding empty verdicts slot: {e:?}")))?;
+    std::fs::write(&slot, &empty).map_err(TyuError::Io)?;
+
+    let mut cmd = Command::new(&langc);
+    cmd.arg("--emit=obj");
+    cmd.arg(format!("--target={triple}"));
+    cmd.arg(format!("--out-dir={}", ctx.out_dir.display()));
+    cmd.arg("--write-obl");
+    cmd.arg("--checks=undischarged");
+    cmd.arg(format!("--verdicts={}", slot.display()));
+    cmd.arg(format!("--sysroot={}", sysroot.display()));
+    if let Some(sel) = ctx.platform_selection() {
+        cmd.arg(format!("--platform={}", sel.pack.pack_root().display()));
+    }
+    for inc in include_dirs {
+        cmd.arg("-I");
+        cmd.arg(inc);
+    }
+    let mut flag_buf = [""; 8];
+    let n = feature_set.write_flags(&mut flag_buf);
+    if n > 0 {
+        cmd.arg(format!("--features={}", flag_buf[..n].join(",")));
+    }
+    if is_lib {
+        cmd.arg("--lib");
+    }
+    cmd.arg(src);
+    let status = cmd
+        .status()
+        .map_err(|e| TyuError::Test(format!("running langc: {e}")))?;
+    if !status.success() {
+        return Err(TyuError::Test(format!(
+            "langc failed on '{}' (exit code {:?})",
+            src.display(),
+            status.code(),
+        )));
+    }
+
+    // langc names the object after the module *declaration*; pick the newly
+    // produced `.o` (same heuristic as `build::compile_simple`).
+    Ok(std::fs::read_dir(&ctx.out_dir)
+        .ok()
+        .into_iter()
+        .flat_map(|rd| rd.filter_map(|e| e.ok()))
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("o") && !before.contains(p))
+        .next()
+        .ok_or_else(|| {
+            TyuError::Test(format!(
+                "langc produced no .o for '{}' in '{}'",
+                src.display(),
+                ctx.out_dir.display(),
+            ))
+        })?)
+}
+
+/// Slice 8: hold a policy-adopting fixture to its declared `verify_policy`
+/// by auditing its resolved obligation verdicts. langc wrote `<Module>.obl.json`
+/// (the obligation records) and `<Module>.verdicts.inTree.json` (the resolved
+/// non-open verdicts + honest accounting) beside the object; an obligation
+/// whose `(id, id_hash)` is absent from the echo is **open**. `no-open`
+/// fails the suite (E6410-class) listing every open site; `no-open-no-
+/// assumptions` additionally fails on assumed verdicts. Fail-closed: a
+/// missing/corrupt echo or artifact is an error, never a silent pass.
+fn enforce_fixture_verify_policy(
+    ctx: &build::BuildContext,
+    module_name: &str,
+    policy: crate::args::VerifyPolicy,
+) -> Result<(), TyuError> {
+    let artifact = ctx.out_dir.join(format!("{module_name}.obl.json"));
+    let echo_path = ctx.out_dir.join(format!("{module_name}.verdicts.inTree.json"));
+    let obls = std::fs::read(&artifact).map_err(|e| {
+        TyuError::Test(format!(
+            "verify_policy={}: reading '{}': {e}",
+            policy.as_str(),
+            artifact.display()
+        ))
+    })?;
+    let set = verifier::codec::read_obl(&obls)
+        .map_err(|e| TyuError::Test(format!("obligation artifact invalid (E{}): {e:?}", e.code())))?;
+    let echo = verifier::verdict::read_echo(&std::fs::read(&echo_path).map_err(|e| {
+        TyuError::Test(format!(
+            "verify_policy={}: reading verdicts echo '{}': {e}",
+            policy.as_str(),
+            echo_path.display()
+        ))
+    })?)
+    .map_err(|e| TyuError::Test(format!("verdicts echo invalid (E6402): {e:?}")))?;
+
+    let open: Vec<&verifier::model::Obligation> = set
+        .obligations
+        .iter()
+        .filter(|o| echo.verdicts.lookup(&o.id, &o.id_hash).is_none())
+        .collect();
+    let assumed: Vec<&verifier::model::Obligation> = set
+        .obligations
+        .iter()
+        .filter_map(|o| match echo.verdicts.lookup(&o.id, &o.id_hash) {
+            Some(r) if r.status == verifier::verdict::VerdictStatus::Assumed => Some(o),
+            _ => None,
+        })
+        .collect();
+
+    let fails_open = matches!(policy, crate::args::VerifyPolicy::NoOpen | crate::args::VerifyPolicy::NoOpenNoAssumptions)
+        && !open.is_empty();
+    let fails_assumed =
+        policy == crate::args::VerifyPolicy::NoOpenNoAssumptions && !assumed.is_empty();
+    if fails_open || fails_assumed {
+        let mut msg = format!(
+            "E6410: fixture '{}' has open obligations under verify_policy={}",
+            module_name,
+            policy.as_str()
+        );
+        for o in open.iter().take(32) {
+            msg.push_str(&format!(
+                "\n  {} — {}::{}.{} line {}",
+                o.kind.as_str(),
+                module_name,
+                o.site.word,
+                o.site.occurrence,
+                o.site.span.line,
+            ));
+        }
+        if open.len() > 32 {
+            msg.push_str(&format!("\n  … and {} more", open.len() - 32));
+        }
+        for o in assumed.iter().take(32) {
+            msg.push_str(&format!(
+                "\n  assumed {} — {}::{}.{}",
+                o.kind.as_str(),
+                module_name,
+                o.site.word,
+                o.site.occurrence,
+            ));
+        }
+        return Err(TyuError::Test(msg));
+    }
+    Ok(())
 }
 
 fn fixtures_dir() -> PathBuf {
@@ -1394,6 +1611,7 @@ mod tests {
             targets: Vec::new(),
             poison: None,
             expects: None,
+            verify_policy: None,
         }
     }
 
@@ -1707,6 +1925,7 @@ rung = "{rung}"
             targets: Vec::new(),
             poison: None,
             expects: None,
+            verify_policy: None,
         }
     }
 

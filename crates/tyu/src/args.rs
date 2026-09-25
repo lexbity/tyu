@@ -259,6 +259,28 @@ impl VerifyPolicy {
     }
 }
 
+impl std::str::FromStr for VerifyPolicy {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        VerifyPolicy::parse(s).ok_or_else(|| {
+            format!(
+                "unknown verify_policy '{}': expected 'open-ok', 'no-open', or 'no-open-no-assumptions'",
+                s
+            )
+        })
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for VerifyPolicy {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        std::str::FromStr::from_str(&s).map_err(serde::de::Error::custom)
+    }
+}
+
 impl VerifyMode {
     pub fn parse(v: &str) -> Option<Self> {
         match v {
