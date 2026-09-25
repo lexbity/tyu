@@ -31,6 +31,9 @@ pub fn claim_text(trap_code: u16) -> &'static str {
         5030 => "E_ISR_STACK",
         5031 => "E_RESOURCE_SHARED_UNLOCKED",
         5040 => "E_DIVERGE_IN_BOUNDED",
+        // Contract band 33xx (slice P6 — static-verification.md Q6, FR-7)
+        3313 => "E_CONTRACT_PREDICATE_IMPURE",
+        3314 => "E_CONTRACT_PREDICATE_TOO_LARGE",
         // Static stack-depth 51xx band
         5100 => "E_STACK_UNBOUNDED",
         5101 => "E_STACK_EXCEEDS_BUDGET",
@@ -43,6 +46,7 @@ pub fn claim_text(trap_code: u16) -> &'static str {
         6402 => "E_VERDICTS_MALFORMED",
         6403 => "E_DESC_VERIFICATION_INVALID",
         6410 => "E_VERIFY_NO_OPEN",
+        6413 => "E_CONTRACT_INTERFACE_STALE",
         6415 => "E_IMAGE_VERDICTS_INVALID",
         _ => "UNKNOWN_TRAP_CODE",
     }
@@ -107,7 +111,8 @@ mod tests {
     fn every_registered_code_has_text() {
         let known = [
             10u16, 20, 21, 22, 23, 24, 25, 26, 5001, 5002, 5003, 5004, 5010, 5011, 5012, 5020,
-            5030, 5031, 5040, 5100, 5101, 5103, 6400, 6401, 6402, 6403, 6410, 6415,
+            5030, 5031, 5040, 3313, 3314, 5100, 5101, 5103, 6400, 6401, 6402, 6403, 6410, 6413,
+            6415,
         ];
         for &code in &known {
             assert_ne!(

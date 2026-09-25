@@ -94,6 +94,14 @@ pub struct WordEntry {
     pub performs: EffectSet,
     pub requires: CapSet,
     pub bound: StackBound,
+    /// Slice P6 (static-verification.md Q6/Q7): Fnv-1a of the word's contract
+    /// clause surface — the callee-module-local predicate names of its
+    /// `needs`/`ensures` clauses (`ir::contract::contract_hash`). `0` = the
+    /// word declares no contract. The caller folds this into the artifact
+    /// (`contract-pre` obligations and `abi_hash` v2); the predicate names
+    /// themselves live in the `.def`/decl the driver parses, which is what
+    /// makes E6413 staleness detection possible.
+    pub contract_hash: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -153,6 +153,42 @@ fn platformless_hosted_build_degrades_to_open_main_context() {
 }
 
 #[test]
+fn contract_sites_are_reported_retained_under_module_loading() {
+    // FR-21 (report leg): the default tyu build resolves every feature
+    // (all-features-on fallback), so `module-loading` is on. langc then
+    // force-opens every contract site — a dynamic export is a runtime
+    // surface no build-time discharge may remove — and the report names
+    // those sites `retained` with the reason, so "why is this open" has a
+    // policy answer.
+    const CONTRACT_MOD: &str = "\
+module Bank;
+subtype Percent = i64 range 0..100;
+: pct-in-range ( Percent -- Percent bool )
+  dup 0 >= [ dup 100 <= ] [ 0 0 == ] if ;
+: bounded_inc ( Percent -- Percent )
+  needs [ pct-in-range ]
+  1 + as Percent ;
+: main ( -- i64 )
+  50 as Percent bounded_inc as i64 ;
+end;
+";
+    let (_, report) = build("retained", &["--target=x86_64-unknown-linux-gnu"], CONTRACT_MOD);
+    let v: serde_json::Value = serde_json::from_str(&report).unwrap();
+    let retained = v["retained"].as_array().unwrap();
+    assert!(!retained.is_empty(), "module-loading build must retain contract sites");
+    for r in retained {
+        assert_eq!(r["reason"], "dynamic export (module-loading)");
+        assert!(r["id"].as_str().unwrap().contains("contract-"));
+    }
+    // The contract obligations are open (kept), and the report's honesty
+    // block counts the emitted contract traps.
+    assert!(
+        v["emitted_checks"]["contract"].as_u64().unwrap() >= 1,
+        "the retained contract check is present in the object"
+    );
+}
+
+#[test]
 fn report_is_byte_deterministic_across_builds() {
     // FR-17: identical tree → identical report bytes (no timestamps, no
     // iteration-order output).

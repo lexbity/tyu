@@ -167,6 +167,36 @@ fn sample_set() -> verifier::model::OblSet {
 
         Vec::new(),
     );
+    // Slice P6: a contract obligation — `PredicateHolds` transcluding the
+    // callee's predicate (name + IR + hash) over caller-side args.
+    ctx.record(
+        Kind::ContractPre,
+        Formula::PredicateHolds {
+            pred: verifier::model::PredicateRef {
+                module: "Bank".to_string(),
+                name: "pct-in-range".to_string(),
+                ir: vec![
+                    "block b0".to_string(),
+                    "dup Percent".to_string(),
+                    "const_i64 0".to_string(),
+                    "cmp_ge".to_string(),
+                    "ret".to_string(),
+                ],
+                ir_hash: "11aa22bb33cc44dd".to_string(),
+            },
+            args: vec![Oel::Var {
+                name: "$top".to_string(),
+            }],
+        },
+        41,
+        3,
+        Provenance::Opaque,
+        vec![verifier::model::Assumption::ContractPredicate {
+            module: "Bank".to_string(),
+            name: "pct-in-range".to_string(),
+            ir_hash: "11aa22bb33cc44dd".to_string(),
+        }],
+    );
 
     ctx.into_set()
 }

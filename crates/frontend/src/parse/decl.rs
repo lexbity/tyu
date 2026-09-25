@@ -103,14 +103,30 @@ impl<'a> Parser<'a> {
                 TokenKind::KwPerforms => {
                     has_explicit_performs = true;
                     self.bump();
-                    if self.look.kind != TokenKind::PunctLBrace {
-                        return Err(ParseError::ExpectedRBrace {
-                            span: self.look.span,
+                    // `.def` boundary annotation form (slice P6, §6.6):
+                    // `performs ( SUSPEND, MMIO )` — parentheses mirror the
+                    // `.def` grammar; the module form `performs { … }` is
+                    // unchanged. Both lower to the same effect bits.
+                    let paren_form = self.look.kind == TokenKind::PunctLParen;
+                    let (open, close) = if paren_form {
+                        (TokenKind::PunctLParen, TokenKind::PunctRParen)
+                    } else {
+                        (TokenKind::PunctLBrace, TokenKind::PunctRBrace)
+                    };
+                    if self.look.kind != open {
+                        return Err(if paren_form {
+                            ParseError::ExpectedSigParen {
+                                span: self.look.span,
+                            }
+                        } else {
+                            ParseError::ExpectedRBrace {
+                                span: self.look.span,
+                            }
                         });
                     }
                     let brace_span = self.capture_balanced(
-                        TokenKind::PunctLBrace,
-                        TokenKind::PunctRBrace,
+                        open,
+                        close,
                         ParseError::ExpectedRBrace {
                             span: self.look.span,
                         },
@@ -150,6 +166,14 @@ impl<'a> Parser<'a> {
                             });
                         }
                     }
+                }
+                // Slice P6 (§6.6): a `bound` clause is the hand-declared
+                // bound form the design explicitly rejected (retired
+                // E_STACK_DECLARED_MISMATCH 5102; stack-bound-analysis §13).
+                // A v2 `.def` meeting one must fail loudly (E6413 band), never
+                // silently absorb it into the body.
+                TokenKind::Ident if self.slice(self.look.span) == b"bound" => {
+                    return Err(ParseError::UnsupportedDefClause { span: self.look.span });
                 }
                 _ => break,
             }

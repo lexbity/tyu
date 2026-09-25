@@ -61,6 +61,7 @@ fn compile_with_isr_grant(source: Vec<u8>, isr_stack_slots: u32) -> Result<(), u
                 Some(&descriptor),
                 None,
                 None,
+                false,
                 |_w, _ctx| Ok::<(), ()>(()),
             ) {
                 Ok(()) => Ok(()),

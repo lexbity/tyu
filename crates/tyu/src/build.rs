@@ -259,6 +259,7 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
         modules.last().map(|m| m.name.as_str()),
         args.verify,
         args.verify_policy,
+        args.feature_set.contains(codegen_core::Feature::ModuleLoading),
     )?;
 
     Ok(BuildOutcome {
@@ -985,6 +986,14 @@ fn compile_module(
         cmd.arg("-I");
         cmd.arg(inc);
     }
+    // Slice P6 (Q7): the callee modules' `.obl.json` artifacts live in the
+    // out-dir (compiled in dependency order by earlier `compile_module`
+    // calls). langc resolves a contract callee's predicate facts through the
+    // same include-dir search `.def` uses — so `out_dir` is an implicit
+    // include dir. Additive: the search falls through for every other
+    // extension (the out-dir holds no `.def`/`.mod` in a normal build).
+    cmd.arg("-I");
+    cmd.arg(out_dir);
 
     if module.is_lib {
         cmd.arg("--lib");

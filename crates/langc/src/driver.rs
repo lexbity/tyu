@@ -3,7 +3,7 @@ use crate::iface::{export_iter, find_decl, find_word_decl};
 use crate::util::{
     check_word_for_gate, join_path, slice_span, try_load_module_file, MemOut, Stdout,
 };
-use alloc::string::{String, ToString};
+use alloc::string::ToString;
 use alloc::vec::Vec;
 use codegen_core::compiled_desc::CompiledDescriptor;
 use codegen_core::{FeatureSet, MmioApertureSpec, Target};
@@ -109,6 +109,7 @@ fn init_env(
         performs: EffectSet::empty(),
         requires: CapSet::empty(),
         bound: StackBound::ID,
+        contract_hash: 0,
     }; 256];
     let mut env_len = 0usize;
     add_builtins(&mut env, &mut env_len, target.spec());
@@ -222,6 +223,7 @@ pub fn emit_asm_driver(
         descriptor,
         None, // --emit=asm: no obligation extraction (P2 scope is obl/obj)
         None,
+        feature_set.contains(codegen_core::Feature::ModuleLoading),
         |w, _ctx| {
             // Feature gate check — reject gated ops before codegen.
             if check_word_for_gate(w, feature_set, input_path, src) {
@@ -450,6 +452,7 @@ pub fn emit_obj_driver(
         descriptor,
         extract_ctx.as_mut(),
         verdicts,
+        feature_set.contains(codegen_core::Feature::ModuleLoading),
         |w, ctx| {
             if check_word_for_gate(w, feature_set, input_path, src) {
                 gate_hit = true;
@@ -566,6 +569,14 @@ pub fn emit_obj_driver(
     // (no partial outputs on failure). The extraction ran in the same
     // lowering pass as codegen above.
     if let Some(ctx) = extract_ctx.as_mut() {
+        // Slice P6 (Q7): fill the contract obligations' transcluded predicate
+        // refs from the callee modules' `.obl.json` facts (E6413 on a stale
+        // interface). Runs before any artifact is written — a failure leaves
+        // no partial outputs.
+        if let Err(code) = transclude_contract_predicates(ctx, module, src, search_dirs) {
+            let _ = diag::error_simple(code, b"contract predicate interface stale (E6413)");
+            return 2;
+        }
         let mut obl_buf = [0u8; 512];
         let obl_path = match join_path(&mut obl_buf, out_dir, module_name, b".obl.json") {
             Some(p) => p,
@@ -740,6 +751,7 @@ pub fn emit_obl_driver(
         descriptor,
         Some(&mut ctx),
         None,
+        false,
         |_w, _ctx| Ok::<(), ()>(()),
     ) {
         Ok(()) => {}
@@ -754,6 +766,11 @@ pub fn emit_obl_driver(
         }
     }
 
+    // Slice P6 (Q7): transclude contract-predicate refs before encoding.
+    if let Err(code) = transclude_contract_predicates(&mut ctx, module, src, search_dirs) {
+        let _ = diag::error_simple(code, b"contract predicate interface stale (E6413)");
+        return 2;
+    }
     let bytes = match verifier::codec::encode_obl(ctx.set()) {
         Ok(b) => b,
         Err(_) => {
@@ -776,6 +793,243 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize, _spec: &codegen_cor
         env[*len] = *w;
         *len += 1;
     }
+}
+
+/// Parse a `[ name, name ]` contract-clause span into its predicate names
+/// (slice P6, Q6/Q7). The clause's bracketed content is a comma-separated
+/// list of callee-module-local predicate word names — the same capture the
+/// lowering compiles inline for the callee, re-read here as names so the
+/// `.def` boundary carries them (Q7: `.def` uses names, never bodies). Only
+/// clean identifiers count: an inline quotation body (`dup 0 >=`) is not a
+/// name and contributes nothing to the named surface.
+fn contract_clause_names<'s>(src: &'s [u8], span: Option<frontend::span::Span>) -> alloc::vec::Vec<&'s [u8]> {
+    let mut out: alloc::vec::Vec<&'s [u8]> = alloc::vec::Vec::new();
+    let Some(span) = span else { return out };
+    if span.end <= span.start + 2 {
+        return out;
+    }
+    let inner = &src[span.start + 1..span.end - 1];
+    for segment in core::str::from_utf8(inner).unwrap_or("").split(',') {
+        let trimmed = segment.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let bytes = trimmed.as_bytes();
+        if bytes.len() <= 32 && !bytes.iter().any(|b| b.is_ascii_whitespace()) {
+            out.push(bytes);
+        }
+    }
+    out
+}
+
+/// The word's contract-surface hash (slice P6): Fnv-1a of its `needs` +
+/// `ensures` predicate names; 0 = no contract clause.
+fn word_contract_hash(
+    src: &[u8],
+    needs: Option<frontend::span::Span>,
+    ensures: Option<frontend::span::Span>,
+) -> u64 {
+    let needs_names = contract_clause_names(src, needs);
+    let ensures_names = contract_clause_names(src, ensures);
+    if needs_names.is_empty() && ensures_names.is_empty() {
+        return 0;
+    }
+    ir::contract::contract_hash(&needs_names, &ensures_names)
+}
+
+// ---------------------------------------------------------------------------
+// Slice P6 (Q6/Q7): contract-predicate transclusion.
+// ---------------------------------------------------------------------------
+
+/// The imported-symbol → module-name table (`<imports>`), used to resolve a
+/// contract callee's predicate facts to its module's `.obl.json` via the
+/// same include-dir search `.def` uses (Q7 — `try_load_module_file` pattern).
+struct ImportTable {
+    names: alloc::vec::Vec<(alloc::vec::Vec<u8>, alloc::vec::Vec<u8>)>,
+}
+
+impl ImportTable {
+    fn build(module: &ModuleAst, src: &[u8]) -> ImportTable {
+        let mut names = alloc::vec::Vec::new();
+        for imp in module.imports.iter() {
+            let mname = slice_span(src, imp.module).to_vec();
+            for s in imp.names.iter() {
+                names.push((slice_span(src, *s).to_vec(), mname.clone()));
+            }
+        }
+        ImportTable { names }
+    }
+
+    fn module_of(&self, word: &[u8]) -> Option<&[u8]> {
+        self.names
+            .iter()
+            .find(|(w, _)| w.as_slice() == word)
+            .map(|(_, m)| m.as_slice())
+    }
+}
+
+/// Slice P6 (Q6/Q7): fill the `PredicateHolds` formula's transcluded
+/// `PredicateRef` on every contract obligation the lowering recorded.
+///
+/// At record time the ref is a lookup stub (`pred.name` = the *callee word
+/// name* for `contract-pre`, empty for `contract-post` — the callee is the
+/// record's own `site.word`). This pass resolves, for each stub:
+///   1. the callee's `needs`/`ensures` clause names (from the module's own
+///      decl, or the imported module's hand-authored `.def` — names only,
+///      per Q7: `.def` never carries bodies or bounds);
+///   2. the predicate's compiler-computed IR + `ir_hash` (from the callee
+///      module's `.obl.json` `facts.predicates` — the artifact, never
+///      hand-declared);
+///   3. a missing predicate fact is a *stale interface* (E6413): the `.def`
+///      declares a contract the callee's artifact does not document.
+fn transclude_contract_predicates(
+    ctx: &mut ExtractionCtx,
+    module: &ModuleAst,
+    src: &[u8],
+    search_dirs: &[&[u8]],
+) -> Result<(), u32> {
+    let imports = ImportTable::build(module, src);
+    let mut cached: alloc::vec::Vec<(alloc::vec::Vec<u8>, Option<verifier::model::OblSet>)> =
+        alloc::vec::Vec::new();
+    let out = ctx.set_mut();
+    for o in out.obligations.iter_mut() {
+        let (kind, stub) = match &mut o.formula {
+            verifier::model::Formula::PredicateHolds { pred, .. } => (o.kind, pred),
+            _ => continue,
+        };
+        if !stub.ir_hash.is_empty() {
+            continue; // already transcluded
+        }
+        // The callee word's name: `contract-pre` records carry it in the
+        // stub (the called word); `contract-post`'s callee is the record's
+        // own site word (the word whose `ensures` this is).
+        let callee: alloc::vec::Vec<u8> = if kind == verifier::model::Kind::ContractPre {
+            stub.name.clone().into_bytes()
+        } else {
+            o.site.word.clone().into_bytes()
+        };
+        let is_needs = kind == verifier::model::Kind::ContractPre;
+        let resolved = resolve_predicate_name(module, src, search_dirs, &imports, &callee, is_needs)?;
+        let Some((pred_name, callee_module)) = resolved else {
+            // Inline (unnamed) predicate clause: nothing to transclude — the
+            // record stays an opaque inline reference; its verdict resolves
+            // open (the runtime check is retained) unless a verdicts file
+            // closes it by id.
+            continue;
+        };
+        // The predicate's compiler-computed fact: the callee module's
+        // artifact. Cache per module (a module has few imported deps).
+        let obl = load_module_obl(&mut cached, search_dirs, callee_module.as_deref())?;
+        let Some(obl) = obl else {
+            // Facts unavailable (module compiled without extraction): fail
+            // closed to *open* — the runtime check remains (R6 is a hard
+            // error only for a *declared-then-missing* predicate).
+            stub.name = pred_name;
+            stub.module = callee_module.unwrap_or_default();
+            continue;
+        };
+        let fact = obl
+            .facts
+            .predicates
+            .iter()
+            .find(|p| p.name.as_bytes() == pred_name.as_bytes());
+        let Some(fact) = fact else {
+            // E6413: the `.def`/decl declares `pred_name` as a contract
+            // predicate, but the callee module's artifact has no such
+            // predicate — stale interface (the callee's contract surface
+            // drifted without the caller knowing).
+            return Err(6413u32);
+        };
+        stub.name = pred_name;
+        stub.module = callee_module.unwrap_or_default();
+        stub.ir = fact.ir.clone();
+        stub.ir_hash = fact.ir_hash.clone();
+        // The discharge relies on the transcluded predicate (T2) — list it
+        // in the record's trusted assumptions.
+        if !o.assumptions.iter().any(|a| {
+            matches!(a, verifier::model::Assumption::ContractPredicate { name, .. }
+                if *name == stub.name)
+        }) {
+            o.assumptions.push(verifier::model::Assumption::ContractPredicate {
+                module: stub.module.clone(),
+                name: stub.name.clone(),
+                ir_hash: stub.ir_hash.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Resolve the predicate NAME a callee's contract clause declares, plus the
+/// callee's defining module when imported. `needs=true` reads the `needs`
+/// clause, else `ensures`. The clause is a `[ name, … ]` quote span; v1
+/// uses the FIRST declared predicate per clause (multi-name clauses are
+/// parsed and hashed in full for the ABI surface, but obligations name the
+/// first).
+fn resolve_predicate_name<'s>(
+    module: &'s ModuleAst,
+    src: &'s [u8],
+    search_dirs: &[&[u8]],
+    imports: &ImportTable,
+    callee: &[u8],
+    is_needs: bool,
+) -> Result<Option<(alloc::string::String, Option<alloc::string::String>)>, u32> {
+    if let Some(d) = find_decl(module, src, callee) {
+        let span = if is_needs { d.requires } else { d.ensures };
+        let names = contract_clause_names(src, span);
+        let Some(first) = names.first().copied() else {
+            // Inline (unnamed) clause — the record stays an opaque inline
+            // predicate reference; nothing to transclude.
+            return Ok(None);
+        };
+        return Ok(Some((verifier::model::utf8_lossy(first), None)));
+    }
+    // Imported: resolve the declaring module from the import table, then
+    // read its hand-authored `.def` (names only — Q7, no bodies, no bounds).
+    let Some(mname) = imports.module_of(callee) else {
+        // Not declared here and not imported — the import machinery would
+        // have failed earlier; open, not an error.
+        return Err(2203u32);
+    };
+    let def_src = try_load_module_file(search_dirs, mname, b".def").ok_or(2201u32)?;
+    let def_ast = Parser::new(def_src.as_slice())
+        .parse_module_ast()
+        .map_err(|_| 2202u32)?;
+    let d = find_decl(&def_ast, def_src.as_slice(), callee).ok_or(2212u32)?;
+    let span = if is_needs { d.requires } else { d.ensures };
+    let names = contract_clause_names(def_src.as_slice(), span);
+    let Some(first) = names.first().copied() else {
+        return Ok(None);
+    };
+    Ok(Some((
+        verifier::model::utf8_lossy(first),
+        Some(verifier::model::utf8_lossy(mname)),
+    )))
+}
+
+/// Load a module's `.obl.json` through the include-dir search, caching per
+/// module name inside one pass. `None` = artifacts for that module are
+/// unavailable (compiled without extraction) — fail-closed to open.
+fn load_module_obl(
+    cache: &mut alloc::vec::Vec<(alloc::vec::Vec<u8>, Option<verifier::model::OblSet>)>,
+    search_dirs: &[&[u8]],
+    module: Option<&str>,
+) -> Result<Option<verifier::model::OblSet>, u32> {
+    let key = module.unwrap_or_default();
+    if let Some((_, hit)) = cache.iter().find(|(k, _)| k.as_slice() == key.as_bytes()) {
+        return Ok(hit.clone());
+    }
+    let mut value: Option<verifier::model::OblSet> = None;
+    if let Some(m) = module {
+        if let Some(bytes) = try_load_module_file(search_dirs, m.as_bytes(), b".obl.json") {
+            match verifier::codec::read_obl(bytes.as_slice()) {
+                Ok(set) => value = Some(set),
+                Err(e) => return Err(e.code()),
+            }
+        }
+    }
+    cache.push((key.as_bytes().to_vec(), value.clone()));
+    Ok(value)
 }
 
 fn load_import_sigs(
@@ -829,6 +1083,10 @@ fn load_import_sigs(
                 },
                 requires: CapSet::empty(),
                 bound,
+                // Slice P6 (Q7): the callee's contract surface folds into the
+                // entry so call sites can record `contract-pre` obligations
+                // and the ABI hash covers contract drift.
+                contract_hash: word_contract_hash(def_src.as_slice(), d.requires, d.ensures),
             };
             *env_len += 1;
         }
@@ -877,6 +1135,9 @@ fn load_local_sigs(
             },
             requires: CapSet::empty(),
             bound,
+            // Slice P6: local words' contract clauses feed call sites the
+            // same way imported ones do (`contract-pre` records + ABI v2).
+            contract_hash: word_contract_hash(src, d.requires, d.ensures),
         };
         *env_len += 1;
     }

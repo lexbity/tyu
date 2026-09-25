@@ -34,7 +34,7 @@ use verifier::codec::read_obl;
 use verifier::model::{Formula, Kind, Obligation, OblSet};
 use verifier::report::{
     AssumedObligation, ClassAccounting, EmittedChecks, IsrContextAccounting,
-    MainContextAccounting, ModuleAccounting, OpenObligation, ProvablyFailing,
+    MainContextAccounting, ModuleAccounting, OpenObligation, ProvablyFailing, RetainedObligation,
     StackContextAccounting, ToolInfo, TrustedAssumption, VerifyReport,
 };
 use verifier::verdict::{read_echo, Echo, VerdictStatus};
@@ -59,8 +59,9 @@ pub fn compose_and_write_report(
     root_module: Option<&str>,
     verify: VerifyMode,
     policy: VerifyPolicy,
+    module_loading: bool,
 ) -> Result<PathBuf, TyuError> {
-    let report = compose(ctx, module_obl, root_module, verify, policy)?;
+    let report = compose(ctx, module_obl, root_module, verify, policy, module_loading)?;
     let bytes = verifier::codec::encode_report(&report)
         .map_err(|e| TyuError::Build(format!("verify-report encode failed: {e:?}")))?;
     let path = ctx.out_dir.join("verify-report.json");
@@ -94,6 +95,7 @@ pub fn compose(
     root_module: Option<&str>,
     verify: VerifyMode,
     policy: VerifyPolicy,
+    module_loading: bool,
 ) -> Result<VerifyReport, TyuError> {
     // Load every module artifact + its verdicts echo; a missing one
     // (mixed-mode / pre-P4 cache) degrades to the P3 fallback, never a crash
@@ -181,6 +183,24 @@ pub fn compose(
     }
     report.open.sort_by(|a, b| a.module.cmp(&b.module).then_with(|| a.id.cmp(&b.id)));
     report.assumed.sort_by(|a, b| a.module.cmp(&b.module).then_with(|| a.id.cmp(&b.id)));
+    report.retained.sort_by(|a, b| a.id.cmp(&b.id));
+
+    // Slice P6 (FR-21): under `module-loading`, the compiler force-opens
+    // every contract site (keep_contract_checks) because dynamic exports are
+    // a runtime surface no build-time discharge may remove. The report names
+    // those open contract obligations `retained` with the reason, so the
+    // "why is this open" question has a policy answer, not a gap.
+    if module_loading {
+        for o in &report.open {
+            if o.kind == Kind::ContractPre.as_str() || o.kind == Kind::ContractPost.as_str() {
+                report.retained.push(RetainedObligation {
+                    id: o.id.clone(),
+                    reason: "dynamic export (module-loading)".to_string(),
+                });
+            }
+        }
+        report.retained.sort_by(|a, b| a.id.cmp(&b.id));
+    }
 
     report.contexts = StackContextAccounting {
         main: main.clone(),

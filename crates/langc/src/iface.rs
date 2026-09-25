@@ -171,6 +171,12 @@ pub fn find_decl<'a>(ast: &'a ModuleAst, src: &'a [u8], name: &[u8]) -> Option<&
     ast.decls.iter().find(|d| slice_span(src, d.name) == name)
 }
 
+/// The module's canonical name (slice P6 — used to resolve a contract
+/// callee's `.obl.json` through the include-dir search).
+pub fn module_name<'a>(ast: &'a ModuleAst, src: &'a [u8]) -> Option<&'a [u8]> {
+    Some(slice_span(src, ast.name))
+}
+
 pub fn find_word_decl<'a>(m: &'a ModuleAst, src: &[u8], name: &[u8]) -> Option<&'a DeclAst> {
     for d in m.decls.iter() {
         if d.kind != DeclKind::Word {

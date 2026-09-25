@@ -11,6 +11,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         observer: &mut dyn TypecheckObserver,
     ) -> Result<lir::BlockId, TcError> {
         let body_q = pop(stack, sp).ok_or(TcError::TaskSpawnPop { span: name_abs })?;
+        // Slice P6 (Q6, E3313): the spawn-free "also" column of the
+        // contract-predicate matrix row — a predicate may not spawn tasks.
+        if self.in_contract_predicate() {
+            return Err(TcError::ContractPredicateImpure { span: name_abs });
+        }
         let body_span = match body_q {
             Value::Quot(s) => s,
             _ => return Err(TcError::TaskSpawnPop { span: name_abs }),

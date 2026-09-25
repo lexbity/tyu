@@ -110,6 +110,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             performs,
             requires: CapSet::empty(),
             bound: qbound,
+            contract_hash: 0,
         };
         apply_sig(stack, sp, &entry, name_abs, self.subtypes)?;
         let call_sig = self.lir_sig_for_entry(&qsig, name_abs)?;

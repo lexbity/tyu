@@ -601,6 +601,12 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         _tok: Token,
     ) -> Result<lir::BlockId, TcError> {
         let is_load = name[0] == b'@';
+        // Slice P6 (Q6, E3313): the store/spawn-free "also" column of the
+        // contract-predicate matrix row. A predicate is a question; a
+        // `!ty`-store writes memory, which no question may do.
+        if !is_load && self.in_contract_predicate() {
+            return Err(TcError::ContractPredicateImpure { span: name_abs });
+        }
         let typed = name.len() > 1;
         let ty_atom = if typed {
             Some(

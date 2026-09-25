@@ -193,6 +193,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 // No verdicts either: quote emissions are inherited from the
                 // caller (P4 keeps quote checks, conservative).
                 None,
+                false,
                 arena,
                 sig,
                 name,

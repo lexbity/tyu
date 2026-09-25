@@ -39,6 +39,7 @@ pub fn entry(name: &[u8], inp: &[&[u8]], out: &[&[u8]]) -> WordEntry {
         performs: EffectSet::empty(),
         requires: CapSet::empty(),
         bound: StackBound::ID,
+        contract_hash: 0,
     }
 }
 
@@ -49,6 +50,7 @@ pub fn empty_env() -> [WordEntry; 256] {
         performs: EffectSet::empty(),
         requires: CapSet::empty(),
         bound: StackBound::ID,
+        contract_hash: 0,
     }; 256]
 }
 
@@ -185,6 +187,7 @@ pub fn check(
                 &mut arena,
                 None,
                 None,
+                false,
                 &mut obs,
             ) {
                 Ok(_out_words) => on_result(Ok(())),
@@ -277,6 +280,7 @@ pub fn check_ok_with<F>(
                 &mut arena,
                 None,
                 None,
+                false,
                 &mut obs,
             ) {
                 Ok(out_words) => on_word(out_words.word),

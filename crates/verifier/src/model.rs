@@ -138,13 +138,36 @@ pub enum Oel {
     },
 }
 
+/// A contract predicate reference (slice P6, Q2/Q6/Q7): the callee-module-
+/// local predicate word a `needs`/`ensures` clause names. The record's copy
+/// transcludes the predicate's serialized IR (op-text, one line per op) plus
+/// its hash, so an external tool never needs the callee's source (Q2
+/// tradeoff: self-contained records, duplicated bytes — bounded by the
+/// E3314 size cap). `ir_hash` is the Fnv-1a of the IR text; a reader
+/// comparing it against the callee's current `.obl.json` `facts.predicates`
+/// detects stale interfaces (E6413, Q7).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PredicateRef {
+    /// The predicate's defining module (the callee module for imported
+    /// contracts; the module itself for `contract-post`). Empty until the
+    /// driver's transclusion pass resolves it.
+    pub module: String,
+    /// The predicate word's name, callee-module-local.
+    pub name: String,
+    /// Transcluded IR op-text lines (canonical printer from §6.3/`--emit=ir`).
+    pub ir: Vec<String>,
+    /// Fnv-1a of the transcluded IR text (hex, 16 chars).
+    pub ir_hash: String,
+}
+
 /// Obligation head predicates (Q2). `InRange(value, lo, hi)` is the head every
 /// subtype-range site lowers to — the exact predicate `emit_subtype_range_trap`
 /// implements at runtime. `OffsetLE(off, width, size)` is the head every
 /// emulated-aperture MMIO access lowers to — the exact predicate the x86
-/// `emit_mmio_bounds_check` implements (slice P3, Q8): the access's
-/// aperture-relative byte offset plus its width must stay within the
-/// aperture's size.
+/// `emit_mmio_bounds_check` implements (slice P3, Q8). `PredicateHolds`
+/// (slice P6) is a contract clause: the transcluded predicate run over `args`
+/// (`in.i` / `out.i` bound vars, or `$top` where the caller-side provenance
+/// is opaque).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Formula {
     InRange { value: Oel, lo: i64, hi: i64 },
@@ -152,12 +175,21 @@ pub enum Formula {
     /// means the offset is not compile-time known (future dynamic-offset
     /// accesses) — such an obligation is open by construction.
     OffsetLE { off: Option<u32>, width: u32, size: u32 },
+    /// A contract predicate must hold: `needs` at a call site
+    /// (`contract-pre`) or `ensures` at return (`contract-post`). `args`
+    /// binds the predicate's stack inputs (caller-side provenance; `$top`
+    /// where opaque).
+    PredicateHolds {
+        pred: PredicateRef,
+        args: Vec<Oel>,
+    },
 }
 
 /// Trusted facts a formula may rely on (Q2 `assumptions`; T2 in Q14). P2's
 /// subtype sites emit none (the range travels in the formula itself); P3's
 /// `mmio-bounds` sites carry the aperture-size fact the offset must be proven
-/// against.
+/// against; slice P6's contract sites list the transcluded predicate ref
+/// (and its hash) the discharge depends on.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Assumption {
     /// The module declares a subtype with this range.
@@ -169,6 +201,10 @@ pub enum Assumption {
     /// A descriptor aperture with this id and byte size (the fact an
     /// `OffsetLE` discharge counts as trusted — T2).
     ApertureSize { aperture: u16, size: u32 },
+    /// A contract predicate the obligation transcludes (slice P6): the
+    /// predicate's meaning is compiler-extracted code, not a primitive fact,
+    /// so a discharge relying on it lists the ref for accounting.
+    ContractPredicate { module: String, name: String, ir_hash: String },
 }
 
 /// Source span as *debug info only* — never part of an obligation's identity.
@@ -271,11 +307,29 @@ pub struct SubtypeFact {
     pub hi: i64,
 }
 
+/// A named contract-predicate word fact (`facts.predicates`, slice P6, Q7):
+/// compiler-extracted, deterministic — the implementation of abi-contract
+/// §7's `def_word` record for contract predicates under separate
+/// compilation. `ir` transcludes the predicate body in the canonical op-text
+/// form (§6.3, the same text `--emit=ir` prints); `ir_hash` is its Fnv-1a.
+/// A caller matching `ir_hash` against `.def`-declared names detects stale
+/// interfaces (E6413). If the module declares the predicate but the artifact
+/// ships only a hash (no IR text — the `$top`-provenance fallback), `ir` is
+/// empty and the hash covers the word's name only.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PredicateFact {
+    pub name: String,
+    pub ir: Vec<String>,
+    pub ir_hash: String,
+}
+
 /// Module-level fact tables.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Facts {
     pub words: Vec<WordFact>,
     pub subtypes: Vec<SubtypeFact>,
+    /// Slice P6: named contract-predicate words, in declaration order.
+    pub predicates: Vec<PredicateFact>,
 }
 
 /// The complete `.obl.json` document (§6.1). Top-level key order:
@@ -332,6 +386,7 @@ impl ExtractionCtx {
                 facts: Facts {
                     words: Vec::new(),
                     subtypes: Vec::new(),
+                    predicates: Vec::new(),
                 },
                 obligations: Vec::new(),
             },
@@ -367,6 +422,34 @@ impl ExtractionCtx {
             name: utf8_lossy(name),
             lo,
             hi,
+        });
+    }
+
+    /// Record one named contract-predicate fact (slice P6, Q7): the
+    /// predicate word's canonical name plus its transcluded IR op-text
+    /// (`Some`) or a name-only hash record (`None` when the predicate is
+    /// inline-extracted and the module does not name it).
+    pub fn push_predicate_fact(&mut self, name: &[u8], ir: Option<Vec<String>>) {
+        let ir = ir.unwrap_or_default();
+        let ir_hash = if ir.is_empty() {
+            // Name-only record (inline predicates): the hash covers the name.
+            format_hex(fnv1a64(name))
+        } else {
+            let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+            for line in &ir {
+                for &b in line.as_bytes() {
+                    h ^= b as u64;
+                    h = h.wrapping_mul(0x0000_0100_0000_01b3);
+                }
+                h ^= 0xff;
+                h = h.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+            format_hex(h)
+        };
+        self.set.facts.predicates.push(PredicateFact {
+            name: utf8_lossy(name),
+            ir,
+            ir_hash,
         });
     }
 
@@ -475,6 +558,12 @@ impl ExtractionCtx {
     /// Borrow the completed set (for writing the artifact).
     pub fn set(&self) -> &OblSet {
         &self.set
+    }
+
+    /// Mutate the completed set (slice P6 — the driver's transclusion pass
+    /// fills each contract record's `PredicateRef` from the callee's facts).
+    pub fn set_mut(&mut self) -> &mut OblSet {
+        &mut self.set
     }
 
     /// Consume the context, yielding the completed set.

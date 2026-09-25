@@ -124,6 +124,17 @@ pub struct ProvablyFailing {
     pub note: String,
 }
 
+/// One retained check record (`retained` list in §6.5, slice P6 FR-21):
+/// a contract check the build kept for a *policy* reason even where a
+/// discharge would have allowed elision — e.g. `retained (dynamic export)`
+/// under the `module-loading` feature, where the loader's dynamic exports
+/// are a runtime surface no build-time discharge may remove.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RetainedObligation {
+    pub id: String,
+    pub reason: String,
+}
+
 /// The `verdict_sources` accounting (§6.5, slice P5): closed-verdict counts
 /// by course — external verdicts file vs the in-tree dischargers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
@@ -169,6 +180,9 @@ pub struct VerifyReport {
     /// Slice P5: interval-proven out-of-range sites (check retained — the
     /// `provably_failing` honesty diagnostic; never a discharge).
     pub provably_failing: Vec<ProvablyFailing>,
+    /// Slice P6 (FR-21): checks retained for a policy reason (e.g. dynamic
+    /// exports under `module-loading`), with the reason.
+    pub retained: Vec<RetainedObligation>,
     /// Slope P5: closed-verdict course counts (file vs in-tree).
     pub verdict_sources: VerdictSources,
     /// Input verdicts that matched no obligation / disagreed on the hash
@@ -207,6 +221,7 @@ impl VerifyReport {
             assumed: Vec::new(),
             assumptions_trusted: Vec::new(),
             provably_failing: Vec::new(),
+            retained: Vec::new(),
             verdict_sources: VerdictSources::default(),
             stale_verdicts: 0,
             emitted_checks: EmittedChecks::default(),

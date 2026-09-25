@@ -48,6 +48,11 @@ mod types;
 pub use observer::{NullObserver, StackcheckObserver, TypecheckObserver};
 pub use types::intern_type;
 
+/// Slice P6 (Q6, FR-7): contract predicates are bounded by the word-level IR
+/// limits — peak data-stack slots ≤ 64 (and ≤ 16 blocks, which the IR's own
+/// `FixedVec<Block, 16>` enforces structurally). E3314 fires above this.
+pub const PREDICATE_PEAK_SLOTS_MAX: u32 = 64;
+
 #[allow(dead_code)]
 struct QuoteSig {
     sig: WordSig,
@@ -105,6 +110,38 @@ struct IrWordGen<'a, 'r> {
     interp: Linear,
     sig: WordSig,
 
+    /// Slice P6 (Q6): nesting depth of contract-predicate bodies currently
+    /// compiling (`needs`/`ensures`). `> 0` arms the store/spawn-free
+    /// rejection (E3313 — the `also` column of the ContractPredicate matrix
+    /// row) and the predicate peak-size tracker (E3314). 0 outside any
+    /// predicate.
+    contract_pred_depth: u32,
+    /// Slice P6: the data-stack depth (relative to word entry) when the
+    /// current predicate body began — `acc.net` snapshotted in
+    /// `begin_contract_predicate`.
+    pred_entry_net: i16,
+    /// Slice P6: the predicate body's peak relative to its entry, tracked in
+    /// `emit_op` while `contract_pred_depth > 0`.
+    pred_peak_slots: u32,
+    /// Slice P6 (Q6): the current contract clause's predicate names
+    /// (`needs [ a, b ]` → names a, b). Calls to these words inside the
+    /// predicate are *identity-preserving* — their arguments pass through
+    /// the interval state unchanged (purity was verified at the callee's
+    /// declaration), which is what lets a named predicate satisfy the E3312
+    /// origin check.
+    pred_clause_names: [TypeAtom; 4],
+    pred_clause_names_len: u8,
+    /// Slice P6: set immediately before emitting the `Call` op for a
+    /// predicate-clause word — `emit_op` consumes it to route the interval
+    /// transfer to [`verifier::interp::Linear::predicate_call`].
+    next_call_is_predicate: bool,
+    /// Slice P6 (FR-21, Q12): under an image that enables `module-loading`,
+    /// contract checks are retained — the loader's dynamic exports are a
+    /// runtime surface no build-time discharge may remove. When set, the two
+    /// contract record sites resolve Open (the check is emitted) regardless
+    /// of any discharge.
+    keep_contract_checks: bool,
+
     locals: [TypeAtom; 64],
     local_tys: [TypeAtom; 64],
     local_live: [bool; 64],
@@ -150,6 +187,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         allow_raw_casts: bool,
         extraction: Option<&'a mut ExtractionCtx>,
         verdicts: Option<&'a Verdicts>,
+        keep_contract_checks: bool,
         arena: &mut arena::ArenaAllocator,
         sig: WordSig,
         name: lir::Atom,
@@ -298,8 +336,15 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             allow_raw_casts,
             extraction,
             verdicts,
+            keep_contract_checks,
             interp: Linear::new(sig.in_len as usize, 64),
             sig,
+            contract_pred_depth: 0,
+            pred_entry_net: 0,
+            pred_peak_slots: 0,
+            pred_clause_names: [TypeAtom::EMPTY; 4],
+            pred_clause_names_len: 0,
+            next_call_is_predicate: false,
             locals: [TypeAtom::EMPTY; 64],
             local_tys: [TypeAtom::EMPTY; 64],
             local_live: [false; 64],
@@ -388,14 +433,37 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         if let Some(delta) = Self::op_stack_delta(&kind) {
             self.acc = self.acc.compose(delta);
         }
-        // P5: step the abstract interpreter in lockstep (only under
-        // `--checks=undischarged`, where the interval states drive the
-        // subtype-site decisions). The engine's transfer table (§7.2) is
-        // shared with the differential harness.
-        if self.checks == ChecksMode::Undischarged {
-            self.interp.step(cur, &kind, &|tid| {
-                interp_sr(&self.word.types, self.subtypes, tid)
-            });
+        // P5: step the abstract interpreter in lockstep. The interval states
+        // drive the subtype-site decisions under `--checks=undischarged`; the
+        // origin lattice drives the E3312 modified-inputs check (slice P6)
+        // under every contract-checking mode. `Off` never steps it — the
+        // fast path stays exactly today's path (FR-22).
+        if self.checks != ChecksMode::Off {
+            match &kind {
+                // Slice P6 (Q6): a call to a predicate-clause word is
+                // identity-preserving — its arguments pass through (purity
+                // verified at the callee's declaration), which is what keeps
+                // the E3312 origin check meaningful for named predicates.
+                lir::OpKind::Call { sig, .. } if self.next_call_is_predicate => {
+                    self.interp
+                        .predicate_call(cur, sig.in_len as usize, sig.out_len as usize);
+                    self.next_call_is_predicate = false;
+                }
+                _ => self.interp.step(cur, &kind, &|tid| {
+                    interp_sr(&self.word.types, self.subtypes, tid)
+                }),
+            }
+        }
+        // Slice P6 (E3314): while a contract predicate body is compiling,
+        // track its peak data-stack depth relative to the predicate's entry.
+        // `acc.net` is the entry-relative depth; post-op it is the after-op
+        // depth, which is also the peak for every emitted op (none has
+        // `high > net` — see `op_stack_delta`).
+        if self.contract_pred_depth > 0 {
+            let rel = (self.acc.net as i32 - self.pred_entry_net as i32).max(0) as u32;
+            if rel > self.pred_peak_slots {
+                self.pred_peak_slots = rel;
+            }
         }
         let op = lir::Op { kind, span };
         let b = self.block_mut(cur)?;
@@ -637,6 +705,24 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         id_hash: &str,
         in_tree: Option<&InTreeVerdict>,
     ) -> ResolvedVerdict {
+        if self.keep_contract_checks && matches!(kind, OblKind::ContractPre | OblKind::ContractPost) {
+            // FR-21/Q12: under `module-loading` the whole-image contract
+            // checks stay — neither a verdicts-file record nor the in-tree
+            // discharge may close a contract site (the loader's dynamic
+            // exports are a runtime surface no build-time discharge may
+            // remove). Every other class resolves normally.
+            return ResolvedVerdict {
+                id: id.to_string(),
+                id_hash: id_hash.to_string(),
+                kind,
+                status: VerdictStatus::Open,
+                method: None,
+                justification: None,
+                provably_failing: false,
+                reason: None,
+                source: VerdictSource::InTree,
+            };
+        }
         if self.checks == ChecksMode::Undischarged {
             if let Some(v) = self.verdicts {
                 if let Some(rec) = v.lookup(id, id_hash) {
@@ -974,6 +1060,194 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         status
     }
 
+    /// Enter a contract-predicate body (slice P6, Q6): pushes the
+    /// `ContractPredicate` frame (the ambient fold then forbids every
+    /// effect — the existing check path rejects effect-performing calls,
+    /// E3313) and arms the syntactic store/spawn-free guards plus the peak
+    /// tracker. Returns the pushed frame depth (asserted balanced by pop).
+    pub(super) fn begin_contract_predicate(
+        &mut self,
+        span: Span,
+    ) -> Result<(), TcError> {
+        self.ctx.push(ContextKind::ContractPredicate, FrameParam::None, span)?;
+        self.contract_pred_depth = self.contract_pred_depth.saturating_add(1);
+        if self.contract_pred_depth == 1 {
+            self.pred_entry_net = self.acc.net;
+            self.pred_peak_slots = 0;
+            // Fill the clause's predicate names (Q6: `needs [ a, b ]`).
+            self.pred_clause_names_len = 0;
+            for name in crate::typecheck::util::contract_predicate_names(self.src, Some(span)) {
+                if self.pred_clause_names_len as usize >= self.pred_clause_names.len() {
+                    break;
+                }
+                if let Some(atom) = TypeAtom::new(name) {
+                    self.pred_clause_names[self.pred_clause_names_len as usize] = atom;
+                    self.pred_clause_names_len += 1;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// True when `name` is one of the current predicate clause's declared
+    /// predicate words (Q6 — the identity-preserving named-predicate form).
+    pub(super) fn is_predicate_clause_word(&self, name: &[u8]) -> bool {
+        if self.contract_pred_depth == 0 {
+            return false;
+        }
+        let Some(atom) = TypeAtom::new(name) else {
+            return false;
+        };
+        self.pred_clause_names[..self.pred_clause_names_len as usize]
+            .iter()
+            .any(|p| *p == atom)
+    }
+
+    /// Leave a contract-predicate body. Enforces the E3314 size cap (peak
+    /// data-stack slots > 64 — the word-level IR limit).
+    pub(super) fn end_contract_predicate(&mut self, span: Span) -> Result<(), TcError> {
+        debug_assert!(self.contract_pred_depth > 0, "unbalanced contract predicate");
+        if self.contract_pred_depth > 0 {
+            self.contract_pred_depth -= 1;
+        }
+        self.ctx.pop();
+        if self.pred_peak_slots > PREDICATE_PEAK_SLOTS_MAX {
+            return Err(TcError::ContractPredicateTooLarge { span });
+        }
+        Ok(())
+    }
+
+    /// True inside a contract-predicate body — the store/spawn-free "also"
+    /// column of the ContractPredicate matrix row (E3313). A predicate is a
+    /// question; `Store` and `TaskSpawn` are not effects in the vocabulary,
+    /// so the rejection is syntactic, exactly as `lock`'s stack-neutrality
+    /// is carried in "also" (Q6).
+    pub(super) fn in_contract_predicate(&self) -> bool {
+        self.contract_pred_depth > 0
+    }
+
+    /// The emission decision for a contract site (C5/C6), slice P6: `All` and
+    /// `Contracts` emit unconditionally (legacy); `Undischarged` emits only at
+    /// open verdicts; `Off` never. Mirrors [`Self::emit_subtype_check`].
+    fn emit_contract_check(&self, verdict: VerdictStatus) -> bool {
+        match self.checks {
+            ChecksMode::All | ChecksMode::Contracts => true,
+            ChecksMode::Undischarged => verdict.is_open(),
+            ChecksMode::Off => false,
+        }
+    }
+
+    /// C6 site (slice P6): record a `contract-post` obligation for a word's
+    /// `ensures` clause. The formula transcludes the predicate (name + IR
+    /// + hash filled by the driver's transclusion pass) run over the word's
+    /// outputs (`out.i`); the in-tree discharge evaluates the *abstract
+    /// verdict* the epilogue's inline predicate compilation leaves on top of
+    /// the interval state (`DefTrue` → discharged; `DefFalse` →
+    /// `provably_failing` — the site always violates; else open). Returns
+    /// the site's verdict. `pred_iv` is that abstract bool interval,
+    /// captured by the caller after the predicate compiled.
+    pub(super) fn record_contract_post_obligation(
+        &mut self,
+        pred_iv: Interval,
+        span: Span,
+    ) -> VerdictStatus {
+        let n = self.sig.out_len as usize;
+        let mut args: alloc::vec::Vec<verifier::model::Oel> =
+            alloc::vec::Vec::with_capacity(n);
+        for i in 0..n {
+            args.push(verifier::model::Oel::Var {
+                name: var_out_ref(i),
+            });
+        }
+        let (id, id_hash) = {
+            let ctx = match self.extraction.as_mut() {
+                Some(c) => c,
+                None => return VerdictStatus::Open,
+            };
+            let (line, col) = span_line_col(self.src, span);
+            ctx.record(
+                OblKind::ContractPost,
+                Formula::PredicateHolds {
+                    pred: verifier::model::PredicateRef {
+                        module: alloc::string::String::new(),
+                        name: alloc::string::String::new(),
+                        ir: alloc::vec::Vec::new(),
+                        ir_hash: alloc::string::String::new(),
+                    },
+                    args,
+                },
+                line,
+                col,
+                Provenance::Opaque,
+                Vec::new(),
+            )
+        };
+        let in_tree = if self.checks != ChecksMode::Off && !self.keep_contract_checks {
+            Some(InTreeVerdict::of_range(pred_iv, 1, 1))
+        } else {
+            None
+        };
+        let r = self.resolve_site(OblKind::ContractPost, &id, &id_hash, in_tree.as_ref());
+        let status = r.status;
+        if let Some(ctx) = self.extraction.as_mut() {
+            ctx.push_resolved(r);
+        }
+        status
+    }
+
+    /// C5 site (slice P6): record a `contract-pre` obligation at a call site
+    /// to a contracted callee (`entry.contract_hash != 0`). The formula
+    /// transcludes the callee's `needs` predicate (filled by the driver's
+    /// transclusion pass) run over the caller's argument values — v1
+    /// provenance is `$top` (opaque; the callee's own prologue check is the
+    /// runtime enforcement); external tools discharge it. The in-tree
+    /// default is open (no cross-module interval evaluation in v1).
+    pub(super) fn record_contract_pre_obligation(
+        &mut self,
+        callee: &[u8],
+        in_len: u8,
+        span: Span,
+    ) -> VerdictStatus {
+        let mut args: alloc::vec::Vec<verifier::model::Oel> =
+            alloc::vec::Vec::with_capacity(in_len as usize);
+        for _ in 0..in_len {
+            args.push(verifier::model::Oel::Var {
+                name: "$top".to_string(),
+            });
+        }
+        let (id, id_hash) = {
+            let ctx = match self.extraction.as_mut() {
+                Some(c) => c,
+                None => return VerdictStatus::Open,
+            };
+            let (line, col) = span_line_col(self.src, span);
+            ctx.record(
+                OblKind::ContractPre,
+                Formula::PredicateHolds {
+                    // `callee` recalls which word carries the contract so the
+                    // driver's transclusion pass can resolve names + IR.
+                    pred: verifier::model::PredicateRef {
+                        module: alloc::string::String::new(),
+                        name: verifier::model::utf8_lossy(callee),
+                        ir: alloc::vec::Vec::new(),
+                        ir_hash: alloc::string::String::new(),
+                    },
+                    args,
+                },
+                line,
+                col,
+                Provenance::Opaque,
+                Vec::new(),
+            )
+        };
+        let r = self.resolve_site(OblKind::ContractPre, &id, &id_hash, None);
+        let status = r.status;
+        if let Some(ctx) = self.extraction.as_mut() {
+            ctx.push_resolved(r);
+        }
+        status
+    }
+
     pub(super) fn finish(mut self, span: Span) -> Result<IrWordOutput<'r>, TcError> {
         self.fill_subtype_bases(span)?;
         self.fill_type_classes(span)?;
@@ -1145,6 +1419,7 @@ pub fn build_ir_word<'r>(
     arena: &mut arena::ArenaAllocator,
     extraction: Option<&mut ExtractionCtx>,
     verdicts: Option<&Verdicts>,
+    keep_contract_checks: bool,
     observer: &mut dyn TypecheckObserver,
 ) -> Result<IrWordOutput<'r>, TcError> {
     let name = lir_atom(slice_span(src, decl.name))?;
@@ -1161,6 +1436,7 @@ pub fn build_ir_word<'r>(
         allow_raw_casts,
         extraction,
         verdicts,
+        keep_contract_checks,
         arena,
         *sig,
         name,

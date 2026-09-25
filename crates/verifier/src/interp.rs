@@ -131,6 +131,29 @@ impl State {
         }
     }
 
+    /// A contract-predicate call (slice P6, Q6): pop `in_len` argument slots
+    /// and push them back **unchanged**, then push the predicate's extra
+    /// outputs (the verdict) as computed `⊤`. Soundness comes from the
+    /// purity check (E3313): a predicate was verified store/spawn/effect-free
+    /// at its own declaration, so the subject values it returns in the same
+    /// positions are the same values (the origins pass through). This is the
+    /// plan's "needs-discharged callees MAY pass through" for the identity
+    /// lattice — without it, any named-predicate reference would fail E3312.
+    pub fn predicate_call(&mut self, in_len: usize, out_len: usize) {
+        let mut args = Vec::with_capacity(in_len);
+        for _ in 0..in_len {
+            args.push(self.pop_val());
+        }
+        // args is top-first; re-push in original (bottom-first) order.
+        for a in args.iter().rev() {
+            self.push(*a);
+        }
+        let extra = out_len.saturating_sub(in_len);
+        for _ in 0..extra {
+            self.push(Slot::computed(Interval::TOP));
+        }
+    }
+
     fn push(&mut self, slot: Slot) {
         if self.stack.len() >= MAX_SLOTS {
             // Abstract saturation: never panic; soundness is unaffected (a
@@ -424,6 +447,19 @@ impl Linear {
             }
         }
         self.blocks[idx].step(op, sr);
+    }
+
+    /// Slice P6 (Q6): a contract-predicate call's arguments pass through
+    /// unchanged (purity was verified at the callee's declaration). See
+    /// [`State::predicate_call`].
+    pub fn predicate_call(&mut self, b: BlockId, in_len: usize, out_len: usize) {
+        let idx = b.0 as usize;
+        if idx >= self.blocks.len() {
+            while self.blocks.len() <= idx {
+                self.blocks.push(State::fresh(64));
+            }
+        }
+        self.blocks[idx].predicate_call(in_len, out_len);
     }
 
     /// The current folded state of block `b` (never panics: an unseeded
@@ -740,6 +776,17 @@ pub fn discharge_word(
                         status: crate::verdict::VerdictStatus::Open,
                         provably_failing: false,
                         reason: Some("mmio-bounds obligations are descriptor-discharged".to_string()),
+                    };
+                }
+                // Contract obligations (slice P6) are resolved at their
+                // emission-time sites (the epilogue's abstract verdict for
+                // `contract-post`; caller provenance for `contract-pre`) —
+                // the reference engine leaves them open.
+                Formula::PredicateHolds { .. } => {
+                    return SiteVerdict {
+                        status: crate::verdict::VerdictStatus::Open,
+                        provably_failing: false,
+                        reason: Some("contract obligations are resolved at the emission site".to_string()),
                     };
                 }
             };

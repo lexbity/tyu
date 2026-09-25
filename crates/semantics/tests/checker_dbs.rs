@@ -90,6 +90,7 @@ fn subtype_value_returned_as_base_passes_ir_verification() {
                 &mut arena,
                 None,
                 None,
+                false,
                 &mut obs,
             )
             .expect("typecheck should accept subtype flowing to base");
@@ -120,6 +121,7 @@ fn subtype_argument_to_base_param_passes_ir_verification() {
                 performs: EffectSet::empty(),
                 requires: CapSet::empty(),
                 bound: StackBound::ID,
+                contract_hash: 0,
             });
             let s = sig(&[b"i64"], &[b"i64"]);
             let mut arena = arena::ArenaAllocator::new();
@@ -155,6 +157,7 @@ fn subtype_argument_to_base_param_passes_ir_verification() {
                 &mut arena,
                 None,
                 None,
+                false,
                 &mut obs,
             )
             .expect("typecheck should accept subtype argument to base param");

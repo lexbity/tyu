@@ -24,6 +24,13 @@ pub enum ContextKind {
     Isr,
     Handler,
     Bounded,
+    /// Slice P6 (Q6): a contract predicate's body (`needs`/`ensures`) — a
+    /// *question*, so every effect is forbidden (the matrix row forbids all
+    /// five) and the predicate must additionally be store/spawn-free (the
+    /// "also" column — `Store`/`TaskSpawn` are not effect vocabulary, so the
+    /// rejection is syntactic, enforced in the irgen by
+    /// `contract_pred_depth`).
+    ContractPredicate,
 }
 
 /// Parameter carried by a context frame.
@@ -51,7 +58,7 @@ pub struct MatrixRow {
 /// This is the normative artifact. Rows are exercised by the unit tests
 /// below and by the fixture corpus in crates/tooling-tests/tests/corpus/;
 /// a per-cell synthesized completeness oracle does not exist yet.
-pub const MATRIX: [MatrixRow; 7] = [
+pub const MATRIX: [MatrixRow; 8] = [
     MatrixRow {
         kind: ContextKind::WordBody,
         grants: CapSet::from_bits(CapSet::SUSPENDABLE),
@@ -92,6 +99,23 @@ pub const MATRIX: [MatrixRow; 7] = [
         kind: ContextKind::Bounded,
         grants: CapSet::from_bits(CapSet::BOUNDED_STACK),
         forbids: EffectSet::from_bits(EffectSet::DIVERGE),
+        conditional_suspend: false,
+    },
+    // Contract predicate (slice P6, Q6): a question forbids every effect.
+    // The `also` column (store/spawn-freedom) is enforced syntactically in
+    // the irgen, not through the effect fold (`Store`/`TaskSpawn` are not
+    // effects in the vocabulary — mirroring how `lock` carries stack
+    // neutrality in "also").
+    MatrixRow {
+        kind: ContextKind::ContractPredicate,
+        grants: CapSet::empty(),
+        forbids: EffectSet::from_bits(
+            EffectSet::SUSPEND
+                | EffectSet::INTERRUPT
+                | EffectSet::DIVERGE
+                | EffectSet::MMIO
+                | EffectSet::ALLOC,
+        ),
         conditional_suspend: false,
     },
 ];

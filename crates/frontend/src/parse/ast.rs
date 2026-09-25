@@ -147,6 +147,14 @@ pub enum ParseError {
     Skipped {
         span: Span,
     },
+    /// A `.def` word-declaration clause this toolchain does not support
+    /// (slice P6, §6.6). `bound` is the hand-declared-bound form the design
+    /// rejected (retired E5102; stack-bound-analysis §13) — a v2 parser
+    /// meeting a future clause must fail loudly (E6413 band), never silently
+    /// absorb it into the body.
+    UnsupportedDefClause {
+        span: Span,
+    },
 }
 
 impl ParseError {
@@ -196,6 +204,7 @@ impl ParseError {
             Self::LegacyRequiresContract { .. } => 2195,
             Self::LegacyEffectBang { .. } => 2196,
             Self::Skipped { .. } => 2144,
+            Self::UnsupportedDefClause { .. } => 6413,
         }
     }
 
@@ -244,7 +253,8 @@ impl ParseError {
             | Self::Skipped { span } => *span,
             Self::UnknownEffect { name, .. } => *name,
             Self::LegacyRequiresContract { span }
-            | Self::LegacyEffectBang { span } => *span,
+            | Self::LegacyEffectBang { span }
+            | Self::UnsupportedDefClause { span } => *span,
         }
     }
 
@@ -258,6 +268,9 @@ impl ParseError {
             }
             Self::LegacyEffectBang { .. } => {
                 b"parse error: use `performs { ... }` for effect sets"
+            }
+            Self::UnsupportedDefClause { .. } => {
+                b"parse error: unsupported .def clause (E6413); bounds are computed, never hand-declared"
             }
             _ => b"parse error",
         }

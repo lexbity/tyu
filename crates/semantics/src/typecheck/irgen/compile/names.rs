@@ -250,6 +250,20 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 return Err(TcError::SuspendForbidden { span });
             }
         }
+        // Slice P6 (Q6, E3313): inside a contract predicate, a call to a word
+        // performing an effect with no dedicated existing check (MMIO, ALLOC,
+        // INTERRUPT) is an impurity. SUSPEND and DIVERGE calls are already
+        // rejected by the ambient fold's own checks (E5001 blocker /
+        // E5040 DivergeInBounded against the ContractPredicate frame).
+        if self.in_contract_predicate() {
+            let impure = entry
+                .performs
+                .without(EffectSet::SUSPEND)
+                .without(EffectSet::DIVERGE);
+            if !impure.is_empty() {
+                return Err(TcError::ContractPredicateImpure { span: name_abs });
+            }
+        }
         apply_sig(stack, sp, entry, name_abs, self.subtypes)?;
 
         // S7: accumulate callee effects into the word's computed performs set.
@@ -276,6 +290,18 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             && self.ctx.ambient_forbids.contains(EffectSet::DIVERGE)
         {
             return Err(TcError::DivergeInBounded { span: name_abs });
+        }
+
+        // Slice P6 (C5 site, Q6/Q7): every call to a contracted word
+        // (`entry.contract_hash != 0` — the callee declares a `needs`
+        // clause) records a caller-side `contract-pre` obligation at the
+        // call site. The formula's predicate ref is filled by the driver's
+        // transclusion pass (the callee's `.def` names + `.obl.json` IR);
+        // its verdict gates nothing at the call itself (the runtime check
+        // lives in the callee's prologue) but supplies the discharge record
+        // caller-side callers rely on to elide under a closed world (FR-21).
+        if entry.contract_hash != 0 {
+            let _ = self.record_contract_pre_obligation(name, entry.sig.in_len, name_abs);
         }
 
         let builtin = match name {
@@ -324,6 +350,12 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 high: entry.bound.high,
             });
             let call_sig = self.lir_sig_for_entry(&entry.sig, name_abs)?;
+            // Slice P6 (Q6): a predicate-clause word reference is
+            // identity-preserving in the interval state (the arguments pass
+            // through — see `emit_op`'s routing).
+            if self.is_predicate_clause_word(name) {
+                self.next_call_is_predicate = true;
+            }
             self.emit_op(
                 cur,
                 lir::OpKind::Call {

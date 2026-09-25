@@ -57,6 +57,39 @@ pub fn find_subtype(subtypes: &[SubtypeInfo], name: TypeAtom) -> Option<SubtypeI
     subtypes.iter().find(|s| s.name == name).copied()
 }
 
+/// The predicate names a `[ name, name ]` contract clause declares (slice
+/// P6, Q6/Q7). The clause's bracketed content is a comma-separated list of
+/// callee-module-local predicate word names. **Only plain identifiers count**
+/// as named predicates: a segment containing whitespace (an inline quotation
+/// body such as `dup 0 >=`) is not a name — inline clauses are compiled
+/// inline and carry no named ABI surface. Shared by the semantics driver
+/// (the module's predicate-name set for `facts.predicates` capture) and
+/// langc (the `.def` boundary's names-only contract clauses).
+pub fn contract_predicate_names<'s>(
+    src: &'s [u8],
+    span: Option<Span>,
+) -> alloc::vec::Vec<&'s [u8]> {
+    let mut out: alloc::vec::Vec<&'s [u8]> = alloc::vec::Vec::new();
+    let Some(span) = span else { return out };
+    if span.end <= span.start + 2 {
+        return out;
+    }
+    let inner = &src[span.start + 1..span.end - 1];
+    for segment in core::str::from_utf8(inner).unwrap_or("").split(',') {
+        let trimmed = segment.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let bytes = trimmed.as_bytes();
+        // A named predicate is a single identifier: no whitespace, within
+        // the TypeAtom cap.
+        if bytes.len() <= 32 && !bytes.iter().any(|b| b.is_ascii_whitespace()) {
+            out.push(bytes);
+        }
+    }
+    out
+}
+
 pub fn type_compatible(got: TypeAtom, want: TypeAtom, subtypes: &[SubtypeInfo]) -> bool {
     if got == want {
         return true;

@@ -36,6 +36,7 @@ fn entry(
         performs,
         requires: CapSet::empty(),
         bound,
+        contract_hash: 0,
     }
 }
 
@@ -113,6 +114,7 @@ pub fn builtin_words() -> &'static [WordEntry] {
         performs: EffectSet::empty(),
         requires: CapSet::empty(),
         bound: StackBound::ID,
+        contract_hash: 0,
     }; 16];
     if !INIT.load(Ordering::Acquire) {
         let v = make_table();

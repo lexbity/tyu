@@ -23,6 +23,7 @@ use crate::typecheck::irgen::{build_ir_word, lir_atom, NullObserver};
 use crate::typecheck::mmio::{build_mmio_db, MmioDb};
 use crate::typecheck::util::{slice_span, write_sig};
 use crate::types::WordEntry;
+use alloc::string::ToString;
 use alloc::vec::Vec;
 use frontend::fixed::FixedVec;
 use frontend::parse::{DeclKind, ModuleAst};
@@ -131,6 +132,7 @@ pub fn emit_ir(
             &mut arena,
             None,
             None,
+            false,
             &mut null_obs,
         )?;
         lir::verify_word(out_words.word).map_err(|e| TcError::InternalError {
@@ -330,6 +332,7 @@ pub fn emit_stackcheck(
                 &mut arena,
                 None,
                 None,
+                false,
                 &mut obs,
             )
             .map_err(|e| TcError::InternalError {
@@ -357,6 +360,7 @@ pub fn for_each_ir_word<E, F>(
     descriptor: Option<&codegen_core::compiled_desc::CompiledDescriptor>,
     mut extraction: Option<&mut verifier::model::ExtractionCtx>,
     verdicts: Option<&verifier::verdict::Verdicts>,
+    keep_contract_checks: bool,
     mut f: F,
 ) -> Result<(), ForEachIrError<E>>
 where
@@ -388,6 +392,26 @@ where
     if let Some(ctx) = extraction.as_deref_mut() {
         for st in subtypes {
             ctx.push_subtype_fact(st.name.as_bytes(), st.min, st.max);
+        }
+    }
+
+    // Slice P6 (Q7): the module's contract-predicate name set — every word
+    // name a `needs`/`ensures` clause of this module references. Used to
+    // transcribe named predicates into the artifact's `facts.predicates`.
+    let mut predicate_names: alloc::vec::Vec<&[u8]> = alloc::vec::Vec::new();
+    for d in module.decls.iter() {
+        if d.kind != DeclKind::Word {
+            continue;
+        }
+        for n in crate::typecheck::util::contract_predicate_names(src, d.requires) {
+            if !predicate_names.iter().any(|p| *p == n) {
+                predicate_names.push(n);
+            }
+        }
+        for n in crate::typecheck::util::contract_predicate_names(src, d.ensures) {
+            if !predicate_names.iter().any(|p| *p == n) {
+                predicate_names.push(n);
+            }
         }
     }
 
@@ -429,6 +453,7 @@ where
             &mut arena,
             extraction.as_deref_mut(),
             verdicts,
+            keep_contract_checks,
             &mut null_obs,
         )
         .map_err(ForEachIrError::Type)?;
@@ -446,6 +471,24 @@ where
                 out_words.word.bound,
                 out_words.word.performs,
             );
+            // Slice P6 (Q7): named contract predicates transcribe their
+            // canonical op-text IR into `facts.predicates` (the compiler-
+            // computed record callers and external tools match against —
+            // E6413 staleness). Only words the module's contract clauses
+            // name; the op-text form is `ir::write_word_ops` (§6.3).
+            if predicate_names.iter().any(|p| *p == slice_span(src, decl.name)) {
+                let mut ops = VecOut(Vec::new());
+                lir::write_word_ops(&mut ops, out_words.word);
+                let mut lines: alloc::vec::Vec<alloc::string::String> =
+                    alloc::vec::Vec::new();
+                for line in ops.0.split(|&b| b == b'\n') {
+                    if line.is_empty() {
+                        continue;
+                    }
+                    lines.push(core::str::from_utf8(line).unwrap_or("?").to_string());
+                }
+                ctx.push_predicate_fact(slice_span(src, decl.name), Some(lines));
+            }
         }
         // P4: the codegen consumer reads the current word's mmio elision state
         // (shared borrow) while the word is current.
@@ -514,6 +557,7 @@ fn local_summary_env(
                 // every check is accounted (conservative — the final pass may
                 // skip discharged sites, never the reverse).
                 None,
+                false,
                 &mut null_obs,
             )?;
 

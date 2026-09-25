@@ -11,8 +11,8 @@
 //! `read_obl` is the schema-validating reader (used by consumers).
 
 use crate::model::{
-    Assumption, Facts, Formula, Kind, OblSet, Obligation, Oel, Provenance, Site, SpanInfo,
-    SubtypeFact, WordFact, OBL_ARTIFACT_MAX_BYTES, OBL_SCHEMA,
+    Assumption, Facts, Formula, Kind, OblSet, Obligation, Oel, PredicateFact, PredicateRef,
+    Provenance, Site, SpanInfo, SubtypeFact, WordFact, OBL_ARTIFACT_MAX_BYTES, OBL_SCHEMA,
 };
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -127,6 +127,26 @@ fn write_facts(out: &mut Vec<u8>, facts: &Facts) {
         write_i64(out, s.hi);
         out.push(b'}');
     }
+    // Slice P6: named contract-predicate facts (Q7). Always emitted — fixed
+    // schema (`tyu.obl/v1` grew a member; v1 readers skip unknown keys).
+    out.extend_from_slice(b"],\"predicates\":[");
+    for (i, p) in facts.predicates.iter().enumerate() {
+        if i != 0 {
+            out.push(b',');
+        }
+        out.extend_from_slice(b"{\"name\":");
+        write_str(out, &p.name);
+        out.extend_from_slice(b",\"ir\":[");
+        for (j, line) in p.ir.iter().enumerate() {
+            if j != 0 {
+                out.push(b',');
+            }
+            write_str(out, line);
+        }
+        out.extend_from_slice(b"],\"ir_hash\":");
+        write_str(out, &p.ir_hash);
+        out.push(b'}');
+    }
     out.extend_from_slice(b"]}");
 }
 
@@ -182,6 +202,30 @@ fn write_formula(out: &mut Vec<u8>, f: &Formula) {
             write_i64(out, *size as i64);
             out.push(b'}');
         }
+        Formula::PredicateHolds { pred, args } => {
+            out.extend_from_slice(b"{\"op\":\"PredicateHolds\",\"predicate\":{");
+            out.extend_from_slice(b"\"module\":");
+            write_str(out, &pred.module);
+            out.extend_from_slice(b",\"name\":");
+            write_str(out, &pred.name);
+            out.extend_from_slice(b",\"ir\":[");
+            for (i, line) in pred.ir.iter().enumerate() {
+                if i != 0 {
+                    out.push(b',');
+                }
+                write_str(out, line);
+            }
+            out.extend_from_slice(b"],\"ir_hash\":");
+            write_str(out, &pred.ir_hash);
+            out.extend_from_slice(b"},\"args\":[");
+            for (i, a) in args.iter().enumerate() {
+                if i != 0 {
+                    out.push(b',');
+                }
+                write_oel(out, a);
+            }
+            out.extend_from_slice(b"]}");
+        }
     }
 }
 
@@ -220,6 +264,15 @@ fn write_assumption(out: &mut Vec<u8>, a: &Assumption) {
             write_i64(out, *aperture as i64);
             out.extend_from_slice(b",\"size\":");
             write_i64(out, *size as i64);
+            out.push(b'}');
+        }
+        Assumption::ContractPredicate { module, name, ir_hash } => {
+            out.extend_from_slice(b"{\"kind\":\"contract-predicate\",\"module\":");
+            write_str(out, module);
+            out.extend_from_slice(b",\"name\":");
+            write_str(out, name);
+            out.extend_from_slice(b",\"ir_hash\":");
+            write_str(out, ir_hash);
             out.push(b'}');
         }
     }
@@ -420,6 +473,7 @@ impl<'a> Reader<'a> {
         self.expect(b'{')?;
         let mut words: Option<Vec<WordFact>> = None;
         let mut subtypes: Option<Vec<SubtypeFact>> = None;
+        let mut predicates: Option<Vec<PredicateFact>> = None;
         loop {
             self.skip_ws();
             match self.peek() {
@@ -438,13 +492,73 @@ impl<'a> Reader<'a> {
             match key.as_str() {
                 "words" => words = Some(self.parse_word_facts()?),
                 "subtypes" => subtypes = Some(self.parse_subtype_facts()?),
+                "predicates" => predicates = Some(self.parse_predicate_facts()?),
                 _ => self.skip_value()?,
             }
         }
         let (Some(words), Some(subtypes)) = (words, subtypes) else {
             return self.err();
         };
-        Ok(Facts { words, subtypes })
+        // `predicates` is additive (slice P6); a pre-P6 artifact has none.
+        Ok(Facts {
+            words,
+            subtypes,
+            predicates: predicates.unwrap_or_default(),
+        })
+    }
+
+    fn parse_predicate_facts(&mut self) -> Result<Vec<PredicateFact>, CodecError> {
+        self.expect(b'[')?;
+        let mut out = Vec::new();
+        loop {
+            self.skip_ws();
+            match self.peek() {
+                Some(b']') => {
+                    self.i += 1;
+                    break;
+                }
+                Some(b',') => {
+                    self.i += 1;
+                }
+                _ => {}
+            }
+            self.skip_ws();
+            if self.peek() == Some(b']') {
+                self.i += 1;
+                break;
+            }
+            self.expect(b'{')?;
+            let mut name: Option<String> = None;
+            let mut ir: Option<Vec<String>> = None;
+            let mut ir_hash: Option<String> = None;
+            loop {
+                self.skip_ws();
+                match self.peek() {
+                    Some(b'}') => {
+                        self.i += 1;
+                        break;
+                    }
+                    Some(b',') => {
+                        self.i += 1;
+                    }
+                    _ => {}
+                }
+                self.skip_ws();
+                let key = self.parse_string()?;
+                self.expect(b':')?;
+                match key.as_str() {
+                    "name" => name = Some(self.parse_string()?),
+                    "ir" => ir = Some(self.parse_string_array()?),
+                    "ir_hash" => ir_hash = Some(self.parse_string()?),
+                    _ => self.skip_value()?,
+                }
+            }
+            let (Some(name), Some(ir), Some(ir_hash)) = (name, ir, ir_hash) else {
+                return self.err();
+            };
+            out.push(PredicateFact { name, ir, ir_hash });
+        }
+        Ok(out)
     }
 
     fn parse_word_facts(&mut self) -> Result<Vec<WordFact>, CodecError> {
@@ -725,6 +839,8 @@ impl<'a> Reader<'a> {
         let mut off: Option<Option<u32>> = None;
         let mut width: Option<u32> = None;
         let mut size: Option<u32> = None;
+        let mut pred: Option<PredicateRef> = None;
+        let mut args: Option<Vec<Oel>> = None;
         loop {
             self.skip_ws();
             match self.peek() {
@@ -748,6 +864,8 @@ impl<'a> Reader<'a> {
                 "off" => off = Some(self.parse_nullable_u32()?),
                 "width" => width = Some(self.parse_u64()? as u32),
                 "size" => size = Some(self.parse_u64()? as u32),
+                "predicate" => pred = Some(self.parse_predicate_ref()?),
+                "args" => args = Some(self.parse_oel_array()?),
                 _ => self.skip_value()?,
             }
         }
@@ -765,8 +883,55 @@ impl<'a> Reader<'a> {
                 };
                 Ok(Formula::OffsetLE { off, width, size })
             }
+            "PredicateHolds" => {
+                let (Some(pred), Some(args)) = (pred, args) else {
+                    return self.err();
+                };
+                Ok(Formula::PredicateHolds { pred, args })
+            }
             _ => self.err(),
         }
+    }
+
+    fn parse_predicate_ref(&mut self) -> Result<PredicateRef, CodecError> {
+        self.expect(b'{')?;
+        let mut module: Option<String> = None;
+        let mut name: Option<String> = None;
+        let mut ir: Option<Vec<String>> = None;
+        let mut ir_hash: Option<String> = None;
+        loop {
+            self.skip_ws();
+            match self.peek() {
+                Some(b'}') => {
+                    self.i += 1;
+                    break;
+                }
+                Some(b',') => {
+                    self.i += 1;
+                }
+                _ => {}
+            }
+            self.skip_ws();
+            let key = self.parse_string()?;
+            self.expect(b':')?;
+            match key.as_str() {
+                "module" => module = Some(self.parse_string()?),
+                "name" => name = Some(self.parse_string()?),
+                "ir" => ir = Some(self.parse_string_array()?),
+                "ir_hash" => ir_hash = Some(self.parse_string()?),
+                _ => self.skip_value()?,
+            }
+        }
+        let (Some(module), Some(name), Some(ir), Some(ir_hash)) = (module, name, ir, ir_hash)
+        else {
+            return self.err();
+        };
+        Ok(PredicateRef {
+            module,
+            name,
+            ir,
+            ir_hash,
+        })
     }
 
     /// `null` (dynamic offset) or a number.
@@ -780,6 +945,32 @@ impl<'a> Reader<'a> {
             return self.err();
         }
         self.parse_u64().map(|v| Some(v as u32))
+    }
+
+    /// `[oel, oel, …]` — the `args` list of a `PredicateHolds` formula.
+    fn parse_oel_array(&mut self) -> Result<Vec<Oel>, CodecError> {
+        self.expect(b'[')?;
+        let mut out = Vec::new();
+        loop {
+            self.skip_ws();
+            match self.peek() {
+                Some(b']') => {
+                    self.i += 1;
+                    break;
+                }
+                Some(b',') => {
+                    self.i += 1;
+                }
+                _ => {}
+            }
+            self.skip_ws();
+            if self.peek() == Some(b']') {
+                self.i += 1;
+                break;
+            }
+            out.push(self.parse_oel()?);
+        }
+        Ok(out)
     }
 
     fn parse_oel(&mut self) -> Result<Oel, CodecError> {
@@ -865,6 +1056,8 @@ impl<'a> Reader<'a> {
         let mut hi: Option<i64> = None;
         let mut aperture: Option<u16> = None;
         let mut size: Option<u32> = None;
+        let mut module: Option<String> = None;
+        let mut ir_hash: Option<String> = None;
         loop {
             self.skip_ws();
             match self.peek() {
@@ -887,6 +1080,8 @@ impl<'a> Reader<'a> {
                 "hi" => hi = Some(self.parse_i64()?),
                 "aperture" => aperture = Some(self.parse_u64()? as u16),
                 "size" => size = Some(self.parse_u64()? as u32),
+                "module" => module = Some(self.parse_string()?),
+                "ir_hash" => ir_hash = Some(self.parse_string()?),
                 _ => self.skip_value()?,
             }
         }
@@ -903,6 +1098,16 @@ impl<'a> Reader<'a> {
                     return self.err();
                 };
                 Ok(Assumption::ApertureSize { aperture, size })
+            }
+            "contract-predicate" => {
+                let (Some(module), Some(name), Some(ir_hash)) = (module, name, ir_hash) else {
+                    return self.err();
+                };
+                Ok(Assumption::ContractPredicate {
+                    module,
+                    name,
+                    ir_hash,
+                })
             }
             _ => self.err(),
         }
@@ -1234,6 +1439,17 @@ fn write_report_bytes(r: &crate::report::VerifyReport) -> Vec<u8> {
         write_str(&mut out, &p.note);
         out.push(b'}');
     }
+    out.extend_from_slice(b"],\"retained\":[");
+    for (i, r_ret) in r.retained.iter().enumerate() {
+        if i != 0 {
+            out.push(b',');
+        }
+        out.extend_from_slice(b"{\"id\":");
+        write_str(&mut out, &r_ret.id);
+        out.extend_from_slice(b",\"reason\":");
+        write_str(&mut out, &r_ret.reason);
+        out.push(b'}');
+    }
     out.extend_from_slice(b"],\"stale_verdicts\":");
     write_i64(&mut out, r.stale_verdicts as i64);
     out.extend_from_slice(b",\"verdict_sources\":{\"file\":");
@@ -1373,9 +1589,12 @@ mod tests {
         let set = sample_set();
         let bytes = encode_obl(&set).expect("encode");
         let text = String::from_utf8_lossy(&bytes);
-        assert!(text.starts_with("{\"schema\":\"tyu.obl/v1\",\"semantics\":\"tyu.ir-sem/1.0\",\"module\":\"Bank\",\"abi_contract_version\":1,\"facts\""));
+        assert!(text.starts_with("{\"schema\":\"tyu.obl/v1\",\"semantics\":\"tyu.ir-sem/1.0\",\"module\":\"Bank\",\"abi_contract_version\":2,\"facts\""));
         assert!(text.contains("\"obligations\":[{\"id\":\"Bank::clamp::subtype-range::0\",\"id_hash\":\""));
         assert!(text.contains("\"provenance\":\"opaque\""));
+        // Slice P6: the fixed schema grew `facts.predicates` (always
+        // emitted, additive growth — readers skip unknown keys).
+        assert!(text.contains("\"predicates\":[]"));
     }
 
     #[test]

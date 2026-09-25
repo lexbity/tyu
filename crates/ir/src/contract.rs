@@ -381,7 +381,13 @@ impl fmt::Debug for CapSet {
 // ---------------------------------------------------------------------------
 
 /// ABI contract version — bump when the hash input changes meaningfully.
-pub const ABI_CONTRACT_VERSION: u64 = 1;
+///
+/// v2 (static-verification.md slice P6): contract predicate names (the
+/// `needs [ … ]` / `ensures [ … ]` clauses) fold into the hash — a caller
+/// compiled against a `.def` without the clauses must fail to link against a
+/// callee whose contract surface changed, exactly as signature drift already
+/// fails (abi-contract §5's own versioning rule).
+pub const ABI_CONTRACT_VERSION: u64 = 2;
 
 /// Compute a 64-bit hash of a word's ABI contract for cross-module
 /// compatibility checking.  Two modules that import/export the same word
@@ -396,6 +402,8 @@ pub const ABI_CONTRACT_VERSION: u64 = 1;
 ///   - performs (EffectSet bits)
 ///   - requires (CapSet bits)
 ///   - bound (net i16 + high u32)
+///   - contract (Fnv-1a of the word's contract clause names — the
+///     callee-module-local predicate names of `needs`/`ensures`; 0 = none)
 ///   - slot_bytes (bytes per data-stack slot, target-specific)
 pub fn abi_hash(
     sig_in: &[u8],
@@ -403,6 +411,7 @@ pub fn abi_hash(
     performs: EffectSet,
     requires: CapSet,
     bound: StackBound,
+    contract: u64,
     slot_bytes: u32,
 ) -> u64 {
     let mut h: u64 = ABI_CONTRACT_VERSION;
@@ -423,6 +432,34 @@ pub fn abi_hash(
     // Stack bound
     h = h.wrapping_mul(31).wrapping_add(bound.net as u64);
     h = h.wrapping_mul(31).wrapping_add(bound.wire_u32() as u64);
+    // Contract clause surface (Fnv-1a over the predicate names; 0 = none).
+    h = h.wrapping_mul(31).wrapping_add(contract);
+    h
+}
+
+/// Fnv-1a 64-bit of a word's contract clause names (static-verification.md
+/// slice P6). The caller and callee must fold identical bytes: the predicate
+/// names are callee-module-local, taken verbatim from the `.def`/decl clause
+/// in declaration order (`needs` names then `ensures` names, each prefixed
+/// with a tag byte so `needs[x]` and `ensures[x]` cannot collide).
+pub fn contract_hash(needs: &[&[u8]], ensures: &[&[u8]]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325; // Fnv-1a offset basis
+    for name in needs {
+        h ^= 0x01;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        for &b in *name {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    for name in ensures {
+        h ^= 0x02;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        for &b in *name {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
     h
 }
 
@@ -868,6 +905,7 @@ mod tests {
             EffectSet::empty(),
             CapSet::empty(),
             StackBound::ID,
+            0,
             8,
         );
         let h2 = abi_hash(
@@ -876,6 +914,7 @@ mod tests {
             EffectSet::empty(),
             CapSet::empty(),
             StackBound::ID,
+            0,
             8,
         );
         assert_eq!(h1, h2);
@@ -889,6 +928,7 @@ mod tests {
             EffectSet::empty(),
             CapSet::empty(),
             StackBound::ID,
+            0,
             8,
         );
         let with_suspend = abi_hash(
@@ -897,6 +937,7 @@ mod tests {
             EffectSet::from_bits(EffectSet::SUSPEND),
             CapSet::empty(),
             StackBound::ID,
+            0,
             8,
         );
         assert_ne!(base, with_suspend);
@@ -910,6 +951,7 @@ mod tests {
             EffectSet::empty(),
             CapSet::empty(),
             StackBound::ID,
+            0,
             8,
         );
         let bigger = abi_hash(
@@ -921,6 +963,7 @@ mod tests {
                 net: 1,
                 high: High::Slots(5),
             },
+            0,
             8,
         );
         assert_ne!(base, bigger);
@@ -934,6 +977,7 @@ mod tests {
             EffectSet::empty(),
             CapSet::empty(),
             StackBound::ID,
+            0,
             8,
         );
         let different = abi_hash(
@@ -942,6 +986,7 @@ mod tests {
             EffectSet::empty(),
             CapSet::empty(),
             StackBound::ID,
+            0,
             4,
         );
         assert_ne!(base, different);
@@ -955,6 +1000,7 @@ mod tests {
             EffectSet::empty(),
             CapSet::empty(),
             StackBound::ID,
+            0,
             8,
         );
         let with_req = abi_hash(
@@ -963,6 +1009,7 @@ mod tests {
             EffectSet::empty(),
             CapSet::from_bits(CapSet::WRITE),
             StackBound::ID,
+            0,
             8,
         );
         assert_ne!(base, with_req);
@@ -976,6 +1023,7 @@ mod tests {
             EffectSet::empty(),
             CapSet::empty(),
             StackBound::ID,
+            0,
             8,
         );
         let with_sig = abi_hash(
@@ -984,6 +1032,7 @@ mod tests {
             EffectSet::empty(),
             CapSet::empty(),
             StackBound::ID,
+            0,
             8,
         );
         assert_ne!(base, with_sig);
@@ -997,6 +1046,7 @@ mod tests {
             EffectSet::empty(),
             CapSet::empty(),
             StackBound::ID,
+            0,
             8,
         );
         let with_sig = abi_hash(
@@ -1005,6 +1055,7 @@ mod tests {
             EffectSet::empty(),
             CapSet::empty(),
             StackBound::ID,
+            0,
             8,
         );
         assert_ne!(base, with_sig);
@@ -1013,18 +1064,55 @@ mod tests {
     /// Golden value for a fixed input — changing this constant is an ABI break.
     /// If you need to change the hash algorithm, bump ABI_CONTRACT_VERSION.
     #[test]
-    fn abi_hash_golden_v1() {
+    fn abi_hash_golden_v2() {
         let h = abi_hash(
             b"i64",
             b"i64",
             EffectSet::empty(),
             CapSet::empty(),
             StackBound::ID,
+            0,
             8,
         );
         assert_eq!(
-            h, 14985849781704156055,
-            "ABI_HASH_GOLDEN_V1 changed — this is an ABI break. Bump ABI_CONTRACT_VERSION."
+            h, 4020169588794751370,
+            "ABI_HASH_GOLDEN changed — this is an ABI break. Bump ABI_CONTRACT_VERSION."
+        );
+    }
+
+    #[test]
+    fn abi_hash_changes_on_contract() {
+        let base = abi_hash(
+            b"",
+            b"",
+            EffectSet::empty(),
+            CapSet::empty(),
+            StackBound::ID,
+            0,
+            8,
+        );
+        let with_contract = abi_hash(
+            b"",
+            b"",
+            EffectSet::empty(),
+            CapSet::empty(),
+            StackBound::ID,
+            contract_hash(&[b"pct-in-range"], &[]),
+            8,
+        );
+        assert_ne!(base, with_contract);
+    }
+
+    #[test]
+    fn contract_hash_distinguishes_needs_from_ensures() {
+        let needs = contract_hash(&[b"p"], &[]);
+        let ensures = contract_hash(&[], &[b"p"]);
+        assert_ne!(needs, ensures, "needs[x] and ensures[x] must not collide");
+        assert_eq!(contract_hash(&[], &[]), contract_hash(&[], &[]));
+        assert_ne!(contract_hash(&[b"a"], &[]), contract_hash(&[b"b"], &[]));
+        assert_eq!(
+            contract_hash(&[b"a", b"b"], &[]),
+            contract_hash(&[b"a", b"b"], &[])
         );
     }
 }

@@ -166,6 +166,17 @@ pub enum TcError {
     ContractModifiedInputs {
         span: Span,
     },
+    /// Slice P6 (Q6, FR-7): a contract predicate body performed an effect
+    /// (called an effect-performing word) or a store/spawn — a predicate is a
+    /// question and questions have no side roads. E3313.
+    ContractPredicateImpure {
+        span: Span,
+    },
+    /// Slice P6 (Q6, FR-7): a contract predicate body exceeds the word-level
+    /// IR limits (peak data-stack slots > 64). E3314.
+    ContractPredicateTooLarge {
+        span: Span,
+    },
 
     // 3500-3519: Scoped values
     PlaceParseFailed {
@@ -650,6 +661,8 @@ impl TcError {
             TcError::ContractDepth { .. } => 3310,
             TcError::ContractNotBool { .. } => 3311,
             TcError::ContractModifiedInputs { .. } => 3312,
+            TcError::ContractPredicateImpure { .. } => 3313,
+            TcError::ContractPredicateTooLarge { .. } => 3314,
             TcError::PlaceParseFailed { .. } => 3500,
             TcError::MutRefToLocal { .. } => 3501,
             // 3502 retired 2026-06
@@ -835,6 +848,8 @@ impl TcError {
             | TcError::ContractDepth { span }
             | TcError::ContractNotBool { span }
             | TcError::ContractModifiedInputs { span }
+            | TcError::ContractPredicateImpure { span }
+            | TcError::ContractPredicateTooLarge { span }
             | TcError::PlaceParseFailed { span }
             | TcError::MutRefToLocal { span }
             // 3502 retired 2026-06

@@ -1441,6 +1441,24 @@ pub fn write_word(out: &mut impl Output, w: &Word) {
     }
 }
 
+/// The canonical *op-text* form of a word (static-verification.md §6.3 —
+/// "one line per op, the same text `--emit=ir` prints; one canonical
+/// printer, two consumers"). Transcluded into contract-predicate facts and
+/// obligations (slice P6, Q2/Q7) so an external tool never needs the
+/// predicate's source; the Fnv-1a of these bytes is the predicate's
+/// `ir_hash`, which is what the E6413 staleness check compares.
+pub fn write_word_ops(out: &mut impl Output, w: &Word) {
+    for b in w.blocks.iter() {
+        out.write(b"block b");
+        write_u32(out, b.id.0 as u32);
+        out.write(b"\n");
+        for op in b.ops.iter() {
+            write_op(out, w, op);
+            out.write(b"\n");
+        }
+    }
+}
+
 fn type_atom(w: &Word, id: TypeId) -> &Atom {
     w.types.get(id.0 as usize).unwrap_or(&AT_EMPTY)
 }
