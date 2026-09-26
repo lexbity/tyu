@@ -81,6 +81,7 @@ fn compile_fixture(fixture: &str, target: Target) -> String {
         false,
         None,
         false,
+        None,
     );
 
     let asm_path = out_dir.join("Main.asm");

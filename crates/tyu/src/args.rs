@@ -16,6 +16,7 @@ pub enum Command {
     Deploy(DeployArgs),
     Platform(PlatformArgs),
     ToolchainCheck(ToolchainCheckArgs),
+    Proof(ProofArgs),
     Clean,
     /// Help was explicitly requested (`--help`/`-h`); exit 0.
     Help,
@@ -23,6 +24,47 @@ pub enum Command {
     /// has already been printed to stderr. Dispatched to a non-zero exit so
     /// scripted invocations don't silently "pass" on a typo'd flag.
     Usage,
+}
+
+/// Arguments for the `proof` subcommand (PLAN-VERIFY-3 P6).
+#[derive(Debug)]
+pub enum ProofArgs {
+    /// `tyu proof init [--dir=<dir>] [input.mod]` — scaffold the
+    /// developer-owned `proofs/` directory (root import, per-module
+    /// templates, README, `.gitignore`); idempotent.
+    Init {
+        /// Project root (default: the `tyu.toml` location or CWD).
+        dir: Option<PathBuf>,
+        /// An entry `.mod` file whose module graph the templates enumerate.
+        input: Option<PathBuf>,
+    },
+    /// `tyu proof fill` — registered in P6 with an honest "not yet" failure;
+    /// candidate-proof generation lands in P10.
+    Fill,
+}
+
+/// The developer-proof tool requested via `--verify-tool=<tool>`
+/// (PLAN-VERIFY-3 P6.2, FR-3). Closed set: `lean` is the one recognized port.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerifyTool {
+    /// The Lean 4 verification port (`verification/ports/lean`): generated
+    /// statements, `lake build`, and (from P7) the harvest exe.
+    Lean,
+}
+
+impl VerifyTool {
+    pub fn parse(v: &str) -> Option<Self> {
+        match v {
+            "lean" => Some(VerifyTool::Lean),
+            _ => None,
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            VerifyTool::Lean => "lean",
+        }
+    }
 }
 
 /// Arguments for the `platform` subcommand.
@@ -104,6 +146,7 @@ impl DeployArgs {
             verify: VerifyMode::On,
             verify_policy: VerifyPolicy::OpenOk,
             elide_stack_guards: false,
+            verify_tool: None,
         }
     }
 }
@@ -137,6 +180,10 @@ pub struct BuildArgs {
     /// langc only when its extraction pass + image composition prove the
     /// image-level `stack-budget(main)` obligation discharged.
     pub elide_stack_guards: bool,
+    /// P6.2 (FR-3): `--verify-tool=lean` — run the developer-proof pipeline
+    /// (generated statements, lake package, harvest). `None` = the classic
+    /// in-tree verification pipeline only.
+    pub verify_tool: Option<VerifyTool>,
 }
 
 /// Arguments for the `run` subcommand.
@@ -164,6 +211,8 @@ pub struct RunArgs {
     pub verify_policy: VerifyPolicy,
     /// Slice P7: image-level data-stack guard elision (two-pass).
     pub elide_stack_guards: bool,
+    /// P6.2 (FR-3): `--verify-tool=lean` — run the developer-proof pipeline.
+    pub verify_tool: Option<VerifyTool>,
 }
 
 impl RunArgs {
@@ -186,6 +235,7 @@ impl RunArgs {
             verify: self.verify,
             verify_policy: self.verify_policy,
             elide_stack_guards: self.elide_stack_guards,
+            verify_tool: self.verify_tool,
         }
     }
 }
@@ -305,6 +355,7 @@ pub fn parse() -> Command {
         "deploy" => parse_deploy(&args[2..]),
         "platform" => parse_platform(&args[2..]),
         "toolchain" => parse_toolchain(&args[2..]),
+        "proof" => parse_proof(&args[2..]),
         "clean" => Command::Clean,
         "--help" | "-h" => {
             print_usage();
@@ -325,6 +376,7 @@ fn print_usage() {
     eprintln!("  run      Build and execute an image");
     eprintln!("  test     Discover and run test suites");
     eprintln!("  platform Inspect discovered platform packs");
+    eprintln!("  proof    Scaffold / drive the developer-proof pipeline (P6)");
     eprintln!("  clean    Remove build artifacts");
     eprintln!();
     eprintln!("Build/Run options:");
@@ -338,6 +390,9 @@ fn print_usage() {
     eprintln!("  --verify=on|off     Verdict-driven checks (default on; off = legacy path)");
     eprintln!(
         "  --verify-policy=open-ok|no-open|no-open-no-assumptions\n                      Open/assumed policy (default open-ok)"
+    );
+    eprintln!(
+        "  --verify-tool=lean    P6: run the developer-proof pipeline (generated\n                      statements + lake package; harvest in P7)"
     );
     eprintln!(
         "  --elide-stack-guards  Slice P7: two-pass elision of the x86 data-stack\n                      overflow guards, legal only when the image-level\n                      stack-budget(main) verdict is discharged (report:\n                      contexts.stack.guards = elided). Requires --verify=on"
@@ -370,6 +425,9 @@ fn print_usage() {
     eprintln!("Toolchain options:");
     eprintln!("  tyu toolchain check <target>   Resolve and report tool paths");
     eprintln!();
+    eprintln!("Proof options:");
+    eprintln!("  tyu proof init [--dir=<root>] [input.mod]   Scaffold the developer\n                      proofs/ directory (idempotent)");
+    eprintln!("  tyu proof fill                P10: generate candidate proofs (not yet)");
     eprintln!("Run-specific options:");
     eprintln!("  --timeout=<secs>    Maximum execution time (default: 10)");
     eprintln!("  --runner=<mode>     Runner: native|qemu (default: auto)");
@@ -396,12 +454,21 @@ fn parse_common(args: &[String], extra_known: &[&str]) -> Result<CommonArgs, ()>
     let mut verify = VerifyMode::On;
     let mut verify_policy = VerifyPolicy::OpenOk;
     let mut elide_stack_guards = false;
+    let mut verify_tool: Option<VerifyTool> = None;
 
     let mut i = 0;
     while i < args.len() {
         let a = &args[i];
         if a == "-v" || a == "--verbose" {
             verbose = true;
+        } else if let Some(val) = a.strip_prefix("--verify-tool=") {
+            verify_tool = match VerifyTool::parse(val) {
+                Some(t) => Some(t),
+                None => {
+                    eprintln!("tyu: invalid --verify-tool '{}' (expected lean)", val);
+                    return Err(());
+                }
+            };
         } else if let Some(val) = a.strip_prefix("--target=") {
             let tb = val.as_bytes();
             target = Target::parse(tb);
@@ -534,6 +601,7 @@ fn parse_common(args: &[String], extra_known: &[&str]) -> Result<CommonArgs, ()>
         verify,
         verify_policy,
         elide_stack_guards,
+        verify_tool,
     })
 }
 
@@ -566,6 +634,7 @@ struct CommonArgs {
     verify: VerifyMode,
     verify_policy: VerifyPolicy,
     elide_stack_guards: bool,
+    verify_tool: Option<VerifyTool>,
 }
 
 fn parse_build(args: &[String]) -> Command {
@@ -598,6 +667,7 @@ fn parse_build(args: &[String]) -> Command {
         verify: common.verify,
         verify_policy: common.verify_policy,
         elide_stack_guards: common.elide_stack_guards,
+        verify_tool: common.verify_tool,
     })
 }
 
@@ -655,6 +725,7 @@ fn parse_run(args: &[String]) -> Command {
         verify: common.verify,
         verify_policy: common.verify_policy,
         elide_stack_guards: common.elide_stack_guards,
+        verify_tool: common.verify_tool,
     })
 }
 
@@ -972,6 +1043,57 @@ fn parse_toolchain(args: &[String]) -> Command {
     })
 }
 
+/// `tyu proof init [--dir=<root>] [input.mod]` and `tyu proof fill`
+/// (PLAN-VERIFY-3 P6.1; FR-6). Unknown flags are a usage error (BUG-009).
+fn parse_proof(args: &[String]) -> Command {
+    if args.is_empty() {
+        eprintln!("tyu: usage: tyu proof init [--dir=<root>] [input.mod] | tyu proof fill");
+        return Command::Usage;
+    }
+    match args[0].as_str() {
+        "init" => {
+            let mut dir: Option<PathBuf> = None;
+            let mut input: Option<PathBuf> = None;
+            let mut i = 1;
+            while i < args.len() {
+                let a = &args[i];
+                if a == "--dir" {
+                    i += 1;
+                    if i < args.len() {
+                        dir = Some(PathBuf::from(&args[i]));
+                    } else {
+                        eprintln!("tyu: proof init --dir requires a value");
+                        return Command::Usage;
+                    }
+                } else if let Some(val) = a.strip_prefix("--dir=") {
+                    dir = Some(PathBuf::from(val));
+                } else if a.starts_with('-') {
+                    eprintln!("tyu: unknown option '{}'", a);
+                    return Command::Usage;
+                } else if input.is_none() {
+                    input = Some(PathBuf::from(a));
+                }
+                i += 1;
+            }
+            Command::Proof(ProofArgs::Init { dir, input })
+        }
+        "fill" => {
+            if args.len() != 1 {
+                eprintln!("tyu: proof fill takes no arguments in P6");
+                return Command::Usage;
+            }
+            Command::Proof(ProofArgs::Fill)
+        }
+        other => {
+            eprintln!(
+                "tyu: unknown proof subcommand '{}' (expected init|fill)",
+                other
+            );
+            Command::Usage
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1216,6 +1338,92 @@ mod tests {
                     args.report_out.as_deref(),
                     Some(Path::new("/tmp/tyu-report.json"))
                 );
+            }
+            other => panic!("unexpected command: {:?}", other),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // P6: `proof init` / `proof fill` and `--verify-tool`
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parses_proof_init_dir_and_input() {
+        match parse_proof(&strings(&["init", "--dir=/tmp/p", "Main.mod"])) {
+            Command::Proof(ProofArgs::Init { dir, input }) => {
+                assert_eq!(dir.as_deref(), Some(Path::new("/tmp/p")));
+                assert_eq!(input.as_deref(), Some(Path::new("Main.mod")));
+            }
+            other => panic!("unexpected command: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_proof_init_bare() {
+        match parse_proof(&strings(&["init"])) {
+            Command::Proof(ProofArgs::Init {
+                dir: None,
+                input: None,
+            }) => {}
+            other => panic!("unexpected command: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_proof_fill() {
+        match parse_proof(&strings(&["fill"])) {
+            Command::Proof(ProofArgs::Fill) => {}
+            other => panic!("unexpected command: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn unknown_proof_subcommand_is_usage_error() {
+        assert!(matches!(parse_proof(&strings(&["hack"])), Command::Usage));
+        assert!(matches!(
+            parse_proof(&strings(&["fill", "extra"])),
+            Command::Usage
+        ));
+        assert!(matches!(
+            parse_proof(&strings(&["init", "--bogus"])),
+            Command::Usage
+        ));
+    }
+
+    #[test]
+    fn verify_tool_flag_parses_for_build() {
+        match parse_build(&strings(&["--verify-tool=lean", "Main.mod"])) {
+            Command::Build(args) => {
+                assert_eq!(args.verify_tool, Some(VerifyTool::Lean));
+            }
+            other => panic!("unexpected command: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn verify_tool_defaults_to_none() {
+        match parse_build(&strings(&["Main.mod"])) {
+            Command::Build(args) => {
+                assert_eq!(args.verify_tool, None);
+            }
+            other => panic!("unexpected command: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn invalid_verify_tool_is_usage_error() {
+        assert!(matches!(
+            parse_build(&strings(&["--verify-tool=coq", "Main.mod"])),
+            Command::Usage
+        ));
+    }
+
+    #[test]
+    fn run_verify_tool_passes_through_to_build() {
+        match parse_run(&strings(&["--verify-tool=lean", "Main.tyu"])) {
+            Command::Run(args) => {
+                assert_eq!(args.verify_tool, Some(VerifyTool::Lean));
+                assert_eq!(args.to_build_args().verify_tool, Some(VerifyTool::Lean));
             }
             other => panic!("unexpected command: {:?}", other),
         }

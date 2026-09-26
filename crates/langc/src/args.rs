@@ -2,7 +2,9 @@ use codegen_core::{EmitMode, FeatureSet, Target};
 use hosted::{args::RawArgs, cstr, io};
 use semantics::typecheck::ChecksMode;
 
-pub const HELP: &[u8] = b"langc (tyu_lang) v0.1.0\n\nUSAGE:\n  langc [options] <file.mod|file.def>\n\nOPTIONS:\n  --help, -h                  Print help\n  --emit=ast                  Parse and dump AST (inspection)\n  --emit=ir                   Typecheck and dump IR (inspection)\n  --emit=tc                   Stack-trace typecheck dump (inspection)\n  --emit=asm                  Emit assembly text (inspection only, not assemblable standalone)\n  --emit=obligations          Extract verification obligations and write <Module>.obl.json\n                              (requires --out-dir; no codegen)\n  --emit=obj                  Emit relocatable object file (production output)\n  --write-obl                 Also write <Module>.obl.json beside the object (with --emit=obj)\n  --lib                       Compile as a library (no main required, --emit=obj only)\n  -g                          Enable trap-with-location stubs\n  -I <path>                   Add include path\n  --checks=off|contracts|all|undischarged\n                              Checks insertion mode (default all). 'undischarged'\n                              emits a runtime check only at obligation sites whose\n                              verdict is not discharged/assumed, and requires\n                              --verdicts (else E6402)\n  --verdicts=<path>           Verdicts file (tyu.verdicts/v1) for --checks=undischarged\n  --elide-ds-guards           Slice P7: omit the per-push x86 data-stack overflow\n                              guards (C8). A per-image codegen input - tyu forwards\n                              it only when the image-level stack-budget verdict is\n                              discharged (two-pass, --elide-stack-guards); the\n                              __lang_ds_high observability update is kept\n  --allow-raw-casts           Enable raw pointer casts\n  --features=<csv>            Image features to enable (default: all) [concurrency, module-loading]\n  --no-default-features       Start from empty feature set\n  --sysroot=<path>            Sysroot root directory\n  --out-dir=<path>            Output directory (--emit=obj / --emit=obligations)\n  --platform=<dir>            Platform pack directory; the compiled descriptor\n                              at <dir>/platform.desc sources MMIO aperture facts\n  --target=<triple>           Target triple, required for --emit=obj\n                              Supported: x86_64-unknown-linux-gnu\n                                         x86_64-unknown-none\n                                         armv7m-unknown-none\n                                         riscv32-unknown-none\n\n";
+pub const HELP: &[u8] = b"langc (tyu_lang) v0.1.0\n\nUSAGE:\n  langc [options] <file.mod|file.def>\n\nOPTIONS:\n  --help, -h                  Print help\n  --emit=ast                  Parse and dump AST (inspection)\n  --emit=ir                   Typecheck and dump IR (inspection)\n  --emit=tc                   Stack-trace typecheck dump (inspection)\n  --emit=asm                  Emit assembly text (inspection only, not assemblable standalone)\n  --emit=obligations          Extract verification obligations and write <Module>.obl.json\n                              (requires --out-dir; no codegen)\n  --emit=obj                  Emit relocatable object file (production output)\n  --write-obl                 Also write <Module>.obl.json beside the object (with --emit=obj)\n  --lib                       Compile as a library (no main required, --emit=obj only)\n  -g                          Enable trap-with-location stubs\n  -I <path>                   Add include path\n  --checks=off|contracts|all|undischarged\n                              Checks insertion mode (default all). 'undischarged'\n                              emits a runtime check only at obligation sites whose\n                              verdict is not discharged/assumed, and requires\n                              --verdicts (else E6402)\n  --verdicts=<path>           Verdicts file (tyu.verdicts/v1) for --checks=undischarged
+  --verify-tool=<name>       P6 pass-through: the developer-proof tool requested
+                              (lean); recorded in the verdicts echo, not interpreted here\n  --elide-ds-guards           Slice P7: omit the per-push x86 data-stack overflow\n                              guards (C8). A per-image codegen input - tyu forwards\n                              it only when the image-level stack-budget verdict is\n                              discharged (two-pass, --elide-stack-guards); the\n                              __lang_ds_high observability update is kept\n  --allow-raw-casts           Enable raw pointer casts\n  --features=<csv>            Image features to enable (default: all) [concurrency, module-loading]\n  --no-default-features       Start from empty feature set\n  --sysroot=<path>            Sysroot root directory\n  --out-dir=<path>            Output directory (--emit=obj / --emit=obligations)\n  --platform=<dir>            Platform pack directory; the compiled descriptor\n                              at <dir>/platform.desc sources MMIO aperture facts\n  --target=<triple>           Target triple, required for --emit=obj\n                              Supported: x86_64-unknown-linux-gnu\n                                         x86_64-unknown-none\n                                         armv7m-unknown-none\n                                         riscv32-unknown-none\n\n";
 
 /// Validated compiler configuration.
 pub struct Config<'a> {
@@ -34,6 +36,12 @@ pub struct Config<'a> {
     /// fact no per-site verdict map can express). tyu forwards it only from
     /// its two-pass elision proof.
     pub elide_ds_guards: bool,
+    /// PLAN-VERIFY-3 P6.2: `--verify-tool=<name>` — a pass-through recording
+    /// the developer-proof tool the build requested (`lean` today). langc is
+    /// tool-agnostic: it consumes verdicts; the flag only rides the echo so
+    /// the report's provenance names the requested tool. Never validated
+    /// against a closed set here (the driver owns that surface).
+    pub verify_tool: Option<&'a [u8]>,
 }
 
 // `large_enum_variant`: `Ok(Config)` dwarfs `Help`/`Error(i32)`, but boxing the
@@ -94,6 +102,7 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]], emit_diagnostics: bool) -> (Parse
     let mut platform_dir: Option<&[u8]> = None;
     let mut verdicts: Option<&[u8]> = None;
     let mut elide_ds_guards = false;
+    let mut verify_tool: Option<&[u8]> = None;
     let mut features = FeatureSet::all();
     let mut no_default_features = false;
 
@@ -156,6 +165,11 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]], emit_diagnostics: bool) -> (Parse
         }
         if a.starts_with(b"--verdicts=") {
             verdicts = Some(&a[b"--verdicts=".len()..]);
+            i += 1;
+            continue;
+        }
+        if a.starts_with(b"--verify-tool=") {
+            verify_tool = Some(&a[b"--verify-tool=".len()..]);
             i += 1;
             continue;
         }
@@ -367,6 +381,7 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]], emit_diagnostics: bool) -> (Parse
             platform_dir,
             verdicts,
             elide_ds_guards,
+            verify_tool,
         }),
         false,
     )

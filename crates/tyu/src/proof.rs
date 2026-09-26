@@ -1,0 +1,1662 @@
+//! Developer-proof pipeline (PLAN-VERIFY-3 P6) — the generated lake package.
+//!
+//! P6.1 (`tyu proof init` + package generation + Gen-digest check + locking +
+//! caching) and P6.2 (`tyu build --verify-tool=lean` orchestration: gen →
+//! digest → lake build, with an honest unproven-statement accounting in the
+//! report — no path claims a proof verdict before the P7 harvest exists).
+//!
+//! Layout (developer-proof-pipeline.md §Q5):
+//!
+//! ```text
+//! <project>/
+//!   proofs/                  DEVELOPER-OWNED, VCS-tracked
+//!     proofs.lean            root import (scaffolded once by tyu proof init)
+//!     Bank.lean              per-module theorems: obl_<name> := by …
+//!   .tyu-verify/lean/        GENERATED, content-addressed, git-ignored
+//!     lean-toolchain         copied from the port pin (hash-pinned)
+//!     lakefile.toml          GENERATED — Tyu + Gen + TyuProofs libs + the
+//!                            harvest exe stub
+//!     Tyu/                   vendored port library (semantics + interfaces)
+//!     Gen/<Module>.lean      GENERATED statements (def stmt_… : Prop)
+//!     Gen/<Module>.gen.json  statement metadata (name + hash + omission)
+//!     Harvest.lean           exe stub — the P7 harvest entry point
+//!     .tyu-gen.json          package-generation state (fingerprint)
+//! ```
+//!
+//! Determinism (FR-16): regeneration is byte-deterministic; unchanged files
+//! are not rewritten (mtime-stability keeps lake incremental). Error codes:
+//! `E6416` (toolchain / lake / package-generation failure class) and `E6418`
+//! (Gen digest mismatch — the pre-lake tamper gate).
+
+use std::collections::BTreeSet;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::{Duration, Instant};
+
+use verifier::report::{ModuleStatements, ProofStatus};
+use verifier::stmt::{sha256_hex16, StatementContext};
+
+use crate::args::VerifyTool;
+use crate::cache;
+use crate::error::TyuError;
+
+/// The developer-owned proofs directory name (project root, VCS-tracked).
+pub const PROOFS_DIR: &str = "proofs";
+
+/// The generated verification tree (project root, git-ignored).
+pub const VERIFY_DIR: &str = ".tyu-verify";
+
+/// The generated Lean package directory under `VERIFY_DIR`.
+pub const LEAN_PKG_DIR: &str = "lean";
+
+/// The in-tree Lean port location (relative to the workspace root).
+pub const PORT_DIR_REL: &str = "verification/ports/lean";
+
+/// Env override to skip the port build entirely (CI tiers without the Lean
+/// toolchain): the proof pipeline is recorded as `lean-skipped`, every
+/// statement stays unproven, and the build is not failed by the absence.
+pub const SKIP_PORT_BUILD_ENV: &str = "TYU_SKIP_PORT_BUILD";
+
+/// Env override for the package lock wait (tests shorten it).
+pub const LOCK_TIMEOUT_ENV: &str = "TYU_VERIFY_LOCK_TIMEOUT_MS";
+
+/// Default lock wait (§7.2: contention waits ≤ 60 s then E6416).
+const DEFAULT_LOCK_TIMEOUT: Duration = Duration::from_secs(60);
+
+const PKG_STATE_SCHEMA: &str = "tyu.pkg/1";
+
+// ---------------------------------------------------------------------------
+// Project-root resolution
+// ---------------------------------------------------------------------------
+
+/// Resolve the developer-project root: `dir` if given, else the `tyu.toml`
+/// manifest directory (walking up from the CWD), else the CWD. The generated
+/// `.tyu-verify/lean/` package and the developer-owned `proofs/` live here.
+pub fn project_root_for(dir: Option<&Path>) -> Result<PathBuf, TyuError> {
+    let cwd = std::env::current_dir().map_err(TyuError::Io)?;
+    let start = match dir {
+        Some(d) if d.is_absolute() => d.to_path_buf(),
+        Some(d) => cwd.join(d),
+        None => cwd,
+    };
+    Ok(match crate::project::find_manifest(&start) {
+        Some(manifest) => manifest.parent().map(|p| p.to_path_buf()).unwrap_or(start),
+        None => start,
+    })
+}
+
+/// The generated Lean package root for a project: `<root>/.tyu-verify/lean/`.
+fn lean_package_path(project_root: &Path) -> PathBuf {
+    project_root.join(VERIFY_DIR).join(LEAN_PKG_DIR)
+}
+
+// ---------------------------------------------------------------------------
+// `tyu proof init` (FR-6): scaffold the developer-owned proofs/ directory.
+// ---------------------------------------------------------------------------
+
+/// Scaffold `proofs/` in `root`: the root import, one template per module of
+/// the entry `input` (or per `[project]` module), a README, and `.gitignore`
+/// entries. Idempotent: existing files are never overwritten.
+pub fn proof_init(root: &Path, input: Option<&Path>) -> Result<(), TyuError> {
+    let proofs = root.join(PROOFS_DIR);
+    fs::create_dir_all(&proofs).map_err(TyuError::Io)?;
+
+    let modules = if let Some(input) = input {
+        let graph = crate::graph::resolve_graph(input, &[], Some(root))?;
+        graph
+            .iter()
+            .map(|m| m.name.clone())
+            .collect::<Vec<String>>()
+    } else {
+        project_main_and_modules(root)
+    };
+    // Deduplicate + sort for deterministic scaffolding.
+    let modules: BTreeSet<String> = modules.into_iter().collect();
+    let modules: Vec<String> = modules.into_iter().collect();
+
+    // Per-module templates: `import Gen.<Module>` + a doc header. Never
+    // clobbers a developer-authored file.
+    for module in &modules {
+        let path = proofs.join(format!("{module}.lean"));
+        if path.exists() {
+            continue;
+        }
+        write_if_changed(&path, per_module_template(module).as_bytes())?;
+    }
+
+    // Root import: never clobbers; on first scaffold it imports the module
+    // templates just planted; later runs leave it alone (developer-owned).
+    let root_path = proofs.join("proofs.lean");
+    if !root_path.exists() {
+        // Imports MUST precede every other command in Lean — the module doc
+        // comment comes after the imports.
+        let mut text = String::new();
+        for module in &modules {
+            text.push_str("import ");
+            text.push_str(module);
+            text.push('\n');
+        }
+        text.push('\n');
+        text.push_str("/-! Developer proofs root (PLAN-VERIFY-3 P6).\n");
+        text.push('\n');
+        text.push_str("Import the per-module proof files. `tyu proof init` scaffolds this\n");
+        text.push_str("once; add an `import <Module>` line when you create\n");
+        text.push_str("`proofs/<Module>.lean` by hand. The generated statements you prove\n");
+        text.push_str("live in `.tyu-verify/lean/Gen/<Module>.lean` (regenerated every\n");
+        text.push_str("`tyu build --verify-tool=lean`; the `def stmt_… : Prop` definitions\n");
+        text.push_str("are the claims). -/\n");
+        write_if_changed(&root_path, text.as_bytes())?;
+    }
+
+    // README (only on first scaffold).
+    let readme = proofs.join("README.md");
+    if !readme.exists() {
+        let body = "This directory is VCS-tracked and developer-owned.\n\
+                    \n\
+                    The generated statements you prove are regenerated every\n\
+                    `tyu build --verify-tool=lean` into\n\
+                    `.tyu-verify/lean/Gen/<Module>.lean` (git-ignored) — the\n\
+                    `def stmt_… : Prop` definitions are the claims. Prove each\n\
+                    with a theorem of the statement's type in the matching\n\
+                    `proofs/<Module>.lean` file.\n\
+                    \n\
+                    Run `tyu proof init` again to re-scaffold — it is idempotent\n\
+                    and never overwrites your files. `tyu proof fill` (P10) writes\n\
+                    unreviewed candidate proofs to `proofs/candidates/`.\n";
+        write_if_changed(&readme, body.as_bytes())?;
+    }
+
+    ensure_gitignore(root)?;
+    Ok(())
+}
+
+/// A per-module proof template: imports the generated statements (`Gen.<M>`)
+/// and carries a doc header pointing at the statement surface.
+fn per_module_template(module: &str) -> String {
+    format!(
+        "import Gen.{module}\n\
+         \n\
+         /-! Developer proofs for module {module}.\n\
+         \n\
+         The generated statements for this word live in the\n\
+         `Tyu.Gen.Corpus.{module}` namespace of\n\
+         `.tyu-verify/lean/Gen/{module}.lean` (regenerated every\n\
+         `tyu build --verify-tool=lean`). Prove each `stmt_…` obligation with a\n\
+         theorem of the same type, e.g.:\n\
+         \n\
+         \x20 theorem obl_… : Tyu.Gen.Corpus.{module}.stmt_… := by …\n\
+         -/\n\
+         namespace Tyu.Gen.Corpus.{module}\n\
+         end Tyu.Gen.Corpus.{module}\n",
+    )
+}
+
+/// `[project]` main + modules from `tyu.toml`, when present.
+fn project_main_and_modules(root: &Path) -> Vec<String> {
+    let manifest_path = root.join("tyu.toml");
+    let Ok(text) = fs::read_to_string(&manifest_path) else {
+        return Vec::new();
+    };
+    let Ok(manifest) = toml::from_str::<crate::project::ProjectManifest>(&text) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    if let Some(main) = &manifest.project.main {
+        if let Some(name) = module_name_from_path(main) {
+            out.push(name);
+        }
+    }
+    for path in &manifest.project.modules {
+        if let Some(name) = module_name_from_path(path) {
+            out.push(name);
+        }
+    }
+    out
+}
+
+/// `<dir>/<snake_case>.mod` → `<ModuleName>` (the module *declaration* name
+/// is unknowable without parsing; the file-stem PascalCase form is the
+/// conventional match `expected_object_path` uses).
+fn module_name_from_path(path: &str) -> Option<String> {
+    let stem = Path::new(path).file_stem()?.to_str()?;
+    let name: String = stem
+        .split('_')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(c) => c.to_uppercase().to_string() + chars.as_str(),
+            }
+        })
+        .collect();
+    (!name.is_empty()).then_some(name)
+}
+
+/// Ensure `root/.gitignore` covers the generated verification tree; appends
+/// only missing lines, never touches existing content.
+fn ensure_gitignore(root: &Path) -> Result<(), TyuError> {
+    let ignore = root.join(".gitignore");
+    let existing = fs::read_to_string(&ignore).unwrap_or_default();
+    let mut text = existing.clone();
+    for (line, _) in [(".tyu-verify/\n", ".tyu-verify/"), ("target/\n", "target/")] {
+        if !existing.lines().any(|l| l.trim() == line.trim()) {
+            if !text.is_empty() && !text.ends_with('\n') {
+                text.push('\n');
+            }
+            text.push_str(line);
+        }
+    }
+    if text != existing {
+        write_if_changed(&ignore, text.as_bytes())?;
+    }
+    Ok(())
+}
+
+/// `tyu proof fill` (P10) is registered in P6 with an honest not-yet failure:
+/// the CLI surface is stable, the behavior lands with candidate generation.
+pub fn proof_fill() -> Result<(), TyuError> {
+    Err(TyuError::Build(
+        "E6416 proof-fill-not-built: `tyu proof fill` (candidate-proof generation) \
+         lands in PLAN-VERIFY-3 P10 — P6 registers the subcommand so the CLI \
+         surface is stable, but no candidates can be generated before the \
+         automation library exists"
+            .into(),
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// P6.2 entry: the full `--verify-tool=lean` pipeline
+// ---------------------------------------------------------------------------
+
+/// Run the developer-proof pipeline for a build: package generation (P6.1) →
+/// Gen-digest verification (E6418) → the elaborating `lake build` → an honest
+/// per-module statement accounting. Before the P7 harvest exists, every
+/// rendered statement is unproven by construction — the returned
+/// [`ProofStatus`] says so explicitly.
+pub fn run_lean_pipeline(
+    tool: VerifyTool,
+    module_obl: &[(String, Option<PathBuf>)],
+) -> Result<ProofStatus, TyuError> {
+    debug_assert_eq!(tool, VerifyTool::Lean);
+    // P6 test tier: without a Lean toolchain (CI), the port build can be
+    // skipped explicitly — the report then records `lean-skipped` and every
+    // statement unproven. This is an *opt-out*, not a silent failure mode.
+    if std::env::var_os(SKIP_PORT_BUILD_ENV).is_some() {
+        eprintln!(
+            "tyu: --verify-tool=lean: port build skipped ({}), every statement remains unproven",
+            SKIP_PORT_BUILD_ENV
+        );
+        return Ok(ProofStatus::skipped());
+    }
+
+    let project_root = project_root_for(None)?;
+    let port_dir = crate::platform::workspace_root().join(PORT_DIR_REL);
+    if !port_dir.join("lean-toolchain").is_file() {
+        return Err(TyuError::Build(format!(
+            "E6416: Lean verification port missing at '{}' (expected a \
+             verification/ports/lean package with lean-toolchain)",
+            port_dir.display()
+        )));
+    }
+
+    // Toolchain pin + present-and-matching check (§7.2, E6416 fail-closed).
+    let pin = fs::read_to_string(port_dir.join("lean-toolchain"))
+        .map_err(TyuError::Io)?
+        .trim()
+        .to_string();
+    ensure_lean_toolchain(&pin)?;
+
+    // Group the re-homed obligation artifacts into absolute paths.
+    let artifacts: Vec<PathBuf> = module_obl
+        .iter()
+        .filter_map(|(_, path)| path.clone())
+        .collect();
+    if artifacts.is_empty() {
+        eprintln!("tyu: --verify-tool=lean: no obligation artifacts to render");
+        return Ok(ProofStatus::lean("skipped", "", Vec::new()));
+    }
+
+    let package = generate_package(&project_root, &port_dir, &artifacts)?;
+
+    // The vendored semantics surface must be exactly the port's (a tampered
+    // `Tyu/*.lean` in the package would prove the *wrong system* — the
+    // T-F2-class risk, closed fail-closed). The SHA-256 over the vendored
+    // files as committed is recorded in the report (digest-recorded, §Q5).
+    let vendor_digest = verify_vendored_files(&package, &port_dir)?;
+
+    // E6418 pre-lake gate: recompute canonical statement hashes and compare
+    // against the rendered Gen surface.
+    let statements = verify_gen_digests(&package, &artifacts)?;
+
+    // The elaborating build (the developer-visible gate: their proofs must
+    // compile against the generated statements).
+    run_lake_build(&package)?;
+
+    // Observability (P6.2): the per-module unproven listing.
+    for s in &statements {
+        eprintln!(
+            "tyu: proof statements {}: {} rendered, {} omitted, {} unproven (harvest in P7)",
+            s.module, s.rendered, s.omitted, s.unproven
+        );
+    }
+
+    Ok(ProofStatus::lean("verified", &vendor_digest, statements))
+}
+
+// ---------------------------------------------------------------------------
+// The generated package (P6.1)
+// ---------------------------------------------------------------------------
+
+struct LeanPackage {
+    root: PathBuf,
+    gen_dir: PathBuf,
+}
+
+/// Generate (or fast-path) the `.tyu-verify/lean/` package: vendored port
+/// library, rendered statements, lakefile, harvest stub, and the generation
+/// state. Guarded by the package lock (§7.2). Idempotent and deterministic
+/// (FR-16): unchanged files are not rewritten.
+fn generate_package(
+    project_root: &Path,
+    port_dir: &Path,
+    artifacts: &[PathBuf],
+) -> Result<LeanPackage, TyuError> {
+    let root = lean_package_path(project_root);
+    let gen_dir = root.join("Gen");
+
+    let _guard = lock_package(&root)?;
+
+    // Fast path: the generation state records the current fingerprint and the
+    // package content is present.
+    let fingerprint = package_fingerprint(project_root, port_dir, artifacts, &root)?;
+    if let Ok(state) = fs::read_to_string(root.join(".tyu-gen.json")) {
+        if state.trim() == state_text(&fingerprint).trim() && gen_dir.is_dir() {
+            return Ok(LeanPackage { root, gen_dir });
+        }
+    }
+
+    fs::create_dir_all(&gen_dir).map_err(TyuError::Io)?;
+
+    // 1. The hash-pinned toolchain file — the port's pin, byte for byte.
+    let pin_bytes = fs::read(port_dir.join("lean-toolchain"))
+        .map_err(|e| TyuError::Build(format!("reading port lean-toolchain: {e}")))?;
+    write_if_changed(&root.join("lean-toolchain"), &pin_bytes)?;
+
+    // 2. The vendored port library (semantics + interfaces).
+    vendor_port_lib(port_dir, &root)?;
+
+    // 3. The generated statements + metadata (the port's `gen` renderer).
+    render_gen_files(port_dir, artifacts, &root, &gen_dir)?;
+
+    // 4. The lakefile (libs + harvest exe stub; the TyuProofs lib resolves the
+    //    developer's own proofs/ directory).
+    let lakefile = render_lakefile(project_root)?;
+    write_if_changed(&root.join("lakefile.toml"), lakefile.as_bytes())?;
+
+    // 5. The harvest exe stub (P6; the real harvest lands in P7).
+    let has_proofs = project_root.join(PROOFS_DIR).join("proofs.lean").is_file();
+    write_if_changed(
+        &root.join("Harvest.lean"),
+        harvest_stub(has_proofs).as_bytes(),
+    )?;
+
+    // 6. The generation state — LAST, so a crash mid-regeneration leaves a
+    //    mismatched fingerprint and the next build regenerates.
+    write_if_changed(
+        &root.join(".tyu-gen.json"),
+        state_text(&fingerprint).as_bytes(),
+    )?;
+
+    Ok(LeanPackage { root, gen_dir })
+}
+
+/// The regeneration fingerprint: hashes of (vendored port files, toolchain
+/// pin, obligation artifacts, proof files, statement/semantics versions, and
+/// the project root — the lakefile embeds the absolute proofs path). A cache
+/// key, not an integrity digest (FR-14's SHA-256 rule governs the codec
+/// digests, not build invalidation).
+fn package_fingerprint(
+    project_root: &Path,
+    port_dir: &Path,
+    artifacts: &[PathBuf],
+    root: &Path,
+) -> Result<u64, TyuError> {
+    let mut items: Vec<(String, u64)> = Vec::new();
+
+    // The vendored surface: every file the package copies from the port.
+    for rel in vendored_port_files() {
+        let path = port_dir.join(rel);
+        items.push((format!("port:{rel}"), hash_file(&path)?));
+    }
+    items.push((
+        "port:lean-toolchain".to_string(),
+        hash_file(&port_dir.join("lean-toolchain"))?,
+    ));
+
+    // The obligation artifacts (what the statements render from).
+    for a in artifacts {
+        let name = a.file_name().and_then(|n| n.to_str()).unwrap_or("?");
+        items.push((format!("obl:{name}"), hash_file(a)?));
+    }
+
+    // The developer's proofs: content + file set.
+    items.push((
+        "proofs".to_string(),
+        proof_files_hash(&project_root.join(PROOFS_DIR)),
+    ));
+
+    // Versions and the project root (absolute path in the lakefile).
+    items.push((
+        "stmt".to_string(),
+        cache::fnv1a_u64(verifier::stmt::STMT_SCHEMA.as_bytes()),
+    ));
+    items.push((
+        "semantics".to_string(),
+        cache::fnv1a_u64(verifier::semantics::SEMANTICS_VERSION.as_bytes()),
+    ));
+    let root_str = root.to_string_lossy().into_owned();
+    items.push(("root".to_string(), cache::fnv1a_u64(root_str.as_bytes())));
+
+    items.sort();
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for (k, v) in &items {
+        h ^= v;
+        h = h.wrapping_mul(0x100000001b3);
+        h ^= cache::fnv1a_u64(k.as_bytes());
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    Ok(h)
+}
+
+/// The port files the generated package vendors (deterministic list; the
+/// renderer + golden corpus are port-exe material and stay out).
+const fn vendored_port_files() -> &'static [&'static str] {
+    &[
+        "Tyu.lean",
+        "Tyu/IR/Op.lean",
+        "Tyu/IR/Semantics.lean",
+        "Tyu/IR/Target.lean",
+        "Tyu/Mem.lean",
+        "Tyu/Step.lean",
+        "Tyu/Sound.lean",
+        "Tyu/Stackmeta.lean",
+        "Tyu/Conformance/Cfg.lean",
+        "Tyu/Conformance/Interval.lean",
+        "Tyu/Conformance/IntervalLaws.lean",
+        "Tyu/Conformance/Json.lean",
+        "Tyu/Conformance/Parse.lean",
+        "Tyu/Conformance/Runner.lean",
+        "Tyu/Conformance/Step.lean",
+        "Tyu/Conformance/VectorRun.lean",
+        "Tyu/Gen/Sha256.lean",
+        "Tyu/Gen/Stmt.lean",
+    ]
+}
+
+/// Copy the vendored port library files into the package (temp + rename;
+/// unchanged bytes are not rewritten — mtime-stability keeps lake
+/// incremental).
+fn vendor_port_lib(port_dir: &Path, root: &Path) -> Result<(), TyuError> {
+    for rel in vendored_port_files() {
+        let src = port_dir.join(rel);
+        let bytes = fs::read(&src).map_err(|e| {
+            TyuError::Build(format!(
+                "E6416: port library file '{}' unreadable: {e}",
+                src.display()
+            ))
+        })?;
+        let dst = root.join(rel);
+        if let Some(parent) = dst.parent() {
+            fs::create_dir_all(parent).map_err(TyuError::Io)?;
+        }
+        write_if_changed(&dst, &bytes)?;
+    }
+    Ok(())
+}
+
+/// Run the port's `gen` renderer over the artifacts into `gen_dir`,
+/// then prune stale Gen files (modules no longer in the artifact set).
+fn render_gen_files(
+    port_dir: &Path,
+    artifacts: &[PathBuf],
+    root: &Path,
+    gen_dir: &Path,
+) -> Result<(), TyuError> {
+    let gen_bin = ensure_gen_exe(port_dir)?;
+
+    // Clean the Gen dir so a removed module cannot leave a stale statement
+    // behind (determinism: the dir is a pure function of the artifact set).
+    if gen_dir.exists() {
+        for entry in fs::read_dir(gen_dir).map_err(TyuError::Io)?.flatten() {
+            let p = entry.path();
+            if p.extension().and_then(|e| e.to_str()) == Some("lean")
+                || p.extension().and_then(|e| e.to_str()) == Some("json")
+            {
+                let _ = fs::remove_file(&p);
+            }
+        }
+    }
+    fs::create_dir_all(gen_dir).map_err(TyuError::Io)?;
+
+    let mut cmd = Command::new(&gen_bin);
+    cmd.arg("--render").arg("--obl");
+    for a in artifacts {
+        cmd.arg(a);
+    }
+    cmd.arg("--out").arg(gen_dir);
+    let out = cmd.output().map_err(|e| {
+        TyuError::Build(format!(
+            "E6416: running gen renderer '{}': {e}",
+            gen_bin.display()
+        ))
+    })?;
+    if !out.status.success() {
+        let tail = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .rev()
+            .take(16)
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Err(TyuError::Build(format!(
+            "E6416: gen renderer failed (module statements not rendered):\n{tail}"
+        )));
+    }
+
+    // The module set the artifacts describe (the renderer writes
+    // `<Module>.lean` by the artifact's `module` field).
+    let mut expected: BTreeSet<String> = BTreeSet::new();
+    for a in artifacts {
+        let bytes = fs::read(a).map_err(TyuError::Io)?;
+        match verifier::codec::read_obl(&bytes) {
+            Ok(set) => {
+                expected.insert(set.module);
+            }
+            Err(e) => {
+                return Err(TyuError::Build(format!(
+                    "obligation artifact '{}' invalid (E{}): {e:?}",
+                    a.display(),
+                    e.code()
+                )));
+            }
+        }
+    }
+    for entry in fs::read_dir(gen_dir).map_err(TyuError::Io)?.flatten() {
+        let p = entry.path();
+        let Some(stem) = p.file_stem().and_then(|s| s.to_str()).map(String::from) else {
+            continue;
+        };
+        if p.extension().and_then(|e| e.to_str()) == Some("lean") && !expected.contains(&stem) {
+            let _ = fs::remove_file(&p);
+        }
+    }
+
+    let _ = root; // (gen output lands in gen_dir; root kept for API symmetry)
+    Ok(())
+}
+
+/// Locate (building if necessary) the port's `gen` renderer executable.
+fn ensure_gen_exe(port_dir: &Path) -> Result<PathBuf, TyuError> {
+    let bin = port_dir.join(".lake").join("build").join("bin").join("gen");
+    if bin.is_file() {
+        return Ok(bin);
+    }
+    eprintln!(
+        "tyu: building the port's gen renderer in '{}'",
+        port_dir.display()
+    );
+    let status = Command::new("lake")
+        .current_dir(port_dir)
+        .args(["build", "gen"])
+        .status()
+        .map_err(|e| {
+            TyuError::Build(format!(
+                "E6416: spawning `lake build gen` in '{}': {e}",
+                port_dir.display()
+            ))
+        })?;
+    if !status.success() {
+        return Err(TyuError::Build(format!(
+            "E6416: `lake build gen` failed in '{}'",
+            port_dir.display()
+        )));
+    }
+    if !bin.is_file() {
+        return Err(TyuError::Build(format!(
+            "E6416: gen renderer not produced in '{}'",
+            port_dir.display()
+        )));
+    }
+    Ok(bin)
+}
+
+/// The generated lakefile: the vendored `Tyu` lib, the generated `Gen` lib,
+/// the developer's `TyuProofs` lib (roots enumerated from `proofs/*.lean`,
+/// sorted — deterministic), and the `harvest` exe stub.
+fn render_lakefile(project_root: &Path) -> Result<String, TyuError> {
+    let proofs_dir = project_root.join(PROOFS_DIR);
+    let mut text = String::new();
+    text.push_str("# Generated by tyu (PLAN-VERIFY-3 P6.1) — DO NOT EDIT.\n");
+    text.push_str("# The package is regenerated every `tyu build --verify-tool=lean`.\n");
+    text.push_str("# libs: Tyu (vendored port) + Gen (generated statements) + TyuProofs\n");
+    text.push_str("#       (developer-owned proofs/, enumerated roots) + the harvest stub.\n");
+    text.push('\n');
+    text.push_str("name = \"tyu-verify\"\n");
+    text.push_str("version = \"0.1.0\"\n");
+    text.push('\n');
+    text.push_str("[[lean_lib]]\n");
+    text.push_str("name = \"Tyu\"\n");
+    text.push_str("srcDir = \".\"\n");
+    text.push_str("roots = [\"Tyu\"]\n");
+    text.push('\n');
+    text.push_str("[[lean_lib]]\n");
+    text.push_str("name = \"Gen\"\n");
+    text.push_str("srcDir = \".\"\n");
+    text.push_str("roots = [\"Gen\"]\n");
+
+    let mut roots: Vec<String> = Vec::new();
+    if proofs_dir.is_dir() {
+        for entry in fs::read_dir(&proofs_dir).map_err(TyuError::Io)?.flatten() {
+            let p = entry.path();
+            if p.is_file() && p.extension().and_then(|e| e.to_str()) == Some("lean") {
+                if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                    roots.push(stem.to_string());
+                }
+            }
+        }
+    }
+    roots.sort();
+    roots.dedup();
+    if !roots.is_empty() {
+        // The absolute proofs path: lake resolves srcDir exactly once, from
+        // wherever the build runs.
+        let abs = if proofs_dir.is_absolute() {
+            proofs_dir.clone()
+        } else {
+            std::env::current_dir()
+                .map_err(TyuError::Io)?
+                .join(&proofs_dir)
+        };
+        text.push_str("\n[[lean_lib]]\n");
+        text.push_str("name = \"TyuProofs\"\n");
+        text.push_str("srcDir = \"");
+        text.push_str(&toml_escape(&abs.to_string_lossy()));
+        text.push_str("\"\n");
+        text.push_str("roots = [");
+        for (i, r) in roots.iter().enumerate() {
+            if i != 0 {
+                text.push_str(", ");
+            }
+            text.push('"');
+            text.push_str(&toml_escape(r));
+            text.push('"');
+        }
+        text.push_str("]\n");
+    }
+
+    text.push_str("\n[[lean_exe]]\n");
+    text.push_str("name = \"harvest\"\n");
+    text.push_str("srcDir = \".\"\n");
+    text.push_str("root = \"Harvest\"\n");
+    Ok(text)
+}
+
+/// Escape a TOML basic string minimally (control chars and `"`/`\`).
+fn toml_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// The P6 harvest exe stub: importing the proofs root (when present) makes
+/// `lake build harvest` the developer-visible elaboration gate. The real
+/// harvest — statement binding, axiom audit, T-CL closure, verdicts v2 — is
+/// P7's deliverable; this stub states so honestly.
+fn harvest_stub(has_proofs: bool) -> String {
+    let mut text = String::new();
+    if has_proofs {
+        text.push_str("import proofs\n\n");
+    }
+    text.push_str("-- The P6 harvest stub (PLAN-VERIFY-3 P6.2). The real harvest —\n");
+    text.push_str("-- statement binding, axiom audit, assumption closure, verdicts v2 —\n");
+    text.push_str("-- lands in P7. Importing the proofs root keeps this the \n");
+    text.push_str("-- elaboration gate for the developer's theorems.\n\n");
+    text.push_str("def main : IO Unit :=\n");
+    text.push_str("  IO.println \"harvest: not-built (PLAN-VERIFY-3 P7)\"\n");
+    text
+}
+
+// ---------------------------------------------------------------------------
+// Package lock (§7.2)
+// ---------------------------------------------------------------------------
+
+/// A create-exclusive package lock; dropped (released) on scope exit.
+#[derive(Debug)]
+struct LockGuard {
+    path: PathBuf,
+}
+
+/// Acquire the package lock: create-exclusive on `.tyu-verify/lean/`, waiting
+/// up to the timeout (env-overridable for tests) then E6416. A lock whose
+/// recorded PID is dead is stolen (a crashed build cannot wedge the package).
+fn lock_package(root: &Path) -> Result<LockGuard, TyuError> {
+    fs::create_dir_all(root).map_err(TyuError::Io)?;
+    let lock_path = root.join(".tyu-gen.lock");
+    let timeout = std::env::var(LOCK_TIMEOUT_ENV)
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(DEFAULT_LOCK_TIMEOUT);
+    let deadline = Instant::now() + timeout;
+
+    loop {
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
+        {
+            Ok(mut f) => {
+                use std::io::Write as _;
+                let _ = f.write_all(format!("{}\n", std::process::id()).as_bytes());
+                return Ok(LockGuard {
+                    path: lock_path.clone(),
+                });
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                if lock_dead(&lock_path) {
+                    let _ = fs::remove_file(&lock_path);
+                    continue;
+                }
+                if Instant::now() >= deadline {
+                    return Err(TyuError::Build(format!(
+                        "E6416: generated proof package '{}' is locked by another \
+                         build ({} ms elapsed): concurrent tyu builds share the \
+                         package lock, §7.2",
+                        root.display(),
+                        timeout.as_millis()
+                    )));
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(e) => {
+                return Err(TyuError::Build(format!(
+                    "E6416: cannot create package lock '{}': {e}",
+                    lock_path.display()
+                )));
+            }
+        }
+    }
+}
+
+/// True when the lock's recorded owner PID is gone (a crashed build).
+fn lock_dead(lock_path: &Path) -> bool {
+    let Ok(text) = fs::read_to_string(lock_path) else {
+        return true;
+    };
+    let Ok(pid) = text.trim().parse::<i32>() else {
+        return true;
+    };
+    // `kill(0)` probes existence without signalling.
+    let alive = unsafe { libc::kill(pid, 0) } == 0;
+    !alive
+}
+
+impl Drop for LockGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Vendored-library verification (§Q5 digest-recorded / T-F2 fail-closed)
+// ---------------------------------------------------------------------------
+
+/// Verify every vendored package file is byte-identical to the port's and
+/// return the SHA-256 (hex) over the vendored surface as committed — the
+/// digest the build report records (`proof.vendor_digest`). A tampered
+/// `Tyu/*.lean` in the package is E6418 fail-closed (silent wrong-semantics
+/// proving is the exact failure this gate exists to prevent).
+fn verify_vendored_files(package: &LeanPackage, port_dir: &Path) -> Result<String, TyuError> {
+    let mut digests: Vec<(String, [u8; 32])> = Vec::new();
+    for rel in vendored_port_files() {
+        let port_bytes = fs::read(port_dir.join(rel)).map_err(|e| {
+            TyuError::Build(format!(
+                "E6416: port library file '{}' unreadable: {e}",
+                port_dir.join(rel).display()
+            ))
+        })?;
+        let pkg_bytes = fs::read(package.root.join(rel)).map_err(|e| {
+            TyuError::Build(format!(
+                "E6418: vendored file '{}' missing from the package: {e}",
+                package.root.join(rel).display()
+            ))
+        })?;
+        if pkg_bytes != port_bytes {
+            return Err(TyuError::Build(format!(
+                "E6418: vendored semantics file '{}' disagrees with the port \
+                 (tampered Tyu library?) — refusing to elaborate proofs against \
+                 the wrong semantics",
+                rel
+            )));
+        }
+        digests.push((rel.to_string(), verifier::stmt::sha256(&pkg_bytes)));
+    }
+    digests.sort();
+    let mut stream = Vec::with_capacity(digests.len() * 40);
+    for (rel, digest) in &digests {
+        stream.extend_from_slice(rel.as_bytes());
+        stream.extend_from_slice(digest);
+    }
+    Ok(verifier::stmt::hex32(verifier::stmt::sha256(&stream)))
+}
+
+// ---------------------------------------------------------------------------
+// Gen-digest verification (E6418) + statement accounting
+// ---------------------------------------------------------------------------
+
+/// Recompute every obligation's canonical `statement_hash` (P1.1 encoder) and
+/// verify the rendered Gen surface carries it — the pre-lake tamper gate.
+/// Returns the per-module statement accounting. Any mismatch is `E6418`
+/// (fail-closed: a mutated `Gen` file or a renderer/encoder drift aborts
+/// before lake runs).
+fn verify_gen_digests(
+    package: &LeanPackage,
+    artifacts: &[PathBuf],
+) -> Result<Vec<ModuleStatements>, TyuError> {
+    let mut out: Vec<ModuleStatements> = Vec::new();
+    for a in artifacts {
+        let bytes = fs::read(a).map_err(TyuError::Io)?;
+        let set = verifier::codec::read_obl(&bytes).map_err(|e| {
+            TyuError::Build(format!(
+                "obligation artifact '{}' invalid (E{}): {e:?}",
+                a.display(),
+                e.code()
+            ))
+        })?;
+        let module = &set.module;
+
+        let lean_path = package.gen_dir.join(format!("{module}.lean"));
+        let meta_path = package.gen_dir.join(format!("{module}.gen.json"));
+        if !lean_path.is_file() || !meta_path.is_file() {
+            return Err(TyuError::Build(format!(
+                "E6418: generated statement surface missing for module {} \
+                 (expected '{}' and '{}')",
+                module,
+                lean_path.display(),
+                meta_path.display()
+            )));
+        }
+
+        let lean_text = fs::read_to_string(&lean_path).map_err(TyuError::Io)?;
+        let meta = parse_gen_meta(&fs::read(&meta_path).map_err(TyuError::Io)?)?;
+        let stored_hashes = extract_statement_hashes(&lean_text);
+
+        let mut rendered: u32 = 0;
+        let mut omitted: u32 = 0;
+        for o in &set.obligations {
+            let word_ir_hash = set
+                .facts
+                .words
+                .iter()
+                .find(|w| w.name == o.site.word)
+                .map(|w| sha256_hex16(w.ir.as_bytes()))
+                .unwrap_or_default();
+            // §Q3 relativity: the statement is bound to the artifact's own
+            // (target, model_semantics) identity — the consuming build's
+            // mismatch is the E6421 path at langc, a different surface.
+            let ctx = StatementContext::for_obligation(
+                module,
+                &set.target,
+                &set.model_semantics,
+                &word_ir_hash,
+                o,
+            );
+            let expected_hash = ctx.statement_hash_hex(&o.formula);
+
+            let row = meta
+                .statements
+                .iter()
+                .find(|s| s.id == o.id)
+                .ok_or_else(|| {
+                    TyuError::Build(format!(
+                        "E6418: module {} — obligation {} missing from Gen metadata",
+                        module, o.id
+                    ))
+                })?;
+            if row.omitted {
+                omitted = omitted.saturating_add(1);
+                continue;
+            }
+            rendered = rendered.saturating_add(1);
+            if row.statement_hash != expected_hash {
+                return Err(TyuError::Build(format!(
+                    "E6418: statement hash mismatch for {} — Gen metadata \
+                     records '{}', the canonical encoder computes '{}'",
+                    o.id, row.statement_hash, expected_hash
+                )));
+            }
+            if !stored_hashes.contains(&expected_hash) {
+                return Err(TyuError::Build(format!(
+                    "E6418: statement hash for {} not carried in '{}' (tampered Gen?)",
+                    o.id,
+                    lean_path.display()
+                )));
+            }
+        }
+        out.push(ModuleStatements {
+            module: module.clone(),
+            rendered,
+            omitted,
+            unproven: rendered, // P6: harvest is P7 — nothing is proven yet.
+        });
+    }
+    out.sort_by(|a, b| a.module.cmp(&b.module));
+    Ok(out)
+}
+
+/// The `statements` array of a `<Module>.gen.json` metadata file.
+fn parse_gen_meta(bytes: &[u8]) -> Result<GenMeta, TyuError> {
+    let value: serde_json::Value = serde_json::from_slice(bytes)
+        .map_err(|e| TyuError::Build(format!("E6418: unparseable Gen metadata: {e}")))?;
+    let schema = value
+        .get("schema")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    if schema != "tyu.gen/1" {
+        return Err(TyuError::Build(format!(
+            "E6418: unknown Gen metadata schema '{}' (expected tyu.gen/1)",
+            schema
+        )));
+    }
+    let mut statements = Vec::new();
+    if let Some(arr) = value.get("statements").and_then(|v| v.as_array()) {
+        for row in arr {
+            let id = row
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let omitted = row
+                .get("omitted")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let statement_hash = row
+                .get("statement_hash")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            statements.push(GenStatementRow {
+                id,
+                omitted,
+                statement_hash,
+            });
+        }
+    }
+    Ok(GenMeta { statements })
+}
+
+#[derive(Debug)]
+struct GenMeta {
+    statements: Vec<GenStatementRow>,
+}
+
+#[derive(Debug)]
+struct GenStatementRow {
+    id: String,
+    omitted: bool,
+    statement_hash: String,
+}
+
+/// Extract the `statement_hash: <hex>` annotations the renderer writes into
+/// each generated statement's doc comment.
+fn extract_statement_hashes(lean_text: &str) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    let mut rest = lean_text;
+    while let Some(idx) = rest.find("statement_hash: ") {
+        rest = &rest[idx + "statement_hash: ".len()..];
+        let hex_len = rest
+            .bytes()
+            .take_while(|b| b.is_ascii_hexdigit())
+            .count()
+            .min(64);
+        if hex_len == 64 {
+            out.insert(rest[..64].to_string());
+        }
+        if hex_len > 0 {
+            rest = &rest[hex_len..];
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// Build state + helper I/O
+// ---------------------------------------------------------------------------
+
+/// The `.tyu-gen.json` generation-state text for a fingerprint.
+fn state_text(fingerprint: &u64) -> String {
+    format!(
+        "{{\"schema\":\"{PKG_STATE_SCHEMA}\",\"fingerprint\":\"{fingerprint:016x}\",\
+        \"stmt\":\"{}\",\"semantics\":\"{}\"}}\n",
+        verifier::stmt::STMT_SCHEMA,
+        verifier::semantics::SEMANTICS_VERSION
+    )
+}
+
+/// Write `bytes` to `path` only when the existing content differs (temp +
+/// rename; mtime-stability keeps lake incremental — FR-16).
+fn write_if_changed(path: &Path, bytes: &[u8]) -> Result<(), TyuError> {
+    if let Ok(existing) = fs::read(path) {
+        if existing == bytes {
+            return Ok(());
+        }
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(TyuError::Io)?;
+    }
+    let tmp = path.with_extension(format!("tmp{}", std::process::id()));
+    fs::write(&tmp, bytes).map_err(TyuError::Io)?;
+    fs::rename(&tmp, path).map_err(|e| {
+        TyuError::Build(format!(
+            "re-homing '{}' -> '{}': {}",
+            tmp.display(),
+            path.display(),
+            e
+        ))
+    })?;
+    Ok(())
+}
+
+fn hash_file(path: &Path) -> Result<u64, TyuError> {
+    cache::content_hash(path)
+}
+
+/// The deterministic proof-files hash (§7.2 `proof_files_hash`): FNV-1a over
+/// the sorted `(relative path, content hash)` pairs of everything under
+/// `proofs/`. A cache key for the TyuProofs lib / verdicts cache — not an
+/// integrity digest.
+pub fn proof_files_hash(proofs_dir: &Path) -> u64 {
+    let mut items: Vec<(String, u64)> = Vec::new();
+    if let Ok(rd) = fs::read_dir(proofs_dir) {
+        for entry in rd.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                continue;
+            }
+            let rel = p
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("?")
+                .to_string();
+            items.push((rel, cache::content_hash(&p).unwrap_or(0)));
+        }
+    }
+    items.sort();
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for (rel, ch) in items {
+        h ^= ch;
+        h = h.wrapping_mul(0x100000001b3);
+        h ^= cache::fnv1a_u64(rel.as_bytes());
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
+}
+
+// ---------------------------------------------------------------------------
+// Toolchain resolution (§7.2; E6416)
+// ---------------------------------------------------------------------------
+
+/// Verify the Lean toolchain is present and matches the port's pin (the
+/// `lean-toolchain` reference) — `elan which lean` when elan manages the
+/// toolchain, else the PATH `lean`/`lake` with a version check. Mismatch or
+/// absence is E6416 with the pin in the diagnostic.
+pub fn ensure_lean_toolchain(pin: &str) -> Result<(), TyuError> {
+    let want = pin
+        .rsplit(':')
+        .next()
+        .unwrap_or(pin)
+        .trim()
+        .trim_start_matches('v')
+        .to_string();
+    // Elan-managed: `elan which lean` resolves the pinned toolchain from the
+    // package's lean-toolchain file when one is present in the CWD.
+    let lean_bin = if let Some(elan) = crate::toolchain::find_in_path("elan") {
+        if let Ok(out) = Command::new(&elan).arg("which").arg("lean").output() {
+            if out.status.success() {
+                let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if !path.is_empty() {
+                    Some(PathBuf::from(path))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let lean_bin = match lean_bin {
+        Some(b) => b,
+        None => crate::toolchain::find_in_path("lean").ok_or_else(|| {
+            TyuError::Build(format!(
+                "E6416: Lean toolchain unavailable — pin '{}' requires `lean` \
+                 (via elan or PATH); the proof pipeline cannot run",
+                pin
+            ))
+        })?,
+    };
+    let got = lean_version(&lean_bin)
+        .ok_or_else(|| TyuError::Build(format!("E6416: cannot probe '{}'", lean_bin.display())))?;
+    if !same_version(&got, &want) {
+        return Err(TyuError::Build(format!(
+            "E6416: Lean toolchain mismatch — pin '{}' ({}), resolved '{}' is {} \
+             — run `elan toolchain install {}` (or align the pinned toolchain)",
+            pin,
+            want,
+            lean_bin.display(),
+            got,
+            pin
+        )));
+    }
+    // `lake` must be present too (the elaborating build step).
+    if crate::toolchain::find_in_path("lake").is_none() {
+        return Err(TyuError::Build(format!(
+            "E6416: `lake` not found in PATH — required to build the generated \
+             proof package (pin {})",
+            pin
+        )));
+    }
+    Ok(())
+}
+
+/// `lean --version` → `"4.27.0"`-style version string.
+fn lean_version(path: &Path) -> Option<String> {
+    let out = Command::new(path).arg("--version").output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let v = text
+        .strip_prefix("Lean (version ")
+        .and_then(|r| r.split(',').next())?
+        .trim();
+    Some(v.to_string())
+}
+
+/// Prefix-equal version comparison on dot-separated numeric segments: the
+/// pin's segments must be a prefix of the installed toolchain's (`want`
+/// `"4.27"` is satisfied by `got` `"4.27.0"`; a full pin compares exactly).
+fn same_version(got: &str, want: &str) -> bool {
+    let seg = |s: &str| -> Vec<u32> {
+        s.trim()
+            .split('.')
+            .filter_map(|p| {
+                p.chars()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect::<String>()
+                    .parse()
+                    .ok()
+            })
+            .collect()
+    };
+    let g = seg(got);
+    let w = seg(want);
+    !w.is_empty() && g.len() >= w.len() && g.iter().zip(w.iter()).all(|(a, b)| a == b)
+}
+
+/// The elaborating lake build of the generated package. Any failure — a
+/// developer proof that does not elaborate, a vendored-file breakage, a lake
+/// crash — is E6416 with the output captured (fail-closed: the build stops
+/// before any check is elided for an unproven statement).
+fn run_lake_build(package: &LeanPackage) -> Result<(), TyuError> {
+    let out = Command::new("lake")
+        .current_dir(&package.root)
+        .args(["build", "harvest"])
+        .output()
+        .map_err(|e| {
+            TyuError::Build(format!(
+                "E6416: spawning `lake build harvest` in '{}': {e}",
+                package.root.display()
+            ))
+        })?;
+    if !out.status.success() {
+        let mut tail = String::new();
+        for stream in [&out.stdout, &out.stderr] {
+            let text = String::from_utf8_lossy(stream);
+            tail.push_str(&text);
+        }
+        let tail = tail
+            .lines()
+            .rev()
+            .take(32)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Err(TyuError::Build(format!(
+            "E6416: `lake build harvest` failed in '{}' — the generated \
+             statements and/or the developer proofs did not elaborate:\n{}",
+            package.root.display(),
+            tail
+        )));
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Harvest boundary (P6.2: wired, honest, tested — P7 replaces the error)
+// ---------------------------------------------------------------------------
+
+/// The harvest call boundary. In P6 the port's harvest executable does not
+/// exist (P7's deliverable), so reaching this point is an explicit
+/// fail-closed error — no build may claim a proof verdict it cannot harvest.
+/// P6 wires the boundary and proves it fail-closes (unit test); the P6 build
+/// path never reaches it (the report records `harvest: "not-built"` instead),
+/// which is why the lib build sees it as unused until P7 plugs it in.
+#[allow(dead_code)]
+pub(crate) fn invoke_harvest() -> Result<(), TyuError> {
+    Err(TyuError::Build(
+        "E6416 harvest-not-built: the port's harvest executable is a \
+         PLAN-VERIFY-3 P7 deliverable; before it lands, no kernel-checked \
+         proof can be consumed and every statement stays unproven"
+            .into(),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("tyu-proof-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn proof_files_hash_is_deterministic_and_sensitive() {
+        let dir = temp_dir("pfh");
+        let proofs = dir.join("proofs");
+        fs::create_dir_all(&proofs).unwrap();
+        fs::write(proofs.join("Bank.lean"), "theorem a : True := by trivial\n").unwrap();
+        fs::write(proofs.join("proofs.lean"), "import Bank\n").unwrap();
+        let h1 = proof_files_hash(&proofs);
+        let h2 = proof_files_hash(&proofs);
+        assert_eq!(h1, h2, "same tree → same hash");
+        fs::write(proofs.join("Bank.lean"), "-- changed\n").unwrap();
+        let h3 = proof_files_hash(&proofs);
+        assert_ne!(h1, h3, "content change must change the hash");
+        fs::write(proofs.join("Loop.lean"), "theorem b : True := by trivial\n").unwrap();
+        let h4 = proof_files_hash(&proofs);
+        assert_ne!(h1, h4, "file-set change must change the hash");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn invoke_harvest_fails_closed_with_harvest_not_built() {
+        let err = invoke_harvest().unwrap_err();
+        assert!(err.to_string().contains("E6416"), "err: {err}");
+        assert!(
+            err.to_string().contains("harvest-not-built"),
+            "must name the state: {err}"
+        );
+    }
+
+    #[test]
+    fn proof_fill_is_an_honest_not_yet() {
+        let err = proof_fill().unwrap_err();
+        assert!(err.to_string().contains("E6416"), "err: {err}");
+        assert!(
+            err.to_string().contains("P10"),
+            "must name the phase: {err}"
+        );
+    }
+
+    #[test]
+    fn version_check_matches_and_rejects() {
+        assert!(same_version("4.27.0", "4.27.0"));
+        assert!(same_version("4.27.0", "4.27"), "pin prefix satisfies");
+        assert!(!same_version("4.26.0", "4.27.0"));
+        assert!(!same_version("4.27.1", "4.27.0"));
+        assert!(
+            !same_version("4.27.0", "4.27.0.1"),
+            "installed short of pin"
+        );
+    }
+
+    #[test]
+    fn write_if_changed_skips_identical_bytes_and_preserves_mtime() {
+        let dir = temp_dir("wic");
+        let p = dir.join("f.txt");
+        write_if_changed(&p, b"hello").unwrap();
+        let m1 = fs::metadata(&p).unwrap().modified().unwrap();
+        std::thread::sleep(Duration::from_millis(40));
+        write_if_changed(&p, b"hello").unwrap();
+        let m2 = fs::metadata(&p).unwrap().modified().unwrap();
+        assert_eq!(m1, m2, "unchanged bytes must not be rewritten");
+        write_if_changed(&p, b"world").unwrap();
+        assert_eq!(fs::read(&p).unwrap(), b"world");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn extract_statement_hashes_scans_doc_comments() {
+        let text = "-- /-- statement: X\n    statement_hash: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -/\n";
+        let hashes = extract_statement_hashes(text);
+        assert!(hashes.contains("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+        assert!(!extract_statement_hashes("no hashes here").contains("a"));
+    }
+
+    #[test]
+    fn toml_escape_quotes_and_backslashes() {
+        assert_eq!(toml_escape("a\"b\\c"), "a\\\"b\\\\c");
+        assert_eq!(toml_escape("plain/path"), "plain/path");
+    }
+
+    // -------------------------------------------------------------------
+    // Hermetic pipeline tests (no lake/lean needed — the port's committed
+    // corpus goldens + a synthetic port fixture stand in).
+    // -------------------------------------------------------------------
+
+    fn workspace_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf()
+    }
+
+    fn port_dir() -> PathBuf {
+        workspace_root()
+            .join("verification")
+            .join("ports")
+            .join("lean")
+    }
+
+    /// The corpus golden material the E6418 check runs against: the real
+    /// renderer output (gen metadata + Gen text) and the artifact it was
+    /// rendered from — pinned by the P5 drift tests, so a mismatch here is a
+    /// genuine encoder↔renderer disagreement.
+    fn corpus_fixture(project: &Path) -> (PathBuf, PathBuf, PathBuf) {
+        let artifact = port_dir().join("goldens").join("obl").join("Bank.obl.json");
+        let gen_json = port_dir().join("goldens").join("gen").join("Bank.gen.json");
+        let gen_lean = port_dir()
+            .join("Tyu")
+            .join("Gen")
+            .join("Golden")
+            .join("Bank.lean");
+        assert!(artifact.is_file(), "missing {}", artifact.display());
+        assert!(gen_json.is_file(), "missing {}", gen_json.display());
+        assert!(gen_lean.is_file(), "missing {}", gen_lean.display());
+        fs::create_dir_all(project.join("out")).unwrap();
+        let _ = fs::copy(&artifact, project.join("out").join("Bank.obl.json")).unwrap();
+        let gen_dir = project.join("gen");
+        fs::create_dir_all(&gen_dir).unwrap();
+        let _ = fs::copy(&gen_json, gen_dir.join("Bank.gen.json")).unwrap();
+        let _ = fs::copy(&gen_lean, gen_dir.join("Bank.lean")).unwrap();
+        (project.join("out").join("Bank.obl.json"), gen_dir, gen_lean)
+    }
+
+    #[test]
+    fn vendored_library_tamper_is_fail_closed() {
+        let dir = temp_dir("vendor");
+        let project = dir.join("project");
+        fs::create_dir_all(&project).unwrap();
+        fs::create_dir_all(project.join("proofs")).unwrap();
+        fs::write(project.join("proofs").join("proofs.lean"), b"").unwrap();
+        let (artifact, _, _) = corpus_fixture(&project);
+        let port = synthetic_port(&dir);
+        let pkg = generate_package(&project, &port, &[artifact]).unwrap();
+        // A clean package verifies and yields a digest.
+        let digest = verify_vendored_files(&pkg, &port).unwrap();
+        assert_eq!(digest.len(), 64, "sha256 hex");
+        assert_eq!(
+            verify_vendored_files(&pkg, &port).unwrap(),
+            digest,
+            "deterministic"
+        );
+        // Tamper one vendored semantics file → E6418, fail-closed.
+        let step = pkg.root.join("Tyu").join("Step.lean");
+        let text = fs::read_to_string(&step).unwrap();
+        fs::write(&step, format!("-- tampered\n{text}")).unwrap();
+        let err = verify_vendored_files(&pkg, &port).unwrap_err();
+        assert!(err.to_string().contains("E6418"), "err: {err}");
+        assert!(
+            err.to_string().contains("tampered Tyu library"),
+            "must name the failure: {err}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn gen_digest_check_agrees_with_the_port_on_corpus_and_catches_tamper() {
+        let dir = temp_dir("e6418");
+        let (artifact, gen_dir, _) = corpus_fixture(&dir);
+        let pkg = LeanPackage {
+            root: dir.clone(),
+            gen_dir: gen_dir.clone(),
+        };
+        let statements = verify_gen_digests(&pkg, std::slice::from_ref(&artifact)).unwrap();
+        // The Bank corpus: ≥ 1 rendered statement and ≥ 1 omitted one (the
+        // opaque/contract rows the renderer refuses) — both arms exercised;
+        // every rendered statement is unproven in P6.
+        let bank = statements
+            .iter()
+            .find(|s| s.module == "Bank")
+            .expect("Bank accounting present");
+        assert!(bank.rendered >= 1, "rendered: {}", bank.rendered);
+        assert!(bank.omitted >= 1, "omitted: {}", bank.omitted);
+        assert_eq!(bank.unproven, bank.rendered, "P6: nothing proven yet");
+
+        // Tamper the generated text's first statement hash — E6418, fail-closed.
+        let lean_path = gen_dir.join("Bank.lean");
+        let text = fs::read_to_string(&lean_path).unwrap();
+        let real = extract_statement_hashes(&text).into_iter().next().unwrap();
+        let tampered = format!("{}a", &real[..63]);
+        let text2 = text.replacen(&real, &tampered, 1);
+        assert_ne!(text2, text, "tamper must change the text");
+        fs::write(&lean_path, text2).unwrap();
+        let err = verify_gen_digests(&pkg, &[artifact]).unwrap_err();
+        assert!(err.to_string().contains("E6418"), "err: {err}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A synthetic port: the vendored files copied from the real port plus a
+    /// fake `gen` renderer that copies the corpus golden output verbatim —
+    /// hermetic package generation (no lake, no lean).
+    fn synthetic_port(project: &Path) -> PathBuf {
+        let port = project.join("port");
+        for rel in vendored_port_files() {
+            let src = port_dir().join(rel);
+            let dst = port.join(rel);
+            fs::create_dir_all(dst.parent().unwrap()).unwrap();
+            fs::copy(&src, &dst).unwrap();
+        }
+        fs::create_dir_all(port.join(".lake").join("build").join("bin")).unwrap();
+        // The fake gen renderer: `--render --obl <files> --out <dir>` copies
+        // the corpus golden Bank surface into the out dir.
+        let gen_dir_for = project.join("gen-src");
+        fs::create_dir_all(&gen_dir_for).unwrap();
+        fs::copy(
+            port_dir().join("goldens").join("gen").join("Bank.gen.json"),
+            gen_dir_for.join("Bank.gen.json"),
+        )
+        .unwrap();
+        fs::copy(
+            port_dir()
+                .join("Tyu")
+                .join("Gen")
+                .join("Golden")
+                .join("Bank.lean"),
+            gen_dir_for.join("Bank.lean"),
+        )
+        .unwrap();
+        let script = port.join(".lake").join("build").join("bin").join("gen");
+        fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\n\
+                 out=\"\"\n\
+                 prev=\"\"\n\
+                 for a in \"$@\"; do\n\
+                 \x20 if [ \"$prev\" = \"--out\" ]; then out=\"$a\"; fi\n\
+                 \x20 prev=\"$a\"\n\
+                 done\n\
+                 cp \"{}/Bank.lean\" \"$out/Bank.lean\"\n\
+                 cp \"{}/Bank.gen.json\" \"$out/Bank.gen.json\"\n",
+                gen_dir_for.display(),
+                gen_dir_for.display(),
+            ),
+        )
+        .unwrap();
+        // chmod +x
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&script).unwrap().permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&script, perms).unwrap();
+        }
+        fs::write(port.join("lean-toolchain"), b"leanprover/lean4:v4.27.0\n").unwrap();
+        port
+    }
+
+    #[test]
+    fn generate_package_is_deterministic_and_fast_paths() {
+        let dir = temp_dir("genpkg");
+        let project = dir.join("project");
+        fs::create_dir_all(&project).unwrap();
+        fs::create_dir_all(project.join("proofs")).unwrap();
+        fs::write(project.join("proofs").join("proofs.lean"), b"import Bank\n").unwrap();
+        fs::write(
+            project.join("proofs").join("Bank.lean"),
+            b"import Gen.Bank\n-- no proofs yet\n",
+        )
+        .unwrap();
+        let (artifact, _, _) = corpus_fixture(&project);
+
+        let port = synthetic_port(&dir);
+        let package1 = generate_package(&project, &port, std::slice::from_ref(&artifact)).unwrap();
+
+        // Determinism: regenerating over the same inputs yields the identical
+        // byte tree (a second generation fast-paths and does not rewrite).
+        let state1 = fs::read(package1.root.join(".tyu-gen.json")).unwrap();
+        let tree1 = tree_bytes(&package1.root);
+        let package2 = generate_package(&project, &port, std::slice::from_ref(&artifact)).unwrap();
+        assert_eq!(
+            fs::read(package2.root.join(".tyu-gen.json")).unwrap(),
+            state1,
+            "state must be byte-stable"
+        );
+        assert_eq!(
+            tree1,
+            tree_bytes(&package2.root),
+            "tree must be byte-stable"
+        );
+
+        // The lakefile resolves the developer proofs dir + enumerated roots,
+        // and the harvest stub imports the proofs root.
+        let lakefile = fs::read_to_string(package2.root.join("lakefile.toml")).unwrap();
+        assert!(lakefile.contains("TyuProofs"), "lakefile: {lakefile}");
+        assert!(
+            lakefile.contains("\"Bank\", \"proofs\""),
+            "roots: {lakefile}"
+        );
+        let stub = fs::read_to_string(package2.root.join("Harvest.lean")).unwrap();
+        assert!(stub.contains("import proofs"), "stub: {stub}");
+
+        // A proof-file change invalidates the fingerprint → the next call
+        // regenerates (the state moves).
+        let dir2 = temp_dir("genpkg2");
+        fs::create_dir_all(dir2.join("proofs")).unwrap();
+        fs::write(dir2.join("proofs").join("proofs.lean"), b"import Bank\n").unwrap();
+        fs::write(
+            dir2.join("proofs").join("Bank.lean"),
+            b"import Gen.Bank\n-- changed\n",
+        )
+        .unwrap();
+        let (artifact2, _, _) = corpus_fixture(&dir2);
+        let package3 = generate_package(&dir2, &port, std::slice::from_ref(&artifact2)).unwrap();
+        assert_ne!(
+            fs::read(package3.root.join(".tyu-gen.json")).unwrap(),
+            state1,
+            "a proofs/ edit must change the generation state"
+        );
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&dir2);
+    }
+
+    /// Recursively collect (relative path, bytes) for a directory, sorted —
+    /// a byte-tree equality witness.
+    fn tree_bytes(root: &Path) -> Vec<(String, Vec<u8>)> {
+        let mut out = Vec::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(d) = stack.pop() {
+            if let Ok(rd) = fs::read_dir(&d) {
+                for e in rd.flatten() {
+                    let p = e.path();
+                    if p.is_dir() {
+                        stack.push(p);
+                    } else if let Ok(bytes) = fs::read(&p) {
+                        if let Ok(rel) = p.strip_prefix(root) {
+                            out.push((rel.to_string_lossy().into_owned(), bytes));
+                        }
+                    }
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn package_lock_waits_then_e6416_and_steals_stale_locks() {
+        let dir = temp_dir("lock");
+        fs::create_dir_all(&dir).unwrap();
+        // A lock owned by a live PID (us) must block until the timeout → E6416.
+        let lock = dir.join(".tyu-gen.lock");
+        fs::write(&lock, format!("{}\n", std::process::id())).unwrap();
+        std::env::set_var(LOCK_TIMEOUT_ENV, "300");
+        let start = Instant::now();
+        let err = lock_package(&dir).unwrap_err();
+        assert!(err.to_string().contains("E6416"), "err: {err}");
+        assert!(
+            start.elapsed() >= Duration::from_millis(250),
+            "must have waited: {:?}",
+            start.elapsed()
+        );
+        std::env::remove_var(LOCK_TIMEOUT_ENV);
+
+        // A lock owned by a dead PID is stolen immediately.
+        fs::write(&lock, "99999999\n").unwrap();
+        let guard = lock_package(&dir).unwrap();
+        let held = fs::read_to_string(&lock).unwrap();
+        assert!(
+            held.trim() == std::process::id().to_string(),
+            "lock must be re-held by us after the steal: {held:?}"
+        );
+        drop(guard);
+        assert!(!lock.exists(), "dropping releases the lock");
+        let _ = fs::remove_dir_all(&dir);
+    }
+}

@@ -91,7 +91,14 @@ const GUARDS_ELIDED: ElisionCtx = ElisionCtx {
 };
 
 /// Compose and write `<out_dir>/verify-report.json`, enforce the build policy
-/// (E6410, FR-18), and print the NFR-9 one-line accounting summary.
+/// (E6410, FR-18), and print the NFR-9 one-line accounting summary. `proof`
+/// is the P6.2 developer-proof status (None-tool builds carry the inert
+/// default).
+// 8 positional parameters model the report's fixed input surface (build
+// context, per-module artifacts, root, verify mode, policy, module-loading,
+// elision decision, and the proof status); bundling them would relocate the
+// same fields without reducing real coupling.
+#[allow(clippy::too_many_arguments)]
 pub fn compose_and_write_report(
     ctx: &BuildContext,
     module_obl: &[(String, Option<PathBuf>)],
@@ -100,13 +107,14 @@ pub fn compose_and_write_report(
     policy: VerifyPolicy,
     module_loading: bool,
     elide_ds_guards: bool,
+    proof: &verifier::report::ProofStatus,
 ) -> Result<PathBuf, TyuError> {
     let elision = if elide_ds_guards {
         &GUARDS_ELIDED
     } else {
         &GUARDS_RETAINED
     };
-    let report = compose(
+    let mut report = compose(
         ctx,
         module_obl,
         root_module,
@@ -115,6 +123,7 @@ pub fn compose_and_write_report(
         module_loading,
         elision,
     )?;
+    report.proof = proof.clone();
     let bytes = verifier::codec::encode_report(&report)
         .map_err(|e| TyuError::Build(format!("verify-report encode failed: {e:?}")))?;
     let path = ctx.out_dir.join("verify-report.json");

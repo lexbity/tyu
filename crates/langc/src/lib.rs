@@ -195,6 +195,7 @@ pub unsafe fn run(argc: isize, argv: *const *const hosted::c::c_char) -> i32 {
                 cfg.write_obl,
                 verdicts.as_ref(),
                 cfg.elide_ds_guards,
+                cfg.verify_tool,
             )
         }
         EmitMode::Obligations => {

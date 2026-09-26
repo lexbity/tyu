@@ -279,6 +279,7 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
             feature_set,
             args.verify,
             elide_ds,
+            args.verify_tool,
         )?;
         module_objs.push(compiled.object_path);
         module_obl.push((module.name.clone(), compiled.obl_path));
@@ -335,6 +336,17 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
     prune_out_dir(&out_dir, &mut cache, &built_fps, build_started)?;
     cache.save()?;
 
+    // P6.2 (FR-3): `--verify-tool=lean` — the developer-proof pipeline:
+    // package generation (`.tyu-verify/lean/`), Gen-digest verification
+    // (E6418), and the elaborating lake build. Runs only for a produced
+    // image; a pipeline failure is E6416 fail-closed (no verdicts, no
+    // report). Before the P7 harvest exists every rendered statement is
+    // unproven, and the report says so — no path claims a proof verdict.
+    let proof_status = match args.verify_tool {
+        Some(tool) => crate::proof::run_lean_pipeline(tool, &module_obl)?,
+        None => verifier::report::ProofStatus::none(),
+    };
+
     // P3/P4: compose the verification report from every module's obligation
     // artifact + verdict echo (§7.3: per-context stack-budget verdicts +
     // per-module class accounting; §6.5: the `emitted_checks` honesty block
@@ -351,6 +363,7 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
         args.feature_set
             .contains(codegen_core::Feature::ModuleLoading),
         elide_ds,
+        &proof_status,
     )?;
 
     Ok(BuildOutcome {
@@ -1018,6 +1031,7 @@ fn compile_module(
     feature_set: FeatureSet,
     verify: crate::args::VerifyMode,
     elide_ds_guards: bool,
+    verify_tool: Option<crate::args::VerifyTool>,
 ) -> Result<CompiledModule, TyuError> {
     let features = feature_set.bits();
     // Check cache first. The obligation artifact rides beside the object under
@@ -1072,6 +1086,12 @@ fn compile_module(
         let path = ensure_verdicts_cache_file(&verdicts_slot)?;
         cmd.arg("--checks=undischarged");
         cmd.arg(format!("--verdicts={}", path.display()));
+    }
+    // P6.2 pass-through: langc stays tool-agnostic (it consumes verdicts);
+    // the flag records the requested proof tool in the verdicts echo so the
+    // report's provenance names it.
+    if let Some(tool) = verify_tool {
+        cmd.arg(format!("--verify-tool={}", tool.as_str()));
     }
     // Slice P7 (Q5/FR-11): the *image-level* decision — all modules or none
     // (per-image atomicity). A dedicated codegen input, never derived from

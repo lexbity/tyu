@@ -86,6 +86,27 @@ fn main() {
                 }
             }
         }
+        args::Command::Proof(proof_args) => {
+            let result = match proof_args {
+                args::ProofArgs::Init { dir, input } => {
+                    match tyu::proof::project_root_for(dir.as_deref()) {
+                        Ok(root) => {
+                            eprintln!(
+                                "tyu: scaffolding proofs/ in '{}'",
+                                root.join("proofs").display()
+                            );
+                            tyu::proof::proof_init(&root, input.as_deref())
+                        }
+                        Err(e) => Err(e),
+                    }
+                }
+                args::ProofArgs::Fill => tyu::proof::proof_fill(),
+            };
+            if let Err(e) = result {
+                eprintln!("tyu: proof error: {}", e);
+                std::process::exit(1);
+            }
+        }
         args::Command::Clean => {
             let target_dir = std::path::Path::new("target").join("tyu");
             if target_dir.exists() {

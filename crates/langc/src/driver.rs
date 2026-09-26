@@ -316,6 +316,7 @@ pub fn emit_obj_driver(
     write_obl: bool,
     verdicts: Option<&verifier::verdict::Verdicts>,
     elide_ds_guards: bool,
+    verify_tool: Option<&[u8]>,
 ) -> i32 {
     let module_name = slice_span(src, module.name);
     // P2/P4: extract obligations alongside the object and write
@@ -704,6 +705,7 @@ pub fn emit_obj_driver(
             &provably_failing,
             &open_reasons,
             in_tree_verdicts,
+            verify_tool.map(|t| core::str::from_utf8(t).unwrap_or("?")),
         ) {
             Ok(b) => b,
             Err(_) => {

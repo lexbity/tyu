@@ -10,7 +10,14 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 /// Schema identifier of `verify-report.json` artifacts.
-pub const REPORT_SCHEMA: &str = "tyu.verify-report/v1";
+///
+/// v1 → v2 (PLAN-VERIFY-3 P6.2, §13): v2 adds the `proof` section — the
+/// per-module statement accounting of the developer-proof pipeline (§Q5,
+/// §7.3), defaulted until P7 lands the harvest + trust/method/surface
+/// accounting. v1 consumers of the *open/assumed* surfaces are unaffected
+/// (the new section is additive JSON members; the report has a single in-tree
+/// writer, `tu` → `verifier::codec::encode_report`).
+pub const REPORT_SCHEMA: &str = "tyu.verify-report/v2";
 
 /// Schema identifier of the image-verdicts record (slice P7, Q5/FR-11): the
 /// durable, validated evidence of the two-pass guard-elision decision —
@@ -170,8 +177,93 @@ pub struct TrustedAssumption {
     pub what: String,
 }
 
+/// Per-module statement accounting of the proof pipeline (P6.2, §Q5/§7.3):
+/// what the port's statement renderer generated for a module's obligations.
+/// The rendered count is the number of `def stmt_… : Prop` statements
+/// generated; `omitted` counts the obligations the renderer refused (with a
+/// reason, `model-unavailable`/`opaque-site`/…); `unproven` is how many
+/// rendered statements have no kernel-checked theorem yet — before the P7
+/// harvest step exists this equals `rendered` by construction, and the report
+/// is explicit about it (`harvest: "not-built"`).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModuleStatements {
+    pub module: String,
+    pub rendered: u32,
+    pub omitted: u32,
+    pub unproven: u32,
+}
+
+/// The report's proof section (P6.2; the §Q6 trust/method/surface accounting
+/// lands with P7's verdicts v2 — this slice carries only the fields the
+/// statement pipeline can honestly report before harvest exists).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProofStatus {
+    /// The verification tool active during this build: `"none"` (no
+    /// `--verify-tool`), `"lean"` (the proof pipeline ran), or
+    /// `"lean-skipped"` (the port build was skipped under
+    /// `TYU_SKIP_PORT_BUILD=1`). Closed value set.
+    pub tool: String,
+    /// Harvest state: `"not-built"` in P6 (the port's harvest exe is P7's
+    /// deliverable); `"ok"` from P7. Closed value set.
+    pub harvest: String,
+    /// Gen-digest check outcome (E6418): `"verified"` (every rendered
+    /// statement's `statement_hash` matches the canonical encoder),
+    /// `"skipped"` (no Gen surface to check — no `--verify-tool`, or the
+    /// port build was skipped).
+    pub gen_digest: String,
+    /// SHA-256 (hex) over the vendored port library files as committed in the
+    /// generated package — the §Q5 "digest-recorded in the build report"
+    /// requirement: an auditor (or a later build) can re-derive it, and a
+    /// tampered `Tyu/*.lean` in the package is a fail-closed E6418, not a
+    /// silent "prove against the wrong semantics". Empty when no pipeline ran.
+    pub vendor_digest: String,
+    /// Per-module statement accounting, sorted by module name.
+    pub statements: Vec<ModuleStatements>,
+}
+
+impl ProofStatus {
+    /// The no-proof-pipeline default: `--verify-tool` absent.
+    pub fn none() -> Self {
+        Self {
+            tool: "none".to_string(),
+            harvest: "not-built".to_string(),
+            gen_digest: "skipped".to_string(),
+            vendor_digest: String::new(),
+            statements: Vec::new(),
+        }
+    }
+
+    /// The toolchain-skip status (`TYU_SKIP_PORT_BUILD=1`): the proof
+    /// pipeline was requested but not attempted; every statement is unproven
+    /// and the report says so.
+    pub fn skipped() -> Self {
+        Self {
+            tool: "lean-skipped".to_string(),
+            harvest: "not-built".to_string(),
+            gen_digest: "skipped".to_string(),
+            vendor_digest: String::new(),
+            statements: Vec::new(),
+        }
+    }
+
+    /// The P6 lean-pipeline status: the package was generated, the Gen
+    /// digests verified (E6418), and the elaborating build ran — but no
+    /// kernel-checked theorem was harvested yet (`harvest: "not-built"`), so
+    /// every rendered statement is `unproven`.
+    pub fn lean(gen_digest: &str, vendor_digest: &str, statements: Vec<ModuleStatements>) -> Self {
+        Self {
+            tool: "lean".to_string(),
+            harvest: "not-built".to_string(),
+            gen_digest: gen_digest.to_string(),
+            vendor_digest: vendor_digest.to_string(),
+            statements,
+        }
+    }
+}
+
 /// The complete report document (§6.5; P3 v1 fields plus the P4 honesty
-/// fields `assumed`, `stale_verdicts`, `emitted_checks`).
+/// fields `assumed`, `stale_verdicts`, `emitted_checks`, and the P6 `proof`
+/// section).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VerifyReport {
     pub schema: String,
@@ -196,6 +288,10 @@ pub struct VerifyReport {
     pub stale_verdicts: u32,
     /// The honesty block: emitted checks per class (FR-15/FR-16).
     pub emitted_checks: EmittedChecks,
+    /// P6.2: the proof-pipeline section (per-module statement accounting;
+    /// trust/method/surface fields land in P7). `"none"` when the build ran
+    /// without `--verify-tool`.
+    pub proof: ProofStatus,
 }
 
 impl VerifyReport {
@@ -231,6 +327,7 @@ impl VerifyReport {
             verdict_sources: VerdictSources::default(),
             stale_verdicts: 0,
             emitted_checks: EmittedChecks::default(),
+            proof: ProofStatus::none(),
         }
     }
 }

@@ -289,6 +289,7 @@ pub fn encode_echo(
     provably_failing: &[ProvablyFailingRecord],
     open_reasons: &[OpenReasonRecord],
     in_tree_verdicts: u32,
+    verify_tool: Option<&str>,
 ) -> Result<Vec<u8>, VerdictError> {
     let mut out = Vec::with_capacity(512);
     out.extend_from_slice(b"{\"schema\":");
@@ -299,6 +300,13 @@ pub fn encode_echo(
     push_str_json(&mut out, tool_version);
     out.extend_from_slice(b"},\"semantics\":");
     push_str_json(&mut out, SEMANTICS_VERSION);
+    // P6.2 pass-through: the requested developer-proof tool (e.g. "lean"),
+    // recorded so the report's provenance names it. Omitted when absent
+    // (deterministic — an ordinary verdicts file is byte-identical to P5).
+    if let Some(tool) = verify_tool {
+        out.extend_from_slice(b",\"verify_tool\":");
+        push_str_json(&mut out, tool);
+    }
     out.extend_from_slice(b",\"verdicts\":[");
     for (i, r) in records.iter().enumerate() {
         if i != 0 {

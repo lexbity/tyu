@@ -1146,6 +1146,45 @@ if grep -rnE 'sorry|Admitted|native_decide' "$PORTDIR/Tyu/Gen" --include='*.lean
 fi
 [ "$g33_fail" -eq 0 ] && msg $GREEN "  G33: P5 statement-renderer surface (Gen + goldens + drift test)"
 failures=$((failures + g33_fail))
+
+# --- G34: PLAN-VERIFY-3 P6 — the developer-proof pipeline surface ---
+# `tyu proof init`/`fill`, the generated `.tyu-verify/lean/` package
+# (vendored port lib + generated Gen + lakefile + harvest stub), the E6418
+# Gen-digest gate, the `--verify-tool` pass-through, the honest report v2
+# `proof` section, and the two-tier integration tests must all exist.
+g34_fail=0
+if [ ! -f crates/tyu/src/proof.rs ]; then
+    msg $RED "  G34 FAIL: crates/tyu/src/proof.rs missing (P6 package pipeline)"
+    g34_fail=1
+fi
+# CLI surface: proof init/fill + --verify-tool + dispatch.
+grep -q 'ProofArgs::Init' crates/tyu/src/args.rs || { msg $RED "  G34 FAIL: proof init unparsed"; g34_fail=1; }
+grep -q 'ProofArgs::Fill' crates/tyu/src/args.rs || { msg $RED "  G34 FAIL: proof fill unparsed"; g34_fail=1; }
+grep -q 'parse_proof' crates/tyu/src/args.rs || { msg $RED "  G34 FAIL: proof subcommand parser missing"; g34_fail=1; }
+grep -q 'Command::Proof' crates/tyu/src/main.rs || { msg $RED "  G34 FAIL: proof dispatch missing in main.rs"; g34_fail=1; }
+grep -q 'verify-tool=' crates/tyu/src/args.rs || { msg $RED "  G34 FAIL: --verify-tool unparsed"; g34_fail=1; }
+grep -q 'VerifyTool::Lean' crates/tyu/src/args.rs || { msg $RED "  G34 FAIL: lean tool enum missing"; g34_fail=1; }
+# Package generation + gates + the obligation-artifact E6418 digest check.
+grep -q 'lean_package_path' crates/tyu/src/proof.rs || { msg $RED "  G34 FAIL: package path helper missing"; g34_fail=1; }
+grep -q 'E6418' crates/tyu/src/proof.rs || { msg $RED "  G34 FAIL: E6418 Gen-digest gate missing"; g34_fail=1; }
+grep -q 'harvest-not-built' crates/tyu/src/proof.rs || { msg $RED "  G34 FAIL: harvest boundary missing"; g34_fail=1; }
+grep -q 'TYU_SKIP_PORT_BUILD' crates/tyu/src/proof.rs || { msg $RED "  G34 FAIL: skip-mode hook missing"; g34_fail=1; }
+grep -q 'proof_files_hash' crates/tyu/src/proof.rs || { msg $RED "  G34 FAIL: proof-files hash missing"; g34_fail=1; }
+# langc pass-through + report v2 proof section.
+grep -q 'verify_tool' crates/langc/src/args.rs || { msg $RED "  G34 FAIL: langc --verify-tool unparsed"; g34_fail=1; }
+grep -q 'tyu.verify-report/v2' crates/verifier/src/report.rs || { msg $RED "  G34 FAIL: report schema v2 missing"; g34_fail=1; }
+grep -q 'proof' crates/verifier/src/codec.rs || { msg $RED "  G34 FAIL: report proof section unencoded"; g34_fail=1; }
+# Tests: the two P6 integration suites + the build wiring.
+for t in crates/tyu/tests/proof_init.rs crates/tyu/tests/build_verify_integration.rs; do
+    if [ ! -f "$t" ]; then
+        msg $RED "  G34 FAIL: $t missing"
+        g34_fail=1
+    fi
+done
+grep -q 'run_lean_pipeline' crates/tyu/src/build.rs || { msg $RED "  G34 FAIL: pipeline not wired into build.rs"; g34_fail=1; }
+[ "$g34_fail" -eq 0 ] && msg $GREEN "  G34: P6 developer-proof pipeline surface (proof init/fill, package, E6418, report v2, tests)"
+failures=$((failures + g34_fail))
+
 echo ""
 msg $GREEN "============================================"
 msg $GREEN "Per-package test counts:"

@@ -82,7 +82,7 @@ fn metal_platform_build_reports_discharged_main_context() {
         BANK_MOD,
     );
     let v: serde_json::Value = serde_json::from_str(&report).unwrap();
-    assert_eq!(v["schema"], "tyu.verify-report/v1");
+    assert_eq!(v["schema"], "tyu.verify-report/v2");
     assert_eq!(v["policy"], "open-ok");
     let main = &v["contexts"]["stack"]["main"];
     assert_eq!(main["verdict"], "discharged");

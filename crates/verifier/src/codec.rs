@@ -1681,6 +1681,32 @@ fn write_report_bytes(r: &crate::report::VerifyReport) -> Vec<u8> {
     write_str(&mut out, &r.semantics);
     out.extend_from_slice(b",\"policy\":");
     write_str(&mut out, &r.policy);
+    // P6.2: the proof-pipeline section (additive member — the report is
+    // produced by the single in-tree writer, so the fixed key order stays).
+    out.extend_from_slice(b",\"proof\":{\"tool\":");
+    write_str(&mut out, &r.proof.tool);
+    out.extend_from_slice(b",\"harvest\":");
+    write_str(&mut out, &r.proof.harvest);
+    out.extend_from_slice(b",\"gen_digest\":");
+    write_str(&mut out, &r.proof.gen_digest);
+    out.extend_from_slice(b",\"vendor_digest\":");
+    write_str(&mut out, &r.proof.vendor_digest);
+    out.extend_from_slice(b",\"statements\":[");
+    for (i, s) in r.proof.statements.iter().enumerate() {
+        if i != 0 {
+            out.push(b',');
+        }
+        out.extend_from_slice(b"{\"module\":");
+        write_str(&mut out, &s.module);
+        out.extend_from_slice(b",\"rendered\":");
+        write_i64(&mut out, s.rendered as i64);
+        out.extend_from_slice(b",\"omitted\":");
+        write_i64(&mut out, s.omitted as i64);
+        out.extend_from_slice(b",\"unproven\":");
+        write_i64(&mut out, s.unproven as i64);
+        out.push(b'}');
+    }
+    out.extend_from_slice(b"]}");
     write_report_modules(&mut out, &r.modules);
     write_report_contexts(&mut out, &r.contexts);
     out.extend_from_slice(b",\"open\":[");
