@@ -172,6 +172,13 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
 
     let mode = effective_build_mode(args, target);
 
+    // §7.2 (P6 amendment): the verification-environment components of every
+    // verdicts-cache slot — semantics, stmt, toolchain pin hash, model id,
+    // proof-files hash. A proof-file edit, a toolchain change, or a bundle-
+    // model change must rotate each module's slot so P7's harvested
+    // (`proof`-class) verdicts can never be silently reused stale.
+    let verify_env = crate::proof::VerifyEnvKey::for_build()?;
+
     // Slice P7 (Q5): guard elision is a per-image fact of the *single*
     // derived data-stack geometry. A dynamic image loads modules into its own
     // stack regions — there is no one `N_main` — so elision is refused there
@@ -280,6 +287,7 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
             args.verify,
             elide_ds,
             args.verify_tool,
+            &verify_env,
         )?;
         module_objs.push(compiled.object_path);
         module_obl.push((module.name.clone(), compiled.obl_path));
@@ -333,7 +341,7 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
     };
 
     // Persist cache (and prune stale artifacts from this out-dir first).
-    prune_out_dir(&out_dir, &mut cache, &built_fps, build_started)?;
+    prune_out_dir(&out_dir, &mut cache, &built_fps, build_started, &verify_env)?;
     cache.save()?;
 
     // P6.2 (FR-3): `--verify-tool=lean` — the developer-proof pipeline:
@@ -364,6 +372,7 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
             .contains(codegen_core::Feature::ModuleLoading),
         elide_ds,
         &proof_status,
+        &verify_env,
     )?;
 
     Ok(BuildOutcome {
@@ -1032,6 +1041,7 @@ fn compile_module(
     verify: crate::args::VerifyMode,
     elide_ds_guards: bool,
     verify_tool: Option<crate::args::VerifyTool>,
+    verify_env: &crate::proof::VerifyEnvKey,
 ) -> Result<CompiledModule, TyuError> {
     let features = feature_set.bits();
     // Check cache first. The obligation artifact rides beside the object under
@@ -1045,7 +1055,11 @@ fn compile_module(
             // healing, never a stale-echo report).
             let verdicts_slot = out_dir
                 .join(".tyu-verify")
-                .join(format!("{}-{:016x}.verdicts.json", module.name, inputs_fp));
+                .join(crate::proof::verdicts_slot_name(
+                    &module.name,
+                    inputs_fp,
+                    verify_env,
+                ));
             let verdicts_usable =
                 verifier::verdict::read_verdicts(&fs::read(&verdicts_slot).unwrap_or_default())
                     .is_ok();
@@ -1081,7 +1095,11 @@ fn compile_module(
     // re-homes the echo, so the report's accounting is honest in both modes.
     let verdicts_slot = out_dir
         .join(".tyu-verify")
-        .join(format!("{}-{:016x}.verdicts.json", module.name, inputs_fp));
+        .join(crate::proof::verdicts_slot_name(
+            &module.name,
+            inputs_fp,
+            verify_env,
+        ));
     if verify == crate::args::VerifyMode::On {
         let path = ensure_verdicts_cache_file(&verdicts_slot)?;
         cmd.arg("--checks=undischarged");
@@ -1488,6 +1506,7 @@ fn prune_out_dir(
     cache: &mut BuildCache,
     current_fps: &BTreeMap<String, Vec<u64>>,
     build_started: std::time::SystemTime,
+    verify_env: &crate::proof::VerifyEnvKey,
 ) -> Result<(), TyuError> {
     let predates = |path: &Path| -> bool {
         fs::metadata(path)
@@ -1546,9 +1565,20 @@ fn prune_out_dir(
 
     // P4: prune stale verdicts-cache entries in `<out_dir>/.tyu-verify/` with
     // the same discipline as the re-homed obl artifacts: an entry whose
-    // (module, fp) fingerprint was superseded by THIS build, or which predates
-    // this build and names a module that no longer exists in it, is reclaimed.
+    // (module, fp) fingerprint was superseded by THIS build, which predates
+    // this build and names a module that no longer exists in it, or which
+    // names a (module, fp) that IS current but under a *different* §7.2
+    // environment slug (a proof-file/toolchain/model change rotated the key —
+    // the old slot is superseded) is reclaimed.
     let verify_dir = out_dir.join(".tyu-verify");
+    // This build's live slot names: keep those verbatim.
+    let expected: std::collections::HashSet<String> = current_fps
+        .iter()
+        .flat_map(|(m, fps)| {
+            fps.iter()
+                .map(move |&fp| crate::proof::verdicts_slot_name(m, fp, verify_env))
+        })
+        .collect();
     let entries = fs::read_dir(&verify_dir);
     if let Ok(entries) = entries {
         for entry in entries.flatten() {
@@ -1556,7 +1586,12 @@ fn prune_out_dir(
             let Some(name) = path.file_name().and_then(|n| n.to_str()).map(String::from) else {
                 continue;
             };
-            let Some((module, fp)) = parse_rehomed_verdicts_name(&name) else {
+            if expected.contains(&name) {
+                continue;
+            }
+            // Loose parse (any env-slug) to apply the per-module rules; a slot
+            // we cannot identify is left alone (conservative).
+            let Some((module, fp)) = crate::proof::parse_any_verdicts_name(&name) else {
                 continue;
             };
             let current = current_fps
@@ -1565,7 +1600,9 @@ fn prune_out_dir(
                 .unwrap_or(false);
             let stale_in_build = current_fps.contains_key(&module);
             let dead = if current {
-                false
+                // Current (module, fp) but not under THIS env's slug: an old
+                // key, superseded by the slot `expected` names.
+                true
             } else {
                 // Never touch a module not part of this build if its artifact
                 // is newer than the build start (concurrent-build safety).
@@ -1596,12 +1633,6 @@ fn parse_rehomed_object_name(name: &str) -> Option<(String, u64)> {
 /// `(module, fp)`.
 fn parse_rehomed_obl_name(name: &str) -> Option<(String, u64)> {
     parse_rehomed_fp_name(name, ".obl.json")
-}
-
-/// Split a `.tyu-verify/<Module>-<inputs_fp:016x>.verdicts.json` name into
-/// `(module, fp)` (slice P4 §7.4).
-fn parse_rehomed_verdicts_name(name: &str) -> Option<(String, u64)> {
-    parse_rehomed_fp_name(name, ".verdicts.json")
 }
 
 fn parse_rehomed_fp_name(name: &str, suffix: &str) -> Option<(String, u64)> {

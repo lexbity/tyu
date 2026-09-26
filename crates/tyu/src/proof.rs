@@ -67,6 +67,120 @@ const DEFAULT_LOCK_TIMEOUT: Duration = Duration::from_secs(60);
 const PKG_STATE_SCHEMA: &str = "tyu.pkg/1";
 
 // ---------------------------------------------------------------------------
+// §7.2 verdicts-cache key extension
+// ---------------------------------------------------------------------------
+
+/// The verification-environment components of the §7.2 verdicts-slot key.
+///
+/// Every verdicts-cache slot is named
+/// `<Module>-<inputs_fp>-sem-<semantics>-stmt-<stmt>-tc-<toolchain_hash16>-
+/// model-<model_id>-proofs-<proof_files_hash16>.verdicts.json` (slashes
+/// sanitized to `_` — ids like `tyu.ir-sem/1.0` or `tyu.model/…/1` are not
+/// file-name characters). The extended key means a proof-file edit
+/// (`proof_files_hash`), a toolchain pin change (`toolchain_hash`), a model
+/// change (`model_id`), or a schema/version bump invalidates cached verdicts
+/// exactly when it must — P7's *harvested* (`proof`-class) verdicts land in
+/// these slots, and a stale slot for a changed proof environment would
+/// otherwise be silently reused.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerifyEnvKey {
+    semantics: String,
+    stmt: String,
+    /// FNV-1a of the port's `lean-toolchain` pin bytes (a cache key, not an
+    /// integrity digest — FR-14 governs the codec digests).
+    toolchain_hash: u64,
+    /// The bundle's model-semantics identity (sanitized into the name);
+    /// `"unmodeled"` until P12 supplies `platform.toml [model]`.
+    model_id: String,
+    proof_files_hash: u64,
+}
+
+impl VerifyEnvKey {
+    /// Build the key for a build: the toolchain pin is read from the port
+    /// (absent port → the empty-pin hash, so a repo without the verification
+    /// tree still gets a stable, well-defined key), the model id is caller-
+    /// supplied, and the proof-files hash covers the developer-owned
+    /// `proofs/` directory. Total: never fails.
+    pub(crate) fn compute(project_root: &Path, model_id: &str) -> Self {
+        let pin = crate::platform::workspace_root()
+            .join(PORT_DIR_REL)
+            .join("lean-toolchain");
+        let pin_bytes = fs::read(&pin).unwrap_or_default();
+        Self {
+            semantics: verifier::semantics::SEMANTICS_VERSION.to_string(),
+            stmt: verifier::stmt::STMT_SCHEMA.to_string(),
+            toolchain_hash: cache::fnv1a_u64(&pin_bytes),
+            model_id: model_id.to_string(),
+            proof_files_hash: proof_files_hash(&project_root.join(PROOFS_DIR)),
+        }
+    }
+
+    /// The build-wide env key: project root from the CWD resolution, model id
+    /// `"unmodeled"` until P12 wires `platform.toml [model]` (the §Q15 honest
+    /// default for a bundle without model semantics).
+    pub(crate) fn for_build() -> Result<Self, TyuError> {
+        let root = project_root_for(None)?;
+        Ok(Self::compute(&root, verifier::model::MODEL_UNMODELED))
+    }
+
+    /// The sanitized filename slug: `-sem-…-stmt-…-tc-…-model-…-proofs-…`
+    /// (slashes → `_`; the dash-sentinel `-sem-` cannot occur in a module
+    /// name, which makes the slot name parse unambiguous).
+    fn slug(&self) -> String {
+        format!(
+            "-sem-{}-stmt-{}-tc-{:016x}-model-{}-proofs-{:016x}",
+            sanitize_component(&self.semantics),
+            sanitize_component(&self.stmt),
+            self.toolchain_hash,
+            sanitize_component(&self.model_id),
+            self.proof_files_hash
+        )
+    }
+}
+
+/// The full slot file name for `(module, inputs_fp)` under an environment.
+pub(crate) fn verdicts_slot_name(module: &str, inputs_fp: u64, env: &VerifyEnvKey) -> String {
+    format!("{}-{:016x}{}.verdicts.json", module, inputs_fp, env.slug())
+}
+
+/// Strict parse of a slot name under the *current* environment: returns
+/// `(module, inputs_fp)` only when the name carries exactly this build's
+/// slug. A slot from a different proof environment does not parse (it is not
+/// this build's slot). Used by the unit tests and available to P7's harvest
+/// caching — the lib build sees it as unused until then.
+#[allow(dead_code)]
+pub(crate) fn parse_verdicts_slot_name(name: &str, env: &VerifyEnvKey) -> Option<(String, u64)> {
+    let stem = name.strip_suffix(".verdicts.json")?;
+    let core = stem.strip_suffix(&env.slug())?;
+    let (module, fp) = core.rsplit_once('-')?;
+    if fp.len() != 16 || !fp.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some((module.to_string(), u64::from_str_radix(fp, 16).ok()?))
+}
+
+/// Loose parse of any verdicts-slot name (`<Module>-<fp:016x>[<slug>]`):
+/// module names never contain `-`, so the first two `-`-separated segments
+/// are `(module, fp)`. Used by the out-dir pruner to identify stale slots
+/// regardless of the env-slug they were written under.
+pub(crate) fn parse_any_verdicts_name(name: &str) -> Option<(String, u64)> {
+    let stem = name.strip_suffix(".verdicts.json")?;
+    let mut it = stem.splitn(3, '-');
+    let module = it.next()?;
+    let fp = it.next()?;
+    if fp.len() != 16 || !fp.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some((module.to_string(), u64::from_str_radix(fp, 16).ok()?))
+}
+
+/// Sanitize a filename component: `/` (path separators in ids) → `_`; other
+/// printable characters pass through untouched. Deterministic.
+fn sanitize_component(s: &str) -> String {
+    s.chars().map(|c| if c == '/' { '_' } else { c }).collect()
+}
+
+// ---------------------------------------------------------------------------
 // Project-root resolution
 // ---------------------------------------------------------------------------
 
@@ -1153,18 +1267,32 @@ pub fn ensure_lean_toolchain(pin: &str) -> Result<(), TyuError> {
         None
     };
     let lean_bin = match lean_bin {
-        Some(b) => b,
-        None => crate::toolchain::find_in_path("lean").ok_or_else(|| {
-            TyuError::Build(format!(
-                "E6416: Lean toolchain unavailable — pin '{}' requires `lean` \
-                 (via elan or PATH); the proof pipeline cannot run",
-                pin
-            ))
-        })?,
+        Some(b) => Some(b),
+        None => crate::toolchain::find_in_path("lean"),
     };
-    let got = lean_version(&lean_bin)
+    check_lean_toolchain(pin, &want, lean_bin.as_deref(), lake_on_path())
+}
+
+/// `check_lean_toolchain` is the decision core (split from discovery so the
+/// missing-toolchain / version-mismatch / lake-missing E6416 paths are unit-
+/// testable without a real Lean installation): `lean_bin` is `None` when no
+/// `lean` resolved (elan or PATH); `lake_present` reports `lake` on PATH.
+fn check_lean_toolchain(
+    pin: &str,
+    want: &str,
+    lean_bin: Option<&Path>,
+    lake_present: bool,
+) -> Result<(), TyuError> {
+    let lean_bin = lean_bin.ok_or_else(|| {
+        TyuError::Build(format!(
+            "E6416: Lean toolchain unavailable — pin '{}' requires `lean` \
+             (via elan or PATH); the proof pipeline cannot run",
+            pin
+        ))
+    })?;
+    let got = lean_version(lean_bin)
         .ok_or_else(|| TyuError::Build(format!("E6416: cannot probe '{}'", lean_bin.display())))?;
-    if !same_version(&got, &want) {
+    if !same_version(&got, want) {
         return Err(TyuError::Build(format!(
             "E6416: Lean toolchain mismatch — pin '{}' ({}), resolved '{}' is {} \
              — run `elan toolchain install {}` (or align the pinned toolchain)",
@@ -1175,8 +1303,7 @@ pub fn ensure_lean_toolchain(pin: &str) -> Result<(), TyuError> {
             pin
         )));
     }
-    // `lake` must be present too (the elaborating build step).
-    if crate::toolchain::find_in_path("lake").is_none() {
+    if !lake_present {
         return Err(TyuError::Build(format!(
             "E6416: `lake` not found in PATH — required to build the generated \
              proof package (pin {})",
@@ -1184,6 +1311,11 @@ pub fn ensure_lean_toolchain(pin: &str) -> Result<(), TyuError> {
         )));
     }
     Ok(())
+}
+
+/// `lake` present on PATH (the elaborating build step).
+fn lake_on_path() -> bool {
+    crate::toolchain::find_in_path("lake").is_some()
 }
 
 /// `lean --version` → `"4.27.0"`-style version string.
@@ -1658,5 +1790,174 @@ mod tests {
         drop(guard);
         assert!(!lock.exists(), "dropping releases the lock");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    // -------------------------------------------------------------------
+    // Toolchain E6416 paths (check_lean_toolchain is hermetic — a fake
+    // `lean` script stands in for the version probe).
+    // -------------------------------------------------------------------
+
+    /// A fake `lean` binary that prints a given version (the shape
+    /// `lean_version` parses).
+    fn fake_lean(dir: &Path, version: &str) -> PathBuf {
+        let bin = dir.join("lean");
+        fs::write(
+            &bin,
+            format!(
+                "#!/bin/sh\n\
+                 if [ \"$1\" = \"--version\" ]; then\n\
+                 \x20 echo \"Lean (version {version}, x86_64-pc-linux-gnu, Release)\"\n\
+                 fi\n"
+            ),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&bin).unwrap().permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&bin, perms).unwrap();
+        }
+        bin
+    }
+
+    #[test]
+    fn toolchain_missing_is_e6416_with_the_pin() {
+        let err =
+            check_lean_toolchain("leanprover/lean4:v4.27.0", "4.27.0", None, true).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("E6416"), "err: {msg}");
+        assert!(msg.contains("Lean toolchain unavailable"), "err: {msg}");
+        assert!(
+            msg.contains("leanprover/lean4:v4.27.0"),
+            "fail-closed with the pin visible: {msg}"
+        );
+    }
+
+    #[test]
+    fn toolchain_version_mismatch_is_e6416() {
+        let dir = temp_dir("tcmis");
+        let lean = fake_lean(&dir, "4.26.0");
+        let err = check_lean_toolchain("leanprover/lean4:v4.27.0", "4.27.0", Some(&lean), true)
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("E6416"), "err: {msg}");
+        assert!(msg.contains("Lean toolchain mismatch"), "err: {msg}");
+        assert!(msg.contains("4.26.0"), "names the resolved version: {msg}");
+        assert!(msg.contains("4.27.0"), "names the pin: {msg}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn lake_missing_is_e6416() {
+        let dir = temp_dir("lakeno");
+        let lean = fake_lean(&dir, "4.27.0");
+        let err = check_lean_toolchain("leanprover/lean4:v4.27.0", "4.27.0", Some(&lean), false)
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("E6416"), "err: {msg}");
+        assert!(msg.contains("`lake` not found"), "err: {msg}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn toolchain_matching_pin_is_ok() {
+        let dir = temp_dir("tcok");
+        let lean = fake_lean(&dir, "4.27.0");
+        check_lean_toolchain("leanprover/lean4:v4.27.0", "4.27.0", Some(&lean), true)
+            .expect("matching pin + lake present must pass");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // -------------------------------------------------------------------
+    // §7.2 verdicts-slot key: naming, parsing, and environment sensitivity
+    // -------------------------------------------------------------------
+
+    fn sample_env() -> VerifyEnvKey {
+        VerifyEnvKey {
+            semantics: "tyu.ir-sem/1.0".to_string(),
+            stmt: "tyu.stmt/1.0".to_string(),
+            toolchain_hash: 0x1234_5678_9abc_def0,
+            model_id: verifier::model::MODEL_UNMODELED.to_string(),
+            proof_files_hash: 0x0bad_cafe_0bad_cafe,
+        }
+    }
+
+    #[test]
+    fn verdicts_slot_name_round_trips_and_is_env_sensitive() {
+        let env = sample_env();
+        let name = verdicts_slot_name("Bank", 0x1020_3040_5060_7080, &env);
+        // The extended components are visible and sanitized (no `/`).
+        assert!(name.starts_with("Bank-1020304050607080-"), "name: {name}");
+        assert!(name.contains("-sem-tyu.ir-sem_1.0-"), "name: {name}");
+        assert!(name.contains("-stmt-tyu.stmt_1.0-"), "name: {name}");
+        assert!(name.contains("-tc-123456789abcdef0-"), "name: {name}");
+        assert!(name.contains("-model-unmodeled-"), "name: {name}");
+        assert!(
+            name.contains("-proofs-0badcafe0badcafe.verdicts.json"),
+            "name: {name}"
+        );
+        assert!(
+            !name.contains('/'),
+            "no path separators may enter a file name"
+        );
+
+        // The strict parse round-trips under the same environment…
+        let parsed = parse_verdicts_slot_name(&name, &env).expect("parses under env");
+        assert_eq!(parsed, ("Bank".to_string(), 0x1020_3040_5060_7080));
+
+        // …and a changed proof environment (a proof-file edit) does NOT parse
+        // as this build's slot: the stale-verdicts silent-reuse failure mode
+        // is structurally impossible.
+        let env2 = VerifyEnvKey {
+            proof_files_hash: 0xdead_beef_dead_beef,
+            ..env.clone()
+        };
+        assert!(
+            parse_verdicts_slot_name(&name, &env2).is_none(),
+            "a different proof environment must not satisfy this slot"
+        );
+        let name2 = verdicts_slot_name("Bank", 0x1020_3040_5060_7080, &env2);
+        assert_ne!(name, name2);
+        assert!(parse_verdicts_slot_name(&name2, &env2).is_some());
+    }
+
+    #[test]
+    fn verdicts_slot_model_id_change_invalidates() {
+        let env = sample_env();
+        let env2 = VerifyEnvKey {
+            model_id: "tyu.model/rp2350/1".to_string(),
+            ..env.clone()
+        };
+        let n1 = verdicts_slot_name("App", 1, &env);
+        let n2 = verdicts_slot_name("App", 1, &env2);
+        assert_ne!(n1, n2, "a model-id change must rotate the slot");
+        assert!(parse_verdicts_slot_name(&n1, &env).is_some());
+        assert!(parse_verdicts_slot_name(&n1, &env2).is_none());
+    }
+
+    #[test]
+    fn loose_slot_parse_handles_legacy_and_extended_names() {
+        // Legacy short form (pre-§7.2) still identifies (module, fp).
+        assert_eq!(
+            parse_any_verdicts_name("Bank-1020304050607080.verdicts.json"),
+            Some(("Bank".to_string(), 0x1020_3040_5060_7080))
+        );
+        // Extended form (any env-slug).
+        let env = sample_env();
+        let name = verdicts_slot_name("Bank", 0x1020_3040_5060_7080, &env);
+        assert_eq!(
+            parse_any_verdicts_name(&name),
+            Some(("Bank".to_string(), 0x1020_3040_5060_7080))
+        );
+        // Non-slot files are refused.
+        assert!(parse_any_verdicts_name("image-verdicts.json").is_none());
+        assert!(parse_any_verdicts_name("Foo-zzzz.verdicts.json").is_none());
+    }
+
+    #[test]
+    fn slot_sanitizer_escapes_slashes_only() {
+        assert_eq!(sanitize_component("tyu.ir-sem/1.0"), "tyu.ir-sem_1.0");
+        assert_eq!(sanitize_component("unmodeled"), "unmodeled");
     }
 }

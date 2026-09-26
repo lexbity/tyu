@@ -7,7 +7,10 @@ description = "Assembly emission glue for Tyu code generation."
 [[bin]]
 name = "lang-assemble"
 path = "src/main.rs"
-harness = false
+# test = false (no harness = false): cargo test never builds or runs the bin;
+# `harness = false` would additionally make the bin-as-test target that
+# `--all-targets` synthesizes a *plain no_std binary* — no std, no test
+# harness — which cannot satisfy the test profile's unwind strategy.
 test = false
 doctest = false
 

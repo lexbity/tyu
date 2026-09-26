@@ -1038,22 +1038,30 @@ fi
 failures=$((failures + g28_fail))
 
 # --- G29: PLAN-VERIFY-3 §P0 — workspace bar: clippy -D warnings ---
-# Deliberately `--lib --bins --tests`, NOT --all-targets: --all-targets
-# synthesizes a phantom bin-as-test compile that ignores the manifest's
-# `test = false` (lang-assemble) and flips panic to unwind against the
-# no_std runtime crates (hosted-rt) — a target that does not exist. The
-# explicit form covers every real target (no examples/ or benches/ dirs in
-# the workspace). Warnings are denied; suppressions require a justification
-# comment at the item (spec Rule: no silent suppression).
+# `--all-targets` (strictly stronger than --lib --bins --tests: it also covers
+# examples/benches if any ever appear). Historical note (resolved 2026-09-26):
+# --all-targets synthesizes a bin-as-test target even for bins marked
+# `test = false`, and that phantom collided with the no_std runtime —
+# langc's phantom linked std, whose panic_impl duplicated hosted-rt's
+# #[panic_handler] (E0152), and lang-assemble's (`harness = false`) was built
+# as a plain no_std binary that cannot satisfy the test profile's unwind
+# strategy. Resolution: the no_std runtime lang items are owned by each
+# binary root behind `cfg(not(test))` (hosted-rt exposes the plain
+# `hosted_rt::panic` routine they delegate to), and lang-assemble dropped the
+# redundant `harness = false`. The phantom is check-only — `test = false`
+# keeps `cargo test` from ever building or running it — and the real
+# freestanding binaries stay `#![no_std]` + panic=abort. Warnings are denied;
+# suppressions require a justification comment at the item (spec Rule: no
+# silent suppression).
 g29_fail=0
-if ! cargo clippy --workspace --lib --bins --tests -- -D warnings >/dev/null 2>&1; then
+if ! cargo clippy --workspace --all-targets -- -D warnings >/dev/null 2>&1; then
     msg $RED "  G29 FAIL: clippy -D warnings (workspace bar, §P0)"
-    cargo clippy --workspace --lib --bins --tests 2>&1 | grep "^ *-->" | head -5 | while read -r d; do
+    cargo clippy --workspace --all-targets 2>&1 | grep "^ *-->" | head -5 | while read -r d; do
         msg $RED "    $d"
     done
     g29_fail=1
 fi
-[ "$g29_fail" -eq 0 ] && msg $GREEN "  G29: clippy -D warnings clean (--lib --bins --tests)"
+[ "$g29_fail" -eq 0 ] && msg $GREEN "  G29: clippy -D warnings clean (--all-targets)"
 failures=$((failures + g29_fail))
 
 # --- G30: PLAN-VERIFY-3 P3.1/P3.2 — Lean port surface ---
@@ -1184,6 +1192,33 @@ done
 grep -q 'run_lean_pipeline' crates/tyu/src/build.rs || { msg $RED "  G34 FAIL: pipeline not wired into build.rs"; g34_fail=1; }
 [ "$g34_fail" -eq 0 ] && msg $GREEN "  G34: P6 developer-proof pipeline surface (proof init/fill, package, E6418, report v2, tests)"
 failures=$((failures + g34_fail))
+
+# --- G35: PLAN-VERIFY-3 P6 hardening — §7.2 slot key, toolchain E6416 tests,
+# tier-A CI wiring ---
+# Three review findings closed in P6: (a) the verdicts-cache slot key must
+# carry the §7.2 environment components (semantics/stmt/toolchain/model/
+# proof-files) so a proof-file or model change can never silently reuse stale
+# (P7 harvested) verdicts; (b) the toolchain missing/mismatch E6416 paths are
+# unit-tested hermetically (check_lean_toolchain); (c) the toolchain-present
+# tier-A build-integration test is wired into the port gate so it runs when
+# a recognized-port toolchain is present.
+g35_fail=0
+for tok in 'VerifyEnvKey' 'verdicts_slot_name' 'parse_any_verdicts_name' 'proof_files_hash' 'check_lean_toolchain' 'ensure_lean_toolchain'; do
+    if ! grep -q "$tok" crates/tyu/src/proof.rs; then
+        msg $RED "  G35 FAIL: proof.rs lacks $tok (P6 hardening surface)"
+        g35_fail=1
+    fi
+done
+if ! grep -q 'verify_env' crates/tyu/src/build.rs; then
+    msg $RED "  G35 FAIL: build.rs does not thread the §7.2 verify env"
+    g35_fail=1
+fi
+if ! grep -q 'TYU_PROOF_E2E' ci/port.sh || ! grep -q 'build_verify_integration' ci/port.sh; then
+    msg $RED "  G35 FAIL: the P6 tier-A test is not wired into ci/port.sh"
+    g35_fail=1
+fi
+[ "$g35_fail" -eq 0 ] && msg $GREEN "  G35: P6 hardening (§7.2 slot key + toolchain E6416 tests + tier-A wiring)"
+failures=$((failures + g35_fail))
 
 echo ""
 msg $GREEN "============================================"

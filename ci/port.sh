@@ -207,4 +207,26 @@ lake build Tyu.Gen.Golden || {
 }
 
 echo ""
-msg 2 "  port.sh: PORT GATE GREEN (conformance + axiom audit + stackmeta + P5 gen drift lock)"
+# --- PLAN-VERIFY-3 P6 — the developer-proof pipeline end to end (tier A) ---
+# With the pinned toolchain in hand, drive the REAL `tyu build
+# --verify-tool=lean` path: package generation into `.tyu-verify/lean/`,
+# the E6418 Gen-digest gate, the elaborating lake build, and the honest
+# per-module unproven accounting (harvest is a P7 deliverable — nothing is
+# claimed proven). This runs the `build_verify_integration` tier-A test
+# (env-gated so toolchain-less CI tiers skip it; the port gate ALWAYS has
+# the toolchain, so here it runs unconditionally).
+msg 2 "  port.sh: P6 developer-proof pipeline e2e (build_verify_integration tier A)"
+(
+    cd "$ROOT"
+    if [ ! -f target/debug/tyu ]; then
+        cargo build -q -p tyu -p langc
+    fi
+    TYU_PROOF_E2E=1 cargo test -q -p tyu --test build_verify_integration 2>&1 | tail -4
+) || {
+    msg 1 "  port.sh: P6 developer-proof pipeline e2e FAILED"
+    exit 1
+}
+msg 2 "  port.sh: P6 developer-proof pipeline e2e green"
+
+echo ""
+msg 2 "  port.sh: PORT GATE GREEN (conformance + axiom audit + stackmeta + P5 gen drift lock + P6 pipeline e2e)"

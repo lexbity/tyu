@@ -93,11 +93,12 @@ const GUARDS_ELIDED: ElisionCtx = ElisionCtx {
 /// Compose and write `<out_dir>/verify-report.json`, enforce the build policy
 /// (E6410, FR-18), and print the NFR-9 one-line accounting summary. `proof`
 /// is the P6.2 developer-proof status (None-tool builds carry the inert
-/// default).
-// 8 positional parameters model the report's fixed input surface (build
+/// default); `verify_env` names this build's §7.2 verdicts-slot environment
+/// (the echo paths are derived from it).
+// 9 positional parameters model the report's fixed input surface (build
 // context, per-module artifacts, root, verify mode, policy, module-loading,
-// elision decision, and the proof status); bundling them would relocate the
-// same fields without reducing real coupling.
+// elision decision, proof status, and the verdicts-slot environment);
+// bundling them would relocate the same fields without reducing real coupling.
 #[allow(clippy::too_many_arguments)]
 pub fn compose_and_write_report(
     ctx: &BuildContext,
@@ -108,6 +109,7 @@ pub fn compose_and_write_report(
     module_loading: bool,
     elide_ds_guards: bool,
     proof: &verifier::report::ProofStatus,
+    verify_env: &crate::proof::VerifyEnvKey,
 ) -> Result<PathBuf, TyuError> {
     let elision = if elide_ds_guards {
         &GUARDS_ELIDED
@@ -122,6 +124,7 @@ pub fn compose_and_write_report(
         policy,
         module_loading,
         elision,
+        verify_env,
     )?;
     report.proof = proof.clone();
     let bytes = verifier::codec::encode_report(&report)
@@ -151,6 +154,11 @@ pub fn compose_and_write_report(
 }
 
 /// Compose the report model (§7.3 + §6.5 P4 fields).
+// 8 positional parameters model the report composition inputs (build context,
+// per-module artifacts, root, verify mode, policy, module-loading, elision,
+// and the §7.2 verdicts-slot environment); bundling them would relocate the
+// same fields without reducing real coupling.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn compose(
     ctx: &BuildContext,
     module_obl: &[(String, Option<PathBuf>)],
@@ -159,6 +167,7 @@ pub(crate) fn compose(
     policy: VerifyPolicy,
     module_loading: bool,
     elision: &ElisionCtx,
+    verify_env: &crate::proof::VerifyEnvKey,
 ) -> Result<VerifyReport, TyuError> {
     // Load every module artifact + its verdicts echo; a missing one
     // (mixed-mode / pre-P4 cache) degrades to the P3 fallback, never a crash
@@ -172,7 +181,7 @@ pub(crate) fn compose(
         };
         let echo = maybe_path
             .as_deref()
-            .and_then(echo_path_for)
+            .and_then(|p| echo_path_for(p, verify_env))
             .map(|p| load_echo(&p))
             .transpose()?
             .flatten();
@@ -318,16 +327,21 @@ pub(crate) fn compose(
 }
 
 /// The module's verdicts-echo path, derived from its re-homed obl path:
-/// `<out_dir>/<Module>-<fp>.obl.json` → `<out_dir>/.tyu-verify/<Module>-<fp>.verdicts.json`.
-fn echo_path_for(obl_path: &Path) -> Option<PathBuf> {
+/// `<out_dir>/<Module>-<fp>.obl.json` → `<out_dir>/.tyu-verify/
+/// <Module>-<fp>-sem-…-stmt-…-tc-…-model-…-proofs-… .verdicts.json` — the
+/// §7.2 slot key of THIS build's verification environment, so report
+/// composition always reads the exact slot the compile step wrote (a
+/// proof-file / toolchain / model change rotates the slot, never the echo).
+fn echo_path_for(obl_path: &Path, verify_env: &crate::proof::VerifyEnvKey) -> Option<PathBuf> {
     let file = obl_path.file_name()?.to_str()?;
     let stem = file.strip_suffix(".obl.json")?;
-    Some(
-        obl_path
-            .parent()?
-            .join(".tyu-verify")
-            .join(format!("{stem}.verdicts.json")),
-    )
+    let (module, fp) = stem.rsplit_once('-')?;
+    if fp.len() != 16 || !fp.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let slot =
+        crate::proof::verdicts_slot_name(module, u64::from_str_radix(fp, 16).ok()?, verify_env);
+    Some(obl_path.parent()?.join(".tyu-verify").join(slot))
 }
 
 /// Read (and fail-closed validate) one module's `.obl.json`; a missing file
