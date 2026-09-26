@@ -5,9 +5,15 @@ on the permitted axioms {propext, Quot.sound, Classical.choice}. Unproven
 placeholder axioms and `Lean.ofReduceBool` are never permitted (§Q11 item
 2); the audit runner
 (`lake env lean AxiomAudit.lean`) prints the `#print axioms` sets and the
-port gate greps for the forbidden constants. -/
+port gate greps for the forbidden constants.
+
+The audited set is OWNED by `REVIEW.md` §3 (the machine-consumed registry
+block): `ci/port.sh` extracts that block and requires every listed theorem
+to appear in this audit. Keep the two lists in the same commit. -/
 
 #print axioms Tyu.Sound.stack_algebra_sequence
+#print axioms Tyu.Sound.stack_algebra_iswalk
+#print axioms Tyu.Sound.stack_algebra_walk
 #print axioms Tyu.Sound.runOk_length
 #print axioms Tyu.Sound.runOkPeak_bound
 #print axioms Tyu.Sound.walk_net

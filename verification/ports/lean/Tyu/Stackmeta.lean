@@ -1,6 +1,5 @@
 import Tyu.Sound
 import Tyu.Conformance.Json
-import Tyu.Conformance.VectorRun
 
 /-! The stackmeta replay (PLAN-VERIFY-3 P4.2's empirical hook for T-C).
 

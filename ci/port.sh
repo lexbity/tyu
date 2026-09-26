@@ -93,9 +93,12 @@ msg 2 "  port.sh: conformance over all four per-target corpora"
 # {propext, Quot.sound, Classical.choice}; unproven placeholder axioms and
 # `Lean.ofReduceBool` are never permitted (§Q11 item 2). `AxiomAudit.lean`
 # prints `#print axioms` for every registry theorem; any line naming a
-# forbidden constant fails the gate.
-if [ -f AxiomAudit.lean ]; then
-    msg 2 "  port.sh: axiom audit (AxiomAudit.lean)"
+# forbidden constant fails the gate. The audited set is OWNED by
+# `REVIEW.md` §3: every theorem named there MUST appear in the audit
+# output — an audit that silently drops a registry theorem fails here
+# (fail-closed against audit erosion).
+if [ -f AxiomAudit.lean ] && [ -f REVIEW.md ]; then
+    msg 2 "  port.sh: axiom audit (AxiomAudit.lean, registry owned by REVIEW.md §3)"
     AUDIT_OUT="$(lake env lean AxiomAudit.lean 2>&1 || true)"
     # every printed axiom set must belong to the permitted set
     if printf '%s\n' "$AUDIT_OUT" | grep -qE "sorryAx|Lean.ofReduceBool"; then
@@ -103,14 +106,27 @@ if [ -f AxiomAudit.lean ]; then
         printf '%s\n' "$AUDIT_OUT" | grep -E "depends on axioms" >&2
         exit 1
     fi
-    audited="$(printf '%s\n' "$AUDIT_OUT" | grep -c "depends on axioms" || true)"
+    audited="$(printf '%s\n' "$AUDIT_OUT" | grep -cE "depends on axioms|does not depend on any axioms" || true)"
+    # registry coverage: each REVIEW.md §3 theorem name must be audited
+    # (both green forms: a permitted-axiom set, or an empty axiom set)
+    missing=0
+    while IFS= read -r thm; do
+        if ! printf '%s\n' "$AUDIT_OUT" | grep -qE "^'$thm' (depends on axioms|does not depend on any axioms)"; then
+            msg 1 "  port.sh: axiom audit FAIL — registry theorem not audited: $thm"
+            missing=1
+        fi
+    done < <(sed -n '/^## 3\./,/^## /p' REVIEW.md | sed -n '/^```text$/,/^```$/p' | grep "^Tyu\." || true)
+    if [ "$missing" -ne 0 ]; then
+        msg 1 "  port.sh: axiom audit FAIL — REVIEW.md §3 ↔ AxiomAudit.lean out of sync"
+        exit 1
+    fi
     if [ "$audited" -lt 10 ]; then
         msg 1 "  port.sh: axiom audit FAIL — only $audited theorems audited (expected ≥ 10)"
         exit 1
     fi
-    msg 2 "  port.sh: axiom audit green ($audited registry theorems, permitted set only)"
+    msg 2 "  port.sh: axiom audit green ($audited registry theorems, permitted set only, REVIEW.md coverage exact)"
 else
-    msg 1 "  port.sh: AxiomAudit.lean missing (P4.2 gate)"
+    msg 1 "  port.sh: AxiomAudit.lean / REVIEW.md missing (P4.2/P4.3 gate)"
     exit 1
 fi
 
@@ -118,6 +134,21 @@ fi
 # Every corpus word's declared (net, high) is re-derived by the port's own
 # walk + monoid: net must match exactly and the peak envelope must stay
 # within the declared bound; a corrupted declared value exits nonzero.
+# An unresolved call SKIPS a word — a silent skip would quietly shrink the
+# theorem's empirical coverage, so any skip > 0 fails the gate (fail-closed
+# against coverage erosion; a legitimate skip is a reviewed corpus change).
 STACKMETA_GOLDENS=("$ROOT"/test-goldens/stackmeta/*/*.json)
 msg 2 "  port.sh: stackmeta replay (${#STACKMETA_GOLDENS[@]} golden files)"
-.lake/build/bin/conformance --level stackmeta --stackmeta "${STACKMETA_GOLDENS[@]}"
+STATUS=0
+STACKMETA_OUT="$(.lake/build/bin/conformance --level stackmeta --stackmeta "${STACKMETA_GOLDENS[@]}")" || STATUS=$?
+printf '%s\n' "$STACKMETA_OUT"
+if [ "$STATUS" -ne 0 ]; then
+    msg 1 "  port.sh: stackmeta replay FAILED (divergence or unreadable golden)"
+    exit 1
+fi
+skipped="$(printf '%s\n' "$STACKMETA_OUT" | sed -n 's/.*skipped=\([0-9]*\).*/\1/p' | tail -1)"
+if [ "${skipped:-0}" -ne 0 ]; then
+    msg 1 "  port.sh: stackmeta replay FAILED — $skipped word(s) skipped (unresolved calls); zero skips required"
+    exit 1
+fi
+msg 2 "  port.sh: stackmeta replay green (0 divergences, 0 skipped)"
