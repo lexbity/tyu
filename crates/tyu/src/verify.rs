@@ -605,19 +605,20 @@ fn collect_assumed(set: &OblSet, echo: Option<&Echo>, module: &str, out: &mut Ve
 }
 
 /// The aperture-size facts used by discharged `mmio-bounds` obligations, each
-/// copied into the trusted list (T2 / FR-15).
+/// copied into the trusted list (T2 / FR-15). The size travels in the
+/// obligation's `OffsetLE` formula — the v2 artifact has no separate
+/// trusted-facts member (PLAN-VERIFY-3 §6.1), so the report derives it from
+/// the formula.
 fn collect_mmio_sizes(set: &OblSet, module: &str, out: &mut Vec<TrustedAssumption>) {
     for o in &set.obligations {
         if o.kind != Kind::MmioBounds || !verdict_is_discharged(o) {
             continue;
         }
-        for a in &o.assumptions {
-            if let verifier::model::Assumption::ApertureSize { size, .. } = a {
-                out.push(TrustedAssumption {
-                    kind: "descriptor".to_string(),
-                    what: format!("{module}: mmio aperture size={size}"),
-                });
-            }
+        if let verifier::model::Formula::OffsetLE { size, .. } = &o.formula {
+            out.push(TrustedAssumption {
+                kind: "descriptor".to_string(),
+                what: format!("{module}: mmio aperture size={size}"),
+            });
         }
     }
 }
@@ -723,7 +724,6 @@ mod tests {
             0,
             0,
             Provenance::Direct,
-            Vec::new(),
         );
         ("App".to_string(), Some(ctx.into_set()))
     }

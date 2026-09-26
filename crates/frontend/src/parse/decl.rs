@@ -61,8 +61,12 @@ impl<'a> Parser<'a> {
         // `ensures [...]` is unchanged.
         // `performs {...}` may appear before or after the bracket clauses —
         // the clause loop accepts any order (BUG-011).
+        // PLAN-VERIFY-3 §Q17 (P1.2): an optional `intent "<text>"` clause
+        // binds the developer's stated claim to the preceding `needs`/`ensures`
+        // contract clause.
         let mut contract_needs: Option<Span> = None;
         let mut ensures: Option<Span> = None;
+        let mut intent: Option<Span> = None;
         let mut cap_set: Option<Span> = None;
         loop {
             match self.look.kind {
@@ -99,6 +103,21 @@ impl<'a> Parser<'a> {
                     ensures = Some(self.capture_quotation(ParseError::ExpectedQuotation {
                         span: self.look.span,
                     })?);
+                }
+                // PLAN-VERIFY-3 §Q17 (P1.2): `intent "<text>"` — the
+                // developer's stated claim for the contract surface. Parsed
+                // after a `needs`/`ensures` clause (or before `performs`);
+                // the string literal's span is carried to the driver, which
+                // strips the quotes and fills the artifact's `intent`.
+                TokenKind::Ident if self.slice(self.look.span) == b"intent" => {
+                    self.bump();
+                    if self.look.kind != TokenKind::String {
+                        return Err(ParseError::ExpectedIntentString {
+                            span: self.look.span,
+                        });
+                    }
+                    intent = Some(self.look.span);
+                    self.bump();
                 }
                 TokenKind::KwPerforms => {
                     has_explicit_performs = true;
@@ -199,6 +218,7 @@ impl<'a> Parser<'a> {
             body: Some(Span::new(body_start, body_end)),
             requires: contract_needs,
             ensures,
+            intent,
             cap_set,
             effect_bits,
             effect_net,
@@ -302,6 +322,7 @@ impl<'a> Parser<'a> {
             body: None,
             requires: None,
             ensures: None,
+            intent: None,
             cap_set: None,
             effect_bits: 0,
             effect_net: 0,
@@ -415,6 +436,7 @@ impl<'a> Parser<'a> {
             body: None,
             requires: None,
             ensures: None,
+            intent: None,
             cap_set: None,
             effect_bits: 0,
             effect_net: 0,
@@ -452,6 +474,7 @@ impl<'a> Parser<'a> {
             body: None,
             requires: None,
             ensures: None,
+            intent: None,
             cap_set: None,
             effect_bits: 0,
             effect_net: 0,
@@ -516,6 +539,7 @@ impl<'a> Parser<'a> {
             body: None,
             requires: None,
             ensures: None,
+            intent: None,
             cap_set: None,
             effect_bits: 0,
             effect_net: 0,
@@ -593,6 +617,7 @@ impl<'a> Parser<'a> {
             body: None,
             requires: None,
             ensures: None,
+            intent: None,
             cap_set: None,
             effect_bits: 0,
             effect_net: 0,
@@ -659,6 +684,7 @@ impl<'a> Parser<'a> {
             body: Some(Span::new(body_start, body_end)),
             requires: None,
             ensures: None,
+            intent: None,
             cap_set: None,
             effect_bits: 0,
             effect_net: 0,
@@ -744,6 +770,7 @@ impl<'a> Parser<'a> {
             body: None,
             requires: None,
             ensures: None,
+            intent: None,
             cap_set: None,
             effect_bits: 0,
             effect_net: 0,
@@ -907,6 +934,17 @@ impl<'a> Parser<'a> {
                             span: self.look.span,
                         },
                     )?;
+                    out.write(b"\n");
+                }
+                // PLAN-VERIFY-3 §Q17 (P1.2): dump `intent "<string>"` clauses
+                // (AST inspection must not swallow them into the body).
+                TokenKind::Ident if self.slice(self.look.span) == b"intent" => {
+                    self.bump();
+                    out.write(b"    intent ");
+                    if self.look.kind == TokenKind::String {
+                        out.write(self.slice(self.look.span));
+                        self.bump();
+                    }
                     out.write(b"\n");
                 }
                 _ => break,

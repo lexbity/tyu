@@ -872,6 +872,71 @@ fi
 [ "$g23_fail" -eq 0 ] && msg $GREEN "  G23: NFR-10 doc gates (doc map, both-policies example, errors, contracts)"
 failures=$((failures + g23_fail))
 
+# --- G24: PLAN-VERIFY-3 P1.1 — canonical-statement boundary gates ---
+# The statement encoder is the hash the whole pipeline binds against and MUST
+# be SHA-256-only (FR-14): fnv1a64 stays confined to identity keys (id_hash),
+# and no new serde may enter the stmt/codec surface (FR-15). These greps are
+# the enforcement point; the property tests in
+# crates/verifier/tests/stmt_encoder.rs cover the encoder behavior.
+g24_fail=0
+if grep -rn "serde" crates/verifier/src/stmt.rs >/dev/null 2>&1; then
+    msg $RED "  G24 FAIL: serde leaked into crates/verifier/src/stmt.rs (hand-rolled JSON only, FR-15)"
+    g24_fail=1
+fi
+# Only actual fnv CALL/IDENTIFIER forms count — the module takes the
+# no-usage position in prose, but a real `fnv1a64(...)` invocation (or a
+# fnv-hash identifier) is the smuggling the gate exists to catch.
+if grep -rniE 'fnv1a64[[:space:]]*\(|fnv1a::|fnv_hash' crates/verifier/src/stmt.rs >/dev/null 2>&1; then
+    msg $RED "  G24 FAIL: fnv hashing invoked in crates/verifier/src/stmt.rs (SHA-256 only, FR-14)"
+    g24_fail=1
+fi
+if [ "$(grep -c 'Sha256' crates/verifier/src/stmt.rs 2>/dev/null || echo 0)" -lt 1 ]; then
+    msg $RED "  G24 FAIL: crates/verifier/src/stmt.rs must construct SHA-256 digests"
+    g24_fail=1
+fi
+# FR-14 guard form: integrity digests introduced by P1 are SHA-256. The
+# statement encoder must never invoke a non-SHA-256 hash.
+if grep -rn 'fnv1a64[[:space:]]*(' crates/verifier/tests/stmt_encoder.rs >/dev/null 2>&1; then
+    msg $RED "  G24 FAIL: statement-encoder tests must not invoke fnv hashing"
+    g24_fail=1
+fi
+[ "$g24_fail" -eq 0 ] && msg $GREEN "  G24: statement encoder is SHA-256-only (fnv1a64 confined to identity keys)"
+failures=$((failures + g24_fail))
+
+# --- G25: PLAN-VERIFY-3 P1.3 — statement-golden surface ---
+# Statement hashes are pinned per triple over the corpus
+# (`tooling-tests/tests/statement_goldens.rs` regenerates/compares; the band
+# rule §Q4 item 3 is enforced by that test's byte comparison). This static
+# gate pins the *surface*: every triple carries exactly the corpus golden set
+# (no module-collision clobbering — the store keys on `<Module>.stmt.json`),
+# and the gate test exists. The byte-stable comparison runs under
+# `cargo test --workspace` and the labeled CI step.
+g25_fail=0
+if [ ! -f crates/tooling-tests/tests/statement_goldens.rs ]; then
+    msg $RED "  G25 FAIL: statement-goldens test missing"
+    g25_fail=1
+fi
+# The exact corpus set (distinct modules per triple): verify-corpus modules
+# + the authored-intent / casts inline fixtures.
+expected_set="Bank Clean Contract EventLoop Lending OpenCast"
+for triple in x86_64-unknown-linux-gnu x86_64-unknown-none armv7m-unknown-none riscv32-unknown-none; do
+    dir="test-goldens/statements/$triple"
+    if [ ! -d "$dir" ]; then
+        msg $RED "  G25 FAIL: statement-golden directory missing for $triple"
+        g25_fail=1
+        continue
+    fi
+    actual=$(cd "$dir" && ls *.stmt.json 2>/dev/null | sed 's/\.stmt\.json$//' | sort | tr '\n' ' ' | sed 's/ $//')
+    if [ "$actual" != "$expected_set" ]; then
+        msg $RED "  G25 FAIL: statement-golden set for $triple drifted"
+        msg $RED "    expected: $expected_set"
+        msg $RED "    actual:   ${actual:-<none>}"
+        g25_fail=1
+    fi
+done
+[ "$g25_fail" -eq 0 ] && msg $GREEN "  G25: statement goldens exact-set present for all four triples (band rule §Q4)"
+failures=$((failures + g25_fail))
+
 echo ""
 msg $GREEN "============================================"
 msg $GREEN "Per-package test counts:"

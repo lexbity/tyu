@@ -1,4 +1,5 @@
-//! `.obl.json` codec (static-verification.md §6.1, slice P2).
+//! `.obl.json` codec (static-verification.md §6.1, slice P2; PLAN-VERIFY-3
+//! §6.1, P1.2 — `tyu.obl/v2`).
 //!
 //! Hand-rolled JSON — deliberately no `serde`/`serde_json` dependency
 //! (see the module doc of [`crate::model`] for the `-nodefaultlibs` link
@@ -7,15 +8,23 @@
 //! reader is a strict, schema-specific parser that fail-closes on E6400
 //! (schema version) / E6401 (malformed) and on semantics-version mismatch.
 //!
+//! v2 (PLAN-VERIFY-3 P1.2) adds the statement-schema stamp, the `(target,
+//! platform, model_semantics)` identity fields, per-word IR text + block
+//! count (8 KiB per-word cap, `WordIrTooLarge`), and per-obligation `intent`
+//! (§Q17), `assumptions` — the §Q7 dependency edges — and `cycles` (§Q9).
+//! The v1 trusted-facts `assumptions` member is gone: every fact it carried
+//! is derivable from the formula. The v1→v2 break is owned by §13: a v1
+//! artifact fails E6400.
+//!
 //! `encode_obl`/`write_obl` are the single writer (used by `langc`);
 //! `read_obl` is the schema-validating reader (used by consumers).
 
 use crate::model::{
-    Assumption, Facts, Formula, Kind, OblSet, Obligation, Oel, PredicateFact, PredicateRef,
-    Provenance, Site, SpanInfo, SubtypeFact, WordFact, OBL_ARTIFACT_MAX_BYTES, OBL_SCHEMA,
+    Facts, Formula, Kind, OblSet, Obligation, Oel, PredicateFact, PredicateRef, Provenance, Site,
+    SpanInfo, SubtypeFact, WordFact, OBL_ARTIFACT_MAX_BYTES, OBL_SCHEMA, WORD_IR_MAX_BYTES,
 };
 use alloc::boxed::Box;
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 /// Codec failure classes. The reader side maps onto the artifact-band
@@ -25,7 +34,7 @@ use alloc::vec::Vec;
 pub enum CodecError {
     /// Not parseable as the artifact shape at all.
     Malformed,
-    /// Top-level `schema` is not `tyu.obl/v1` (E6400).
+    /// Top-level `schema` is not `tyu.obl/v2` (E6400).
     SchemaVersion { found: String },
     /// Top-level `semantics` disagrees with `SEMANTICS_VERSION` (a newer/older
     /// op-semantics row set than this toolchain's — verdict caches are keyed
@@ -33,6 +42,11 @@ pub enum CodecError {
     SemanticsMismatch { found: String },
     /// Artifact exceeds the 16 MiB read-side cap (NFR-5) — fail closed.
     TooLarge { size: usize },
+    /// P1.2 (PLAN-VERIFY-3): a word's canonical op-text exceeds the 8 KiB
+    /// per-word IR cap — fail-closed at encode (E6401-class), so no artifact
+    /// ever ships word IR the statement pipeline would have to make sense of
+    /// past its bound.
+    WordIrTooLarge { word: String, size: usize },
     /// Slice P7: the image-verdicts record (E6415) — the guard-elision
     /// decision evidence is malformed or version-mismatched; fail loud, the
     /// guards stay (fail-closed to *retained* is never silent).
@@ -56,8 +70,23 @@ impl CodecError {
 // ---------------------------------------------------------------------------
 
 /// Serialize a complete obligation set to JSON bytes (fixed key order, Q11).
-/// Enforces the 16 MiB cap on the write side too (NFR-5).
+/// Enforces the 16 MiB cap on the write side too (NFR-5), and the P1.2
+/// per-word IR cap of 8 KiB (E6401-class fail-closed).
 pub fn encode_obl(set: &OblSet) -> Result<Vec<u8>, CodecError> {
+    // PLAN-VERIFY-3 §6.1 (P1.2): per-word IR ≤ 8 KiB, else fail closed. A
+    // word past the bound is an artifact the statement pipeline cannot carry.
+    for w in &set.facts.words {
+        if w.ir.len() > WORD_IR_MAX_BYTES {
+            return Err(CodecError::WordIrTooLarge {
+                word: w.name.clone(),
+                size: w.ir.len(),
+            });
+        }
+    }
+    // Single validated constructor (P1.2 debt item): the identity arithmetic
+    // is checked before anything is written — an underlying record whose id
+    // or id_hash drifted from its canonical form is malformed, never encoded.
+    set.validate().map_err(|_| CodecError::Malformed)?;
     let mut out = Vec::with_capacity(1024);
     write_doc(&mut out, set);
     if out.len() > OBL_ARTIFACT_MAX_BYTES {
@@ -79,8 +108,16 @@ fn write_doc(out: &mut Vec<u8>, set: &OblSet) {
     write_str(out, &set.schema);
     out.extend_from_slice(b",\"semantics\":");
     write_str(out, &set.semantics);
+    out.extend_from_slice(b",\"stmt\":");
+    write_str(out, &set.stmt);
     out.extend_from_slice(b",\"module\":");
     write_str(out, &set.module);
+    out.extend_from_slice(b",\"target\":");
+    write_str(out, &set.target);
+    out.extend_from_slice(b",\"platform\":");
+    write_str(out, &set.platform);
+    out.extend_from_slice(b",\"model_semantics\":");
+    write_str(out, &set.model_semantics);
     out.extend_from_slice(b",\"abi_contract_version\":");
     write_i64(out, set.abi_contract_version as i64);
     write_facts(out, &set.facts);
@@ -117,6 +154,10 @@ fn write_facts(out: &mut Vec<u8>, facts: &Facts) {
         }
         out.extend_from_slice(b"],\"diverge_free\":");
         out.extend_from_slice(if w.diverge_free { b"true" } else { b"false" });
+        out.extend_from_slice(b",\"blocks\":");
+        push_i64_json(out, w.blocks as i64);
+        out.extend_from_slice(b",\"ir\":");
+        write_str(out, &w.ir);
         out.push(b'}');
     }
     out.extend_from_slice(b"],\"subtypes\":[");
@@ -133,7 +174,7 @@ fn write_facts(out: &mut Vec<u8>, facts: &Facts) {
         out.push(b'}');
     }
     // Slice P6: named contract-predicate facts (Q7). Always emitted — fixed
-    // schema (`tyu.obl/v1` grew a member; v1 readers skip unknown keys).
+    // schema (`tyu.obl/v2` grew a member; readers skip unknown keys).
     out.extend_from_slice(b"],\"predicates\":[");
     for (i, p) in facts.predicates.iter().enumerate() {
         if i != 0 {
@@ -170,18 +211,58 @@ fn write_obligation(out: &mut Vec<u8>, o: &Obligation) {
     write_i64(out, o.site.span.line as i64);
     out.extend_from_slice(b",\"col\":");
     write_i64(out, o.site.span.col as i64);
-    out.extend_from_slice(b"}},\"formula\":");
+    out.extend_from_slice(b"}},\"intent\":{\"label\":");
+    write_str(out, &o.intent.label);
+    out.extend_from_slice(b",\"subject\":");
+    write_str(out, &o.intent.subject);
+    out.extend_from_slice(b",\"authored\":");
+    out.extend_from_slice(if o.intent.authored { b"true" } else { b"false" });
+    out.extend_from_slice(b"},\"formula\":");
     write_formula(out, &o.formula);
     out.extend_from_slice(b",\"assumptions\":[");
     for (i, a) in o.assumptions.iter().enumerate() {
         if i != 0 {
             out.push(b',');
         }
-        write_assumption(out, a);
+        write_assumption_edge(out, a);
+    }
+    out.extend_from_slice(b"],\"cycles\":[");
+    for (i, c) in o.cycles.iter().enumerate() {
+        if i != 0 {
+            out.push(b',');
+        }
+        out.extend_from_slice(b"{\"index\":");
+        write_i64(out, c.index as i64);
+        out.extend_from_slice(b",\"blocks\":[");
+        for (j, b) in c.blocks.iter().enumerate() {
+            if j != 0 {
+                out.push(b',');
+            }
+            write_str(out, b);
+        }
+        out.extend_from_slice(b"]}");
     }
     out.extend_from_slice(b"],\"provenance\":");
     write_str(out, o.provenance.as_str());
     out.push(b'}');
+}
+
+/// §Q7 rule 1 (§6.1): the `assumptions` member is the dependency-edge list —
+/// a bare `"runtime-check"` string (the emitted check IS the discharge) or an
+/// `{"obligation": …, "module": …}` reference to the callee's obligation.
+fn write_assumption_edge(out: &mut Vec<u8>, e: &crate::model::AssumptionEdge) {
+    match e {
+        crate::model::AssumptionEdge::Obligation { id, module } => {
+            out.extend_from_slice(b"{\"obligation\":");
+            write_str(out, id);
+            out.extend_from_slice(b",\"module\":");
+            write_str(out, module);
+            out.push(b'}');
+        }
+        crate::model::AssumptionEdge::RuntimeCheck => {
+            write_str(out, "runtime-check");
+        }
+    }
 }
 
 fn write_formula(out: &mut Vec<u8>, f: &Formula) {
@@ -248,36 +329,6 @@ fn write_oel(out: &mut Vec<u8>, v: &Oel) {
             write_str(out, to);
             out.extend_from_slice(b",\"arg\":");
             write_oel(out, arg);
-            out.push(b'}');
-        }
-    }
-}
-
-fn write_assumption(out: &mut Vec<u8>, a: &Assumption) {
-    match a {
-        Assumption::SubtypeRange { name, lo, hi } => {
-            out.extend_from_slice(b"{\"kind\":\"subtype-range\",\"name\":");
-            write_str(out, name);
-            out.extend_from_slice(b",\"lo\":");
-            write_i64(out, *lo);
-            out.extend_from_slice(b",\"hi\":");
-            write_i64(out, *hi);
-            out.push(b'}');
-        }
-        Assumption::ApertureSize { aperture, size } => {
-            out.extend_from_slice(b"{\"kind\":\"aperture-size\",\"aperture\":");
-            write_i64(out, *aperture as i64);
-            out.extend_from_slice(b",\"size\":");
-            write_i64(out, *size as i64);
-            out.push(b'}');
-        }
-        Assumption::ContractPredicate { module, name, ir_hash } => {
-            out.extend_from_slice(b"{\"kind\":\"contract-predicate\",\"module\":");
-            write_str(out, module);
-            out.extend_from_slice(b",\"name\":");
-            write_str(out, name);
-            out.extend_from_slice(b",\"ir_hash\":");
-            write_str(out, ir_hash);
             out.push(b'}');
         }
     }
@@ -429,7 +480,11 @@ impl<'a> Reader<'a> {
         }
         let mut schema: Option<String> = None;
         let mut semantics: Option<String> = None;
+        let mut stmt: Option<String> = None;
         let mut module: Option<String> = None;
+        let mut target: Option<String> = None;
+        let mut platform: Option<String> = None;
+        let mut model_semantics: Option<String> = None;
         let mut abi_contract_version: Option<u32> = None;
         let mut facts: Option<Facts> = None;
         let mut obligations: Option<Vec<Obligation>> = None;
@@ -451,7 +506,11 @@ impl<'a> Reader<'a> {
             match key.as_str() {
                 "schema" => schema = Some(self.parse_string()?),
                 "semantics" => semantics = Some(self.parse_string()?),
+                "stmt" => stmt = Some(self.parse_string()?),
                 "module" => module = Some(self.parse_string()?),
+                "target" => target = Some(self.parse_string()?),
+                "platform" => platform = Some(self.parse_string()?),
+                "model_semantics" => model_semantics = Some(self.parse_string()?),
                 "abi_contract_version" => abi_contract_version = Some(self.parse_u64()? as u32),
                 "facts" => facts = Some(self.parse_facts()?),
                 "obligations" => obligations = Some(self.parse_obligations()?),
@@ -467,7 +526,16 @@ impl<'a> Reader<'a> {
         Ok(OblSet {
             schema,
             semantics,
+            // `stmt`/`target`/`platform`/`model_semantics` are P1.2 additions;
+            // a pre-P1.2 (v1) artifact fails E6400 before reaching here, so an
+            // in-band default is only a reader-side courtesy for malformed-but-
+            // schema-stamped documents. Defaults keep the reader total.
+            stmt: stmt.unwrap_or_else(|| crate::stmt::STMT_SCHEMA.to_string()),
             module,
+            target: target.unwrap_or_default(),
+            platform: platform.unwrap_or_default(),
+            model_semantics: model_semantics
+                .unwrap_or_else(|| crate::model::MODEL_UNMODELED.to_string()),
             abi_contract_version,
             facts,
             obligations,
@@ -593,6 +661,8 @@ impl<'a> Reader<'a> {
             let mut top: Option<bool> = None;
             let mut performs: Option<Vec<String>> = None;
             let mut diverge_free: Option<bool> = None;
+            let mut blocks: Option<u32> = None;
+            let mut ir: Option<String> = None;
             loop {
                 self.skip_ws();
                 match self.peek() {
@@ -615,6 +685,8 @@ impl<'a> Reader<'a> {
                     "top" => top = Some(self.parse_bool()?),
                     "performs" => performs = Some(self.parse_string_array()?),
                     "diverge_free" => diverge_free = Some(self.parse_bool()?),
+                    "blocks" => blocks = Some(self.parse_u64()? as u32),
+                    "ir" => ir = Some(self.parse_string()?),
                     _ => self.skip_value()?,
                 }
             }
@@ -630,6 +702,9 @@ impl<'a> Reader<'a> {
                 top,
                 performs,
                 diverge_free,
+                // `blocks`/`ir` are P1.2 additions — default on absent.
+                ir: ir.unwrap_or_default(),
+                blocks: blocks.unwrap_or(0),
             });
         }
         Ok(out)
@@ -720,8 +795,10 @@ impl<'a> Reader<'a> {
         let mut id_hash: Option<String> = None;
         let mut kind: Option<Kind> = None;
         let mut site: Option<Site> = None;
+        let mut intent: Option<crate::model::Intent> = None;
         let mut formula: Option<Formula> = None;
-        let mut assumptions: Option<Vec<Assumption>> = None;
+        let mut assumptions: Option<Vec<crate::model::AssumptionEdge>> = None;
+        let mut cycles: Option<Vec<crate::model::Cycle>> = None;
         let mut provenance: Option<Provenance> = None;
         loop {
             self.skip_ws();
@@ -746,12 +823,17 @@ impl<'a> Reader<'a> {
                     kind = Kind::from_str(&k);
                 }
                 "site" => site = Some(self.parse_site()?),
+                "intent" => intent = Some(self.parse_intent()?),
                 "formula" => formula = Some(self.parse_formula()?),
                 "assumptions" => assumptions = Some(self.parse_assumptions()?),
+                "cycles" => cycles = Some(self.parse_cycles()?),
                 "provenance" => {
                     let p = self.parse_string()?;
                     provenance = Provenance::from_str(&p);
                 }
+                // Unknown keys (a future additive growth, or a legacy member
+                // like `assumption_edges`) are skipped — the v2 `assumptions`
+                // member is the single dependency record.
                 _ => self.skip_value()?,
             }
         }
@@ -765,9 +847,51 @@ impl<'a> Reader<'a> {
             id_hash,
             kind,
             site,
+            // `intent`/`assumptions`/`cycles` are P1.2 additions: intent
+            // defaults to the synthesized form when the member is absent
+            // (reader-side totality); edges and cycles default empty.
+            intent: intent.unwrap_or_else(|| crate::model::default_intent(kind, "")),
             formula,
             assumptions,
+            cycles: cycles.unwrap_or_default(),
             provenance,
+        })
+    }
+
+    fn parse_intent(&mut self) -> Result<crate::model::Intent, CodecError> {
+        self.expect(b'{')?;
+        let mut label: Option<String> = None;
+        let mut subject: Option<String> = None;
+        let mut authored: Option<bool> = None;
+        loop {
+            self.skip_ws();
+            match self.peek() {
+                Some(b'}') => {
+                    self.i += 1;
+                    break;
+                }
+                Some(b',') => {
+                    self.i += 1;
+                }
+                _ => {}
+            }
+            self.skip_ws();
+            let key = self.parse_string()?;
+            self.expect(b':')?;
+            match key.as_str() {
+                "label" => label = Some(self.parse_string()?),
+                "subject" => subject = Some(self.parse_string()?),
+                "authored" => authored = Some(self.parse_bool()?),
+                _ => self.skip_value()?,
+            }
+        }
+        let (Some(label), Some(subject), Some(authored)) = (label, subject, authored) else {
+            return self.err();
+        };
+        Ok(crate::model::Intent {
+            label,
+            subject,
+            authored,
         })
     }
 
@@ -1028,7 +1152,10 @@ impl<'a> Reader<'a> {
         }
     }
 
-    fn parse_assumptions(&mut self) -> Result<Vec<Assumption>, CodecError> {
+    /// §Q7 rule 1: parse the `assumptions` member — the dependency-edge list.
+    /// An element is either the bare string `"runtime-check"` or an object
+    /// `{"obligation": …, "module": …}` (the obligation form).
+    fn parse_assumptions(&mut self) -> Result<Vec<crate::model::AssumptionEdge>, CodecError> {
         self.expect(b'[')?;
         let mut out = Vec::new();
         loop {
@@ -1048,25 +1175,63 @@ impl<'a> Reader<'a> {
                 self.i += 1;
                 break;
             }
-            out.push(self.parse_assumption()?);
+            match self.peek() {
+                Some(b'"') => {
+                    let s = self.parse_string()?;
+                    match s.as_str() {
+                        "runtime-check" => {
+                            out.push(crate::model::AssumptionEdge::RuntimeCheck)
+                        }
+                        _ => return self.err(),
+                    }
+                }
+                Some(b'{') => {
+                    self.expect(b'{')?;
+                    let mut obligation: Option<String> = None;
+                    let mut module: Option<String> = None;
+                    loop {
+                        self.skip_ws();
+                        match self.peek() {
+                            Some(b'}') => {
+                                self.i += 1;
+                                break;
+                            }
+                            Some(b',') => {
+                                self.i += 1;
+                            }
+                            _ => {}
+                        }
+                        self.skip_ws();
+                        let key = self.parse_string()?;
+                        self.expect(b':')?;
+                        match key.as_str() {
+                            "obligation" => obligation = Some(self.parse_string()?),
+                            "module" => module = Some(self.parse_string()?),
+                            _ => self.skip_value()?,
+                        }
+                    }
+                    let (Some(obligation), Some(module)) = (obligation, module) else {
+                        return self.err();
+                    };
+                    out.push(crate::model::AssumptionEdge::Obligation {
+                        id: obligation,
+                        module,
+                    });
+                }
+                _ => return self.err(),
+            }
         }
         Ok(out)
     }
 
-    fn parse_assumption(&mut self) -> Result<Assumption, CodecError> {
-        self.expect(b'{')?;
-        let mut kind: Option<String> = None;
-        let mut name: Option<String> = None;
-        let mut lo: Option<i64> = None;
-        let mut hi: Option<i64> = None;
-        let mut aperture: Option<u16> = None;
-        let mut size: Option<u32> = None;
-        let mut module: Option<String> = None;
-        let mut ir_hash: Option<String> = None;
+    /// Parse the `cycles` member — the word's nontrivial SCC list (§Q9).
+    fn parse_cycles(&mut self) -> Result<Vec<crate::model::Cycle>, CodecError> {
+        self.expect(b'[')?;
+        let mut out = Vec::new();
         loop {
             self.skip_ws();
             match self.peek() {
-                Some(b'}') => {
+                Some(b']') => {
                     self.i += 1;
                     break;
                 }
@@ -1076,46 +1241,40 @@ impl<'a> Reader<'a> {
                 _ => {}
             }
             self.skip_ws();
-            let key = self.parse_string()?;
-            self.expect(b':')?;
-            match key.as_str() {
-                "kind" => kind = Some(self.parse_string()?),
-                "name" => name = Some(self.parse_string()?),
-                "lo" => lo = Some(self.parse_i64()?),
-                "hi" => hi = Some(self.parse_i64()?),
-                "aperture" => aperture = Some(self.parse_u64()? as u16),
-                "size" => size = Some(self.parse_u64()? as u32),
-                "module" => module = Some(self.parse_string()?),
-                "ir_hash" => ir_hash = Some(self.parse_string()?),
-                _ => self.skip_value()?,
+            if self.peek() == Some(b']') {
+                self.i += 1;
+                break;
             }
+            self.expect(b'{')?;
+            let mut index: Option<u32> = None;
+            let mut blocks: Option<Vec<String>> = None;
+            loop {
+                self.skip_ws();
+                match self.peek() {
+                    Some(b'}') => {
+                        self.i += 1;
+                        break;
+                    }
+                    Some(b',') => {
+                        self.i += 1;
+                    }
+                    _ => {}
+                }
+                self.skip_ws();
+                let key = self.parse_string()?;
+                self.expect(b':')?;
+                match key.as_str() {
+                    "index" => index = Some(self.parse_u64()? as u32),
+                    "blocks" => blocks = Some(self.parse_string_array()?),
+                    _ => self.skip_value()?,
+                }
+            }
+            let (Some(index), Some(blocks)) = (index, blocks) else {
+                return self.err();
+            };
+            out.push(crate::model::Cycle { index, blocks });
         }
-        let Some(kind) = kind else { return self.err() };
-        match kind.as_str() {
-            "subtype-range" => {
-                let (Some(name), Some(lo), Some(hi)) = (name, lo, hi) else {
-                    return self.err();
-                };
-                Ok(Assumption::SubtypeRange { name, lo, hi })
-            }
-            "aperture-size" => {
-                let (Some(aperture), Some(size)) = (aperture, size) else {
-                    return self.err();
-                };
-                Ok(Assumption::ApertureSize { aperture, size })
-            }
-            "contract-predicate" => {
-                let (Some(module), Some(name), Some(ir_hash)) = (module, name, ir_hash) else {
-                    return self.err();
-                };
-                Ok(Assumption::ContractPredicate {
-                    module,
-                    name,
-                    ir_hash,
-                })
-            }
-            _ => self.err(),
-        }
+        Ok(out)
     }
 
     fn parse_string_array(&mut self) -> Result<Vec<String>, CodecError> {
@@ -1677,11 +1836,6 @@ mod tests {
     fn sample_set() -> OblSet {
         let mut ctx = ExtractionCtx::new(b"Bank");
         ctx.begin_word(b"clamp");
-        let mut assumptions = Vec::new();
-        assumptions.push(crate::model::Assumption::ApertureSize {
-            aperture: 0,
-            size: 65536,
-        });
         ctx.record(
             Kind::SubtypeRange,
             Formula::InRange {
@@ -1694,17 +1848,13 @@ mod tests {
             12,
             8,
             Provenance::Opaque,
-            assumptions,
         );
         ctx.push_subtype_fact(b"Percent", 0, 100);
-        // An emulated-aperture access (P3): OffsetLE with a const offset.
+        // An emulated-aperture access (P3): OffsetLE with a const offset. The
+        // aperture SIZE lives in the formula — there is no separate
+        // trusted-facts member in v2 (PLAN-VERIFY-3 §6.1).
         ctx.begin_word(b"read");
         let mut ctx = ctx;
-        let mut mmio_assumptions = Vec::new();
-        mmio_assumptions.push(crate::model::Assumption::ApertureSize {
-            aperture: 0,
-            size: 65536,
-        });
         ctx.record(
             Kind::MmioBounds,
             Formula::OffsetLE {
@@ -1715,7 +1865,6 @@ mod tests {
             4,
             10,
             Provenance::Direct,
-            mmio_assumptions,
         );
         ctx.set().clone()
     }
@@ -1731,8 +1880,13 @@ mod tests {
         let set = sample_set();
         let bytes = encode_obl(&set).expect("encode");
         let text = String::from_utf8_lossy(&bytes);
-        assert!(text.starts_with("{\"schema\":\"tyu.obl/v1\",\"semantics\":\"tyu.ir-sem/1.0\",\"module\":\"Bank\",\"abi_contract_version\":2,\"facts\""));
+        assert!(text.starts_with(
+            "{\"schema\":\"tyu.obl/v2\",\"semantics\":\"tyu.ir-sem/1.0\",\"stmt\":\"tyu.stmt/1.0\",\"module\":\"Bank\",\"target\":\"\",\"platform\":\"\",\"model_semantics\":\"unmodeled\",\"abi_contract_version\":2,\"facts\""
+        ));
         assert!(text.contains("\"obligations\":[{\"id\":\"Bank::clamp::subtype-range::0\",\"id_hash\":\""));
+        assert!(text.contains("\"intent\":{\"label\":\"value must lie in subtype range\",\"subject\":\"\",\"authored\":false}"));
+        assert!(text.contains("\"assumptions\":[]"));
+        assert!(text.contains("\"cycles\":[]"));
         assert!(text.contains("\"provenance\":\"opaque\""));
         // Slice P6: the fixed schema grew `facts.predicates` (always
         // emitted, additive growth — readers skip unknown keys).
@@ -1764,7 +1918,7 @@ mod tests {
         let set = sample_set();
         let mut doc: String = String::from_utf8_lossy(&encode_obl(&set).expect("encode"))
             .into_owned();
-        doc = doc.replacen("tyu.obl/v1", "tyu.obl/v999", 1);
+        doc = doc.replacen("tyu.obl/v2", "tyu.obl/v999", 1);
         assert_eq!(
             read_obl(doc.as_bytes()),
             Err(CodecError::SchemaVersion {
@@ -1777,7 +1931,7 @@ mod tests {
     fn read_rejects_malformed() {
         assert_eq!(read_obl(b"not json"), Err(CodecError::Malformed));
         assert_eq!(
-            read_obl(b"{\"schema\": \"tyu.obl/v1\""),
+            read_obl(b"{\"schema\": \"tyu.obl/v2\""),
             Err(CodecError::Malformed)
         );
     }
@@ -1835,5 +1989,117 @@ mod tests {
         let parsed = read_obl(doc.as_bytes()).expect("additive keys are skipped");
         assert_eq!(parsed.module, "Bank");
         assert_eq!(parsed.obligations.len(), 2);
+    }
+
+    /// P1.2: the v2 identity fields round-trip and are schema-checked.
+    #[test]
+    fn v2_identity_fields_roundtrip() {
+        let mut ctx = ExtractionCtx::new_with_identity(
+            b"Bank",
+            b"x86_64-unknown-none",
+            b"x86_64-unknown-none",
+            b"tyu.model/x86_64-unknown-none/1",
+        );
+        ctx.begin_word(b"clamp");
+        ctx.record(
+            Kind::SubtypeRange,
+            Formula::InRange {
+                value: Oel::Var {
+                    name: "$top".to_string(),
+                },
+                lo: 0,
+                hi: 100,
+            },
+            1,
+            2,
+            Provenance::Opaque,
+        );
+        let set = ctx.into_set();
+        assert_eq!(set.stmt, crate::stmt::STMT_SCHEMA);
+        let bytes = encode_obl(&set).expect("encode");
+        assert!(String::from_utf8_lossy(&bytes).contains("\"target\":\"x86_64-unknown-none\""));
+        let parsed = read_obl(&bytes).expect("decode");
+        assert_eq!(parsed, set, "identity fields must round-trip");
+        assert_eq!(parsed.target, "x86_64-unknown-none");
+        assert_eq!(parsed.platform, "x86_64-unknown-none");
+        assert_eq!(parsed.model_semantics, "tyu.model/x86_64-unknown-none/1");
+        assert_eq!(parsed.stmt, crate::stmt::STMT_SCHEMA);
+    }
+
+    /// P1.2: intent (authored + synthesized), assumption edges, and cycles
+    /// round-trip byte-exactly.
+    #[test]
+    fn v2_obligation_fields_roundtrip() {
+        let mut ctx = ExtractionCtx::new(b"Bank");
+        ctx.begin_word(b"withdraw");
+        ctx.record_with_intent(
+            Kind::ContractPre,
+            Formula::PredicateHolds {
+                pred: crate::model::PredicateRef {
+                    module: "Math".to_string(),
+                    name: "nonneg".to_string(),
+                    ir: vec!["block b0".to_string(), "dup i64".to_string(), "ret".to_string()],
+                    ir_hash: "11aa22bb".to_string(),
+                },
+                args: vec![Oel::Var {
+                    name: "$top".to_string(),
+                }],
+            },
+            4,
+            5,
+            Provenance::Opaque,
+            crate::model::Intent {
+                label: "withdraw never exceeds balance".to_string(),
+                subject: "nonneg".to_string(),
+                authored: true,
+            },
+        );
+        ctx.push_assumption_edge(crate::model::AssumptionEdge::Obligation {
+            id: "Math::clamp::contract-post::0".to_string(),
+            module: "Math".to_string(),
+        });
+        ctx.push_assumption_edge(crate::model::AssumptionEdge::RuntimeCheck);
+        ctx.attach_word_cycles(vec![crate::model::Cycle {
+            index: 1,
+            blocks: vec!["b1".to_string(), "b2".to_string()],
+        }]);
+        let set = ctx.into_set();
+        assert_eq!(set.obligations[0].intent.authored, true);
+        assert_eq!(set.obligations[0].assumptions.len(), 2);
+        assert_eq!(set.obligations[0].cycles.len(), 1);
+
+        let bytes = encode_obl(&set).expect("encode");
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("\"authored\":true"));
+        assert!(text.contains("\"obligation\":\"Math::clamp::contract-post::0\""));
+        assert!(text.contains(
+            "\"assumptions\":[{\"obligation\":\"Math::clamp::contract-post::0\",\"module\":\"Math\"},\"runtime-check\"]"
+        ));
+        assert!(text.contains("\"cycles\":[{\"index\":1,\"blocks\":[\"b1\",\"b2\"]}]"));
+
+        let parsed = read_obl(&bytes).expect("decode");
+        assert_eq!(parsed, set, "P1.2 fields must round-trip byte-exactly");
+    }
+
+    /// P1.2: per-word IR beyond the 8 KiB cap fails closed at encode
+    /// (E6401-class, `WordIrTooLarge`).
+    #[test]
+    fn word_ir_cap_fails_closed() {
+        let mut ctx = ExtractionCtx::new(b"Bank");
+        ctx.begin_word(b"big");
+        ctx.push_word_fact_with_ir(
+            b"big",
+            ir::StackBound {
+                net: 0,
+                high: ir::High::Slots(1),
+            },
+            ir::EffectSet::empty(),
+            &"x".repeat(WORD_IR_MAX_BYTES + 1),
+            1,
+        );
+        let set = ctx.into_set();
+        let err = encode_obl(&set).expect_err("oversized word IR must fail closed");
+        assert!(matches!(err, CodecError::WordIrTooLarge { .. }));
+        assert_eq!(err.code(), 6401);
     }
 }

@@ -59,7 +59,6 @@ fn sample_set() -> verifier::model::OblSet {
         0,
         0,
         Provenance::Direct,
-        Vec::new(),
     );
     ctx.record(
         Kind::SubtypeRange,
@@ -77,7 +76,6 @@ fn sample_set() -> verifier::model::OblSet {
         7,
         3,
         Provenance::Opaque,
-        Vec::new(),
     );
 
     // reg_read ( u32 -- u32 ): an emulated-aperture access (P3) — the
@@ -91,11 +89,6 @@ fn sample_set() -> verifier::model::OblSet {
         },
         ir::EffectSet::from_bits(ir::EffectSet::MMIO),
     );
-    let mut mmio_assumptions = Vec::new();
-    mmio_assumptions.push(verifier::model::Assumption::ApertureSize {
-        aperture: 0,
-        size: 65536,
-    });
     ctx.record(
         Kind::MmioBounds,
         Formula::OffsetLE {
@@ -106,7 +99,6 @@ fn sample_set() -> verifier::model::OblSet {
         4,
         10,
         Provenance::Direct,
-        mmio_assumptions,
     );
     // bounded_inc ( Percent -- Percent ): param check, cast, return check.
     ctx.begin_word(b"bounded_inc");
@@ -130,8 +122,6 @@ fn sample_set() -> verifier::model::OblSet {
         0,
         0,
         Provenance::Direct,
-
-        Vec::new(),
     );
     ctx.record(
         Kind::SubtypeRange,
@@ -149,8 +139,6 @@ fn sample_set() -> verifier::model::OblSet {
         12,
         14,
         Provenance::Opaque,
-
-        Vec::new(),
     );
     ctx.record(
         Kind::SubtypeRange,
@@ -164,8 +152,6 @@ fn sample_set() -> verifier::model::OblSet {
         0,
         0,
         Provenance::Direct,
-
-        Vec::new(),
     );
     // Slice P6: a contract obligation — `PredicateHolds` transcluding the
     // callee's predicate (name + IR + hash) over caller-side args.
@@ -191,11 +177,6 @@ fn sample_set() -> verifier::model::OblSet {
         41,
         3,
         Provenance::Opaque,
-        vec![verifier::model::Assumption::ContractPredicate {
-            module: "Bank".to_string(),
-            name: "pct-in-range".to_string(),
-            ir_hash: "11aa22bb33cc44dd".to_string(),
-        }],
     );
 
     ctx.into_set()
@@ -286,21 +267,27 @@ fn image_verdicts_roundtrip_and_fail_closed() {
 }
 
 /// The golden document's top-level key order is pinned textually (not just by
-/// byte equality): schema → semantics → module → abi_contract_version → facts
-/// → obligations, and per-obligation id → id_hash → kind → site → formula →
-/// assumptions → provenance.
+/// byte equality): schema → semantics → stmt → module → target → platform →
+/// model_semantics → abi_contract_version → facts → obligations, and
+/// per-obligation id → id_hash → kind → site → intent → formula → assumptions
+/// → cycles → provenance (PLAN-VERIFY-3 §6.1, P1.2).
 #[test]
 fn golden_key_order_is_schema_order() {
     let text = String::from_utf8(encode_obl(&sample_set()).expect("encode")).unwrap();
     let (top, obligations_rest) = text
         .split_once("\"obligations\":[{")
         .expect("obligations array present");
-    // Top-level order check: schema → semantics → module → abi_contract_version
-    // → facts(words, subtypes) — all before `obligations`.
+    // Top-level order check: schema → semantics → stmt → module → target →
+    // platform → model_semantics → abi_contract_version → facts(words,
+    // subtypes) — all before `obligations`.
     let top_needles = [
-        "{\"schema\":\"tyu.obl/v1\"",
+        "{\"schema\":\"tyu.obl/v2\"",
         "\"semantics\":",
+        "\"stmt\":",
         "\"module\":\"Bank\"",
+        "\"target\":",
+        "\"platform\":",
+        "\"model_semantics\":",
         "\"abi_contract_version\":",
         "\"facts\":{\"words\":[",
         "\"subtypes\":[",
@@ -313,7 +300,7 @@ fn golden_key_order_is_schema_order() {
         pos += idx + needle.len();
     }
     // Per-obligation order check, on the first record: id → id_hash → kind →
-    // site → formula → assumptions → provenance.
+    // site → intent → formula → assumptions → cycles → provenance.
     let record = obligations_rest
         .split("},{\"id\"")
         .next()
@@ -326,8 +313,12 @@ fn golden_key_order_is_schema_order() {
         "\"occurrence\":",
         "\"span\":{\"line\":",
         "\"col\":",
+        "\"intent\":{\"label\":",
+        "\"subject\":",
+        "\"authored\":",
         "\"formula\":{\"op\":\"InRange\",\"value\":",
         "\"assumptions\":",
+        "\"cycles\":",
         "\"provenance\":",
     ];
     let mut pos = 0usize;

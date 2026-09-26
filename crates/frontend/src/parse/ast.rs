@@ -155,6 +155,11 @@ pub enum ParseError {
     UnsupportedDefClause {
         span: Span,
     },
+    /// PLAN-VERIFY-3 §Q17 (P1.2): `intent` was followed by something that is
+    /// not a string literal (`intent "<text>"`).
+    ExpectedIntentString {
+        span: Span,
+    },
 }
 
 impl ParseError {
@@ -205,6 +210,7 @@ impl ParseError {
             Self::LegacyEffectBang { .. } => 2196,
             Self::Skipped { .. } => 2144,
             Self::UnsupportedDefClause { .. } => 6413,
+            Self::ExpectedIntentString { .. } => 2197,
         }
     }
 
@@ -254,7 +260,8 @@ impl ParseError {
             Self::UnknownEffect { name, .. } => *name,
             Self::LegacyRequiresContract { span }
             | Self::LegacyEffectBang { span }
-            | Self::UnsupportedDefClause { span } => *span,
+            | Self::UnsupportedDefClause { span }
+            | Self::ExpectedIntentString { span } => *span,
         }
     }
 
@@ -271,6 +278,9 @@ impl ParseError {
             }
             Self::UnsupportedDefClause { .. } => {
                 b"parse error: unsupported .def clause (E6413); bounds are computed, never hand-declared"
+            }
+            Self::ExpectedIntentString { .. } => {
+                b"parse error: 'intent' must be followed by a string literal"
             }
             _ => b"parse error",
         }
@@ -355,6 +365,10 @@ pub struct DeclAst {
     pub body: Option<Span>,
     pub requires: Option<Span>,
     pub ensures: Option<Span>,
+    /// PLAN-VERIFY-3 §Q17 (P1.2): the authored `intent "<string>"` clause
+    /// attached to a `needs`/`ensures` contract. The span covers the whole
+    /// string literal including quotes.
+    pub intent: Option<Span>,
     pub cap_set: Option<Span>,
     pub effect_bits: u16,
     pub effect_net: i16,

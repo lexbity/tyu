@@ -15,7 +15,11 @@
 //! - slice P1: the normative IR op semantics table ([`semantics`]) that every
 //!   later slice proves against;
 //! - slice P2: the obligation model ([`model`]) and `.obl.json` codecs
-//!   ([`codec`]) for the C1–C3 subtype-range sites.
+//!   ([`codec`]) for the C1–C3 subtype-range sites;
+//! - PLAN-VERIFY-3 P1: the canonical statement encoder ([`stmt`]) — the
+//!   hash-bound object (`tyu.stmt/1.0`) a developer's proof binds to, plus
+//!   the `.obl.json` v2 growth (intent, assumption edges, cycles, target/
+//!   model relativity; see `devdocs/plans/developer-proof-pipeline.md`).
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -28,4 +32,5 @@ pub mod interp;
 pub mod model;
 pub mod report;
 pub mod semantics;
+pub mod stmt;
 pub mod verdict;

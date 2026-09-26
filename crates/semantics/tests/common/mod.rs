@@ -70,6 +70,7 @@ pub fn make_decl(body: &str) -> (DeclAst, Vec<u8>) {
         body: Some(body_span),
         requires: None,
         ensures: None,
+        intent: None,
         cap_set: None,
         effect_bits: 0,
         effect_net: 0,

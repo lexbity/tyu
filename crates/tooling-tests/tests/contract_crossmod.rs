@@ -186,14 +186,19 @@ fn caller_transcludes_the_callee_predicate() {
         }
         other => panic!("contract-pre must be PredicateHolds, got {other:?}"),
     }
-    // The record lists the transcluded predicate as a trusted assumption (T2).
+    // PLAN-VERIFY-3 §Q7 rule 1: transclusion records the dependency as an
+    // assumption EDGE to the callee's own `needs` obligation (the v2
+    // `assumptions` member — there is no separate trusted-facts member).
     assert!(
-        pre.assumptions.iter().any(|a| matches!(
-            a,
-            verifier::model::Assumption::ContractPredicate { name, .. }
-                if name == "pct-in-range"
-        )),
-        "transclusion must list the predicate as a trusted assumption"
+        pre.assumptions
+            .iter()
+            .any(|e| matches!(
+                e,
+                verifier::model::AssumptionEdge::Obligation { id, module }
+                    if id == "Bank::withdraw::contract-pre::0" && module == "Bank"
+            )),
+        "transclusion must record the callee-dependency edge, got {:?}",
+        pre.assumptions
     );
 }
 

@@ -110,3 +110,75 @@ fn legacy_requires_contract_migration_hint_preserved() {
     };
     assert_eq!(code, 2195, "legacy requires [ … ] keeps its migration hint");
 }
+
+// ---------------------------------------------------------------------------
+// PLAN-VERIFY-3 §Q17 (P1.2): the authored `intent "<text>"` clause.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn intent_clause_captured_after_needs() {
+    let ast = parse_module(
+        "module Bank;\n: withdraw ( bool -- bool )\n  needs [ pct-in-range ] intent \"withdraw never exceeds balance\"\n  drop true ;\nend;\n",
+    );
+    let d = first_decl(&ast);
+    assert!(
+        d.intent.is_some(),
+        "intent clause after needs must be captured"
+    );
+    assert!(d.requires.is_some(), "needs clause must be captured");
+}
+
+/// After `ensures`, the intent clause is captured the same way (the clause
+/// parser accepts any order of the contract/performs group).
+#[test]
+fn intent_clause_captured_after_ensures() {
+    let ast = parse_module(
+        "module Bank;\n: bump ( bool -- bool )\n  ensures [ ret-nonzero ] intent \"returns a nonzero flag\"\n  drop true ;\nend;\n",
+    );
+    let d = first_decl(&ast);
+    assert!(d.ensures.is_some());
+    assert!(d.intent.is_some(), "intent after ensures must be captured");
+}
+
+/// The `intent` string's content is retrievable from the source via the span
+/// (quotes included in the span): `"withdraw never exceeds balance"`.
+#[test]
+fn intent_span_covers_quoted_literal() {
+    let src = "module Bank;\n: withdraw ( bool -- bool )\n  needs [ pct-in-range ] intent \"withdraw never exceeds balance\"\n  drop true ;\nend;\n";
+    let ast = parse_module(src);
+    let d = first_decl(&ast);
+    let span = d.intent.expect("intent clause must be captured");
+    assert!(src.as_bytes()[span.start] == b'"', "span starts at the opening quote");
+    assert!(src.as_bytes()[span.end - 1] == b'"', "span ends at the closing quote");
+    let text = &src[span.start + 1..span.end - 1];
+    assert_eq!(text, "withdraw never exceeds balance");
+}
+
+/// `intent` without a string literal is a parse error (E2197), never a
+/// silent skip into the body.
+#[test]
+fn intent_without_string_is_rejected() {
+    let err = Parser::new(
+        b"module Bank;\n: w ( bool -- bool )\n  ensures [ p ] intent 42\n  drop true ;\nend;\n",
+    )
+    .parse_module_ast();
+    let code = match err {
+        Err(e) => e.code(),
+        Ok(_) => panic!("intent must require a string literal"),
+    };
+    assert_eq!(code, 2197, "intent-without-string must surface E2197");
+}
+
+/// PLAN-VERIFY-3 §Q17 permits the intent clause at any position in the
+/// contract/performs group (BUG-011 order discipline) — including before the
+/// contract clause it belongs to; when no clause follows it simply binds
+/// nothing (the driver only consumes it at a contract obligation).
+#[test]
+fn intent_accepted_in_clause_group_any_order() {
+    let ast = parse_module(
+        "module Bank;\n: w ( bool -- bool )\n  intent \"x\"\n  ensures [ p ]\n  drop true ;\nend;\n",
+    );
+    let d = first_decl(&ast);
+    assert!(d.ensures.is_some());
+    assert!(d.intent.is_some(), "intent in the clause group must be captured");
+}

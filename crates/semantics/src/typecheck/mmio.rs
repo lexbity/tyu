@@ -1211,6 +1211,7 @@ mod tests {
             body: Some(body_span),
             requires: None,
             ensures: None,
+            intent: None,
             cap_set: None,
             effect_bits: 0,
             effect_net: 0,

@@ -25,15 +25,33 @@
 
 use alloc::boxed::Box;
 use alloc::string::{String, ToString};
+use alloc::vec;
 use alloc::vec::Vec;
 use ir::{EffectSet, High, StackBound};
 
-/// Schema identifier of `.obl.json` artifacts (`tyu.obl/v1`).
-pub const OBL_SCHEMA: &str = "tyu.obl/v1";
+/// Schema identifier of `.obl.json` artifacts (`tyu.obl/v2`).
+///
+/// v1 → v2 (PLAN-VERIFY-3 P1.2, §13): v2 adds the statement-schema version,
+/// the `(target, platform, model_semantics)` identity fields, per-word IR
+/// text + block count, per-obligation `intent` (§Q17), the `assumptions`
+/// member now carrying the §Q7 assumption edges (the v1 trusted-facts list
+/// is gone — its content is derivable from the formula), and `cycles`
+/// (§Q9). v1 artifacts fail E6400 (schema-version mismatch) — the compat
+/// break is owned, per §13.
+pub const OBL_SCHEMA: &str = "tyu.obl/v2";
+
+/// The model-semantics identity of a bundle with no model semantics
+/// (`§Q15`): loadable, runnable, testable — and uncertifiable.
+pub const MODEL_UNMODELED: &str = "unmodeled";
 
 /// Hard read-side cap for `.obl.json` artifacts (static-verification.md NFR-5;
 /// enforced at encode and at read).
 pub const OBL_ARTIFACT_MAX_BYTES: usize = 16 * 1024 * 1024;
+
+/// PLAN-VERIFY-3 §6.1 (P1.2): per-word IR cap (8 KiB) — enforced at encode
+/// (E6401-class fail-closed). The statement pipeline binds every statement of
+/// a word against this text; a word past the bound cannot be carried.
+pub const WORD_IR_MAX_BYTES: usize = 8 * 1024;
 
 /// Obligation classes (Q2). Closed, versioned enum: adding a member is a
 /// schema change (`tyu.obl/v2`) because the `kind` string serializes into the
@@ -185,26 +203,54 @@ pub enum Formula {
     },
 }
 
-/// Trusted facts a formula may rely on (Q2 `assumptions`; T2 in Q14). P2's
-/// subtype sites emit none (the range travels in the formula itself); P3's
-/// `mmio-bounds` sites carry the aperture-size fact the offset must be proven
-/// against; slice P6's contract sites list the transcluded predicate ref
-/// (and its hash) the discharge depends on.
+/// The developer-facing claim surface (PLAN-VERIFY-3 §Q17, P1.2): what the
+/// obligation is *about*, in the developer's words. Synthesized per kind when
+/// the source carries no `intent "…"` clause (`authored = false`), or parsed
+/// from the clause verbatim (`authored = true`). The intent is for humans —
+/// the kernel enforces the statement; the intent is only ever declared text
+/// (Q17 tradeoff), surface-visible in diagnostics and the certification
+/// package's claims section.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Assumption {
-    /// The module declares a subtype with this range.
-    SubtypeRange {
-        name: String,
-        lo: i64,
-        hi: i64,
-    },
-    /// A descriptor aperture with this id and byte size (the fact an
-    /// `OffsetLE` discharge counts as trusted — T2).
-    ApertureSize { aperture: u16, size: u32 },
-    /// A contract predicate the obligation transcludes (slice P6): the
-    /// predicate's meaning is compiler-extracted code, not a primitive fact,
-    /// so a discharge relying on it lists the ref for accounting.
-    ContractPredicate { module: String, name: String, ir_hash: String },
+pub struct Intent {
+    /// The claim text: the synthesized per-kind default or the developer's
+    /// authored `intent "…"` string.
+    pub label: String,
+    /// The claim's subject when identifiable (a contract predicate name, the
+    /// declarations a formula ranges over). Empty when not applicable.
+    pub subject: String,
+    /// `true` when `label` came from a developer-authored `intent "…"`
+    /// clause; `false` when synthesized by the toolchain.
+    pub authored: bool,
+}
+
+/// A cross-module assumption edge (§Q7 rule 1, P1.2): a dependency of this
+/// obligation on *another* obligation's discharge — the caller-discharge
+/// lowering's `contract-pre` → callee-`contract-pre` edge. The closure check
+/// (T-CL, P8) walks these; a cycle is malformed, an unresolved edge keeps the
+/// dependent obligation open. Serialized as the obligation's `assumptions`
+/// member (§6.1) — the v1 trusted-facts member went away in v2: everything
+/// it carried is derivable from the formula, so the schema keeps the one
+/// load-bearing dependency record.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AssumptionEdge {
+    /// The assumed obligation's canonical id, plus the module that owns it.
+    Obligation { id: String, module: String },
+    /// The conservative fallback: the emitted runtime check IS the discharge
+    /// (no named obligation to reference). Serialized as the bare string
+    /// `"runtime-check"` (§Q7).
+    RuntimeCheck,
+}
+
+/// One cycle (nontrivial strongly-connected component) of a word's block CFG
+/// (§Q9, P1.2): the structure the statement renderer inducts against when a
+/// developer proves a loop-bearing word. `blocks` are `b<id>` names over the
+/// word's block ids.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Cycle {
+    /// 1-based ordinal among the word's cycles (creation-order stable).
+    pub index: u32,
+    /// The SCC's block names (`b<id>`), ascending by id.
+    pub blocks: Vec<String>,
 }
 
 /// Source span as *debug info only* — never part of an obligation's identity.
@@ -233,8 +279,18 @@ pub struct Obligation {
     pub id_hash: String,
     pub kind: Kind,
     pub site: Site,
+    /// §Q17 (P1.2): the developer-facing claim — synthesized Default or
+    /// authored `intent "…"`. Serialized before `formula` per §6.1.
+    pub intent: Intent,
     pub formula: Formula,
-    pub assumptions: Vec<Assumption>,
+    /// §Q7 rule 1 (P1.2): the obligation's cross-module assumption edges
+    /// (caller-discharge dependencies). In v2 this is the `assumptions`
+    /// member — the v1 trusted-facts list is gone (every fact it carried is
+    /// derivable from the formula). Serialized after the formula.
+    pub assumptions: Vec<AssumptionEdge>,
+    /// §Q9 (P1.2): the word's cycle structure this obligation's site lives
+    /// under (empty for loop-free words/quotation words).
+    pub cycles: Vec<Cycle>,
     /// v1 transparency field (plan P2): distinguishes dischargeable-provenance
     /// formulas from `$top` placeholders. Appended so v1 writers remain
     /// readable by earlier consumers (readers skip unknown keys).
@@ -297,6 +353,14 @@ pub struct WordFact {
     /// True when the word cannot diverge (no self-recursive call in its
     /// closure).
     pub diverge_free: bool,
+    /// P1.2: the word's canonical op-text (§6.3, the same text `--emit=ir`
+    /// prints per word), newline-separated single string; ≤ 8 KiB
+    /// (E6401-class fail-closed at the codec). The engine/anchor text every
+    /// statement of the word relativizes against (`word_ir_hash` in
+    /// `tyu.stmt/1.0`).
+    pub ir: String,
+    /// P1.2: the word's IR block count (`blocks: <n>`; §6.1).
+    pub blocks: u32,
 }
 
 /// A module subtype declaration fact (`facts.subtypes`).
@@ -333,16 +397,66 @@ pub struct Facts {
 }
 
 /// The complete `.obl.json` document (§6.1). Top-level key order:
-/// `schema`, `semantics`, `module`, `abi_contract_version`, `facts`,
-/// `obligations` — fixed by the writer (Q11).
+/// `schema`, `semantics`, `stmt`, `module`, `target`, `platform`,
+/// `model_semantics`, `abi_contract_version`, `facts`, `obligations` — fixed
+/// by the writer (Q11).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OblSet {
     pub schema: String,
     pub semantics: String,
+    /// Statement-schema version (`tyu.stmt/1.0`, §6.2) — the band rule's
+    /// guardrail for statement stability (P1.2).
+    pub stmt: String,
     pub module: String,
+    /// The triple this artifact's obligations were extracted for (§Q3).
+    pub target: String,
+    /// The platform triple the build ran under (bundle identity). Until P12
+    /// populates `platform.toml` model identity, this equals `target`.
+    pub platform: String,
+    /// Model-semantics identity — `tyu.model/<…>/<ver>` or `"unmodeled"`
+    /// (§Q15). Populated from the platform pack from P12 on.
+    pub model_semantics: String,
     pub abi_contract_version: u32,
     pub facts: Facts,
     pub obligations: Vec<Obligation>,
+}
+
+/// Structural validation failures (P1.2 debt item — the *single* `validate()`
+/// called at construction): an artifact whose records do not match the
+/// canonical identity arithmetic is malformed, never silently tolerated.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum OblError {
+    /// `obligations[i].id` is not the canonical id recomputed from
+    /// `(module, site.word, kind, occurrence)`.
+    CanonicalIdMismatch { id: String, expected: String },
+    /// `obligations[i].id_hash` is not `fnv1a64(id)` (hex, 16 chars).
+    IdHashMismatch { id: String, expected: String },
+}
+
+impl OblSet {
+    /// Validate every obligation's identity arithmetic: `id` must equal the
+    /// canonical id and `id_hash` must equal `fnv1a64(id)`. The codec calls
+    /// this before encode (fail-closed) and consumers may use it before use.
+    pub fn validate(&self) -> Result<(), OblError> {
+        for o in &self.obligations {
+            let expected_id =
+                canonical_id(&self.module, o.site.word.as_bytes(), o.kind, o.site.occurrence);
+            if o.id != expected_id {
+                return Err(OblError::CanonicalIdMismatch {
+                    id: o.id.clone(),
+                    expected: expected_id,
+                });
+            }
+            let expected_hash = format_hex(fnv1a64(o.id.as_bytes()));
+            if o.id_hash != expected_hash {
+                return Err(OblError::IdHashMismatch {
+                    id: o.id.clone(),
+                    expected: expected_hash,
+                });
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Accumulation state threaded through lowering by `for_each_ir_word` /
@@ -361,6 +475,10 @@ pub struct ExtractionCtx {
     word: Vec<u8>,
     /// Per-kind occurrence ordinals for the current word.
     counters: [u32; Kind::COUNT],
+    /// P1.2: the obligation index at the start of the current word — the
+    /// range `word_oblig_start..obligations.len()` is the word's records,
+    /// which `attach_word_cycles` fills with the word's cycle structure.
+    word_oblig_start: usize,
     /// P4: resolved verdicts, one per obligation record, push order.
     resolved: Vec<ResolvedVerdict>,
     /// P4: per-word MMIO elision state (Q8) — `word_mmio_open` is latched the
@@ -376,12 +494,31 @@ pub struct ExtractionCtx {
 }
 
 impl ExtractionCtx {
+    /// Create a fresh extraction context for `module` with default identity:
+    /// `target`/`platform` empty (filled by [`ExtractionCtx::set_identity`]
+    /// once the driver knows the compile target) and
+    /// `model_semantics = "unmodeled"` (§Q15 until P12 wires the bundle).
     pub fn new(module: &[u8]) -> Self {
+        Self::new_with_identity(module, b"", b"", MODEL_UNMODELED.as_bytes())
+    }
+
+    /// Create a fresh context with the full statement relativity identity
+    /// (`target`, `platform`, `model_semantics`; §Q3/§6.1).
+    pub fn new_with_identity(
+        module: &[u8],
+        target: &[u8],
+        platform: &[u8],
+        model_semantics: &[u8],
+    ) -> Self {
         Self {
             set: OblSet {
                 schema: OBL_SCHEMA.to_string(),
                 semantics: crate::semantics::SEMANTICS_VERSION.to_string(),
+                stmt: crate::stmt::STMT_SCHEMA.to_string(),
                 module: utf8_lossy(module),
+                target: utf8_lossy(target),
+                platform: utf8_lossy(platform),
+                model_semantics: utf8_lossy(model_semantics),
                 abi_contract_version: ir::contract::ABI_CONTRACT_VERSION as u32,
                 facts: Facts {
                     words: Vec::new(),
@@ -392,10 +529,24 @@ impl ExtractionCtx {
             },
             word: Vec::new(),
             counters: [0; Kind::COUNT],
+            word_oblig_start: 0,
             resolved: Vec::new(),
             word_mmio_open: false,
             contract_emitted: 0,
         }
+    }
+
+    /// Set the statement relativity identity (§Q3) — called by the driver
+    /// once the compile target is resolved (P1.2); no-op on an empty
+    /// `target` (keeps the test-construction default).
+    pub fn set_identity(&mut self, target: &[u8], platform: &[u8], model_semantics: &[u8]) {
+        if !target.is_empty() {
+            self.set.target = utf8_lossy(target);
+        }
+        if !platform.is_empty() {
+            self.set.platform = utf8_lossy(platform);
+        }
+        self.set.model_semantics = utf8_lossy(model_semantics);
     }
 
     /// Start extracting for `word`: resets the per-word occurrence ordinals.
@@ -404,6 +555,7 @@ impl ExtractionCtx {
         self.word = word.to_vec();
         self.counters = [0; Kind::COUNT];
         self.word_mmio_open = false;
+        self.word_oblig_start = self.set.obligations.len();
     }
 
     /// The module's canonical name (the artifact's `module` field).
@@ -454,7 +606,23 @@ impl ExtractionCtx {
     }
 
     /// Record one declared word's computed facts, from its final IR word.
+    /// The word-IR text and block count default to empty/0 — the driver's
+    /// pipeline uses [`ExtractionCtx::push_word_fact_with_ir`].
     pub fn push_word_fact(&mut self, name: &[u8], bound: StackBound, performs: EffectSet) {
+        self.push_word_fact_with_ir(name, bound, performs, "", 0);
+    }
+
+    /// Record one declared word's computed facts including the word's
+    /// canonical op-text (§6.3) and block count (P1.2) — the substrate every
+    /// statement of the word binds against (`word_ir_hash`).
+    pub fn push_word_fact_with_ir(
+        &mut self,
+        name: &[u8],
+        bound: StackBound,
+        performs: EffectSet,
+        ir: &str,
+        blocks: u32,
+    ) {
         let top = bound.high.is_top();
         let high = match bound.high {
             High::Slots(n) => n,
@@ -473,6 +641,8 @@ impl ExtractionCtx {
             top,
             performs: effs,
             diverge_free: !performs.contains(EffectSet::DIVERGE),
+            ir: ir.to_string(),
+            blocks,
         });
     }
 
@@ -493,7 +663,24 @@ impl ExtractionCtx {
         line: u32,
         col: u32,
         provenance: Provenance,
-        assumptions: Vec<Assumption>,
+    ) -> (String, String) {
+        let intent = default_intent(kind, "");
+        self.record_with_intent(kind, formula, line, col, provenance, intent)
+    }
+
+    /// Record one obligation with an explicit intent (§Q17) — the authored or
+    /// subject-identified claim the artifact carries in `intent`. Assumption
+    /// edges are added after recording via
+    /// [`ExtractionCtx::push_assumption_edge`] (they live at the transclusion
+    /// site, not the extraction site).
+    pub fn record_with_intent(
+        &mut self,
+        kind: Kind,
+        formula: Formula,
+        line: u32,
+        col: u32,
+        provenance: Provenance,
+        intent: Intent,
     ) -> (String, String) {
         let occurrence = self.counters[kind.idx()];
         self.counters[kind.idx()] = occurrence.wrapping_add(1);
@@ -508,11 +695,33 @@ impl ExtractionCtx {
                 occurrence,
                 span: SpanInfo { line, col },
             },
+            intent,
             formula,
-            assumptions,
+            assumptions: Vec::new(),
+            cycles: Vec::new(),
             provenance,
         });
         (id, id_hash)
+    }
+
+    /// Attach a caller-discharge assumption edge (P1.2, §Q7 rule 1) to the
+    /// obligation recorded most recently.
+    pub fn push_assumption_edge(&mut self, edge: AssumptionEdge) {
+        if let Some(o) = self.set.obligations.last_mut() {
+            if !o.assumptions.iter().any(|e| e == &edge) {
+                o.assumptions.push(edge);
+            }
+        }
+    }
+
+    /// Fill the current word's obligations with its cycle structure (§Q9).
+    /// `cycles` comes from [`compute_cycles`] over the word's final IR.
+    /// Quotation words record no obligations, so a miss on the range is a
+    /// no-op.
+    pub fn attach_word_cycles(&mut self, cycles: Vec<Cycle>) {
+        for o in self.set.obligations.iter_mut().skip(self.word_oblig_start) {
+            o.cycles = cycles.clone();
+        }
     }
 
     /// Append one resolved verdict (P4). MUST be called exactly once per
@@ -592,6 +801,132 @@ pub fn canonical_id(module: &str, word: &[u8], kind: Kind, occurrence: u32) -> S
     out.push_str(kind.as_str());
     out.push_str("::");
     push_u32_decimal(&mut out, occurrence);
+    out
+}
+
+/// The synthesized-per-kind default intent (§Q17, P1.2). One exhaustive
+/// label per kind — a new obligation kind without a label is a compile error
+/// (same exhaustive-match discipline as `tier.rs`). `subject` is the claim's
+/// subject when the caller knows it (a contract predicate name, a subtype
+/// name…); the driver enriches it post-extraction where it can.
+pub fn default_intent(kind: Kind, subject: &str) -> Intent {
+    let label = match kind {
+        Kind::SubtypeRange => "value must lie in subtype range",
+        Kind::ContractPre => "needs predicate must hold at the call site",
+        Kind::ContractPost => "ensures predicate must hold on exit",
+        Kind::StackBudget => "data-stack peak must fit the bounded-stack grant",
+        Kind::MmioBounds => "MMIO access must stay within the emulated aperture",
+    };
+    Intent {
+        label: label.to_string(),
+        subject: subject.to_string(),
+        authored: false,
+    }
+}
+
+/// Compute the cycles (§Q9, P1.2) of a word's block CFG: the nontrivial
+/// strongly-connected components (size ≥ 2, or a single block with a
+/// self-edge). The block graph is tiny (≤ 16 blocks × ≤ 96 ops), so SCCs are
+/// computed as mutual-reachability classes — Tarjan-equivalent, iterative,
+/// no recursion, deterministic (cycles ordered by minimum block id; block
+/// names `b<id>` ascending).
+pub fn compute_cycles(w: &ir::Word) -> Vec<Cycle> {
+    // Deduplicated, ascending block ids.
+    let mut ids: Vec<u16> = Vec::new();
+    for b in w.blocks.iter() {
+        if !ids.contains(&b.id.0) {
+            ids.push(b.id.0);
+        }
+    }
+    ids.sort_unstable();
+    let n = ids.len();
+    let index_of = |id: u16| -> Option<usize> {
+        for (i, &x) in ids.iter().enumerate() {
+            if x == id {
+                return Some(i);
+            }
+        }
+        None
+    };
+    // Directed edges from terminator ops.
+    let mut edges: Vec<(usize, usize)> = Vec::new();
+    for b in w.blocks.iter() {
+        let Some(i) = index_of(b.id.0) else { continue };
+        for op in b.ops.iter() {
+            match op.kind {
+                ir::OpKind::Br { target } => {
+                    if let Some(t) = index_of(target.0) {
+                        edges.push((i, t));
+                    }
+                }
+                ir::OpKind::BrIf {
+                    then_tgt,
+                    else_tgt,
+                } => {
+                    if let Some(t) = index_of(then_tgt.0) {
+                        edges.push((i, t));
+                    }
+                    if let Some(t) = index_of(else_tgt.0) {
+                        edges.push((i, t));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    // Transitive closure (Warshall) over adjacency.
+    let mut reach = vec![vec![false; n]; n];
+    for i in 0..n {
+        reach[i][i] = true;
+    }
+    for &(a, b) in &edges {
+        reach[a][b] = true;
+    }
+    for k in 0..n {
+        for i in 0..n {
+            if reach[i][k] {
+                for j in 0..n {
+                    reach[i][j] = reach[i][j] || reach[k][j];
+                }
+            }
+        }
+    }
+    // Mutual-reachability classes; a class is a cycle when it has ≥ 2
+    // members or any member has a self-edge (a bounded loop on one block).
+    let mut used = vec![false; n];
+    let mut classes: Vec<Vec<usize>> = Vec::new();
+    for i in 0..n {
+        if used[i] {
+            continue;
+        }
+        let mut member: Vec<usize> = Vec::new();
+        for j in 0..n {
+            if reach[i][j] && reach[j][i] {
+                member.push(j);
+                used[j] = true;
+            }
+        }
+        member.sort_unstable();
+        let self_loop = edges.iter().any(|&(a, b)| a == b && member.contains(&a));
+        if member.len() > 1 || self_loop {
+            classes.push(member);
+        }
+    }
+    classes.sort_by(|a, b| a[0].cmp(&b[0]));
+    let mut out = Vec::with_capacity(classes.len());
+    for (idx, member) in classes.iter().enumerate() {
+        let mut blocks: Vec<String> = Vec::with_capacity(member.len());
+        for &i in member {
+            let mut name = String::with_capacity(8);
+            name.push('b');
+            push_u32_decimal(&mut name, ids[i] as u32);
+            blocks.push(name);
+        }
+        out.push(Cycle {
+            index: (idx + 1) as u32,
+            blocks,
+        });
+    }
     out
 }
 

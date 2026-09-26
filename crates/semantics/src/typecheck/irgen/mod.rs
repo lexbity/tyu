@@ -21,7 +21,6 @@ use crate::typecheck::value::{PlaceId, Value, PARAM_BASE, PLACE_NONE};
 use crate::types::{TypeAtom, WordEntry, WordSig};
 use alloc::boxed::Box;
 use alloc::string::{String, ToString};
-use alloc::vec::Vec;
 use core::mem::MaybeUninit;
 use frontend::fixed::FixedVec;
 use frontend::lex::Lexer;
@@ -817,7 +816,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 0,
                 0,
                 Provenance::Direct,
-                Vec::new(),
             )
         };
         let in_tree = if self.checks == ChecksMode::Undischarged {
@@ -862,7 +860,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 0,
                 0,
                 Provenance::Direct,
-                Vec::new(),
             )
         };
         let in_tree = if self.checks == ChecksMode::Undischarged {
@@ -919,7 +916,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 line,
                 col,
                 Provenance::Opaque,
-                Vec::new(),
             )
         };
         let in_tree = if self.checks == ChecksMode::Undischarged {
@@ -965,7 +961,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 line,
                 col,
                 Provenance::Opaque,
-                Vec::new(),
             )
         };
         let in_tree = if self.checks == ChecksMode::Undischarged {
@@ -983,8 +978,10 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
 
     /// C7 site: record an `mmio-bounds` obligation per emulated-aperture
     /// access (slice P3, Q8). The runtime check (`emit_mmio_bounds_check`,
-    /// x86) proves `off + width ≤ size`; the aperture SIZE is listed as a
-    /// trusted descriptor assumption (T2). Only emulated apertures produce
+    /// x86) proves `off + width ≤ size`; the aperture SIZE rides in the
+    /// formula itself (`OffsetLE.size`), so a report's trusted-assumptions
+    /// accounting derives it from there (PLAN-VERIFY-3 §6.1 — no separate
+    /// trusted-facts member in v2). Only emulated apertures produce
     /// obligations — metal boards have zero `mmio-bounds` records (Q8).
     ///
     /// P4: the in-tree descriptor discharge resolves the site to `Discharged`
@@ -1042,12 +1039,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 line,
                 col,
                 Provenance::Direct,
-                // T2 / Q2: the aperture size is a *descriptor* fact the
-                // formula relies on — listed so reports count it as trusted.
-                alloc::vec![verifier::model::Assumption::ApertureSize {
-                    aperture,
-                    size: spec.size,
-                }],
             );
             (id, id_hash)
         };
@@ -1179,7 +1170,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 line,
                 col,
                 Provenance::Opaque,
-                Vec::new(),
             )
         };
         let in_tree = if self.checks != ChecksMode::Off && !self.keep_contract_checks {
@@ -1237,7 +1227,6 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 line,
                 col,
                 Provenance::Opaque,
-                Vec::new(),
             )
         };
         let r = self.resolve_site(OblKind::ContractPre, &id, &id_hash, None);

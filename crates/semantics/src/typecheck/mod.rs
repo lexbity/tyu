@@ -466,11 +466,22 @@ where
         // Record the declared word's computed facts (bound, performs, diverge)
         // into the artifact (P2) — from the same final IR word codegen sees.
         if let Some(ctx) = extraction.as_deref_mut() {
-            ctx.push_word_fact(
+            // P1.2: the word's canonical op-text (§6.3) + block count + cycle
+            // structure (PLAN-VERIFY-3 §Q9). Every statement of the word
+            // relativizes against this text (`word_ir_hash`); the cycles are
+            // what a loop-bearing word's statement renderer inducts against.
+            let mut ops = VecOut(Vec::new());
+            lir::write_word_ops(&mut ops, out_words.word);
+            let ir_text = core::str::from_utf8(&ops.0).unwrap_or("").to_string();
+            let blocks = out_words.word.blocks.len() as u32;
+            ctx.push_word_fact_with_ir(
                 slice_span(src, decl.name),
                 out_words.word.bound,
                 out_words.word.performs,
+                &ir_text,
+                blocks,
             );
+            ctx.attach_word_cycles(verifier::model::compute_cycles(out_words.word));
             // Slice P6 (Q7): named contract predicates transcribe their
             // canonical op-text IR into `facts.predicates` (the compiler-
             // computed record callers and external tools match against —

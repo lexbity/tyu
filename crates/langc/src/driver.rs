@@ -319,6 +319,16 @@ pub fn emit_obj_driver(
     // path (FR-22).
     let undischarged = checks == ChecksMode::Undischarged;
     let mut extract_ctx = (write_obl || undischarged).then(|| ExtractionCtx::new(module_name));
+    // PLAN-VERIFY-3 §Q3/§Q15 (P1.2): every obligation artifact is relativized
+    // to `(triple, model_semantics)`. The bundle's model identity flows from
+    // the platform pack from P12 on; until then it is `unmodeled`.
+    if let Some(ctx) = extract_ctx.as_mut() {
+        ctx.set_identity(
+            target.triple(),
+            target.triple(),
+            verifier::model::MODEL_UNMODELED.as_bytes(),
+        );
+    }
     let mut path_buf = [0u8; 512];
     let asm_path = match join_path(&mut path_buf, out_dir, module_name, b".asm") {
         Some(p) => p,
@@ -576,6 +586,12 @@ pub fn emit_obj_driver(
     // (no partial outputs on failure). The extraction ran in the same
     // lowering pass as codegen above.
     if let Some(ctx) = extract_ctx.as_mut() {
+        // PLAN-VERIFY-3 §Q17 (P1.2): the developer's authored `intent "…"`
+        // clause rides the contract obligations' `intent` (pass 1 must run
+        // BEFORE transclusion — a `contract-pre` record's callee word is the
+        // stub name only until the transclusion pass replaces it with the
+        // predicate name).
+        fill_contract_intent_clauses(ctx, module, src, search_dirs);
         // Slice P6 (Q7): fill the contract obligations' transcluded predicate
         // refs from the callee modules' `.obl.json` facts (E6413 on a stale
         // interface). Runs before any artifact is written — a failure leaves
@@ -584,6 +600,10 @@ pub fn emit_obj_driver(
             let _ = diag::error_simple(code, b"contract predicate interface stale (E6413)");
             return 2;
         }
+        // Pass 2: the transcluded predicate name becomes each contract
+        // obligation's intent subject (§6.1 `subject`); subtype-range cast
+        // sites name their subtype.
+        finalize_contract_intent_subjects(ctx);
         let mut obl_buf = [0u8; 512];
         let obl_path = match join_path(&mut obl_buf, out_dir, module_name, b".obl.json") {
             Some(p) => p,
@@ -747,6 +767,11 @@ pub fn emit_obl_driver(
     };
 
     let mut ctx = ExtractionCtx::new(module_name);
+    ctx.set_identity(
+        target.triple(),
+        target.triple(),
+        verifier::model::MODEL_UNMODELED.as_bytes(),
+    );
     match semantics::typecheck::for_each_ir_word(
         module,
         src,
@@ -773,11 +798,15 @@ pub fn emit_obl_driver(
         }
     }
 
+    // PLAN-VERIFY-3 §Q17 (P1.2): authored-intent fill (pass 1, pre-
+    // transclusion) + statement relativity identity already set above.
+    fill_contract_intent_clauses(&mut ctx, module, src, search_dirs);
     // Slice P6 (Q7): transclude contract-predicate refs before encoding.
     if let Err(code) = transclude_contract_predicates(&mut ctx, module, src, search_dirs) {
         let _ = diag::error_simple(code, b"contract predicate interface stale (E6413)");
         return 2;
     }
+    finalize_contract_intent_subjects(&mut ctx);
     let bytes = match verifier::codec::encode_obl(ctx.set()) {
         Ok(b) => b,
         Err(_) => {
@@ -933,6 +962,12 @@ fn transclude_contract_predicates(
             // error only for a *declared-then-missing* predicate).
             stub.name = pred_name;
             stub.module = callee_module.unwrap_or_default();
+            // PLAN-VERIFY-3 §Q7 rule 1 (P1.2): with the callee's artifact
+            // unavailable the conservative edge is `runtime-check` — the
+            // emitted check IS the discharge.
+            if kind == verifier::model::Kind::ContractPre {
+                o.assumptions.push(verifier::model::AssumptionEdge::RuntimeCheck);
+            }
             continue;
         };
         let fact = obl
@@ -951,20 +986,133 @@ fn transclude_contract_predicates(
         stub.module = callee_module.unwrap_or_default();
         stub.ir = fact.ir.clone();
         stub.ir_hash = fact.ir_hash.clone();
-        // The discharge relies on the transcluded predicate (T2) — list it
-        // in the record's trusted assumptions.
-        if !o.assumptions.iter().any(|a| {
-            matches!(a, verifier::model::Assumption::ContractPredicate { name, .. }
-                if *name == stub.name)
-        }) {
-            o.assumptions.push(verifier::model::Assumption::ContractPredicate {
+        // PLAN-VERIFY-3 §Q7 rule 1 (P1.2): a caller-side `contract-pre`
+        // obligation's discharge rests on the callee module's own `needs`
+        // obligation (`<module>::<callee_word>::contract-pre::0`) being
+        // discharged. The callee module is known and its artifact carried the
+        // predicate — the edge names the callee's obligation by its canonical
+        // id. (A spurious edge is the safe-failing direction: it keeps the
+        // dependent open, never invents a discharge.)
+        if kind == verifier::model::Kind::ContractPre && !stub.module.is_empty() {
+            o.assumptions.push(verifier::model::AssumptionEdge::Obligation {
+                id: verifier::model::canonical_id(
+                    &stub.module,
+                    callee.as_slice(),
+                    verifier::model::Kind::ContractPre,
+                    0,
+                ),
                 module: stub.module.clone(),
-                name: stub.name.clone(),
-                ir_hash: stub.ir_hash.clone(),
             });
         }
     }
     Ok(())
+}
+
+/// The authored intent text of a clause span (PLAN-VERIFY-3 §Q17): the string
+/// literal `"…"` with the quotes stripped. Backslash sequences are taken
+/// verbatim — the artifact carries exactly the declared text (enforceable
+/// prose is not the deal; the kernel enforces the statement).
+fn authored_intent<'s>(src: &'s [u8], span: Option<frontend::span::Span>) -> Option<&'s [u8]> {
+    let span = span?;
+    if span.end <= span.start + 2 {
+        return None;
+    }
+    let s = &src[span.start + 1..span.end - 1];
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+/// PLAN-VERIFY-3 §Q17 (P1.2), pass 1: attach the developer's authored
+/// `intent "…"` clause to the module's contract obligations, resolving the
+/// clausal word the way transclusion does — the record's own site word for
+/// `contract-post`, the called word (still the stub name pre-transclusion)
+/// for `contract-pre`. Runs BEFORE [`transclude_contract_predicates`].
+fn fill_contract_intent_clauses(
+    ctx: &mut ExtractionCtx,
+    module: &ModuleAst,
+    src: &[u8],
+    search_dirs: &[&[u8]],
+) {
+    let imports = ImportTable::build(module, src);
+    let out = ctx.set_mut();
+    for o in out.obligations.iter_mut() {
+        let is_pre = o.kind == verifier::model::Kind::ContractPre;
+        let is_post = o.kind == verifier::model::Kind::ContractPost;
+        if !is_pre && !is_post {
+            continue;
+        }
+        // The word whose decl carries the contract clause:
+        //   contract-post → the record's own site word (`ensures`);
+        //   contract-pre  → the called word (`needs`), still in the stub
+        //                   name pre-transclusion.
+        let callee: alloc::vec::Vec<u8> = if is_pre {
+            match &o.formula {
+                verifier::model::Formula::PredicateHolds { pred, .. } => {
+                    pred.name.clone().into_bytes()
+                }
+                _ => continue,
+            }
+        } else {
+            o.site.word.clone().into_bytes()
+        };
+        let Some(text) = resolve_contract_intent(module, src, search_dirs, &imports, &callee)
+        else {
+            continue; // no authored clause — keep the synthesized default
+        };
+        o.intent.label = text;
+        o.intent.authored = true;
+    }
+}
+
+/// Resolve the authored intent clause of the word that carries a contract
+/// surface: a local decl, or an imported module's `.def` (names and clauses
+/// only — Q7: `.def` never carries bodies or bounds).
+fn resolve_contract_intent(
+    module: &ModuleAst,
+    src: &[u8],
+    search_dirs: &[&[u8]],
+    imports: &ImportTable,
+    callee: &[u8],
+) -> Option<alloc::string::String> {
+    if let Some(d) = find_decl(module, src, callee) {
+        return authored_intent(src, d.intent).map(|t| verifier::model::utf8_lossy(t));
+    }
+    let mname = imports.module_of(callee)?;
+    let def_src = try_load_module_file(search_dirs, mname, b".def")?;
+    let def_ast = Parser::new(def_src.as_slice()).parse_module_ast().ok()?;
+    let d = find_decl(&def_ast, def_src.as_slice(), callee)?;
+    authored_intent(def_src.as_slice(), d.intent).map(|t| verifier::model::utf8_lossy(t))
+}
+
+/// PLAN-VERIFY-3 §Q17 (P1.2), pass 2: after transclusion the predicate name
+/// is resolved — it becomes each contract obligation's intent subject (§6.1
+/// `intent.subject`), matching the spec's `{label, subject, authored}` shape.
+/// Subtype-range obligations also get their subject where the formula names
+/// it: a narrowing cast's `to` type is the subtype the site ranges over.
+fn finalize_contract_intent_subjects(ctx: &mut ExtractionCtx) {
+    let out = ctx.set_mut();
+    for o in out.obligations.iter_mut() {
+        match &o.formula {
+            verifier::model::Formula::PredicateHolds { pred, .. }
+                if matches!(
+                    o.kind,
+                    verifier::model::Kind::ContractPre | verifier::model::Kind::ContractPost
+                ) =>
+            {
+                o.intent.subject = pred.name.clone();
+            }
+            verifier::model::Formula::InRange {
+                value: verifier::model::Oel::Cast { to, .. },
+                ..
+            } if o.kind == verifier::model::Kind::SubtypeRange && o.intent.subject.is_empty() => {
+                o.intent.subject = to.clone();
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Resolve the predicate NAME a callee's contract clause declares, plus the

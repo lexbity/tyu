@@ -1124,7 +1124,6 @@ mod tests {
             0,
             0,
             Provenance::Direct,
-            Vec::new(),
         );
         let obligations = ctx.set().obligations.clone();
         // One matching record, one hash-mismatched, one totally unknown.

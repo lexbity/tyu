@@ -392,9 +392,8 @@ end;
 
 /// Every emulated-aperture access emits an `mmio-bounds` obligation carrying
 /// the resolved constant offset, the access width (register width — matching
-/// the codegen bounds check), the aperture size, and the aperture-size as a
-/// trusted descriptor assumption (T2). Metal boards (bus apertures only) emit
-/// none (Q8).
+/// the codegen bounds check), the aperture size, and the aperture size living
+/// in the formula head. Metal boards (bus apertures only) emit none (Q8).
 #[test]
 fn mmio_bounds_obligations_per_access() {
     let hosted = workspace_root().join("runtime");
@@ -423,13 +422,10 @@ fn mmio_bounds_obligations_per_access() {
             }
         );
         assert_eq!(o.provenance, verifier::model::Provenance::Direct);
-        assert_eq!(
-            o.assumptions,
-            vec![verifier::model::Assumption::ApertureSize {
-                aperture: 0,
-                size: 0x10000,
-            }]
-        );
+        // v2 has no trusted-facts member separate from the formula — an
+        // mmio-bounds record's assumptions carry only cross-module dependency
+        // edges, and a self-contained aperture access has none.
+        assert!(o.assumptions.is_empty());
     }
     assert_eq!(
         mmio_records[0].id,
