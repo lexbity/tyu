@@ -3,10 +3,11 @@
 .tools
 devdocs/
 fuzz/corpus/
-
 target
-tmp_m7
-tmp_m8
-tmp_mmio
+
 *.bak
 .tyu-verify/
+
+# Lean port build artifacts (verification/ports/*/lakefile target outputs)
+verification/ports/*/.lake/
+verification/ports/*/lake-manifest.json

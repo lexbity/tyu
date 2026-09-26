@@ -24,6 +24,10 @@
 //!   target identity ([`target`]), the memory-model boundary ([`mem`]), the
 //!   promoted program generator ([`gen`]), and the width-relative
 //!   `(TargetSpec, MemModel)` threading through [`interp`].
+//! - PLAN-VERIFY-3 P3: the port exporter ([`export`]) — renders the Lean 4
+//!   port's generated data layer (op enum, semantics table, target records,
+//!   memory-model interfaces) with an exhaustive row registry, byte-drift-
+//!   locked against the committed `verification/ports/lean/` files.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -31,6 +35,7 @@
 extern crate alloc;
 
 pub mod codec;
+pub mod export;
 pub mod gen;
 pub mod interp;
 pub mod interval;

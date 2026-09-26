@@ -1018,6 +1018,60 @@ fi
 [ "$g29_fail" -eq 0 ] && msg $GREEN "  G29: clippy -D warnings clean (--lib --bins --tests)"
 failures=$((failures + g29_fail))
 
+# --- G30: PLAN-VERIFY-3 P3.1/P3.2 — Lean port surface ---
+# The first port's generated data layer + conformance runner are *material*
+# contracts of the developer-proof pipeline: the committed generated files
+# must carry the drift-lock and the completeness marker, the exporter test
+# must exist (`TYU_EXPORT_PORTS=1 cargo test -p verifier --test export_drift`
+# regenerates; committed files byte-compare otherwise), and the port gate
+# (`ci/port.sh`) must be present and executable. The *port build itself* is
+# the blocking `ci/port.sh` job (separate CI tier — needs Lean); this gate
+# pins the surface in the regular Rust CI.
+g30_fail=0
+if [ ! -f crates/verifier/tests/export_drift.rs ]; then
+    msg $RED "  G30 FAIL: port drift-lock test missing (crates/verifier/tests/export_drift.rs)"
+    g30_fail=1
+fi
+if [ ! -x ci/port.sh ]; then
+    msg $RED "  G30 FAIL: ci/port.sh missing or not executable (chmod +x ci/port.sh)"
+    g30_fail=1
+fi
+PORT_DIR=verification/ports/lean
+for f in lean-toolchain lakefile.toml Tyu.lean \
+         Tyu/IR/Op.lean Tyu/IR/Semantics.lean Tyu/IR/Target.lean Tyu/Mem.lean Main.lean; do
+    if [ ! -f "$PORT_DIR/$f" ]; then
+        msg $RED "  G30 FAIL: $PORT_DIR/$f missing (port package surface)"
+        g30_fail=1
+    fi
+done
+if ! grep -q "src/export/lean.rs" "$PORT_DIR/Tyu/IR/Op.lean" || ! grep -q "DO NOT EDIT" "$PORT_DIR/Tyu/IR/Op.lean"; then
+    msg $RED "  G30 FAIL: generated files lack the don't-edit drift-lock marker"
+    g30_fail=1
+fi
+[ "$g30_fail" -eq 0 ] && msg $GREEN "  G30: Lean port surface (generated data layer + drift lock + port.sh)"
+failures=$((failures + g30_fail))
+
+# --- G31: PLAN-VERIFY-3 §P0/§Q11 — port hygiene ---
+# The port's *authored* conjectures are forbidden: no `sorry`, `Admitted`,
+# or `native_decide` (permitted axioms only propext/Quot.sound/
+# Classical.choice; sorryAx/Lean.ofReduceBool never — §Q11 item 2). The
+# generated completeness theorem must be present (`SEMANTICS_total`), and a
+# hand-edited generated file dropping a row must fail the port build — the
+# marker grep verifies the theorem text is present (the lake build gate is
+# the blocking job).
+g31_fail=0
+if grep -rnE 'sorry|Admitted|native_decide' "$PORT_DIR" --include='*.lean' >/dev/null 2>&1; then
+    msg $RED "  G31 FAIL: forbidden proof placeholder (sorry/Admitted/native_decide) in $PORT_DIR"
+    grep -rnE 'sorry|Admitted|native_decide' "$PORT_DIR" --include='*.lean' | head -5
+    g31_fail=1
+fi
+if ! grep -q "theorem SEMANTICS_total" "$PORT_DIR/Tyu/IR/Semantics.lean"; then
+    msg $RED "  G31 FAIL: SEMANTICS_total completeness theorem missing from $PORT_DIR/Tyu/IR/Semantics.lean"
+    g31_fail=1
+fi
+[ "$g31_fail" -eq 0 ] && msg $GREEN "  G31: port hygiene (no sorry/Admitted/native_decide; SEMANTICS_total present)"
+failures=$((failures + g31_fail))
+
 echo ""
 msg $GREEN "============================================"
 msg $GREEN "Per-package test counts:"
