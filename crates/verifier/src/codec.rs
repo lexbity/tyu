@@ -518,8 +518,21 @@ impl<'a> Reader<'a> {
                 _ => self.skip_value()?,
             }
         }
-        let (Some(schema), Some(semantics), Some(module), Some(abi_contract_version), Some(facts), Some(obligations)) =
-            (schema, semantics, module, abi_contract_version, facts, obligations)
+        let (
+            Some(schema),
+            Some(semantics),
+            Some(module),
+            Some(abi_contract_version),
+            Some(facts),
+            Some(obligations),
+        ) = (
+            schema,
+            semantics,
+            module,
+            abi_contract_version,
+            facts,
+            obligations,
+        )
         else {
             return self.err();
         };
@@ -837,8 +850,15 @@ impl<'a> Reader<'a> {
                 _ => self.skip_value()?,
             }
         }
-        let (Some(id), Some(id_hash), Some(kind), Some(site), Some(formula), Some(assumptions), Some(provenance)) =
-            (id, id_hash, kind, site, formula, assumptions, provenance)
+        let (
+            Some(id),
+            Some(id_hash),
+            Some(kind),
+            Some(site),
+            Some(formula),
+            Some(assumptions),
+            Some(provenance),
+        ) = (id, id_hash, kind, site, formula, assumptions, provenance)
         else {
             return self.err();
         };
@@ -925,7 +945,11 @@ impl<'a> Reader<'a> {
         let (Some(word), Some(occurrence), Some(span)) = (word, occurrence, span) else {
             return self.err();
         };
-        Ok(Site { word, occurrence, span })
+        Ok(Site {
+            word,
+            occurrence,
+            span,
+        })
     }
 
     fn parse_span(&mut self) -> Result<SpanInfo, CodecError> {
@@ -1179,9 +1203,7 @@ impl<'a> Reader<'a> {
                 Some(b'"') => {
                     let s = self.parse_string()?;
                     match s.as_str() {
-                        "runtime-check" => {
-                            out.push(crate::model::AssumptionEdge::RuntimeCheck)
-                        }
+                        "runtime-check" => out.push(crate::model::AssumptionEdge::RuntimeCheck),
                         _ => return self.err(),
                     }
                 }
@@ -1307,42 +1329,38 @@ impl<'a> Reader<'a> {
         self.skip_ws();
         let c = self.bump()?;
         match c {
-            b'{' => {
-                loop {
-                    self.skip_ws();
-                    if self.peek() == Some(b'}') {
-                        self.i += 1;
-                        break;
-                    }
-                    if self.peek() == Some(b',') {
-                        self.i += 1;
-                        continue;
-                    }
-                    if self.peek().is_none() {
-                        return self.err();
-                    }
-                    self.parse_string()?;
-                    self.expect(b':')?;
-                    self.skip_value()?;
+            b'{' => loop {
+                self.skip_ws();
+                if self.peek() == Some(b'}') {
+                    self.i += 1;
+                    break;
                 }
-            }
-            b'[' => {
-                loop {
-                    self.skip_ws();
-                    if self.peek() == Some(b']') {
-                        self.i += 1;
-                        break;
-                    }
-                    if self.peek() == Some(b',') {
-                        self.i += 1;
-                        continue;
-                    }
-                    if self.peek().is_none() {
-                        return self.err();
-                    }
-                    self.skip_value()?;
+                if self.peek() == Some(b',') {
+                    self.i += 1;
+                    continue;
                 }
-            }
+                if self.peek().is_none() {
+                    return self.err();
+                }
+                self.parse_string()?;
+                self.expect(b':')?;
+                self.skip_value()?;
+            },
+            b'[' => loop {
+                self.skip_ws();
+                if self.peek() == Some(b']') {
+                    self.i += 1;
+                    break;
+                }
+                if self.peek() == Some(b',') {
+                    self.i += 1;
+                    continue;
+                }
+                if self.peek().is_none() {
+                    return self.err();
+                }
+                self.skip_value()?;
+            },
             b'"' => {
                 self.i -= 1;
                 self.parse_string()?;
@@ -1485,7 +1503,10 @@ impl<'a> Reader<'a> {
                 break;
             }
             let d = (d - b'0') as u64;
-            v = v.checked_mul(10).and_then(|x| x.checked_add(d)).ok_or(CodecError::Malformed)?;
+            v = v
+                .checked_mul(10)
+                .and_then(|x| x.checked_add(d))
+                .ok_or(CodecError::Malformed)?;
             digits += 1;
             self.i += 1;
         }
@@ -1854,7 +1875,6 @@ mod tests {
         // aperture SIZE lives in the formula — there is no separate
         // trusted-facts member in v2 (PLAN-VERIFY-3 §6.1).
         ctx.begin_word(b"read");
-        let mut ctx = ctx;
         ctx.record(
             Kind::MmioBounds,
             Formula::OffsetLE {
@@ -1883,7 +1903,8 @@ mod tests {
         assert!(text.starts_with(
             "{\"schema\":\"tyu.obl/v2\",\"semantics\":\"tyu.ir-sem/1.0\",\"stmt\":\"tyu.stmt/1.0\",\"module\":\"Bank\",\"target\":\"\",\"platform\":\"\",\"model_semantics\":\"unmodeled\",\"abi_contract_version\":2,\"facts\""
         ));
-        assert!(text.contains("\"obligations\":[{\"id\":\"Bank::clamp::subtype-range::0\",\"id_hash\":\""));
+        assert!(text
+            .contains("\"obligations\":[{\"id\":\"Bank::clamp::subtype-range::0\",\"id_hash\":\""));
         assert!(text.contains("\"intent\":{\"label\":\"value must lie in subtype range\",\"subject\":\"\",\"authored\":false}"));
         assert!(text.contains("\"assumptions\":[]"));
         assert!(text.contains("\"cycles\":[]"));
@@ -1910,14 +1931,17 @@ mod tests {
         let decoded = read_obl(&first).expect("decode");
         assert_eq!(decoded, set, "decode must reproduce the model");
         let second = encode_obl(&decoded).expect("re-encode");
-        assert_eq!(first, second, "encode -> decode -> encode must be byte-exact");
+        assert_eq!(
+            first, second,
+            "encode -> decode -> encode must be byte-exact"
+        );
     }
 
     #[test]
     fn read_rejects_wrong_schema() {
         let set = sample_set();
-        let mut doc: String = String::from_utf8_lossy(&encode_obl(&set).expect("encode"))
-            .into_owned();
+        let mut doc: String =
+            String::from_utf8_lossy(&encode_obl(&set).expect("encode")).into_owned();
         doc = doc.replacen("tyu.obl/v2", "tyu.obl/v999", 1);
         assert_eq!(
             read_obl(doc.as_bytes()),
@@ -1944,7 +1968,13 @@ mod tests {
 
     #[test]
     fn kind_strings_parse_roundtrip() {
-        for k in [Kind::SubtypeRange, Kind::ContractPre, Kind::ContractPost, Kind::StackBudget, Kind::MmioBounds] {
+        for k in [
+            Kind::SubtypeRange,
+            Kind::ContractPre,
+            Kind::ContractPost,
+            Kind::StackBudget,
+            Kind::MmioBounds,
+        ] {
             assert_eq!(Kind::from_str(k.as_str()), Some(k));
         }
         assert_eq!(Kind::from_str("bogus"), None);
@@ -1982,8 +2012,8 @@ mod tests {
     #[test]
     fn reader_tolerates_additive_keys() {
         let set = sample_set();
-        let mut doc: String = String::from_utf8_lossy(&encode_obl(&set).expect("encode"))
-            .into_owned();
+        let mut doc: String =
+            String::from_utf8_lossy(&encode_obl(&set).expect("encode")).into_owned();
         // Insert a future-style key inside the top-level object.
         doc = doc.replace(",\"facts\"", ",\"future_extra\":{\"a\":1},\"facts\"");
         let parsed = read_obl(doc.as_bytes()).expect("additive keys are skipped");
@@ -2038,7 +2068,11 @@ mod tests {
                 pred: crate::model::PredicateRef {
                     module: "Math".to_string(),
                     name: "nonneg".to_string(),
-                    ir: vec!["block b0".to_string(), "dup i64".to_string(), "ret".to_string()],
+                    ir: vec![
+                        "block b0".to_string(),
+                        "dup i64".to_string(),
+                        "ret".to_string(),
+                    ],
                     ir_hash: "11aa22bb".to_string(),
                 },
                 args: vec![Oel::Var {
@@ -2064,7 +2098,7 @@ mod tests {
             blocks: vec!["b1".to_string(), "b2".to_string()],
         }]);
         let set = ctx.into_set();
-        assert_eq!(set.obligations[0].intent.authored, true);
+        assert!(set.obligations[0].intent.authored);
         assert_eq!(set.obligations[0].assumptions.len(), 2);
         assert_eq!(set.obligations[0].cycles.len(), 1);
 

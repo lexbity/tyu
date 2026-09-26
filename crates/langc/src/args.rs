@@ -36,6 +36,9 @@ pub struct Config<'a> {
     pub elide_ds_guards: bool,
 }
 
+// `large_enum_variant`: `Ok(Config)` dwarfs `Help`/`Error(i32)`, but boxing the
+// config would heap-allocate on the no_std startup path for no behavioral gain.
+#[allow(clippy::large_enum_variant)]
 pub enum ParseResult<'a> {
     Ok(Config<'a>),
     Help,
@@ -369,6 +372,10 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]], emit_diagnostics: bool) -> (Parse
     )
 }
 
+/// # Safety
+/// `argc`/`argv` must describe a valid C command-line argument array: `argc`
+/// pointers at `argv`, each pointing to a NUL-terminated string valid for the
+/// program's lifetime.
 pub unsafe fn parse_args<'a>(
     argc: isize,
     argv: *const *const hosted::c::c_char,
@@ -404,7 +411,7 @@ mod tests {
         }
     }
 
-    fn err_code<'a>(args: &[&'a [u8]]) -> i32 {
+    fn err_code(args: &[&[u8]]) -> i32 {
         match parse_args_from_iter(args, false).0 {
             ParseResult::Ok(_) => panic!("expected error"),
             ParseResult::Help => panic!("expected error, got Help"),
@@ -468,7 +475,7 @@ mod tests {
     fn emit_obligations() {
         let cfg = ok(&[b"langc", b"--emit=obligations", b"x.mod"]);
         assert_eq!(cfg.emit, EmitMode::Obligations);
-        assert_eq!(cfg.write_obl, false);
+        assert!(!cfg.write_obl);
     }
 
     #[test]
@@ -489,7 +496,7 @@ mod tests {
             b"x.mod",
         ]);
         assert_eq!(cfg.emit, EmitMode::Obj);
-        assert_eq!(cfg.write_obl, true);
+        assert!(cfg.write_obl);
     }
 
     #[test]
@@ -526,7 +533,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_I_arg() {
+    fn missing_i_arg() {
         assert_eq!(err_code(&[b"langc", b"-I", b"--emit=ast", b"x.mod"]), 2);
     }
 
@@ -544,8 +551,13 @@ mod tests {
     fn checks_undischarged_requires_verdicts() {
         // Gate (P4, E6402): undischarged without --verdicts is a hard error.
         assert_eq!(
-            err_code(&[b"langc", b"--checks=undischarged", b"--emit=obj",
-                       b"--target=x86_64-unknown-linux-gnu", b"x.mod"]),
+            err_code(&[
+                b"langc",
+                b"--checks=undischarged",
+                b"--emit=obj",
+                b"--target=x86_64-unknown-linux-gnu",
+                b"x.mod"
+            ]),
             2
         );
         let c = ok(&[

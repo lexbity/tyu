@@ -156,10 +156,8 @@ fn resolve_one(
             let path = PathBuf::from(p);
             let resolved_path = if path.is_file() {
                 path.clone()
-            } else if let Some(fp) = find_in_path(p) {
-                fp
             } else {
-                return None;
+                find_in_path(p)?
             };
             return Some(ResolvedTool {
                 path: resolved_path,
@@ -175,10 +173,8 @@ fn resolve_one(
         let path = PathBuf::from(&val);
         let resolved_path = if path.is_file() {
             path.clone()
-        } else if let Some(fp) = find_in_path(&val) {
-            fp
         } else {
-            return None;
+            find_in_path(&val)?
         };
         return Some(ResolvedTool {
             path: resolved_path,

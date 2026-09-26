@@ -11,12 +11,8 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-
 fn platform_arg() -> String {
-    format!(
-        "--platform={}",
-        workspace_root().join("runtime").display()
-    )
+    format!("--platform={}", workspace_root().join("runtime").display())
 }
 
 fn build_tools() {
@@ -51,10 +47,6 @@ fn fresh_dir(name: &str) -> PathBuf {
     dir
 }
 
-fn repo_sysroot() -> PathBuf {
-    workspace_root().join("sysroot")
-}
-
 #[test]
 fn iface_conformance_ok() {
     build_tools();
@@ -78,7 +70,9 @@ fn iface_conformance_ok() {
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ast"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=ast"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(out.status.success());
@@ -107,7 +101,9 @@ fn iface_signature_mismatch_fails() {
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ast"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=ast"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -133,7 +129,9 @@ fn import_missing_symbol_fails() {
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ast"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=ast"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -157,7 +155,9 @@ fn langc_emit_ir_typechecks_if_while() {
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=ir"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -189,7 +189,9 @@ fn langc_emit_ir_rejects_type_mismatch() {
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=ir"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -210,7 +212,9 @@ fn milestone4_contracts_and_subtypes_in_ir() {
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=ir"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -249,7 +253,9 @@ end;\n",
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir", "--allow-raw-casts"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=ir", "--allow-raw-casts"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -299,7 +305,9 @@ end;\n",
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=asm", "--allow-raw-casts"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=asm", "--allow-raw-casts"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -342,7 +350,9 @@ end;\n",
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=ir"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -376,7 +386,9 @@ end;\n",
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=ir"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -401,7 +413,9 @@ end;\n",
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=ir"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -434,7 +448,9 @@ end;\n",
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=ir"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -463,7 +479,9 @@ end;\n",
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=ir"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -493,7 +511,9 @@ end;\n",
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=asm"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=asm"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -537,7 +557,9 @@ end;\n",
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=asm"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=asm"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -571,7 +593,9 @@ fn milestone7_compile_assemble_run_exit_code() {
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=asm"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=asm"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -611,7 +635,13 @@ fn milestone7_emit_obj_link_run_exit_code() {
 
     let status = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=obj", "--target=x86_64-unknown-linux-gnu", "--out-dir=."]).arg(platform_arg()).arg("Main.mod")
+        .args([
+            "--emit=obj",
+            "--target=x86_64-unknown-linux-gnu",
+            "--out-dir=.",
+        ])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .status()
         .unwrap();
     assert!(status.success());
@@ -650,7 +680,14 @@ fn milestone7_emit_obj_link_trap_exit_code() {
 
     let status = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=obj", "--checks=all", "--target=x86_64-unknown-linux-gnu", "--out-dir=."]).arg(platform_arg()).arg("Main.mod")
+        .args([
+            "--emit=obj",
+            "--checks=all",
+            "--target=x86_64-unknown-linux-gnu",
+            "--out-dir=.",
+        ])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .status()
         .unwrap();
     assert!(status.success());

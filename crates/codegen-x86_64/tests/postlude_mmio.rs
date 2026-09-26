@@ -3,8 +3,8 @@
 //! platform-layer audit finding F1). A reservation smaller than the checked
 //! bound would admit MMIO past the array into adjacent `.bss`.
 
+use codegen_core::{AsmMode, CodegenError, MmioApertureKind, MmioApertureSpec};
 use codegen_x86_64::X86_64HostedBackend;
-use codegen_core::{AsmMode, CodegenBackend, CodegenError, MmioApertureKind, MmioApertureSpec};
 use ir::{OpKind, Word, TY_I64};
 
 mod util;

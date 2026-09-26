@@ -27,7 +27,7 @@ fn tool(name: &str) -> PathBuf {
 fn deploy_pipeline_snapshot() {
     // Build required tools.
     let status = Command::new(env!("CARGO"))
-        .current_dir(&workspace_root())
+        .current_dir(workspace_root())
         .args([
             "build",
             "-q",

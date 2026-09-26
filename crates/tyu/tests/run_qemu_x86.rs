@@ -3,7 +3,7 @@
 //! R-1: pass, fail-marker, no-completion (with completed assertion).
 //! R-2: deterministic hang detection (no TCO dependency).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
@@ -11,13 +11,13 @@ use codegen_core::Target;
 use tyu::runner::Runner;
 use tyu::test_helpers::*;
 
-fn build_x86_image(src: &str, dir: &PathBuf, label: &str) -> PathBuf {
+fn build_x86_image(src: &str, dir: &Path, label: &str) -> PathBuf {
     let main_mod = dir.join(format!("{}.mod", label));
     std::fs::write(&main_mod, src).unwrap();
     let out_dir = dir.join(label);
 
     let status = Command::new(env!("CARGO"))
-        .current_dir(&workspace_root())
+        .current_dir(workspace_root())
         .args(["build", "-q", "-p", "langc"])
         .status()
         .expect("cargo build");
@@ -46,21 +46,21 @@ fn build_x86_image(src: &str, dir: &PathBuf, label: &str) -> PathBuf {
     out_dir.join("Main.lmod")
 }
 
-fn run_platform_x86(src: &str, dir: &PathBuf, label: &str) -> std::process::Output {
+fn run_platform_x86(src: &str, dir: &Path, label: &str) -> std::process::Output {
     let main_mod = dir.join(format!("{}.mod", label));
     std::fs::write(&main_mod, src).unwrap();
     let out_dir = dir.join(format!("{}_out", label));
     let sysroot = workspace_root().join("sysroot");
 
     let status = Command::new(env!("CARGO"))
-        .current_dir(&workspace_root())
+        .current_dir(workspace_root())
         .args(["build", "-q", "-p", "langc", "-p", "tyu"])
         .status()
         .expect("cargo build");
     assert!(status.success(), "cargo build failed");
 
     Command::new(tyu_exe())
-        .current_dir(&workspace_root())
+        .current_dir(workspace_root())
         .args([
             "run",
             "--platform=x86_64-unknown-none",
@@ -72,21 +72,21 @@ fn run_platform_x86(src: &str, dir: &PathBuf, label: &str) -> std::process::Outp
         .expect("tyu run")
 }
 
-fn run_dynamic_x86(src: &str, dir: &PathBuf, label: &str) -> (std::process::Output, PathBuf) {
+fn run_dynamic_x86(src: &str, dir: &Path, label: &str) -> (std::process::Output, PathBuf) {
     let main_mod = dir.join(format!("{}.mod", label));
     std::fs::write(&main_mod, src).unwrap();
     let out_dir = dir.join(format!("{}_dynamic_out", label));
     let sysroot = workspace_root().join("sysroot");
 
     let status = Command::new(env!("CARGO"))
-        .current_dir(&workspace_root())
+        .current_dir(workspace_root())
         .args(["build", "-q", "-p", "langc", "-p", "tyu"])
         .status()
         .expect("cargo build");
     assert!(status.success(), "cargo build failed");
 
     let output = Command::new(tyu_exe())
-        .current_dir(&workspace_root())
+        .current_dir(workspace_root())
         .args([
             "run",
             "--mode=dynamic",

@@ -7,7 +7,7 @@ use std::process::Command;
 
 fn build_langc() {
     let s = Command::new(env!("CARGO"))
-        .current_dir(&common::workspace_root())
+        .current_dir(common::workspace_root())
         .args(["build", "-q", "-p", "langc"])
         .status()
         .expect("cargo build");
@@ -104,7 +104,7 @@ end;
     assert!(
         !v_records.is_empty(),
         "output must contain at least one V record:\nstdout bytes: {:02x?}",
-        &outcome.stdout,
+        outcome.stdout,
     );
 
     let d_records: Vec<_> = records
@@ -114,7 +114,7 @@ end;
     assert!(
         !d_records.is_empty(),
         "output must contain at least one D record:\nstdout bytes: {:02x?}",
-        &outcome.stdout,
+        outcome.stdout,
     );
 
     // Decode the first D record and verify its fields.
@@ -373,7 +373,7 @@ end;
         summary.failures, 0,
         "D record payload must not cause phantom 'F' markers.\n\
          stdout bytes: {:02x?}",
-        &outcome.stdout,
+        outcome.stdout,
     );
 }
 
@@ -634,16 +634,6 @@ end;
 // Compilation helpers
 // ---------------------------------------------------------------------------
 
-/// Compile a .mod file with langc (no special flags).
-fn langc_compile(
-    target: codegen_core::Target,
-    src: &Path,
-    out_dir: &Path,
-    is_lib: bool,
-) -> PathBuf {
-    common::langc_compile(target, src, out_dir, is_lib)
-}
-
 /// Compile a .mod file with langc -g --checks=all.
 fn langc_compile_g(
     target: codegen_core::Target,
@@ -688,8 +678,7 @@ fn langc_compile_g(
         .unwrap()
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("o") && !before.contains(p))
-        .next()
+        .find(|p| p.extension().and_then(|x| x.to_str()) == Some("o") && !before.contains(p))
         .expect("langc (g) produced no .o file")
 }
 

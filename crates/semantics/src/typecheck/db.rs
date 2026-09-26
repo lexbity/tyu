@@ -313,12 +313,7 @@ mod tests {
     use alloc::vec::Vec;
     use frontend::parse::{AttrAst, DeclAst};
 
-    fn isr_word(
-        src: &mut Vec<u8>,
-        decls: &mut FixedVec<DeclAst, 256>,
-        name: &str,
-        body: &str,
-    ) {
+    fn isr_word(src: &mut Vec<u8>, decls: &mut FixedVec<DeclAst, 256>, name: &str, body: &str) {
         let ns = src.len();
         src.extend_from_slice(name.as_bytes());
         let name_span = Span::new(ns, src.len());
@@ -333,22 +328,23 @@ mod tests {
                 vector: Span::new(bs, bs + 4),
             })
             .unwrap();
-        decls.push(DeclAst {
-            kind: DeclKind::Word,
-            name: name_span,
-            sig: None,
-            attrs,
-            body: Some(body_span),
-            requires: None,
-            ensures: None,
-            intent: None,
-            cap_set: None,
-            effect_bits: 0,
-            effect_net: 0,
-            effect_high: 0,
-            has_explicit_performs: false,
-        })
-        .unwrap();
+        decls
+            .push(DeclAst {
+                kind: DeclKind::Word,
+                name: name_span,
+                sig: None,
+                attrs,
+                body: Some(body_span),
+                requires: None,
+                ensures: None,
+                intent: None,
+                cap_set: None,
+                effect_bits: 0,
+                effect_net: 0,
+                effect_high: 0,
+                has_explicit_performs: false,
+            })
+            .unwrap();
     }
 
     #[test]

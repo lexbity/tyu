@@ -146,7 +146,11 @@ pub fn decode(bytes: &[u8]) -> Result<BoardTable, BoardTableError> {
     if bytes.len() < 16 {
         return Err(BoardTableError::Truncated);
     }
-    let platform_hash = u64::from_le_bytes(bytes[0..8].try_into().map_err(|_| BoardTableError::Truncated)?);
+    let platform_hash = u64::from_le_bytes(
+        bytes[0..8]
+            .try_into()
+            .map_err(|_| BoardTableError::Truncated)?,
+    );
     let count = bytes[8] as usize;
     if count > APERTURE_CAP {
         return Err(BoardTableError::TooManyApertures);
@@ -167,12 +171,20 @@ pub fn decode(bytes: &[u8]) -> Result<BoardTable, BoardTableError> {
     for (i, slot) in apertures.iter_mut().take(count).enumerate() {
         let off = 16 + i * BOARD_TABLE_ENTRY_SIZE;
         let name_hash = u64::from_le_bytes(
-            bytes[off..off + 8].try_into().map_err(|_| BoardTableError::BadEntry)?,
+            bytes[off..off + 8]
+                .try_into()
+                .map_err(|_| BoardTableError::BadEntry)?,
         );
-        let base =
-            u32::from_le_bytes(bytes[off + 8..off + 12].try_into().map_err(|_| BoardTableError::BadEntry)?);
-        let size =
-            u32::from_le_bytes(bytes[off + 12..off + 16].try_into().map_err(|_| BoardTableError::BadEntry)?);
+        let base = u32::from_le_bytes(
+            bytes[off + 8..off + 12]
+                .try_into()
+                .map_err(|_| BoardTableError::BadEntry)?,
+        );
+        let size = u32::from_le_bytes(
+            bytes[off + 12..off + 16]
+                .try_into()
+                .map_err(|_| BoardTableError::BadEntry)?,
+        );
         let capability = bytes[off + 16];
         *slot = BoardAperture {
             name_hash,
@@ -236,7 +248,10 @@ mod tests {
         assert_eq!(decode(&buf[..20]).unwrap_err(), BoardTableError::Truncated);
         let mut extended = [0u8; BOARD_TABLE_ENCODED_SIZE + 1];
         extended[..n].copy_from_slice(&buf[..n]);
-        assert_eq!(decode(&extended).unwrap_err(), BoardTableError::TrailingBytes);
+        assert_eq!(
+            decode(&extended).unwrap_err(),
+            BoardTableError::TrailingBytes
+        );
     }
 
     #[test]

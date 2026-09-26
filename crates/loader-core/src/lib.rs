@@ -7,6 +7,7 @@
 
 extern crate alloc;
 
+pub mod apertures;
 pub mod error;
 pub mod load;
 pub mod modpack;
@@ -16,7 +17,6 @@ pub mod reloc_arm;
 pub mod reloc_riscv;
 pub mod reloc_x86_64;
 pub mod symbols;
-pub mod apertures;
 
 #[cfg(feature = "device-loader")]
 pub mod boot;

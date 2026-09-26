@@ -3,7 +3,6 @@
 .tools
 devdocs/
 fuzz/corpus/
-test-goldens/
 
 target
 tmp_m7

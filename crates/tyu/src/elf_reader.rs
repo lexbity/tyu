@@ -7,7 +7,7 @@
 /// The function returns a borrowed slice so callers can avoid an unnecessary
 /// heap allocation.  If an owned copy is needed the caller can `.to_vec()` at
 /// the call site.
-
+///
 /// Read an ELF section by name from raw ELF bytes.
 /// Returns `None` if the data is not valid ELF or the section is not found.
 pub fn read_elf_section<'a>(data: &'a [u8], section_name: &[u8]) -> Option<&'a [u8]> {
@@ -112,12 +112,19 @@ pub fn undefined_word_hashes(data: &[u8]) -> Vec<u64> {
     };
     // Elf64_Sym: st_name u32 @0, st_shndx u16 @6, entry 24 bytes.
     // Elf32_Sym: st_name u32 @0, st_shndx u16 @14, entry 16 bytes.
-    let (entry_size, shndx_off) = if elf64 { (24usize, 6usize) } else { (16usize, 14usize) };
+    let (entry_size, shndx_off) = if elf64 {
+        (24usize, 6usize)
+    } else {
+        (16usize, 14usize)
+    };
     let mut off = 0;
     while off + entry_size <= symtab.len() {
         let st_name = u32::from_le_bytes(symtab[off..off + 4].try_into().unwrap());
-        let st_shndx =
-            u16::from_le_bytes(symtab[off + shndx_off..off + shndx_off + 2].try_into().unwrap());
+        let st_shndx = u16::from_le_bytes(
+            symtab[off + shndx_off..off + shndx_off + 2]
+                .try_into()
+                .unwrap(),
+        );
         off += entry_size;
         // SHN_UNDEF == 0; the all-null entry has st_name == 0.
         if st_shndx != 0 || st_name == 0 {
@@ -126,10 +133,7 @@ pub fn undefined_word_hashes(data: &[u8]) -> Vec<u64> {
         let Some(name) = cstr_at(strtab, st_name as usize) else {
             continue;
         };
-        if let Ok(hash) = u64::from_str_radix(
-            std::str::from_utf8(&name[2..]).unwrap_or(""),
-            16,
-        ) {
+        if let Ok(hash) = u64::from_str_radix(std::str::from_utf8(&name[2..]).unwrap_or(""), 16) {
             out.push(hash);
         }
     }
@@ -169,8 +173,11 @@ pub fn symbol_value(data: &[u8], name: &[u8]) -> Option<u64> {
     let mut off = 0;
     while off + entry_size <= symtab.len() {
         let st_name = u32::from_le_bytes(symtab[off..off + 4].try_into().ok()?);
-        let st_shndx =
-            u16::from_le_bytes(symtab[off + shndx_off..off + shndx_off + 2].try_into().ok()?);
+        let st_shndx = u16::from_le_bytes(
+            symtab[off + shndx_off..off + shndx_off + 2]
+                .try_into()
+                .ok()?,
+        );
         let defined = st_shndx != 0;
         let value = u64::from_le_bytes(
             symtab[off + value_off..off + value_off + value_len]

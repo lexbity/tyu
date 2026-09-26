@@ -281,7 +281,7 @@ pub fn escalate(
     let breakpoints: Vec<u64> = [trap_loc_addr, trap_addr, overflow_addr]
         .into_iter()
         .flatten()
-        .map(|a| norm(a))
+        .map(&norm)
         .collect();
     if breakpoints.is_empty() {
         return EscalationOutcome {
@@ -416,9 +416,9 @@ pub fn escalate(
         let modinfo_bytes = crate::elf_reader::read_elf_section(&elf_data, b".lang.modinfo");
         let debug_bytes = crate::elf_reader::read_elf_section(&elf_data, b".lang.debug");
 
-        let index = if let Some(ref dbg) = debug_bytes {
+        let index = if let Some(dbg) = debug_bytes {
             diag_core::decode::ModinfoIndex::from_debug_bytes(dbg)
-        } else if let Some(ref mi) = modinfo_bytes {
+        } else if let Some(mi) = modinfo_bytes {
             diag_core::decode::ModinfoIndex::from_modinfo_bytes(mi)
         } else {
             None
@@ -658,9 +658,9 @@ fn lookup_in_debugsec(elf: &Path, name: &str) -> Option<DebugWordInfo> {
         .unwrap_or_else(|| fnv1a_str(name));
 
     // Iterate over debug entries to find the matching hash.
-    let (count, _) = lmod::debugsec::decode_header(&debug_bytes)?;
+    let (count, _) = lmod::debugsec::decode_header(debug_bytes)?;
     for i in 0..count {
-        let entry = lmod::debugsec::read_entry(&debug_bytes, i)?;
+        let entry = lmod::debugsec::read_entry(debug_bytes, i)?;
         if entry.sym_hash == hash {
             return Some(DebugWordInfo {
                 name: core::str::from_utf8(entry.name).ok()?.to_string(),
@@ -675,12 +675,12 @@ fn lookup_in_debugsec(elf: &Path, name: &str) -> Option<DebugWordInfo> {
 fn unique_unbounded_debug_word(elf: &Path) -> Option<DebugWordInfo> {
     let elf_data = std::fs::read(elf).ok()?;
     let debug_bytes = crate::elf_reader::read_elf_section(&elf_data, b".lang.debug")?;
-    let (count, _) = lmod::debugsec::decode_header(&debug_bytes)?;
+    let (count, _) = lmod::debugsec::decode_header(debug_bytes)?;
 
     let mut candidate = None;
     let mut non_main_candidate = None;
     for i in 0..count {
-        let entry = lmod::debugsec::read_entry(&debug_bytes, i)?;
+        let entry = lmod::debugsec::read_entry(debug_bytes, i)?;
         if entry.high != 0xFFFF_FFFF {
             continue;
         }

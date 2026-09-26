@@ -12,8 +12,8 @@
 //! as a board match.
 
 use super::{
-    AccessKind, BarrierKind, Descriptor, DESCRIPTOR_SCHEMA, MMIO_SEM_VER, ReadKind, ApertureKind,
-    WriteKind,
+    AccessKind, ApertureKind, BarrierKind, Descriptor, ReadKind, WriteKind, DESCRIPTOR_SCHEMA,
+    MMIO_SEM_VER,
 };
 
 /// The u64-to-hex rendering used by every downstream consumer of
@@ -218,9 +218,7 @@ mod tests {
     use crate::platform::desc::parse::parse_descriptor;
 
     fn parse(text: &str) -> Descriptor {
-        parse_descriptor(text)
-            .unwrap()
-            .expect("descriptor present")
+        parse_descriptor(text).unwrap().expect("descriptor present")
     }
 
     const DESCRIPTOR: &str = r#"

@@ -11,7 +11,7 @@ use tyu::test_helpers::*;
 
 fn ensure_langc() {
     let status = Command::new(env!("CARGO"))
-        .current_dir(&workspace_root())
+        .current_dir(workspace_root())
         .args(["build", "-q", "-p", "langc"])
         .status()
         .expect("cargo build");
@@ -64,7 +64,7 @@ end;
 
     // Build with -g to get .lang.debug with declared high.
     let triple = "x86_64-unknown-none";
-    let target = codegen_core::Target::X86_64UnknownNone;
+    let _target = codegen_core::Target::X86_64UnknownNone;
     let status = Command::new(langc_exe())
         .args([
             "-g",
@@ -191,7 +191,7 @@ end;
 
     std::fs::write(dir.join("test.mod"), fixture_src).unwrap();
     let triple = "x86_64-unknown-none";
-    let target = codegen_core::Target::X86_64UnknownNone;
+    let _target = codegen_core::Target::X86_64UnknownNone;
 
     let status = Command::new(langc_exe())
         .args([
@@ -210,8 +210,7 @@ end;
         .unwrap()
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("o"))
-        .next()
+        .find(|p| p.extension().and_then(|x| x.to_str()) == Some("o"))
         .unwrap();
 
     // read_declared_high works on .o files too (they have .lang.modinfo).

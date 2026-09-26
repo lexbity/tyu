@@ -151,7 +151,12 @@ mod tests {
     /// Build a minimal ELF64 object with `.lang.modinfo` and `.symtab` /
     /// `.strtab` sections, following the `elf_reader` test construction.
     /// `undefined_syms` become SHN_UNDEF `w_<hex>` entries.
-    fn object_elf(module: &[u8], exports: &[u64], imports: &[u64], undefined_syms: &[u64]) -> Vec<u8> {
+    fn object_elf(
+        module: &[u8],
+        exports: &[u64],
+        imports: &[u64],
+        undefined_syms: &[u64],
+    ) -> Vec<u8> {
         // Real modinfo bytes via the lmod encoder.
         let export_names: Vec<String> = exports.iter().map(|&h| name_of(h)).collect();
         let import_names: Vec<String> = imports.iter().map(|&h| name_of(h)).collect();
@@ -258,7 +263,7 @@ mod tests {
         let hdr = |i: usize| shoff + i * shentsz;
         // .shstrtab header (last).
         let s = hdr(shnum);
-        elf[s + 0..s + 4].copy_from_slice(&shtab_name_off.to_le_bytes());
+        elf[s..s + 4].copy_from_slice(&shtab_name_off.to_le_bytes());
         elf[s + 0x18..s + 0x20].copy_from_slice(&(shstr_off as u64).to_le_bytes());
         elf[s + 0x20..s + 0x28].copy_from_slice(&(shstr.len() as u64).to_le_bytes());
 
@@ -282,8 +287,7 @@ mod tests {
         // directory or the obj_N.o names collide.
         static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let dir =
-            std::env::temp_dir().join(format!("tyu_provenance_{}_{seq}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("tyu_provenance_{}_{seq}", std::process::id()));
         let _ = fs::create_dir_all(&dir);
         let mut paths = Vec::new();
         for (i, (_module, data)) in objs.iter().enumerate() {
@@ -359,5 +363,4 @@ mod tests {
         let _ = bare;
         run(&[("bare", stripped)]).expect("objects without modinfo are unattributed");
     }
-
 }

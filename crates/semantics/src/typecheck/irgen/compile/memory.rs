@@ -18,7 +18,7 @@ fn check_atomic_width(
     span: Span,
 ) -> Result<(), TcError> {
     // atomic_max is expressed in bits; the register width in bytes.
-    let width_bits = mmio_type_width_bytes(reg_ty.as_bytes()).unwrap_or(1) as u32 * 8;
+    let width_bits = mmio_type_width_bytes(reg_ty.as_bytes()).unwrap_or(1) * 8;
     if width_bits > meta.atomic_max as u32 {
         return Err(TcError::MmioOverWideAccess { span });
     }
@@ -890,10 +890,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                             self.emit_op(cur, lir::OpKind::Dup { ty: tid }, name_abs)?;
                             self.emit_op(
                                 cur,
-                                lir::OpKind::LocalSet {
-                                    slot: tmp,
-                                    ty: tid,
-                                },
+                                lir::OpKind::LocalSet { slot: tmp, ty: tid },
                                 name_abs,
                             )?;
                             self.emit_subtype_range_trap(cur, tmp, tid, &st, name_abs)?;

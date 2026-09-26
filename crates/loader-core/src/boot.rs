@@ -1,10 +1,10 @@
 //! Device-loader boot glue for firmware-resident `.lmod` loading.
 
+use crate::apertures::ApertureRegistry;
 use crate::error::{LoadError, E_BAD_CONTAINER};
 use crate::load::{load_module, LoadedSet};
 use crate::platform::{BoardAperture, LoaderPlatform, Region, Rw, Rx, TrustLevel};
 use crate::symbols::SymMap;
-use crate::apertures::ApertureRegistry;
 use lmod::board_table::{decode as decode_board_table, BoardTable, BOARD_TABLE_ENCODED_SIZE};
 use lmod::validate::Container;
 #[cfg(feature = "signing")]

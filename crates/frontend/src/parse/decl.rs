@@ -192,7 +192,9 @@ impl<'a> Parser<'a> {
                 // A v2 `.def` meeting one must fail loudly (E6413 band), never
                 // silently absorb it into the body.
                 TokenKind::Ident if self.slice(self.look.span) == b"bound" => {
-                    return Err(ParseError::UnsupportedDefClause { span: self.look.span });
+                    return Err(ParseError::UnsupportedDefClause {
+                        span: self.look.span,
+                    });
                 }
                 _ => break,
             }

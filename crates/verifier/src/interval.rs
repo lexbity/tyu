@@ -15,8 +15,39 @@
 //! an unreachable value (empty set); it never discharges and never marks
 //! `provably_failing` (it is not "always failing" — it is "never reached").
 //!
-//! `Tri` is the abstract three-valued boolean (`DefTrue` / `DefFalse` / `Top`)
-//! used for obligation heads: a head discharging requires `DefTrue` (Q6/Q4).
+// Width-relativism (PLAN-VERIFY-3 §Q3, slice P2): the **data** value domain
+// is full i64 on *every* target — the runtime emulates 64-bit arithmetic on
+// 32-bit targets (codegen-arm emits `ConstI64` as a 32-bit register pair), so
+// the interval arithmetic below is target-independent. What IS width-relative
+// is the **address/usize domain** and the **MMIO register domain** (§Q13:
+// "nondeterministic value within the register's width"). `word_domain` /
+// `usize_max` are the two width functions the parameterized reference
+// semantics (PLAN-VERIFY-3 P2) consults at the `MemModel` boundary.
+
+/// The signed two's-complement domain of a `word_bits`-wide word:
+/// `[-2^(b-1), 2^(b-1)-1]`. `b == 0` or `b >= 64` is the full i64 domain
+/// (a 64-bit word IS the i64 domain).
+pub const fn word_domain(bits: u8) -> (i64, i64) {
+    let b = if bits == 0 { 64 } else { bits };
+    if b >= 64 {
+        return (i64::MIN, i64::MAX);
+    }
+    let half = 1i64 << (b - 1);
+    (-half, half - 1)
+}
+
+/// The unsigned maximum of a `word_bits`-wide `usize`: `2^b − 1`. `b >= 64`
+/// saturates at `i64::MAX` (the abstract value lattice cannot represent
+/// `2^64 − 1`; `⊤` covers it soundly).
+pub const fn usize_max(bits: u8) -> u64 {
+    if bits >= 64 {
+        i64::MAX as u64
+    } else if bits == 0 {
+        u64::MAX
+    } else {
+        (1u64 << bits) - 1
+    }
+}
 
 /// The abstract three-valued boolean for obligation heads (§7.2).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -130,9 +161,15 @@ impl Interval {
     }
 
     // --- arithmetic (Q4/§7.2: checked; overflow → ⊤) ---
+    //
+    // `should_implement_trait` is allowed deliberately: these are the
+    // *lattice* hull operations, not `std::ops::{Add,Sub,Mul}` impls (a Hull +
+    // Hull "addition" would be a sparse-sum, not the interval-law addition).
+    // The names `add`/`sub`/`mul` are the standard interval-domain notation.
 
     /// `[lo1, hi1] + [lo2, hi2] = [lo1+lo2, hi1+hi2]`; a bound overflow in
     /// i64 is `⊤` (sound versus wrapping: `⊤` never discharges).
+    #[allow(clippy::should_implement_trait)]
     pub fn add(self, other: Interval) -> Interval {
         match (self, other) {
             (Interval::Bottom, _) | (_, Interval::Bottom) => Interval::Bottom,
@@ -147,6 +184,7 @@ impl Interval {
     }
 
     /// `[lo1, hi1] - [lo2, hi2] = [lo1-hi2, hi1-lo2]`.
+    #[allow(clippy::should_implement_trait)]
     pub fn sub(self, other: Interval) -> Interval {
         match (self, other) {
             (Interval::Bottom, _) | (_, Interval::Bottom) => Interval::Bottom,
@@ -165,6 +203,7 @@ impl Interval {
     /// makes the result `⊤` — sound against wrapping (concrete mul wraps, so
     /// an overflowing corner could produce any wrapped value; `⊤` never
     /// discharges). All 9 sign combinations are unit-tested by hand.
+    #[allow(clippy::should_implement_trait)]
     pub fn mul(self, other: Interval) -> Interval {
         match (self, other) {
             (Interval::Bottom, _) | (_, Interval::Bottom) => Interval::Bottom,
@@ -177,12 +216,10 @@ impl Interval {
                     b.checked_mul(d),
                 ];
                 match corners {
-                    [Some(w), Some(x), Some(y), Some(z)] => {
-                        Interval::Range {
-                            lo: w.min(x).min(y).min(z),
-                            hi: w.max(x).max(y).max(z),
-                        }
-                    }
+                    [Some(w), Some(x), Some(y), Some(z)] => Interval::Range {
+                        lo: w.min(x).min(y).min(z),
+                        hi: w.max(x).max(y).max(z),
+                    },
                     _ => Interval::Top,
                 }
             }
@@ -343,8 +380,6 @@ pub fn tri_cmp(a: Interval, b: Interval, kind: ir::CmpKind) -> Tri {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::vec;
-    use alloc::vec::Vec;
 
     fn r(lo: i64, hi: i64) -> Interval {
         Interval::Range { lo, hi }

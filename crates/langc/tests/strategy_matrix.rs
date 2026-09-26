@@ -19,8 +19,14 @@ fn strategy_matrices_match_golden() {
     let mut rendered = String::new();
     for (name, cell) in [
         ("arm", codegen_arm::mmio_cell as fn(_, _, _) -> StrategyCell),
-        ("riscv", codegen_riscv::mmio_cell as fn(_, _, _) -> StrategyCell),
-        ("x86_64", codegen_x86_64::mmio_cell as fn(_, _, _) -> StrategyCell),
+        (
+            "riscv",
+            codegen_riscv::mmio_cell as fn(_, _, _) -> StrategyCell,
+        ),
+        (
+            "x86_64",
+            codegen_x86_64::mmio_cell as fn(_, _, _) -> StrategyCell,
+        ),
     ] {
         rendered.push_str(&render_strategy_matrix(name, cell));
     }
@@ -44,7 +50,12 @@ fn strategy_matrices_match_golden() {
 fn matrix_cells_are_exhaustive() {
     for strategy in [WriteKind::Plain, WriteKind::W1s, WriteKind::W1c] {
         for kind in [ApertureKind::Bus, ApertureKind::Emulated] {
-            for op in [MmioOp::Load, MmioOp::Store, MmioOp::LoadField, MmioOp::StoreField] {
+            for op in [
+                MmioOp::Load,
+                MmioOp::Store,
+                MmioOp::LoadField,
+                MmioOp::StoreField,
+            ] {
                 let _ = codegen_arm::mmio_cell(strategy, kind, op);
                 let _ = codegen_riscv::mmio_cell(strategy, kind, op);
                 let _ = codegen_x86_64::mmio_cell(strategy, kind, op);

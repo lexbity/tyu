@@ -73,7 +73,9 @@ impl RelocKind {
     /// (P6). Every reloc-capable ISA binds the base via `MmioApertureBase`.
     pub fn kind_for_isa(isa: ir::RelocIsa) -> Self {
         match isa {
-            ir::RelocIsa::ArmThumbLdrLiteral | ir::RelocIsa::RiscVHi20Lo12 => Self::MmioApertureBase,
+            ir::RelocIsa::ArmThumbLdrLiteral | ir::RelocIsa::RiscVHi20Lo12 => {
+                Self::MmioApertureBase
+            }
         }
     }
 

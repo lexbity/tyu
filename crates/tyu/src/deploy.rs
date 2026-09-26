@@ -126,7 +126,10 @@ pub fn run(args: &DeployArgs) -> Result<(), TyuError> {
         };
 
         if outcome.timed_out {
-            return Err(TyuError::Deploy(format!("HANG — timed out after {:?}", timeout)).into());
+            return Err(TyuError::Deploy(format!(
+                "HANG — timed out after {:?}",
+                timeout
+            )));
         }
 
         let summary = harness_core::parse_output(&outcome.stdout);
@@ -134,8 +137,7 @@ pub fn run(args: &DeployArgs) -> Result<(), TyuError> {
             return Err(TyuError::Deploy(format!(
                 "NO_COMPLETION — exit code {} but no `S\\n` marker",
                 outcome.exit_code,
-            ))
-            .into());
+            )));
         }
         if summary.failures > 0 {
             return Err(TyuError::Deploy(format!(
@@ -152,8 +154,7 @@ pub fn run(args: &DeployArgs) -> Result<(), TyuError> {
             return Err(TyuError::Deploy(format!(
                 "EXIT_MISMATCH — exit code {} != expected {}",
                 outcome.exit_code, expected,
-            ))
-            .into());
+            )));
         }
     }
 
@@ -264,7 +265,9 @@ fn load_device_keys(keys_dir: &Path) -> Result<Vec<(String, [u8; 32])>, TyuError
         keys.push((id.to_string(), *kek_bytes));
     }
     if keys.is_empty() {
-        return Err(TyuError::Provision("no device keys found in directory".into()).into());
+        return Err(TyuError::Provision(
+            "no device keys found in directory".into(),
+        ));
     }
     Ok(keys)
 }

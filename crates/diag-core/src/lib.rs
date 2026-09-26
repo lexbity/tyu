@@ -172,6 +172,11 @@ mod tests {
     extern crate alloc;
     use super::*;
     use crate::claims;
+    // Feature-unification note: workspace builds can activate this crate's
+    // `std` feature through dependents (harness-core), compiling the
+    // `#[cfg(feature = "std")]` tests below, whose `vec!` needs this import.
+    // Gated so the default (no_std) test build does not flag it unused.
+    #[cfg(feature = "std")]
     use alloc::vec;
 
     // -----------------------------------------------------------------------

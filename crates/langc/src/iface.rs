@@ -189,6 +189,44 @@ pub fn find_word_decl<'a>(m: &'a ModuleAst, src: &[u8], name: &[u8]) -> Option<&
     None
 }
 
+/// Every error code returned by the interface checker.
+/// This list is the single source of truth; tests consume it so
+/// adding a new code without adding it here is a compile-time reminder.
+pub const EMITTED_IFACE_CODES: &[u32] = &[
+    2020, 2021, 2022, 2201, 2202, 2203, 2204, 2205, 2207, 2210, 2211, 2212, 2213, 2214, 2215, 2216,
+    2217, 2218, 2219, 2220, 2223, 2300,
+];
+
+pub fn iface_error_message(code: u32) -> &'static [u8] {
+    match code {
+        // Module and subtype errors (from driver.rs)
+        2020 => b"too many subtypes (max 64)",
+        2021 => b"subtype name too long",
+        2022 => b"base type name too long",
+        // `check_program` import/interface errors.
+        2201 => b"import interface file (.def) not found",
+        2202 => b"failed to parse imported interface (.def)",
+        2203 => b"imported symbol not exported by interface",
+        2204 => b"failed to parse imported implementation (.mod)",
+        2205 => b"failed to parse signature in imported interface",
+        2207 => b"too many imported words (max 256 total)",
+        2210 => b"implementation missing exported symbol from interface",
+        2211 => b"implementation exports symbol not present in interface",
+        2212 => b"interface export refers to missing declaration",
+        2213 => b"implementation export refers to missing declaration",
+        2214 => b"interface/implementation declaration kind mismatch",
+        2215 => b"interface/implementation attributes mismatch",
+        2216 => b"interface exported word missing signature",
+        2217 => b"implementation exported word missing signature",
+        2218 => b"interface/implementation word signature mismatch",
+        2219 => b"interface/implementation word effect mismatch",
+        2220 => b"local word name too long",
+        2223 => b"too many words in module (max 256)",
+        2300 => b"failed to parse module interface (.def) for current module",
+        _ => b"interface/import error",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -338,43 +376,5 @@ mod tests {
             b"interface/import error",
             "unlisted code should fall through to default"
         );
-    }
-}
-
-/// Every error code returned by the interface checker.
-/// This list is the single source of truth; tests consume it so
-/// adding a new code without adding it here is a compile-time reminder.
-pub const EMITTED_IFACE_CODES: &[u32] = &[
-    2020, 2021, 2022, 2201, 2202, 2203, 2204, 2205, 2207, 2210, 2211, 2212, 2213, 2214, 2215, 2216,
-    2217, 2218, 2219, 2220, 2223, 2300,
-];
-
-pub fn iface_error_message(code: u32) -> &'static [u8] {
-    match code {
-        // Module and subtype errors (from driver.rs)
-        2020 => b"too many subtypes (max 64)",
-        2021 => b"subtype name too long",
-        2022 => b"base type name too long",
-        // `check_program` import/interface errors.
-        2201 => b"import interface file (.def) not found",
-        2202 => b"failed to parse imported interface (.def)",
-        2203 => b"imported symbol not exported by interface",
-        2204 => b"failed to parse imported implementation (.mod)",
-        2205 => b"failed to parse signature in imported interface",
-        2207 => b"too many imported words (max 256 total)",
-        2210 => b"implementation missing exported symbol from interface",
-        2211 => b"implementation exports symbol not present in interface",
-        2212 => b"interface export refers to missing declaration",
-        2213 => b"implementation export refers to missing declaration",
-        2214 => b"interface/implementation declaration kind mismatch",
-        2215 => b"interface/implementation attributes mismatch",
-        2216 => b"interface exported word missing signature",
-        2217 => b"implementation exported word missing signature",
-        2218 => b"interface/implementation word signature mismatch",
-        2219 => b"interface/implementation word effect mismatch",
-        2220 => b"local word name too long",
-        2223 => b"too many words in module (max 256)",
-        2300 => b"failed to parse module interface (.def) for current module",
-        _ => b"interface/import error",
     }
 }

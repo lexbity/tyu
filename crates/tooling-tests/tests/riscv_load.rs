@@ -9,10 +9,10 @@ use common::*;
 use hosted::loader::HostedLoaderPlatform;
 use lmod::hash::fnv1a_u64;
 use lmod::header::{compute_layout, encode_header};
-use lmod::modinfo::{self, ExportEntry, ImportEntry};
+use lmod::modinfo::{self, ImportEntry};
 use lmod::validate::Container;
-use loader_core::load::{load_module, LoadedSet};
 use loader_core::apertures::ApertureRegistry;
+use loader_core::load::{load_module, LoadedSet};
 use loader_core::symbols::SymMap;
 
 /// RISC-V RV32 code with `addi s2, s2, 4` — detectable by Arch scanner.
@@ -95,7 +95,13 @@ fn riscv_load_no_imports() {
     register_test_runtime_symtab(&mut global_map, ds_high);
     let mut loaded_set = LoadedSet::<64>::new();
 
-    let result = load_module(&container, &mut plat, &mut global_map, &mut loaded_set, &mut ApertureRegistry::new());
+    let result = load_module(
+        &container,
+        &mut plat,
+        &mut global_map,
+        &mut loaded_set,
+        &mut ApertureRegistry::new(),
+    );
     assert!(result.is_ok(), "RV32 no-import load failed: {:?}", result);
 }
 
@@ -111,13 +117,19 @@ fn riscv_load_with_import() {
     register_test_runtime_symtab(&mut global_map, ds_high);
     let mut loaded_set = LoadedSet::<64>::new();
 
-    let loaded = load_module(&container, &mut plat, &mut global_map, &mut loaded_set, &mut ApertureRegistry::new())
-        .expect("RV32 import load with R_RISCV_32 should succeed");
+    let loaded = load_module(
+        &container,
+        &mut plat,
+        &mut global_map,
+        &mut loaded_set,
+        &mut ApertureRegistry::new(),
+    )
+    .expect("RV32 import load with R_RISCV_32 should succeed");
 
     // Verify relocation: first 4 bytes = lower 32 bits of symbol address
-    let code_slice = unsafe { loaded.code.as_slice() };
+    let code_slice = loaded.code.as_slice();
     let patched = u32::from_le_bytes(code_slice[..4].try_into().unwrap()) as u64;
-    let stub = unsafe { std::mem::transmute::<extern "C" fn(), u64>(common::extern_c_fn_stub) };
+    let stub = common::extern_c_fn_stub as *const () as u64;
     assert_eq!(
         patched,
         stub & 0xFFFF_FFFF,
@@ -138,7 +150,13 @@ fn riscv_load_abi_hash_mismatch_rejected() {
     register_test_runtime_symtab(&mut global_map, ds_high);
     let mut loaded_set = LoadedSet::<64>::new();
 
-    let result = load_module(&container, &mut plat, &mut global_map, &mut loaded_set, &mut ApertureRegistry::new());
+    let result = load_module(
+        &container,
+        &mut plat,
+        &mut global_map,
+        &mut loaded_set,
+        &mut ApertureRegistry::new(),
+    );
     assert_eq!(result.unwrap_err(), 5200, "expected E_ABI_MISMATCH");
 }
 

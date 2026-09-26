@@ -9,7 +9,8 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use codegen_core::compiled_desc::{
-    CompiledDescriptor, COMPILED_DESC_MAX_BYTES, encode_compiled_desc,
+    encode_compiled_desc, CompiledDescriptor, COMPILED_DESC_APERTURE_CAP, COMPILED_DESC_DEVICE_CAP,
+    COMPILED_DESC_MAX_BYTES,
 };
 use codegen_core::{MmioApertureKind, MmioApertureSpec};
 
@@ -41,13 +42,13 @@ fn temp_platform(name: &str) -> PathBuf {
     dir
 }
 
-fn write_desc(dir: &PathBuf, cd: &CompiledDescriptor) {
+fn write_desc(dir: &std::path::Path, cd: &CompiledDescriptor) {
     let mut buf = [0u8; COMPILED_DESC_MAX_BYTES];
     let n = encode_compiled_desc(cd, &mut buf).unwrap();
     fs::write(dir.join("platform.desc"), &buf[..n]).unwrap();
 }
 
-fn run_langc(dir: &PathBuf) -> String {
+fn run_langc(dir: &std::path::Path) -> String {
     let out = std::env::temp_dir().join(format!(
         "tyu-langc-neg-out-{}-{}",
         std::process::id(),
@@ -75,9 +76,8 @@ fn run_langc(dir: &PathBuf) -> String {
 #[test]
 fn e3648_unbindable_bus_aperture() {
     let dir = temp_platform("unbindable");
-    let mut cd = CompiledDescriptor::default();
-    cd.aperture_count = 1;
-    cd.apertures[0] = MmioApertureSpec {
+    let mut apertures = [MmioApertureSpec::EMPTY; COMPILED_DESC_APERTURE_CAP];
+    apertures[0] = MmioApertureSpec {
         id: 0,
         name: atom(b"bus"),
         kind: MmioApertureKind::Bus,
@@ -85,17 +85,9 @@ fn e3648_unbindable_bus_aperture() {
         size: 0x10000,
         reloc_isa: Some(codegen_core::RelocIsa::ArmThumbLdrLiteral),
     };
-    cd.device_count = 1;
-    cd.devices[0] = codegen_core::compiled_desc::CompiledDevice {
-        map: atom(b"BusMap"),
-        instance: atom(b"bus"),
-        aperture: 0,
-        base_offset: 0,
-        registers: [codegen_core::compiled_desc::CompiledRegister::EMPTY;
-            codegen_core::compiled_desc::COMPILED_DESC_REGISTER_CAP],
-        register_count: 1,
-    };
-    cd.devices[0].registers[0] = codegen_core::compiled_desc::CompiledRegister {
+    let mut registers = [codegen_core::compiled_desc::CompiledRegister::EMPTY;
+        codegen_core::compiled_desc::COMPILED_DESC_REGISTER_CAP];
+    registers[0] = codegen_core::compiled_desc::CompiledRegister {
         offset: 0,
         name: atom(b"A"),
         width: 32,
@@ -108,6 +100,23 @@ fn e3648_unbindable_bus_aperture() {
         barrier: 0,
         interrupt: 0xFFFF,
         irq: 0xFFFF,
+    };
+    let mut devices =
+        [codegen_core::compiled_desc::CompiledDevice::EMPTY; COMPILED_DESC_DEVICE_CAP];
+    devices[0] = codegen_core::compiled_desc::CompiledDevice {
+        map: atom(b"BusMap"),
+        instance: atom(b"bus"),
+        aperture: 0,
+        base_offset: 0,
+        registers,
+        register_count: 1,
+    };
+    let cd = CompiledDescriptor {
+        apertures,
+        aperture_count: 1,
+        devices,
+        device_count: 1,
+        ..CompiledDescriptor::default()
     };
     write_desc(&dir, &cd);
     fs::write(
@@ -152,15 +161,19 @@ fn e3648_unbindable_bus_aperture() {
 #[test]
 fn size_zero_aperture_desc_is_e3647() {
     let dir = temp_platform("size-zero");
-    let mut cd = CompiledDescriptor::default();
-    cd.aperture_count = 1;
-    cd.apertures[0] = MmioApertureSpec {
+    let mut apertures = [MmioApertureSpec::EMPTY; COMPILED_DESC_APERTURE_CAP];
+    apertures[0] = MmioApertureSpec {
         id: 0,
         name: atom(b"mmio"),
         kind: MmioApertureKind::Emulated,
         base: None,
         size: 0,
         reloc_isa: None,
+    };
+    let cd = CompiledDescriptor {
+        apertures,
+        aperture_count: 1,
+        ..CompiledDescriptor::default()
     };
     write_desc(&dir, &cd);
 
@@ -175,9 +188,8 @@ fn size_zero_aperture_desc_is_e3647() {
 #[test]
 fn overlapping_apertures_desc_is_e3647() {
     let dir = temp_platform("overlap");
-    let mut cd = CompiledDescriptor::default();
-    cd.aperture_count = 2;
-    cd.apertures[0] = MmioApertureSpec {
+    let mut apertures = [MmioApertureSpec::EMPTY; COMPILED_DESC_APERTURE_CAP];
+    apertures[0] = MmioApertureSpec {
         id: 0,
         name: atom(b"a"),
         kind: MmioApertureKind::Bus,
@@ -185,13 +197,18 @@ fn overlapping_apertures_desc_is_e3647() {
         size: 0x1000,
         reloc_isa: Some(codegen_core::RelocIsa::ArmThumbLdrLiteral),
     };
-    cd.apertures[1] = MmioApertureSpec {
+    apertures[1] = MmioApertureSpec {
         id: 1,
         name: atom(b"b"),
         kind: MmioApertureKind::Bus,
         base: Some(0x40000800),
         size: 0x1000,
         reloc_isa: Some(codegen_core::RelocIsa::ArmThumbLdrLiteral),
+    };
+    let cd = CompiledDescriptor {
+        apertures,
+        aperture_count: 2,
+        ..CompiledDescriptor::default()
     };
     write_desc(&dir, &cd);
 

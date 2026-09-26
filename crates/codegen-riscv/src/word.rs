@@ -68,24 +68,26 @@ impl<'a> RiscVBackend<'a> {
         self.cur_word_id = fnv1a_u64(w.name.as_bytes());
         // P6: fuse this word's aperture-use entries into the module table.
         for wu in w.apertures.iter() {
-            codegen_core::merge_aperture_use(&mut self.mi_apertures, &mut self.mi_aperture_count, wu);
+            codegen_core::merge_aperture_use(
+                &mut self.mi_apertures,
+                &mut self.mi_aperture_count,
+                wu,
+            );
         }
         self.out.write(b"\n");
-        if self.mode == AsmMode::Object {
-            if is_exported(self.module, self.src, w.name.as_bytes()) {
-                let n = lir::Atom::new(w.name.as_bytes()).unwrap_or(lir::AT_EMPTY);
-                let idx = self.mi_export_count;
-                if idx < self.mi_exports.len() {
-                    self.mi_exports[idx] = crate::ModInfoExport {
-                        name: n,
-                        effects: w.performs.bits(),
-                        requires_caps: w.requires.bits(),
-                        stack_bound: w.bound.wire_u32(),
-                    };
-                    self.mi_export_count = idx + 1;
-                } else {
-                    return Err(CodegenError::ModInfoTooLarge);
-                }
+        if self.mode == AsmMode::Object && is_exported(self.module, self.src, w.name.as_bytes()) {
+            let n = lir::Atom::new(w.name.as_bytes()).unwrap_or(lir::AT_EMPTY);
+            let idx = self.mi_export_count;
+            if idx < self.mi_exports.len() {
+                self.mi_exports[idx] = crate::ModInfoExport {
+                    name: n,
+                    effects: w.performs.bits(),
+                    requires_caps: w.requires.bits(),
+                    stack_bound: w.bound.wire_u32(),
+                };
+                self.mi_export_count = idx + 1;
+            } else {
+                return Err(CodegenError::ModInfoTooLarge);
             }
         }
         self.out.write(b"\t.globl ");
@@ -415,7 +417,8 @@ impl<'a> RiscVBackend<'a> {
                 // P6: aperture_base + offset through a relocatable literal site.
                 self.emit_mmio_aperture_addr(aperture, offset)?;
                 self.out.write(b"\tsw a0, 0(s2)\n\taddi s2, s2, 4\n");
-                self.out.write(b"\tli a1, 0\n\tsw a1, 0(s2)\n\taddi s2, s2, 4\n");
+                self.out
+                    .write(b"\tli a1, 0\n\tsw a1, 0(s2)\n\taddi s2, s2, 4\n");
                 self.emit_ds_high_update();
                 Ok(true)
             }
@@ -432,7 +435,11 @@ impl<'a> RiscVBackend<'a> {
                     return Err(CodegenError::UnsupportedAddrOf);
                 }
                 self.out.write(b"\tla a0, ");
-                write_res_label(self.out, slice_span(self.src, self.module.name), place.as_bytes());
+                write_res_label(
+                    self.out,
+                    slice_span(self.src, self.module.name),
+                    place.as_bytes(),
+                );
                 self.out.write(b"\n");
                 self.out.write(b"\tsw a0, 0(s2)\n\taddi s2, s2, 4\n");
                 self.out.write(b"\tsw zero, 0(s2)\n\taddi s2, s2, 4\n");
@@ -634,13 +641,16 @@ impl<'a> RiscVBackend<'a> {
                 }
                 Ok(())
             }
-            lir::OpKind::MmioPlace { aperture, offset, .. } => {
+            lir::OpKind::MmioPlace {
+                aperture, offset, ..
+            } => {
                 // Symbolic place: aperture_base + offset (P4), bound through a
                 // relocatable literal site (P6). The aperture is guaranteed
                 // declared by construction (descriptor resolution).
                 self.emit_mmio_aperture_addr(aperture, offset)?;
                 self.out.write(b"\tsw a0, 0(s2)\n\taddi s2, s2, 4\n");
-                self.out.write(b"\tli a1, 0\n\tsw a1, 0(s2)\n\taddi s2, s2, 4\n");
+                self.out
+                    .write(b"\tli a1, 0\n\tsw a1, 0(s2)\n\taddi s2, s2, 4\n");
                 self.emit_ds_high_update();
                 Ok(())
             }
@@ -697,9 +707,7 @@ impl<'a> RiscVBackend<'a> {
                     })?;
                 // R1 defensive: w1s/w1c stores are RMW; on an effectful
                 // register the read is a phantom bus read (E3642).
-                if read_kind == lir::ReadKind::Effectful
-                    && write_kind != lir::WriteKind::Plain
-                {
+                if read_kind == lir::ReadKind::Effectful && write_kind != lir::WriteKind::Plain {
                     return Err(CodegenError::UnsupportedOp {
                         op_name: b"MmioVolStore",
                     });
@@ -963,9 +971,10 @@ impl<'a> RiscVBackend<'a> {
         let (rbits, _) = prim_bits_signed(_w, reg_ty).ok_or(CodegenError::UnsupportedOp {
             op_name: b"MmioVolLoadField",
         })?;
-        let (fbits, f_signed) = prim_bits_signed(_w, field_ty).ok_or(CodegenError::UnsupportedOp {
-            op_name: b"MmioVolLoadField",
-        })?;
+        let (fbits, f_signed) =
+            prim_bits_signed(_w, field_ty).ok_or(CodegenError::UnsupportedOp {
+                op_name: b"MmioVolLoadField",
+            })?;
         self.emit_mmio_barrier_before(barrier);
         self.out.write(b"\taddi s2, s2, -8\n\tlw a0, 0(s2)\n");
         match rbits {
@@ -1177,7 +1186,7 @@ fn max_local_slot(w: &lir::Word) -> Option<u16> {
     for b in w.blocks.iter() {
         for op in b.ops.iter() {
             if let lir::OpKind::LocalSet { slot, .. } = op.kind {
-                if max.map_or(true, |m| slot > m) {
+                if max.is_none_or(|m| slot > m) {
                     max = Some(slot);
                 }
             }

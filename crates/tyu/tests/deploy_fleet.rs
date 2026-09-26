@@ -16,7 +16,7 @@ module Main;\nimport platform/testio { testio.write-byte };\n\
 
 fn ensure_tools() {
     let status = Command::new(env!("CARGO"))
-        .current_dir(&workspace_root())
+        .current_dir(workspace_root())
         .args([
             "build",
             "-q",
@@ -52,13 +52,13 @@ fn deploy_fleet_produces_encrypted_signed_artifact() {
     }
     ensure_tools();
 
-    struct EnvGuard(&'static str, &'static str);
+    struct EnvGuard(&'static str);
     impl Drop for EnvGuard {
         fn drop(&mut self) {
             std::env::remove_var(self.0);
         }
     }
-    let _g = EnvGuard("TYU_D1_KEK", "TYU_D1_SIGN");
+    let _g = EnvGuard("TYU_D1_KEK");
     std::env::set_var("TYU_D1_KEK", hex::encode([0xab; 32]));
     std::env::set_var("TYU_D1_SIGN", hex::encode([0xab; 32]));
 
@@ -119,13 +119,13 @@ fn deploy_fleet_runs_under_qemu() {
     }
     ensure_tools();
 
-    struct EnvGuard(&'static str, &'static str);
+    struct EnvGuard(&'static str);
     impl Drop for EnvGuard {
         fn drop(&mut self) {
             std::env::remove_var(self.0);
         }
     }
-    let _g = EnvGuard("TYU_D2_KEK", "TYU_D2_SIGN");
+    let _g = EnvGuard("TYU_D2_KEK");
     std::env::set_var("TYU_D2_KEK", hex::encode([0xab; 32]));
     std::env::set_var("TYU_D2_SIGN", hex::encode([0xab; 32]));
 

@@ -937,6 +937,87 @@ done
 [ "$g25_fail" -eq 0 ] && msg $GREEN "  G25: statement goldens exact-set present for all four triples (band rule §Q4)"
 failures=$((failures + g25_fail))
 
+# --- G26: PLAN-VERIFY-3 P2.1 — verifier layering (no codegen-core) ---
+# The verifier is the semantic kernel: `ir → verifier → (semantics, langc) →
+# tyu`. It must NOT import the backend's target identity — it carries its own
+# four-field `TargetSpec` duplicate, and parity with codegen-core is asserted
+# by `tooling-tests/tests/target_parity.rs` (the one place in the tree that
+# may compare them, because tooling-tests already depends on both). This gate
+# makes the boundary mechanical: a future `use codegen_core` in the verifier
+# fails CI, and the parity test pins the values.
+g26_fail=0
+if grep -rnE 'codegen_core|codegen-core' crates/verifier/ >/dev/null 2>&1; then
+    # Note: `target_parity.rs` lives in tooling-tests, never in crates/verifier/.
+    msg $RED "  G26 FAIL: verifier must not reference codegen-core (layering rule)"
+    g26_fail=1
+fi
+if [ ! -f crates/tooling-tests/tests/target_parity.rs ]; then
+    msg $RED "  G26 FAIL: target-parity test missing (verifier TargetSpec vs codegen-core)"
+    g26_fail=1
+fi
+[ "$g26_fail" -eq 0 ] && msg $GREEN "  G26: verifier stays codegen-core-free; target parity pinned by tooling-tests"
+failures=$((failures + g26_fail))
+
+# --- G27: PLAN-VERIFY-3 P2.2 — per-target vector corpus surface ---
+# The conformance vectors (`tyu.vec/1`) exist for every recognized triple,
+# the vector-corpus + interval-targets tests exist, and the committed files
+# carry the schema tag. Byte-stability is enforced by
+# `vector_corpus_files_match_regeneration` under `cargo test --workspace`;
+# this gate pins the *surface* (files + tag + tests present), like G25.
+g27_fail=0
+if [ ! -f crates/verifier/tests/vector_corpus.rs ] || [ ! -f crates/verifier/tests/interval_targets.rs ]; then
+    msg $RED "  G27 FAIL: vector corpus tests missing (vector_corpus.rs / interval_targets.rs)"
+    g27_fail=1
+fi
+for triple in x86_64-unknown-linux-gnu x86_64-unknown-none armv7m-unknown-none riscv32-unknown-none; do
+    idx="crates/verifier/test-vectors/$triple/index.json"
+    if [ ! -f "$idx" ]; then
+        msg $RED "  G27 FAIL: vector corpus missing for $triple ($idx)"
+        g27_fail=1
+        continue
+    fi
+    if ! grep -q '"tyu.vec/1"' "$idx"; then
+        msg $RED "  G27 FAIL: $idx lacks the tyu.vec/1 schema tag"
+        g27_fail=1
+    fi
+done
+[ "$g27_fail" -eq 0 ] && msg $GREEN "  G27: per-target vector corpus (tyu.vec/1) present for all four triples"
+failures=$((failures + g27_fail))
+
+# --- G28: PLAN-VERIFY-3 §P0 — workspace bar: rustfmt ---
+# Every slice ends `cargo fmt --check` green (§P0 workspace bar). The gate is
+# the check itself — mechanical, zero judgement, no bypass path short of
+# editing this gate.
+g28_fail=0
+if ! cargo fmt --check >/dev/null 2>&1; then
+    msg $RED "  G28 FAIL: rustfmt drift — run 'cargo fmt' (workspace bar, §P0)"
+    cargo fmt --check 2>&1 | grep "^Diff in" | head -5 | while read -r d; do
+        msg $RED "    $d"
+    done
+    g28_fail=1
+fi
+[ "$g28_fail" -eq 0 ] && msg $GREEN "  G28: rustfmt clean (workspace bar)"
+failures=$((failures + g28_fail))
+
+# --- G29: PLAN-VERIFY-3 §P0 — workspace bar: clippy -D warnings ---
+# Deliberately `--lib --bins --tests`, NOT --all-targets: --all-targets
+# synthesizes a phantom bin-as-test compile that ignores the manifest's
+# `test = false` (lang-assemble) and flips panic to unwind against the
+# no_std runtime crates (hosted-rt) — a target that does not exist. The
+# explicit form covers every real target (no examples/ or benches/ dirs in
+# the workspace). Warnings are denied; suppressions require a justification
+# comment at the item (spec Rule: no silent suppression).
+g29_fail=0
+if ! cargo clippy --workspace --lib --bins --tests -- -D warnings >/dev/null 2>&1; then
+    msg $RED "  G29 FAIL: clippy -D warnings (workspace bar, §P0)"
+    cargo clippy --workspace --lib --bins --tests 2>&1 | grep "^ *-->" | head -5 | while read -r d; do
+        msg $RED "    $d"
+    done
+    g29_fail=1
+fi
+[ "$g29_fail" -eq 0 ] && msg $GREEN "  G29: clippy -D warnings clean (--lib --bins --tests)"
+failures=$((failures + g29_fail))
+
 echo ""
 msg $GREEN "============================================"
 msg $GREEN "Per-package test counts:"

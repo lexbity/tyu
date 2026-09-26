@@ -205,16 +205,19 @@ fn ids_never_come_from_spans() {
     let line = |set: &verifier::model::OblSet| {
         set.obligations
             .iter()
-            .find(|o| o.formula == verifier::model::Formula::InRange {
-                value: verifier::model::Oel::Cast {
-                    from: "i64".to_string(),
-                    to: "Percent".to_string(),
-                    arg: Box::new(verifier::model::Oel::Var {
-                        name: "$top".to_string(),
-                    }),
-                },
-                lo: 0,
-                hi: 100,
+            .find(|o| {
+                o.formula
+                    == verifier::model::Formula::InRange {
+                        value: verifier::model::Oel::Cast {
+                            from: "i64".to_string(),
+                            to: "Percent".to_string(),
+                            arg: Box::new(verifier::model::Oel::Var {
+                                name: "$top".to_string(),
+                            }),
+                        },
+                        lo: 0,
+                        hi: 100,
+                    }
             })
             .unwrap()
             .site

@@ -19,7 +19,7 @@
 //! the cast/return sites.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 mod common;
@@ -57,10 +57,14 @@ fn build(tag: &str, extra: &[&str], source: &str) -> (PathBuf, String, bool) {
         cmd.arg(a);
     }
     let out = cmd.output().expect("tyu invocation");
-    (out_dir, String::from_utf8_lossy(&out.stderr).into_owned(), out.status.success())
+    (
+        out_dir,
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        out.status.success(),
+    )
 }
 
-fn report(out_dir: &PathBuf) -> serde_json::Value {
+fn report(out_dir: &Path) -> serde_json::Value {
     let bytes = fs::read(out_dir.join("verify-report.json")).expect("report written");
     serde_json::from_slice(&bytes).expect("report parses")
 }
@@ -106,11 +110,19 @@ fn provable_cast_chain_discharges_without_verdicts_file() {
     assert_eq!(cls["total"], 1);
     assert_eq!(cls["discharged"], 1, "interval engine discharged the cast");
     assert_eq!(cls["open"], 0);
-    assert_eq!(r["emitted_checks"]["subtype_range"], 0, "no check emitted at a discharged site");
+    assert_eq!(
+        r["emitted_checks"]["subtype_range"], 0,
+        "no check emitted at a discharged site"
+    );
     assert_eq!(r["open"].as_array().unwrap().len(), 0);
     // The in-tree discharge method is recorded in the verdicts echo.
     let echo_dir = out_dir.join(".tyu-verify");
-    let echo_file = fs::read_dir(&echo_dir).unwrap().next().unwrap().unwrap().path();
+    let echo_file = fs::read_dir(&echo_dir)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
     let echo = verifier::verdict::read_echo(&fs::read(&echo_file).unwrap()).unwrap();
     assert_eq!(echo.verdicts.records.len(), 1);
     assert_eq!(
@@ -141,25 +153,25 @@ fn return_chain_discharges_c2_and_keeps_c1() {
         .map(|o| o["id"].as_str().unwrap())
         .collect();
     assert!(
-        open_ids.iter().any(|id| *id == "R::bounded_inc::subtype-range::0"),
+        open_ids.contains(&"R::bounded_inc::subtype-range::0"),
         "C1 param still open: {open_ids:?}"
     );
     assert!(
-        open_ids.iter().any(|id| *id == "R::bounded_inc::subtype-range::1"),
+        open_ids.contains(&"R::bounded_inc::subtype-range::1"),
         "C3 cast on a ⊤ input still open: {open_ids:?}"
     );
     assert!(
-        open_ids.iter().any(|id| *id == "R::main::subtype-range::1"),
+        open_ids.contains(&"R::main::subtype-range::1"),
         "main's C2 return sees a Call (⊤) and stays open: {open_ids:?}"
     );
     // The discharged sites: bounded_inc's C2 (occurrence 2) and main's C3
     // (occurrence 0) are NOT in the open list.
     assert!(
-        !open_ids.iter().any(|id| *id == "R::bounded_inc::subtype-range::2"),
+        !open_ids.contains(&"R::bounded_inc::subtype-range::2"),
         "bounded_inc's return check discharges: {open_ids:?}"
     );
     assert!(
-        !open_ids.iter().any(|id| *id == "R::main::subtype-range::0"),
+        !open_ids.contains(&"R::main::subtype-range::0"),
         "main's cast discharges: {open_ids:?}"
     );
 }
@@ -174,7 +186,10 @@ fn constant_out_of_range_is_provably_failing_and_open() {
     let r = report(&out_dir);
     let cls = &r["modules"][0]["classes"]["subtype-range"];
     assert_eq!(cls["total"], 1);
-    assert_eq!(cls["open"], 1, "never a discharge for a provably failing site");
+    assert_eq!(
+        cls["open"], 1,
+        "never a discharge for a provably failing site"
+    );
     assert_eq!(r["emitted_checks"]["subtype_range"], 1, "check retained");
     // The report's provably-failing list carries the site + the note.
     let pfi = r["provably_failing"].as_array().unwrap();

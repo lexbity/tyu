@@ -9,15 +9,6 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
-fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf()
-}
-
 fn tyu_exe() -> PathBuf {
     // CARGO_BIN_EXE_ is set for integration tests of the same package.
     PathBuf::from(env!("CARGO_BIN_EXE_tyu"))
@@ -50,11 +41,7 @@ subtype Percent = i64 range 0..100;
 end;
 ";
 
-fn build(
-    tag: &str,
-    extra: &[&str],
-    source: &str,
-) -> (PathBuf, String) {
+fn build(tag: &str, extra: &[&str], source: &str) -> (PathBuf, String) {
     let dir = fresh_dir(tag);
     let mod_path = dir.join("Bank.mod");
     fs::write(&mod_path, source).unwrap();
@@ -129,9 +116,7 @@ fn metal_platform_build_reports_discharged_main_context() {
     // Open obligations all land in the open list with ids.
     let open = v["open"].as_array().unwrap();
     assert!(!open.is_empty());
-    assert!(
-        open.iter().any(|o| o["kind"] == "subtype-range")
-    );
+    assert!(open.iter().any(|o| o["kind"] == "subtype-range"));
 }
 
 #[test]
@@ -142,7 +127,11 @@ fn platformless_hosted_build_degrades_to_open_main_context() {
     // absence can only ever cause more checking, never less), and the report
     // is still written. Contrast the metal test: a runtime that exports its
     // geometry gets the discharge with no declaration anywhere.
-    let (_, report) = build("noplatform", &["--target=x86_64-unknown-linux-gnu"], BANK_MOD);
+    let (_, report) = build(
+        "noplatform",
+        &["--target=x86_64-unknown-linux-gnu"],
+        BANK_MOD,
+    );
     let v: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(v["contexts"]["stack"]["main"]["budget"], 0);
     assert_eq!(v["contexts"]["stack"]["main"]["verdict"], "open");
@@ -172,10 +161,17 @@ subtype Percent = i64 range 0..100;
   50 as Percent bounded_inc as i64 ;
 end;
 ";
-    let (_, report) = build("retained", &["--target=x86_64-unknown-linux-gnu"], CONTRACT_MOD);
+    let (_, report) = build(
+        "retained",
+        &["--target=x86_64-unknown-linux-gnu"],
+        CONTRACT_MOD,
+    );
     let v: serde_json::Value = serde_json::from_str(&report).unwrap();
     let retained = v["retained"].as_array().unwrap();
-    assert!(!retained.is_empty(), "module-loading build must retain contract sites");
+    assert!(
+        !retained.is_empty(),
+        "module-loading build must retain contract sites"
+    );
     for r in retained {
         assert_eq!(r["reason"], "dynamic export (module-loading)");
         assert!(r["id"].as_str().unwrap().contains("contract-"));
@@ -210,7 +206,10 @@ fn report_is_byte_deterministic_across_builds() {
         assert!(status.success());
         reports.push(fs::read(out_dir.join("verify-report.json")).unwrap());
     }
-    assert_eq!(reports[0], reports[1], "verify-report.json must be byte-identical (FR-17)");
+    assert_eq!(
+        reports[0], reports[1],
+        "verify-report.json must be byte-identical (FR-17)"
+    );
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -235,14 +234,14 @@ fn oboligation_artifact_rides_beside_each_object() {
     let obl_files: Vec<String> = fs::read_dir(&out_dir)
         .unwrap()
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.file_name()
-                .to_string_lossy()
-                .ends_with(".obl.json")
-        })
+        .filter(|e| e.file_name().to_string_lossy().ends_with(".obl.json"))
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .collect();
-    assert_eq!(obl_files.len(), 1, "one module → one artifact: {obl_files:?}");
+    assert_eq!(
+        obl_files.len(),
+        1,
+        "one module → one artifact: {obl_files:?}"
+    );
     assert!(obl_files[0].starts_with("Bank-"));
     let _ = fs::remove_dir_all(&dir);
 }

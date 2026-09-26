@@ -8,7 +8,7 @@
 //! under QEMU, which is done in execution-tests.
 
 use codegen_arm::ArmThumbBackend;
-use codegen_core::{AsmMode, CodegenError};
+use codegen_core::AsmMode;
 use frontend::{
     fixed::FixedVec,
     parse::{ModuleAst, Output, Parser},

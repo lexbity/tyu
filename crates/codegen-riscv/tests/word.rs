@@ -4,7 +4,7 @@
 //! (slt/sltu sequences), ConstStr table emission, trap symbol, and a
 //! smoke golden.
 
-use codegen_core::{AsmMode, CodegenError};
+use codegen_core::AsmMode;
 use codegen_riscv::RiscVBackend;
 use frontend::{
     fixed::FixedVec,

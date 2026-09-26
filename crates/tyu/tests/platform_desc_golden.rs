@@ -252,10 +252,14 @@ fn check_fixture(name: &str, expected_code: u16, needle: &str) {
         }
         Ok(Some(desc)) => {
             let errors = validate(&desc, None);
-            let hit = errors.iter().any(|e| {
-                e.code == expected_code && e.detail.contains(needle)
-            });
-            assert!(hit, "fixture {name}: no {expected_code} with '{}' among {:?}", needle, errors);
+            let hit = errors
+                .iter()
+                .any(|e| e.code == expected_code && e.detail.contains(needle));
+            assert!(
+                hit,
+                "fixture {name}: no {expected_code} with '{}' among {:?}",
+                needle, errors
+            );
         }
         Ok(None) => panic!("fixture {name} should produce a descriptor"),
     }
@@ -382,9 +386,10 @@ fn metal_trust_word_must_exist_in_pack() {
     .unwrap();
 
     let errors = validate(&desc, Some(&root));
-    let hit = errors
-        .iter()
-        .any(|e| e.detail.contains("metal.trust word 'platform.boot.enter_xip' not declared"));
+    let hit = errors.iter().any(|e| {
+        e.detail
+            .contains("metal.trust word 'platform.boot.enter_xip' not declared")
+    });
     assert!(hit, "{:?}", errors);
 
     // A pack root that DOES declare the word passes.
@@ -428,7 +433,10 @@ registers = [
 ]
 "#;
     let desc = parse(text);
-    assert!(validate(&desc, None).is_empty(), "effectful ro must be legal");
+    assert!(
+        validate(&desc, None).is_empty(),
+        "effectful ro must be legal"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -520,16 +528,27 @@ fn real_pack_descriptors_parse_and_validate() {
         .to_path_buf();
     for (name, path) in [
         ("rp2350", "platforms/rp2350/platform.toml"),
-        ("x86_64-unknown-none", "platforms/x86_64-unknown-none/platform.toml"),
-        ("armv7m-unknown-none", "platforms/armv7m-unknown-none/platform.toml"),
-        ("riscv32-unknown-none", "platforms/riscv32-unknown-none/platform.toml"),
-        ("linux-x86_64-hosted", "runtime/linux-x86_64-hosted.platform.toml"),
+        (
+            "x86_64-unknown-none",
+            "platforms/x86_64-unknown-none/platform.toml",
+        ),
+        (
+            "armv7m-unknown-none",
+            "platforms/armv7m-unknown-none/platform.toml",
+        ),
+        (
+            "riscv32-unknown-none",
+            "platforms/riscv32-unknown-none/platform.toml",
+        ),
+        (
+            "linux-x86_64-hosted",
+            "runtime/linux-x86_64-hosted.platform.toml",
+        ),
     ] {
-        let text = fs::read_to_string(root.join(path))
-            .unwrap_or_else(|e| panic!("reading {name}: {e}"));
-        let desc = parse_descriptor(&text).unwrap_or_else(|e| {
-            panic!("parsing {name}: E{} {}", e.code, e.detail)
-        });
+        let text =
+            fs::read_to_string(root.join(path)).unwrap_or_else(|e| panic!("reading {name}: {e}"));
+        let desc = parse_descriptor(&text)
+            .unwrap_or_else(|e| panic!("parsing {name}: E{} {}", e.code, e.detail));
         let desc = desc.unwrap_or_else(|| panic!("{name} must carry a descriptor"));
         let errors = validate(&desc, Some(&root));
         assert!(

@@ -195,7 +195,10 @@ impl<'a> X86_64HostedBackend<'a> {
     /// Set the MMIO apertures this backend lowers against (P3, D-7). The langc
     /// driver supplies either the target's static defaults or the compiled
     /// platform descriptor's apertures.
-    pub fn set_mmio_apertures(&mut self, apertures: &[MmioApertureSpec]) -> Result<(), CodegenError> {
+    pub fn set_mmio_apertures(
+        &mut self,
+        apertures: &[MmioApertureSpec],
+    ) -> Result<(), CodegenError> {
         if apertures.len() > 8 {
             return Err(CodegenError::TooManyMmioApertures);
         }
@@ -243,8 +246,7 @@ impl<'a> X86_64HostedBackend<'a> {
             requires_caps: 0,
             stack_bound: 0,
         }; 64];
-        for i in 0..export_count {
-            let mi = &self.mi_exports[i];
+        for (i, mi) in self.mi_exports.iter().take(export_count).enumerate() {
             let name = mi.name.as_bytes();
             let sym_hash = lmod::hash::fnv1a_u64(name);
             export_entries[i] = lmod::modinfo::ExportEntry {
@@ -261,8 +263,8 @@ impl<'a> X86_64HostedBackend<'a> {
             sym_hash: 0,
             name: b"",
         }; 64];
-        for i in 0..import_count {
-            let name = self.mi_imports[i].name.as_bytes();
+        for (i, imp) in self.mi_imports.iter().take(import_count).enumerate() {
+            let name = imp.name.as_bytes();
             let sym_hash = lmod::hash::fnv1a_u64(name);
             import_entries[i] = lmod::modinfo::ImportEntry { sym_hash, name };
         }
@@ -277,8 +279,12 @@ impl<'a> X86_64HostedBackend<'a> {
                 aperture_id: 0,
                 access_mask: 0,
             }; 8];
-        for i in 0..self.mi_aperture_count {
-            let wu = &self.mi_apertures[i];
+        for (i, wu) in self
+            .mi_apertures
+            .iter()
+            .take(self.mi_aperture_count)
+            .enumerate()
+        {
             aperture_entries[i] = lmod::modinfo::ApertureUseEntry {
                 name_hash: lmod::hash::fnv1a_u64(wu.name.as_bytes()),
                 size: wu.size,
@@ -321,9 +327,9 @@ impl<'a> X86_64HostedBackend<'a> {
         self.out.write(b"  db ");
         if size > 0 {
             crate::ophelpers::write_u32(self.out, buf[0] as u32);
-            for i in 1..size {
+            for b in buf.iter().take(size).skip(1) {
                 self.out.write(b",");
-                crate::ophelpers::write_u32(self.out, buf[i] as u32);
+                crate::ophelpers::write_u32(self.out, *b as u32);
             }
         }
         self.out.write(b"\n");
@@ -367,9 +373,9 @@ impl<'a> X86_64HostedBackend<'a> {
         self.out.write(b"section '.lang.debug'\n  db ");
         if size > 0 {
             crate::ophelpers::write_u32(self.out, buf[0] as u32);
-            for i in 1..size {
+            for b in buf.iter().take(size).skip(1) {
                 self.out.write(b",");
-                crate::ophelpers::write_u32(self.out, buf[i] as u32);
+                crate::ophelpers::write_u32(self.out, *b as u32);
             }
         }
         self.out.write(b"\n");
@@ -429,11 +435,15 @@ pub fn mmio_cell(
             MmioOp::Load | MmioOp::LoadField => StrategyCell::Supported { pattern: "mov" },
             MmioOp::Store => match strategy {
                 WriteKind::Plain => StrategyCell::Supported { pattern: "mov" },
-                WriteKind::W1c => StrategyCell::Supported { pattern: "RMW andn" },
+                WriteKind::W1c => StrategyCell::Supported {
+                    pattern: "RMW andn",
+                },
                 WriteKind::W1s => StrategyCell::Supported { pattern: "RMW or" },
                 WriteKind::Xor => StrategyCell::Supported { pattern: "RMW xor" },
             },
-            MmioOp::StoreField => StrategyCell::Supported { pattern: "RMW field" },
+            MmioOp::StoreField => StrategyCell::Supported {
+                pattern: "RMW field",
+            },
         },
     }
 }
@@ -460,7 +470,9 @@ mod tests {
         src.extend_from_slice(b"module ");
         src.extend(alloc::vec![b'x'; 4096]);
         src.extend_from_slice(b"; end;");
-        let mod_ast = frontend::parse::Parser::new(&src).parse_module_ast().unwrap();
+        let mod_ast = frontend::parse::Parser::new(&src)
+            .parse_module_ast()
+            .unwrap();
 
         let mut sink = Sink {
             buf: alloc::vec::Vec::new(),

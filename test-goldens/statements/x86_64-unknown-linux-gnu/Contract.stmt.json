@@ -1,0 +1,16 @@
+{
+  "schema": "tyu.stmt-goldens/1.0",
+  "semantics": "tyu.ir-sem/1.0",
+  "stmt": "tyu.stmt/1.0",
+  "target": "x86_64-unknown-linux-gnu",
+  "model_semantics": "unmodeled",
+  "module": "Contract",
+  "statements": [
+    {"id": "Contract::pct-in-range::subtype-range::0", "id_hash": "ba61ba4e8b96df8c", "statement_hash": "f822b83909bdb3fb62239f6ce645282607a762415af8d118cd7d647dbfd5cf00"},
+    {"id": "Contract::pct-in-range::subtype-range::1", "id_hash": "ba61bb4e8b96e13f", "statement_hash": "9ddcffbadfc6a266c696748aa68347e38eb57b6d21c79f86274eda14caa0d5ae"},
+    {"id": "Contract::withdraw::subtype-range::0", "id_hash": "8e57b506829b9b6b", "statement_hash": "b18b776683051222a4143237eab0b103c5dff50a0885882d8064b89895486ae0"},
+    {"id": "Contract::withdraw::contract-pre::0", "id_hash": "6cf6259c5b9b3925", "statement_hash": "666e219d2209a13fb81d94c0d9108bed6995a330da6d4a9b6c8c67875db7ec77"},
+    {"id": "Contract::main::subtype-range::0", "id_hash": "6fd7da76077c7fec", "statement_hash": "334ea64f71b83a48deafe3e930b1eff4c17eeb4377859dc475359511771d7acf"},
+    {"id": "Contract::main::contract-pre::0", "id_hash": "f87bcac77db19a80", "statement_hash": "ac7bf8fc9d833fb60738c3d338a490b1bd341a68ff3f3dd41c16e1534dad7611"}
+  ]
+}

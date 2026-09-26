@@ -760,26 +760,3 @@ fn assert_ir_fails_with(src: &str, expected_code: u32) {
         "expected E{expected_code} in stderr, got:\n{stderr}"
     );
 }
-
-/// Assert that compiling `src` with `--emit=asm` fails with exactly `expected_code`.
-fn assert_fails_with(src: &str, expected_code: u32) {
-    build_langc();
-    let dir = fresh_dir("neg");
-    let path = dir.join("test.mod");
-    std::fs::write(&path, src).unwrap();
-    let out = Command::new(langc_exe())
-        .args(["--emit=asm", path.to_str().unwrap()])
-        .output()
-        .unwrap();
-    let code = out.status.code().unwrap_or(-1);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let expected_str = format!("E{expected_code}");
-    assert!(
-        code != 0,
-        "expected E{expected_code} (exit non-zero), but compilation succeeded.\nstderr: {stderr}"
-    );
-    assert!(
-        stderr.contains(&expected_str),
-        "expected E{expected_code} in stderr, got:\n{stderr}"
-    );
-}

@@ -14,7 +14,7 @@ fn resource_lock_addr_of_emitted() {
         return;
     }
     let s = Command::new(env!("CARGO"))
-        .current_dir(&common::workspace_root())
+        .current_dir(common::workspace_root())
         .args(["build", "-q", "-p", "langc"])
         .status()
         .expect("cargo build");
@@ -39,9 +39,7 @@ fn resource_lock_addr_of_emitted() {
         "resource AddrOf must load the resource symbol address;\n{asm}"
     );
     assert!(
-        asm.contains("section '.bss'")
-            && asm.contains("r_")
-            && asm.contains("dq 0"),
+        asm.contains("section '.bss'") && asm.contains("r_") && asm.contains("dq 0"),
         "module must declare its resource globals;\n{asm}"
     );
 }

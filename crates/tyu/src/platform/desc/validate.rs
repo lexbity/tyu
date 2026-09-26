@@ -10,8 +10,8 @@
 //! skips the disk-backed rule.
 
 use super::{
-    AccessKind, Descriptor, DescriptorError, DeviceMap, E_DESC_INVALID, RegisterRow, ApertureKind,
-    WriteKind, full_mask,
+    full_mask, AccessKind, ApertureKind, Descriptor, DescriptorError, DeviceMap, RegisterRow,
+    WriteKind, E_DESC_INVALID,
 };
 use std::path::Path;
 
@@ -61,7 +61,10 @@ fn validate_apertures(desc: &Descriptor, errors: &mut Vec<DescriptorError>) {
     names.sort_unstable();
     for pair in names.windows(2) {
         if pair[0] == pair[1] {
-            errors.push(err(format!("aperture names must be unique (duplicate '{}')", pair[0])));
+            errors.push(err(format!(
+                "aperture names must be unique (duplicate '{}')",
+                pair[0]
+            )));
         }
     }
 
@@ -182,7 +185,7 @@ fn validate_register(d: &DeviceMap, r: &RegisterRow, errors: &mut Vec<Descriptor
 
     // Rule: register offsets word-aligned to their width.
     let bytes = r.width_bytes();
-    if bytes > 0 && r.offset % bytes != 0 {
+    if bytes > 0 && !r.offset.is_multiple_of(bytes) {
         errors.push(err(format!(
             "device {} '{}' register '{}': offset 0x{:x} not aligned to width {}",
             d.map, d.instance, r.name, r.offset, r.width
@@ -372,13 +375,14 @@ mod tests {
     use crate::platform::desc::parse::parse_descriptor;
 
     fn parse(text: &str) -> Descriptor {
-        parse_descriptor(text)
-            .unwrap()
-            .expect("descriptor present")
+        parse_descriptor(text).unwrap().expect("descriptor present")
     }
 
     fn codes(text: &str) -> Vec<u16> {
-        validate(&parse(text), None).iter().map(|e| e.code).collect()
+        validate(&parse(text), None)
+            .iter()
+            .map(|e| e.code)
+            .collect()
     }
 
     #[test]
@@ -460,9 +464,11 @@ registers = [
 ]
 "#;
         let errors = validate(&parse(text), None);
-        assert!(errors
-            .iter()
-            .any(|e| e.detail.contains("> aperture")), "{:?}", errors);
+        assert!(
+            errors.iter().any(|e| e.detail.contains("> aperture")),
+            "{:?}",
+            errors
+        );
     }
 
     #[test]
@@ -715,9 +721,9 @@ impl = "glue/region"
         std::fs::create_dir_all(&dir).unwrap();
         let errors = validate(&parse(text), Some(&dir));
         assert!(
-            errors
-                .iter()
-                .any(|e| e.detail.contains("allocator impl 'glue/region' does not exist")),
+            errors.iter().any(|e| e
+                .detail
+                .contains("allocator impl 'glue/region' does not exist")),
             "unexpected errors: {errors:?}"
         );
 
@@ -748,7 +754,11 @@ registers = [
 ]
 "#;
         let errors = validate(&parse(text), None);
-        assert!(errors.len() >= 3, "expected multiple violations: {:?}", errors);
+        assert!(
+            errors.len() >= 3,
+            "expected multiple violations: {:?}",
+            errors
+        );
         assert!(codes(text).iter().all(|c| *c == E_DESC_INVALID));
     }
 
@@ -786,7 +796,11 @@ ds_size = 0x4000
 isr_stack_slots = 32
 "#,
         ));
-        assert!(validate(&desc, None).is_empty(), "{:?}", validate(&desc, None));
+        assert!(
+            validate(&desc, None).is_empty(),
+            "{:?}",
+            validate(&desc, None)
+        );
     }
 
     #[test]

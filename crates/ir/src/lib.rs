@@ -424,7 +424,7 @@ mod prim_tests {
 
 #[cfg(test)]
 mod type_class_tests {
-    use super::{TypeClass, is_scoped_enter_class};
+    use super::{is_scoped_enter_class, TypeClass};
 
     #[test]
     fn class_of_maps_every_builtin_name() {
@@ -1059,7 +1059,11 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
             OpKind::AddrOf { mutable: true, .. } => {
                 push(&mut stack, &mut sp, TY_PTR_MUT, op.span)?;
             }
-            OpKind::MmioPlace { place, aperture, offset } => {
+            OpKind::MmioPlace {
+                place,
+                aperture,
+                offset,
+            } => {
                 // P4: the referenced aperture must be declared in the word's
                 // use-table, and the offset must fall inside it.
                 let size = match find_aperture_use(w, aperture) {
@@ -1082,7 +1086,11 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
                 // rejected here — the same class check the backends rely on
                 // to avoid the silent no-op. Defense in depth, mirroring the
                 // stack checker.
-                let class = w.type_classes.get(ty.0 as usize).copied().unwrap_or(TypeClass::Other);
+                let class = w
+                    .type_classes
+                    .get(ty.0 as usize)
+                    .copied()
+                    .unwrap_or(TypeClass::Other);
                 if !is_scoped_enter_class(class) {
                     return Err(VerifyError::ScopedEnterTypeNotScoped { span: op.span });
                 }
@@ -1218,10 +1226,7 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
                     return Err(VerifyError::LoadAddrNotPtr { span: op.span });
                 }
                 if let Some(width) = type_width_bytes(w, ty) {
-                    if let Err(e) = check_site_bounds(w, &sites[..site_count], place, width, op.span)
-                    {
-                        return Err(e);
-                    }
+                    check_site_bounds(w, &sites[..site_count], place, width, op.span)?;
                     // R2 (D-3): no access wider than the register's atomic_max
                     // (width in bytes, atomic_max in bits).
                     if width * 8 > atomic_max as u32 {
@@ -1256,10 +1261,7 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
                     return Err(VerifyError::MmioPhantomRead { span: op.span });
                 }
                 if let Some(width) = type_width_bytes(w, ty) {
-                    if let Err(e) = check_site_bounds(w, &sites[..site_count], place, width, op.span)
-                    {
-                        return Err(e);
-                    }
+                    check_site_bounds(w, &sites[..site_count], place, width, op.span)?;
                     if width * 8 > atomic_max as u32 {
                         return Err(VerifyError::MmioOverWideAccess { span: op.span });
                     }
@@ -1277,10 +1279,7 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
                     return Err(VerifyError::MmioFieldAddrNotMmio { span: op.span });
                 }
                 if let Some(width) = type_width_bytes(w, reg_ty) {
-                    if let Err(e) = check_site_bounds(w, &sites[..site_count], place, width, op.span)
-                    {
-                        return Err(e);
-                    }
+                    check_site_bounds(w, &sites[..site_count], place, width, op.span)?;
                     if width * 8 > atomic_max as u32 {
                         return Err(VerifyError::MmioOverWideAccess { span: op.span });
                     }
@@ -1307,10 +1306,7 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
                     return Err(VerifyError::MmioPhantomRead { span: op.span });
                 }
                 if let Some(width) = type_width_bytes(w, reg_ty) {
-                    if let Err(e) = check_site_bounds(w, &sites[..site_count], place, width, op.span)
-                    {
-                        return Err(e);
-                    }
+                    check_site_bounds(w, &sites[..site_count], place, width, op.span)?;
                     if width * 8 > atomic_max as u32 {
                         return Err(VerifyError::MmioOverWideAccess { span: op.span });
                     }
@@ -1601,7 +1597,11 @@ fn write_op(out: &mut impl Output, w: &Word, op: &Op) {
             out.write(place.as_bytes());
             write_addr_of_base(out, base);
         }
-        OpKind::MmioPlace { place, aperture, offset } => {
+        OpKind::MmioPlace {
+            place,
+            aperture,
+            offset,
+        } => {
             out.write(b"mmio_place ");
             out.write(place.as_bytes());
             out.write(b" aperture=");
@@ -1849,7 +1849,12 @@ fn write_addr_of_base(out: &mut impl Output, base: AddrOfBase) {
 }
 
 /// The fused `read_kind/atomic/barrier` suffix on volatile-op lines (P5).
-fn write_access_meta(out: &mut impl Output, read_kind: ReadKind, atomic_max: u8, barrier: BarrierKind) {
+fn write_access_meta(
+    out: &mut impl Output,
+    read_kind: ReadKind,
+    atomic_max: u8,
+    barrier: BarrierKind,
+) {
     if read_kind == ReadKind::Effectful {
         out.write(b" effectful");
     }
@@ -1873,12 +1878,12 @@ fn write_i64(out: &mut impl Output, v: i64) {
     }
     let mut buf = [0u8; 24];
     let mut n = 0usize;
-    let mut x = v;
-    if x < 0 {
+    if v < 0 {
         out.write(b"-");
-        x = -x;
     }
-    let mut u = x as u64;
+    // `unsigned_abs` — negation overflows at i64::MIN (a boundary constant
+    // the transfer table must render, PLAN-VERIFY-3 P2 vectors).
+    let mut u = v.unsigned_abs();
     while u > 0 && n < buf.len() {
         buf[n] = b'0' + (u % 10) as u8;
         n += 1;
@@ -1912,9 +1917,9 @@ fn write_u64_hex(out: &mut impl Output, mut v: u64) {
 #[cfg(test)]
 mod format_ver_tests {
     extern crate alloc;
+    use super::{check_format_ver, FormatVerMismatch, FORMAT_VER};
     use alloc::format;
     use alloc::string::ToString;
-    use super::{check_format_ver, FormatVerMismatch, FORMAT_VER};
 
     #[test]
     fn accepts_current_version_with_trailing_newline() {
@@ -1938,7 +1943,7 @@ mod format_ver_tests {
         assert_eq!(
             check_format_ver(newer.as_bytes()),
             Err(FormatVerMismatch {
-                found: Some((FORMAT_VER + 1) as u32)
+                found: Some(FORMAT_VER + 1)
             })
         );
     }
@@ -1949,7 +1954,10 @@ mod format_ver_tests {
             check_format_ver(b"module M;\n"),
             Err(FormatVerMismatch { found: None })
         );
-        assert_eq!(check_format_ver(b""), Err(FormatVerMismatch { found: None }));
+        assert_eq!(
+            check_format_ver(b""),
+            Err(FormatVerMismatch { found: None })
+        );
         assert_eq!(
             check_format_ver(b"format_ver x\n"),
             Err(FormatVerMismatch { found: None })

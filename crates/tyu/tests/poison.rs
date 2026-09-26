@@ -14,7 +14,7 @@ use tyu::test_helpers::*;
 
 fn ensure_langc() {
     let status = Command::new(env!("CARGO"))
-        .current_dir(&workspace_root())
+        .current_dir(workspace_root())
         .args(["build", "-q", "-p", "langc"])
         .status()
         .expect("cargo build");
@@ -43,7 +43,7 @@ fn poison_fail_marker() {
 
     let dir = temp_dir("poison_fail");
     std::fs::write(
-        &dir.join("poison_fail.mod"),
+        dir.join("poison_fail.mod"),
         "\
 module PoisonFail;
 import platform/testio { testio.write-byte };
@@ -54,7 +54,7 @@ end;
     )
     .unwrap();
     std::fs::write(
-        &dir.join("manifest.toml"),
+        dir.join("manifest.toml"),
         "\
 [[fixture]]
 name = \"poison_fail\"
@@ -94,7 +94,7 @@ fn poison_no_completion() {
 
     let dir = temp_dir("poison_nocomp");
     std::fs::write(
-        &dir.join("poison_nocomp.mod"),
+        dir.join("poison_nocomp.mod"),
         "\
 module PoisonNocomp;
 : poison-nocomp-run ( -- )
@@ -105,7 +105,7 @@ end;
     )
     .unwrap();
     std::fs::write(
-        &dir.join("manifest.toml"),
+        dir.join("manifest.toml"),
         "\
 [[fixture]]
 name = \"poison_nocomp\"
@@ -146,7 +146,7 @@ fn poison_clean_fixture_rejected() {
     let dir = temp_dir("poison_clean");
     // A fixture that passes cleanly (no F marker, no hang)
     std::fs::write(
-        &dir.join("poison_clean.mod"),
+        dir.join("poison_clean.mod"),
         "\
 module PoisonClean;
 : poison-clean-run ( -- ) ;
@@ -156,7 +156,7 @@ end;
     )
     .unwrap();
     std::fs::write(
-        &dir.join("manifest.toml"),
+        dir.join("manifest.toml"),
         "\
 [[fixture]]
 name = \"poison_clean\"
@@ -205,7 +205,7 @@ fn ci_missing_tools_hard_error() {
 
     let dir = temp_dir("ci_missing");
     std::fs::write(
-        &dir.join("simple.mod"),
+        dir.join("simple.mod"),
         "\
 module Simple;
 : main ( -- i64 ) 0 ;
@@ -215,7 +215,7 @@ end;
     )
     .unwrap();
     std::fs::write(
-        &dir.join("manifest.toml"),
+        dir.join("manifest.toml"),
         "\
 [[fixture]]
 name = \"simple\"
@@ -260,7 +260,7 @@ fn poison_non_poison_fixtures_unaffected() {
 
     let dir = temp_dir("non_poison");
     std::fs::write(
-        &dir.join("pass.mod"),
+        dir.join("pass.mod"),
         "\
 module Pass;
 : pass-run ( -- ) ;
@@ -270,7 +270,7 @@ end;
     )
     .unwrap();
     std::fs::write(
-        &dir.join("manifest.toml"),
+        dir.join("manifest.toml"),
         "\
 [[fixture]]
 name = \"pass\"

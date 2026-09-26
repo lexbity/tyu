@@ -100,16 +100,20 @@ fn malformed_verdicts_fail_closed_e6402() {
     // 1. Not JSON at all.
     expect_malformed("not-json", b"this is not json");
     // 2. Truncated document.
-    expect_malformed("truncated", HEADER[..HEADER.len() - 3].as_bytes());
+    expect_malformed("truncated", &HEADER.as_bytes()[..HEADER.len() - 3]);
     // 3. Wrong schema version.
     expect_malformed(
         "wrong-schema",
-        HEADER.replacen("tyu.verdicts/v1", "tyu.verdicts/v999", 1).as_bytes(),
+        HEADER
+            .replacen("tyu.verdicts/v1", "tyu.verdicts/v999", 1)
+            .as_bytes(),
     );
     // 4. Wrong semantics version.
     expect_malformed(
         "wrong-semantics",
-        HEADER.replacen("tyu.ir-sem/1.0", "tyu.ir-sem/999.0", 1).as_bytes(),
+        HEADER
+            .replacen("tyu.ir-sem/1.0", "tyu.ir-sem/999.0", 1)
+            .as_bytes(),
     );
     // 5. Unknown record status.
     expect_malformed(

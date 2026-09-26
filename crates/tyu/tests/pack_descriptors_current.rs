@@ -12,8 +12,8 @@
 use std::fs;
 use std::path::PathBuf;
 
-use codegen_core::compiled_desc::{encode_compiled_desc, decode_compiled_desc};
-use tyu::platform::desc::{ensure_compiled_descriptor, descriptor_file_path};
+use codegen_core::compiled_desc::{decode_compiled_desc, encode_compiled_desc};
+use tyu::platform::desc::{descriptor_file_path, ensure_compiled_descriptor};
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -47,8 +47,7 @@ fn every_in_tree_pack_compiles_and_committed_desc_is_current() {
         let compiled = ensure_compiled_descriptor(&manifest_path, &pack_root)
             .unwrap_or_else(|e| panic!("pack '{}' must compile: {}", pack_root.display(), e));
 
-        let mut buf = Vec::new();
-        buf.resize(codegen_core::compiled_desc::COMPILED_DESC_MAX_BYTES, 0);
+        let mut buf = vec![0; codegen_core::compiled_desc::COMPILED_DESC_MAX_BYTES];
         let n = encode_compiled_desc(&compiled, &mut buf).expect("encode");
         let fresh = &buf[..n];
 
@@ -65,7 +64,8 @@ fn every_in_tree_pack_compiles_and_committed_desc_is_current() {
             )
         });
         assert_eq!(
-            committed, fresh,
+            committed,
+            fresh,
             "committed '{}' is stale vs the current descriptor format; \
              re-bless with TYU_BLESS_PACK_DESCRIPTORS=1 and review the diff",
             desc_path.display()

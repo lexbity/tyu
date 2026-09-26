@@ -15,7 +15,7 @@ use std::process::Command;
 use lmod::enc::EncMode;
 use lmod::header::{FORMAT_VER, HEADER_SIZE, LMOD_FLAG_ENCRYPTED, LMOD_FLAG_SIGNED};
 use lmod::validate::Container;
-use tyu::test_helpers::{bin, golden_dir, workspace_root};
+use tyu::test_helpers::{golden_dir, workspace_root};
 
 const KEK_HEX: &str = "abababababababababababababababababababababababababababababababab";
 const SIGN_KEY_HEX: &str = "abababababababababababababababababababababababababababababababab";
@@ -31,7 +31,7 @@ fn temp_dir(label: &str) -> PathBuf {
 
 fn build_tools() {
     let status = Command::new(env!("CARGO"))
-        .current_dir(&workspace_root())
+        .current_dir(workspace_root())
         .args([
             "build",
             "-q",
@@ -105,13 +105,13 @@ fn golden_encrypt_structural() {
         container.code(),
         "code section must be present"
     );
-    assert!(container.code().len() > 0, "code must not be empty");
+    assert!(!container.code().is_empty(), "code must not be empty");
     assert!(
-        container.rodata().len() == 0,
+        container.rodata().is_empty(),
         "rodata should be empty for this test"
     );
     assert!(
-        container.data().len() == 0,
+        container.data().is_empty(),
         "data should be empty for this test"
     );
 }

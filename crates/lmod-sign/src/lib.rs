@@ -254,7 +254,7 @@ mod tests {
         // ENCRYPTED flag), then sign it.  This validates the code path
         // in sign() where the signed region includes the enc-header and
         // encrypted payload sections.
-        use lmod::header::{compute_layout, encode_header, HEADER_SIZE, LMOD_FLAG_ENCRYPTED};
+        use lmod::header::{compute_layout, encode_header, LMOD_FLAG_ENCRYPTED};
 
         let layout = compute_layout(42, 16, 8, 0, 0, 0, 0, 0);
         let total = layout.total_len as usize;

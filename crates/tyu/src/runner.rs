@@ -215,7 +215,7 @@ fn spawn_and_wait(
             Err(e) => {
                 let _stdout = stdout_handle.join().unwrap_or_default();
                 let _stderr = stderr_handle.join().unwrap_or_default();
-                return Err(TyuError::Build(format!("waitpid failed: {}", e)).into());
+                return Err(TyuError::Build(format!("waitpid failed: {}", e)));
             }
         }
     };
@@ -286,9 +286,10 @@ fn run_device(spec: &OpenOcdSpec, image: &Path, timeout: Duration) -> Result<Run
         .map_err(|e| TyuError::Build(format!("spawning OpenOCD '{}': {}", spec.bin, e)))?;
 
     if !flash_status.success() {
-        return Err(
-            TyuError::Build(format!("OpenOCD flash failed for '{}'", image.display())).into(),
-        );
+        return Err(TyuError::Build(format!(
+            "OpenOCD flash failed for '{}'",
+            image.display()
+        )));
     }
 
     // Step 2: Open serial port and capture output.

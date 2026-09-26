@@ -6,8 +6,9 @@ use crate::typecheck::db::{
 use crate::typecheck::error::{ChecksMode, EscapeKind, TcError};
 use crate::typecheck::irgen::compile::borrow::{mint_id, PlaceKey, LEDGER_CAP};
 use crate::typecheck::mmio::mmio_type_width_bytes;
-use crate::typecheck::mmio::{aperture_access_bits,
-    access_can_read, access_can_write, field_mask_shift, resolve_mmio_place, MmioDb, MmioResolved,
+use crate::typecheck::mmio::{
+    access_can_read, access_can_write, aperture_access_bits, field_mask_shift, resolve_mmio_place,
+    MmioDb, MmioResolved,
 };
 use crate::typecheck::parse::{capture_balanced, capture_scoped_block, read_qualified_name};
 use crate::typecheck::place::PlacePath;
@@ -28,12 +29,12 @@ use frontend::parse::{AttrAst, DeclAst};
 use frontend::span::Span;
 use frontend::token::{Token, TokenKind};
 use ir::{self as lir, CapSet, EffectSet, High, StackBound};
-use verifier::interval::Interval;
 use verifier::interp::{InTreeVerdict, Linear};
+use verifier::interval::Interval;
 use verifier::model::{
     ExtractionCtx, Formula, Kind as OblKind, Oel, Provenance, ResolvedVerdict, VerdictSource,
 };
-use verifier::verdict::{Verdicts, VerdictStatus};
+use verifier::verdict::{VerdictStatus, Verdicts};
 
 pub mod arena;
 mod compile;
@@ -107,6 +108,14 @@ struct IrWordGen<'a, 'r> {
     /// discipline). `Linear`'s seeds/joins/widenings are maintained by the
     /// control-flow lowering (control.rs).
     interp: Linear,
+    /// PLAN-VERIFY-3 P2: the memory-model boundary the transfer table steps
+    /// against. `FlatMem` is the default (memory not modeled — pre-P2
+    /// behavior); the parameterization makes the relocation possible later.
+    mem_model: verifier::interp::FlatMem,
+    /// PLAN-VERIFY-3 P2: the target identity carried from `build_ir_word`
+    /// — quote words re-enter [`IrWordGen::new`] through
+    /// `build_quote_word_with_context`, so the spec must be re-threadable.
+    target_spec: verifier::target::TargetSpec,
     sig: WordSig,
 
     /// Slice P6 (Q6): nesting depth of contract-predicate bodies currently
@@ -174,6 +183,7 @@ struct IrWordGen<'a, 'r> {
 impl<'a, 'r> IrWordGen<'a, 'r> {
     #[allow(clippy::too_many_arguments)]
     fn new(
+        target_spec: verifier::target::TargetSpec,
         src: &'a [u8],
         env: &'a [WordEntry],
         subtypes: &'a [SubtypeInfo],
@@ -336,7 +346,9 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             extraction,
             verdicts,
             keep_contract_checks,
-            interp: Linear::new(sig.in_len as usize, 64),
+            interp: Linear::new(target_spec, sig.in_len as usize, 64),
+            mem_model: verifier::interp::FlatMem,
+            target_spec,
             sig,
             contract_pred_depth: 0,
             pred_entry_net: 0,
@@ -448,9 +460,12 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                         .predicate_call(cur, sig.in_len as usize, sig.out_len as usize);
                     self.next_call_is_predicate = false;
                 }
-                _ => self.interp.step(cur, &kind, &|tid| {
-                    interp_sr(&self.word.types, self.subtypes, tid)
-                }),
+                _ => self.interp.step(
+                    cur,
+                    &kind,
+                    &|tid| interp_sr(&self.word.types, self.subtypes, tid),
+                    &mut self.mem_model,
+                ),
             }
         }
         // Slice P6 (E3314): while a contract predicate body is compiling,
@@ -504,9 +519,9 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             lir::OpKind::Swap { .. } => Some(ZERO),
             lir::OpKind::AddI64 | lir::OpKind::SubI64 | lir::OpKind::MulI64 => Some(NEG1),
             lir::OpKind::Cmp { .. } | lir::OpKind::AndBool | lir::OpKind::OrBool => Some(NEG1),
-            lir::OpKind::NotBool
-            | lir::OpKind::InterruptDisable
-            | lir::OpKind::InterruptEnable => Some(ZERO),
+            lir::OpKind::NotBool | lir::OpKind::InterruptDisable | lir::OpKind::InterruptEnable => {
+                Some(ZERO)
+            }
             lir::OpKind::LocalSet { .. } => Some(NEG1),
             lir::OpKind::LocalGet { .. } => Some(ONE),
             lir::OpKind::Cast { .. } | lir::OpKind::Bitcast { .. } => Some(ZERO),
@@ -521,9 +536,10 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             // (`if`/`while`/`loop`) snapshot and reset `self.acc` around the
             // branch, so they account it themselves.  `Call` (caller composes
             // the callee's sig/bound), `Br`, `Ret` are handled by their callers.
-            lir::OpKind::BrIf { .. } | lir::OpKind::Call { .. } | lir::OpKind::Br { .. } | lir::OpKind::Ret => {
-                None
-            }
+            lir::OpKind::BrIf { .. }
+            | lir::OpKind::Call { .. }
+            | lir::OpKind::Br { .. }
+            | lir::OpKind::Ret => None,
         }
     }
 
@@ -704,7 +720,8 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         id_hash: &str,
         in_tree: Option<&InTreeVerdict>,
     ) -> ResolvedVerdict {
-        if self.keep_contract_checks && matches!(kind, OblKind::ContractPre | OblKind::ContractPost) {
+        if self.keep_contract_checks && matches!(kind, OblKind::ContractPre | OblKind::ContractPost)
+        {
             // FR-21/Q12: under `module-loading` the whole-image contract
             // checks stay — neither a verdicts-file record nor the in-tree
             // discharge may close a contract site (the loader's dynamic
@@ -1016,7 +1033,9 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 reason: None,
             })
         } else {
-            Some(InTreeVerdict::open("emulated aperture access past the aperture size"))
+            Some(InTreeVerdict::open(
+                "emulated aperture access past the aperture size",
+            ))
         };
         let (id, id_hash) = {
             let ctx = match self.extraction.as_mut() {
@@ -1056,11 +1075,9 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
     /// effect — the existing check path rejects effect-performing calls,
     /// E3313) and arms the syntactic store/spawn-free guards plus the peak
     /// tracker. Returns the pushed frame depth (asserted balanced by pop).
-    pub(super) fn begin_contract_predicate(
-        &mut self,
-        span: Span,
-    ) -> Result<(), TcError> {
-        self.ctx.push(ContextKind::ContractPredicate, FrameParam::None, span)?;
+    pub(super) fn begin_contract_predicate(&mut self, span: Span) -> Result<(), TcError> {
+        self.ctx
+            .push(ContextKind::ContractPredicate, FrameParam::None, span)?;
         self.contract_pred_depth = self.contract_pred_depth.saturating_add(1);
         if self.contract_pred_depth == 1 {
             self.pred_entry_net = self.acc.net;
@@ -1089,15 +1106,16 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         let Some(atom) = TypeAtom::new(name) else {
             return false;
         };
-        self.pred_clause_names[..self.pred_clause_names_len as usize]
-            .iter()
-            .any(|p| *p == atom)
+        self.pred_clause_names[..self.pred_clause_names_len as usize].contains(&atom)
     }
 
     /// Leave a contract-predicate body. Enforces the E3314 size cap (peak
     /// data-stack slots > 64 — the word-level IR limit).
     pub(super) fn end_contract_predicate(&mut self, span: Span) -> Result<(), TcError> {
-        debug_assert!(self.contract_pred_depth > 0, "unbalanced contract predicate");
+        debug_assert!(
+            self.contract_pred_depth > 0,
+            "unbalanced contract predicate"
+        );
         if self.contract_pred_depth > 0 {
             self.contract_pred_depth -= 1;
         }
@@ -1129,8 +1147,8 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
     }
 
     /// C6 site (slice P6): record a `contract-post` obligation for a word's
-    /// `ensures` clause. The formula transcludes the predicate (name + IR
-    /// + hash filled by the driver's transclusion pass) run over the word's
+    /// `ensures` clause. The formula transcludes the predicate (name, IR, and
+    /// hash filled by the driver's transclusion pass) run over the word's
     /// outputs (`out.i`); the in-tree discharge evaluates the *abstract
     /// verdict* the epilogue's inline predicate compilation leaves on top of
     /// the interval state (`DefTrue` → discharged; `DefFalse` →
@@ -1143,8 +1161,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         span: Span,
     ) -> VerdictStatus {
         let n = self.sig.out_len as usize;
-        let mut args: alloc::vec::Vec<verifier::model::Oel> =
-            alloc::vec::Vec::with_capacity(n);
+        let mut args: alloc::vec::Vec<verifier::model::Oel> = alloc::vec::Vec::with_capacity(n);
         for i in 0..n {
             args.push(verifier::model::Oel::Var {
                 name: var_out_ref(i),
@@ -1336,7 +1353,9 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             size: spec.size,
             access_mask: bits,
             bind: match spec.reloc_isa {
-                Some(codegen_core::RelocIsa::ArmThumbLdrLiteral) => lir::BindKind::ArmThumbLdrLiteral,
+                Some(codegen_core::RelocIsa::ArmThumbLdrLiteral) => {
+                    lir::BindKind::ArmThumbLdrLiteral
+                }
                 Some(codegen_core::RelocIsa::RiscVHi20Lo12) => lir::BindKind::RiscVHi20Lo12,
                 None => lir::BindKind::None,
             },
@@ -1393,6 +1412,7 @@ pub struct IrWordOutput<'r> {
 
 #[allow(clippy::too_many_arguments)]
 pub fn build_ir_word<'r>(
+    target_spec: verifier::target::TargetSpec,
     decl: &DeclAst,
     src: &[u8],
     env: &[WordEntry],
@@ -1413,6 +1433,7 @@ pub fn build_ir_word<'r>(
 ) -> Result<IrWordOutput<'r>, TcError> {
     let name = lir_atom(slice_span(src, decl.name))?;
     let mut gen = IrWordGen::new(
+        target_spec,
         src,
         env,
         subtypes,

@@ -17,7 +17,7 @@ fn ensure_langc() {
     // to O_NONBLOCK; that flag leaks back to the outer `cargo test` harness,
     // whose writes then panic with EAGAIN.
     let out = Command::new(env!("CARGO"))
-        .current_dir(&common::workspace_root())
+        .current_dir(common::workspace_root())
         .args(["build", "-q", "-p", "langc"])
         .output()
         .expect("cargo build");

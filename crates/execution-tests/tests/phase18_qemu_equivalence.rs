@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use hosted::loader::HostedLoaderPlatform;
 use hosted::mem;
-use loader_core::load::{load_module, LoadedSet};
 use loader_core::apertures::ApertureRegistry;
+use loader_core::load::{load_module, LoadedSet};
 use loader_core::symbols::SymMap;
 
 const ORACLE_MOD: &str = "module Main;\n: main ( -- i64 ) 0 ;\nexport { main };\nend;\n";
@@ -80,7 +80,14 @@ fn host_loader_value(source: &str, dir: &Path) -> i64 {
     let ds_high = allocate_runtime_page();
     register_host_runtime_symtab(&mut map, ds_high);
     let mut set = LoadedSet::<64>::new();
-    load_module(&container, &mut platform, &mut map, &mut set, &mut ApertureRegistry::new()).unwrap();
+    load_module(
+        &container,
+        &mut platform,
+        &mut map,
+        &mut set,
+        &mut ApertureRegistry::new(),
+    )
+    .unwrap();
 
     let main = map.lookup_by_name(b"main").unwrap().addr;
     const DS_SIZE: usize = 65536;
@@ -130,7 +137,7 @@ fn register_host_runtime_symtab(map: &mut SymMap<'_, 256>, ds_high_addr: usize) 
 }
 
 fn allocate_runtime_page() -> usize {
-    unsafe { mem::mmap_anon(4096, mem::prot::READ | mem::prot::WRITE).unwrap() as usize }
+    mem::mmap_anon(4096, mem::prot::READ | mem::prot::WRITE).unwrap() as usize
 }
 
 fn assert_qemu_equivalence(target: common::DynamicTarget) {

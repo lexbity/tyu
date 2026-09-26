@@ -13,7 +13,9 @@ pub mod driver;
 pub mod iface;
 pub mod util;
 
-use codegen_core::compiled_desc::{decode_compiled_desc, validate_compiled_desc, CompiledDescriptor};
+use codegen_core::compiled_desc::{
+    decode_compiled_desc, validate_compiled_desc, CompiledDescriptor,
+};
 use codegen_core::{EmitMode, MmioApertureSpec, Target};
 use frontend::parse::{DeclKind, ModuleAst, Parser};
 use hosted::{diag, fs};
@@ -21,6 +23,10 @@ use hosted::{diag, fs};
 use crate::iface::{check_program, iface_error_message};
 use crate::util::{emit_parse_error, join_path, split_dir, Stdout};
 
+/// # Safety
+/// `argc`/`argv` must describe a valid C command-line argument array: `argc`
+/// pointers at `argv`, each pointing to a NUL-terminated string valid for the
+/// program's lifetime.
 pub unsafe fn run(argc: isize, argv: *const *const hosted::c::c_char) -> i32 {
     let cfg = match unsafe { args::parse_args(argc, argv) } {
         args::ParseResult::Ok(c) => c,
@@ -213,10 +219,7 @@ fn module_has_mmio_construct(module: &ModuleAst) -> bool {
     if !module.instances.is_empty() {
         return true;
     }
-    module
-        .decls
-        .iter()
-        .any(|d| d.kind == DeclKind::RegisterMap)
+    module.decls.iter().any(|d| d.kind == DeclKind::RegisterMap)
 }
 
 /// Load the compiled platform descriptor from `<dir>/platform.desc`.

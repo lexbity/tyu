@@ -7,7 +7,7 @@ use std::process::Command;
 
 fn build_langc() {
     let s = Command::new(env!("CARGO"))
-        .current_dir(&common::workspace_root())
+        .current_dir(common::workspace_root())
         .args(["build", "-q", "-p", "langc"])
         .status()
         .expect("cargo build");
@@ -312,8 +312,7 @@ fn langc_compile_g(
         .unwrap()
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("o") && !before.contains(p))
-        .next()
+        .find(|p| p.extension().and_then(|x| x.to_str()) == Some("o") && !before.contains(p))
         .expect("langc (g) produced no .o file")
 }
 

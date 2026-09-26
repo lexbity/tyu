@@ -24,7 +24,7 @@ use std::time::Duration;
 
 fn build_langc() {
     let s = Command::new(env!("CARGO"))
-        .current_dir(&common::workspace_root())
+        .current_dir(common::workspace_root())
         .args(["build", "-q", "-p", "langc", "-p", "tyu"])
         .status()
         .expect("cargo build");
@@ -32,7 +32,11 @@ fn build_langc() {
 }
 
 fn langc_dir(extra: &[&str], source: &str) -> PathBuf {
-    let dir = common::temp_dir(if extra.is_empty() { "s7_guarded" } else { "s7_elided" });
+    let dir = common::temp_dir(if extra.is_empty() {
+        "s7_guarded"
+    } else {
+        "s7_elided"
+    });
     let mod_path = dir.join("M.mod");
     std::fs::write(&mod_path, source).unwrap();
     let mut args: Vec<String> = vec![
@@ -179,7 +183,14 @@ end;
 
 #[test]
 fn elided_image_runs_correctly_under_qemu() {
-    if !common::require_tools(&["langc", "tyu", "fasm", "ld", "qemu-system-x86_64", "objdump"]) {
+    if !common::require_tools(&[
+        "langc",
+        "tyu",
+        "fasm",
+        "ld",
+        "qemu-system-x86_64",
+        "objdump",
+    ]) {
         return;
     }
     // Gate: the geometry requirement — the metal runtime exports the DS
@@ -218,13 +229,13 @@ fn elided_image_runs_correctly_under_qemu() {
     assert!(
         !outcome.timed_out,
         "elided image must complete, not hang (stdout: {:02x?})",
-        &outcome.stdout
+        outcome.stdout
     );
     let summary = harness_core::parse_output(&outcome.stdout);
     assert!(
         summary.completed,
         "elided image must emit the completion marker (stdout: {:02x?})",
-        &outcome.stdout
+        outcome.stdout
     );
 
     // The guarded build of the same source runs identically (control).
@@ -257,10 +268,8 @@ end;
     let out = tyu_metal_build("s7_refused", rec, true);
     // The report records the refusal honestly: top = ⊤, verdict open, guards
     // retained (never a silent elision of an unproven image).
-    let report: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(out.join("verify-report.json")).unwrap(),
-    )
-    .unwrap();
+    let report: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(out.join("verify-report.json")).unwrap()).unwrap();
     assert_eq!(report["contexts"]["stack"]["guards"], "retained");
     assert_eq!(report["contexts"]["stack"]["main"]["top"], true);
     assert_eq!(report["emitted_checks"]["data_stack_guards"], true);

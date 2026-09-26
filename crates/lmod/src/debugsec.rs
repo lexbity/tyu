@@ -273,13 +273,13 @@ mod tests {
         let (count, _) = decode_header(data).unwrap();
         assert_eq!(count as usize, entries.len());
 
-        for i in 0..entries.len() {
+        for (i, entry) in entries.iter().enumerate() {
             let parsed = read_entry(data, i as u32).unwrap();
-            assert_eq!(parsed.sym_hash, entries[i].sym_hash);
-            assert_eq!(parsed.name, entries[i].name);
-            assert_eq!(parsed.net, entries[i].net);
-            assert_eq!(parsed.high, entries[i].high);
-            assert_eq!(parsed.effects, entries[i].effects);
+            assert_eq!(parsed.sym_hash, entry.sym_hash);
+            assert_eq!(parsed.name, entry.name);
+            assert_eq!(parsed.net, entry.net);
+            assert_eq!(parsed.high, entry.high);
+            assert_eq!(parsed.effects, entry.effects);
         }
     }
 

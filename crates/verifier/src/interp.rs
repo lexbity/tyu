@@ -1,5 +1,5 @@
 //! Abstract interpretation over the IR (static-verification.md §7.2, slice
-//! P5): the in-tree interval engine.
+//! P5; PLAN-VERIFY-3 P2): the in-tree interval engine, now parameterized.
 //!
 //! ```text
 //! Interval = ⊥ | [lo, hi] | ⊤        (standard interval lattice)
@@ -7,12 +7,14 @@
 //! State    = { stack: slot → Interval×Origin, locals: id → Interval×Origin }
 //! ```
 //!
-//! [`State::step`] is the normative transfer table (§7.2) over the IR ops the
-//! lowering emits, with the arithmetic rules of [`crate::interval`] (checked
-//! bounds, overflow → `⊤`, sound versus wrapping). **Memory is not modeled**
-//! (Q4): `Load`/`MmioVol*` yield `⊤` unconditionally; `Call` yields `⊤`
-//! outputs. `BrIf` joins by hull union; conditions do not refine branches (no
-//! path sensitivity in v1).
+//! **Semantics is a function of `(TargetSpec, MemModel-instance)`, never a
+//! constant** (PLAN-VERIFY-3 §Q3): [`State::step`] is the normative transfer
+//! table (§7.2) over the IR ops the lowering emits, and every op transfers
+//! against the caller-supplied target identity and memory model. The default
+//! in-tree pair `(X86_64, FlatMem)` reproduces the pre-P2 behavior exactly
+//! (`FlatMem` yields `⊤` for every load/aperture read — Q4's "memory is not
+//! modeled"; the i64-with-wrap→⊤ rule re-expressed at the target word width,
+//! see [`crate::interval`]).
 //!
 //! Two consumers share this one transfer table:
 //! - [`Linear`] — the per-block states the *lowering* maintains incrementally
@@ -28,8 +30,13 @@ use alloc::vec::Vec;
 use ir::{BlockId, OpKind, TypeId};
 
 use crate::interval::{Interval, Tri};
+use crate::mem::MemModel;
+use crate::target::TargetSpec;
 
-pub use crate::interval::{bool_iv, eval_in_range, tri_and, tri_cmp, tri_from_bool_iv, tri_not, tri_or};
+pub use crate::interval::{
+    bool_iv, eval_in_range, tri_and, tri_cmp, tri_from_bool_iv, tri_not, tri_or,
+};
+pub use crate::mem::{ApertureMem, FlatMem};
 
 /// Max abstract stack/ local depth (mirrors the IR's own slot caps; the
 /// abstract state saturates, never panics).
@@ -187,11 +194,22 @@ impl State {
 
     /// The normative transfer function (§7.2 table). Soundness: every op
     /// either computes a conservative interval in [`crate::interval`], or
-    /// widens to `⊤` (memory, calls, addresses, unknown types).
-    pub fn step(&mut self, op: &OpKind, sr: &SubtypeRange<'_>) {
+    /// widens to `⊤` (calls, addresses, unknown types). Memory and MMIO
+    /// consult the caller-supplied [`MemModel`] (§Q13 — nondeterminism lives
+    /// at the trait boundary); the target identity relativizes the value
+    /// domain questions a model may ask (§Q3).
+    pub fn step(
+        &mut self,
+        op: &OpKind,
+        sr: &SubtypeRange<'_>,
+        spec: TargetSpec,
+        mem: &mut dyn MemModel,
+    ) {
         match op {
             OpKind::ConstI64(v) => self.push(Slot::computed(Interval::const_val(*v))),
-            OpKind::ConstBool(b) => self.push(Slot::computed(Interval::const_val(if *b { 1 } else { 0 }))),
+            OpKind::ConstBool(b) => {
+                self.push(Slot::computed(Interval::const_val(if *b { 1 } else { 0 })))
+            }
             OpKind::ConstStr(_) => self.push_top(),
             OpKind::AddrOf { .. } | OpKind::MmioPlace { .. } | OpKind::ScopedEnter { .. } => {
                 self.push_top()
@@ -251,11 +269,7 @@ impl State {
             }
             OpKind::LocalGet { slot, .. } => {
                 let idx = *slot as usize;
-                let v = self
-                    .locals
-                    .get(idx)
-                    .copied()
-                    .unwrap_or(Slot::top());
+                let v = self.locals.get(idx).copied().unwrap_or(Slot::top());
                 self.push(v);
             }
             OpKind::Cast { from: _, to } => {
@@ -286,18 +300,31 @@ impl State {
                 }
             }
             OpKind::Load { .. } => {
-                let _ = self.pop_val(); // address
-                self.push(Slot::computed(Interval::TOP)); // memory not modeled (Q4)
+                // P2: the abstract load is the memory model's answer
+                // (FlatMem: `⊤` — the default; ApertureMem: recorded point
+                // stores). The abstract address is passed through so a model
+                // can distinguish provably-reachable cells.
+                let addr = self.pop_val().iv;
+                let v = mem.load(addr, spec.word_bits);
+                self.push(Slot::computed(v));
             }
             OpKind::Store { .. } => {
-                let _ = self.pop2_val(); // address, value
+                // Stack is `[addr, value]` — value is on top; the runtime
+                // pops value, then address (matches `emit_binop`'s operand
+                // order; the address is pushed first / sits below).
+                let (addr, val) = self.pop2_val();
+                mem.store(addr.iv, val.iv);
             }
-            OpKind::MmioVolLoad { .. } | OpKind::MmioVolLoadField { .. } => {
+            OpKind::MmioVolLoad { place, .. } | OpKind::MmioVolLoadField { place, .. } => {
                 let _ = self.pop_val();
-                self.push(Slot::computed(Interval::TOP));
+                // §Q13: an MMIO read is the model's injected oracle — the
+                // nondeterministic value within the register's width.
+                let v = mem.aperture_read(place, spec.word_bits);
+                self.push(Slot::computed(v));
             }
-            OpKind::MmioVolStore { .. } | OpKind::MmioVolStoreField { .. } => {
-                let _ = self.pop2_val();
+            OpKind::MmioVolStore { place, .. } | OpKind::MmioVolStoreField { place, .. } => {
+                let (_addr, val) = self.pop2_val(); // `[addr, value]`, value on top
+                mem.aperture_write(place, val.iv);
             }
             OpKind::TrapIfFalse { .. } => {
                 let _ = self.pop_val();
@@ -424,29 +451,33 @@ fn push_i64(s: &mut String, mut v: i64) {
 
 #[derive(Clone, Debug)]
 pub struct Linear {
+    spec: TargetSpec,
     blocks: Vec<State>,
 }
 
 impl Linear {
-    /// Begin a word: block 0 holds the callee-entry state. `blocks < 16`
-    /// (the IR's cap); `inputs` seeds the entry stack.
-    pub fn new(inputs: usize, locals_cap: usize) -> Linear {
+    /// Begin a word under a target identity: block 0 holds the callee-entry
+    /// state. `spec` relativizes every transfer (PLAN-VERIFY-3 §Q3);
+    /// `blocks < 16` (the IR's cap); `inputs` seeds the entry stack.
+    pub fn new(spec: TargetSpec, inputs: usize, locals_cap: usize) -> Linear {
         Linear {
+            spec,
             blocks: vec![State::callee_entry(inputs, locals_cap)],
         }
     }
 
-    /// Transfer an op into block `b` (§7.2). The block's entry state must
-    /// already exist (seeded by the control-flow lowering); a missing state
-    /// is created fresh (⊤) defensively.
-    pub fn step(&mut self, b: BlockId, op: &OpKind, sr: &SubtypeRange<'_>) {
+    /// Transfer an op into block `b` (§7.2) with the per-call memory model.
+    /// The block's entry state must already exist (seeded by the
+    /// control-flow lowering); a missing state is created fresh (⊤)
+    /// defensively.
+    pub fn step(&mut self, b: BlockId, op: &OpKind, sr: &SubtypeRange<'_>, mem: &mut dyn MemModel) {
         let idx = b.0 as usize;
         if idx >= self.blocks.len() {
             while self.blocks.len() <= idx {
                 self.blocks.push(State::fresh(64));
             }
         }
-        self.blocks[idx].step(op, sr);
+        self.blocks[idx].step(op, sr, self.spec, mem);
     }
 
     /// Slice P6 (Q6): a contract-predicate call's arguments pass through
@@ -473,7 +504,10 @@ impl Linear {
     /// the block was never seeded.
     pub fn state_or_fresh(&self, b: BlockId) -> State {
         let idx = b.0 as usize;
-        self.blocks.get(idx).cloned().unwrap_or_else(|| State::fresh(64))
+        self.blocks
+            .get(idx)
+            .cloned()
+            .unwrap_or_else(|| State::fresh(64))
     }
 
     /// The top interval of block `b`'s abstract stack.
@@ -483,10 +517,7 @@ impl Linear {
 
     /// The abstract value of local slot `i` in block `b`.
     pub fn local_interval(&self, b: BlockId, i: usize) -> Interval {
-        self.state(b)
-            .locals
-            .get(i)
-            .map_or(Interval::TOP, |s| s.iv)
+        self.state(b).locals.get(i).map_or(Interval::TOP, |s| s.iv)
     }
 
     /// Seed `target` from block `src`, truncated to the branch-entry stack
@@ -541,7 +572,11 @@ fn hull_state(a: &State, b: &State, stack_len: usize) -> State {
         let y = b.stack[i];
         stack.push(Slot {
             iv: x.iv.join(y.iv),
-            origin: if x.origin == y.origin { x.origin } else { Origin::Computed },
+            origin: if x.origin == y.origin {
+                x.origin
+            } else {
+                Origin::Computed
+            },
         });
     }
     let locals_cap = core::cmp::max(a.locals.len(), b.locals.len());
@@ -551,7 +586,11 @@ fn hull_state(a: &State, b: &State, stack_len: usize) -> State {
         let y = b.locals.get(i).copied().unwrap_or(Slot::top());
         locals.push(Slot {
             iv: x.iv.join(y.iv),
-            origin: if x.origin == y.origin { x.origin } else { Origin::Computed },
+            origin: if x.origin == y.origin {
+                x.origin
+            } else {
+                Origin::Computed
+            },
         });
     }
     State { stack, locals }
@@ -559,13 +598,20 @@ fn hull_state(a: &State, b: &State, stack_len: usize) -> State {
 
 /// The back-edge widening: `v ∇ old = old if new ⊑ old, else ⊤` (§7.2).
 fn widen_state(header: &State, body_end: &State, stack_len: usize) -> State {
-    let n = core::cmp::min(stack_len, core::cmp::min(header.stack.len(), body_end.stack.len()));
+    let n = core::cmp::min(
+        stack_len,
+        core::cmp::min(header.stack.len(), body_end.stack.len()),
+    );
     let mut stack = Vec::with_capacity(n);
     for i in 0..n {
         let old = header.stack[i];
         let new = body_end.stack[i];
         stack.push(Slot {
-            iv: if new.iv.subset_of(old.iv) { old.iv } else { Interval::TOP },
+            iv: if new.iv.subset_of(old.iv) {
+                old.iv
+            } else {
+                Interval::TOP
+            },
             origin: if old.origin == Origin::Top || old.origin == new.origin {
                 old.origin
             } else {
@@ -579,7 +625,11 @@ fn widen_state(header: &State, body_end: &State, stack_len: usize) -> State {
         let old = header.locals.get(i).copied().unwrap_or(Slot::top());
         let new = body_end.locals.get(i).copied().unwrap_or(Slot::top());
         locals.push(Slot {
-            iv: if new.iv.subset_of(old.iv) { old.iv } else { Interval::TOP },
+            iv: if new.iv.subset_of(old.iv) {
+                old.iv
+            } else {
+                Interval::TOP
+            },
             origin: if old.origin == Origin::Top || old.origin == new.origin {
                 old.origin
             } else {
@@ -609,7 +659,12 @@ pub struct CfResult {
 /// keep `old` when `new ⊑ old`, else `⊤`), so loop-carried slots reach `⊤` in
 /// ≤ 2 visits; a first visit hull-joins (the target may have fallen through
 /// several entries). Terminates by construction.
-pub fn run_cfg(word: &ir::Word, sr: &SubtypeRange<'_>) -> CfResult {
+pub fn run_cfg(
+    word: &ir::Word,
+    sr: &SubtypeRange<'_>,
+    spec: TargetSpec,
+    mem: &mut dyn MemModel,
+) -> CfResult {
     let nblocks = word.blocks.len().max(1);
     let mut states: Vec<State> = vec![State::callee_entry(word.sig.in_len as usize, 64)];
     while states.len() < nblocks {
@@ -632,11 +687,11 @@ pub fn run_cfg(word: &ir::Word, sr: &SubtypeRange<'_>) -> CfResult {
         };
         let mut flow = states[idx].clone();
         for op in block.ops.iter() {
-            flow.step(&op.kind, sr);
+            flow.step(&op.kind, sr, spec, mem);
         }
         // Propagate to block terminators' successors (Ret/Load-flows are
         // intra-block; Br/BrIf route).
-        for tgt in block_successors_from(&block) {
+        for tgt in block_successors_from(block) {
             let ti = tgt.0 as usize;
             if visits[ti] > 0 {
                 // Back-edge (FR-12 widening: v ∇ old = old if new ⊑ old else ⊤).
@@ -655,10 +710,7 @@ pub fn run_cfg(word: &ir::Word, sr: &SubtypeRange<'_>) -> CfResult {
 fn block_successors_from(block: &ir::Block) -> Vec<BlockId> {
     match block.ops.iter().last().map(|op| &op.kind) {
         Some(OpKind::Br { target }) => vec![*target],
-        Some(OpKind::BrIf {
-            then_tgt,
-            else_tgt,
-        }) => vec![*then_tgt, *else_tgt],
+        Some(OpKind::BrIf { then_tgt, else_tgt }) => vec![*then_tgt, *else_tgt],
         _ => Vec::new(),
     }
 }
@@ -670,11 +722,23 @@ fn merge_first_visit(old: &State, incoming: &State) -> State {
     let max_stack = core::cmp::max(old.stack.len(), incoming.stack.len());
     let mut stack = Vec::with_capacity(max_stack);
     for i in 0..max_stack {
-        let a = old.stack.get(i).copied().unwrap_or(Slot::computed(Interval::BOTTOM));
-        let b = incoming.stack.get(i).copied().unwrap_or(Slot::computed(Interval::BOTTOM));
+        let a = old
+            .stack
+            .get(i)
+            .copied()
+            .unwrap_or(Slot::computed(Interval::BOTTOM));
+        let b = incoming
+            .stack
+            .get(i)
+            .copied()
+            .unwrap_or(Slot::computed(Interval::BOTTOM));
         stack.push(Slot {
             iv: a.iv.join(b.iv),
-            origin: if a.origin == b.origin { a.origin } else { Origin::Computed },
+            origin: if a.origin == b.origin {
+                a.origin
+            } else {
+                Origin::Computed
+            },
         });
     }
     let cap = core::cmp::max(old.locals.len(), incoming.locals.len());
@@ -684,7 +748,11 @@ fn merge_first_visit(old: &State, incoming: &State) -> State {
         let b = incoming.locals.get(i).copied().unwrap_or(Slot::top());
         locals.push(Slot {
             iv: a.iv.join(b.iv),
-            origin: if a.origin == b.origin { a.origin } else { Origin::Computed },
+            origin: if a.origin == b.origin {
+                a.origin
+            } else {
+                Origin::Computed
+            },
         });
     }
     State { stack, locals }
@@ -693,20 +761,25 @@ fn merge_first_visit(old: &State, incoming: &State) -> State {
 /// The exit (return) state of a CFG: the fold of every `Ret` block's ops,
 /// hull-joined over all return blocks. The value the word returns is on the
 /// (abstract) stack of this state.
-pub fn exit_state(cf: &CfResult, word: &ir::Word, sr: &SubtypeRange<'_>) -> State {
+pub fn exit_state(
+    cf: &CfResult,
+    word: &ir::Word,
+    sr: &SubtypeRange<'_>,
+    spec: TargetSpec,
+    mem: &mut dyn MemModel,
+) -> State {
     let mut acc: Option<State> = None;
     for (i, block) in word.blocks.iter().enumerate() {
-        let rets = matches!(block.ops.iter().last().map(|op| &op.kind), Some(OpKind::Ret));
+        let rets = matches!(
+            block.ops.iter().last().map(|op| &op.kind),
+            Some(OpKind::Ret)
+        );
         if !rets {
             continue;
         }
-        let mut flow = cf
-            .states
-            .get(i)
-            .cloned()
-            .unwrap_or_else(|| State::fresh(1));
+        let mut flow = cf.states.get(i).cloned().unwrap_or_else(|| State::fresh(1));
         for op in block.ops.iter() {
-            flow.step(&op.kind, sr);
+            flow.step(&op.kind, sr, spec, mem);
         }
         acc = Some(match acc {
             None => flow,
@@ -745,9 +818,11 @@ pub fn discharge_word(
     word: &ir::Word,
     obligations: &[crate::model::Obligation],
     sr: &SubtypeRange<'_>,
+    spec: TargetSpec,
+    mem: &mut dyn MemModel,
 ) -> Vec<SiteVerdict> {
-    let cf = run_cfg(word, sr);
-    let exit = exit_state(&cf, word, sr);
+    let cf = run_cfg(word, sr, spec, mem);
+    let exit = exit_state(&cf, word, sr, spec, mem);
     let mut cast_occurrence = 0usize;
     let mut seen_casts = Vec::new();
     // Walk the CFG in block order collecting the pre-cast tops of narrowing
@@ -761,7 +836,7 @@ pub fn discharge_word(
                     seen_casts.push(flow.top_interval());
                 }
             }
-            flow.step(&op.kind, sr);
+            flow.step(&op.kind, sr, spec, mem);
         }
     }
 
@@ -775,7 +850,9 @@ pub fn discharge_word(
                     return SiteVerdict {
                         status: crate::verdict::VerdictStatus::Open,
                         provably_failing: false,
-                        reason: Some("mmio-bounds obligations are descriptor-discharged".to_string()),
+                        reason: Some(
+                            "mmio-bounds obligations are descriptor-discharged".to_string(),
+                        ),
                     };
                 }
                 // Contract obligations (slice P6) are resolved at their
@@ -786,7 +863,9 @@ pub fn discharge_word(
                     return SiteVerdict {
                         status: crate::verdict::VerdictStatus::Open,
                         provably_failing: false,
-                        reason: Some("contract obligations are resolved at the emission site".to_string()),
+                        reason: Some(
+                            "contract obligations are resolved at the emission site".to_string(),
+                        ),
                     };
                 }
             };
@@ -801,7 +880,10 @@ pub fn discharge_word(
                     _ => Interval::TOP, // $top: opaque
                 },
                 Oel::Cast { .. } => {
-                    let v = seen_casts.get(cast_occurrence).copied().unwrap_or(Interval::TOP);
+                    let v = seen_casts
+                        .get(cast_occurrence)
+                        .copied()
+                        .unwrap_or(Interval::TOP);
                     cast_occurrence += 1;
                     v
                 }
@@ -818,7 +900,6 @@ pub fn discharge_word(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::string::ToString;
 
     /// The C4 store-interval path (slice P5): a store's pre-value interval
     /// drives the discharge — a bounded in-range store discharges, a ⊤ store
@@ -832,27 +913,55 @@ mod tests {
 
         let wild = InTreeVerdict::of_range(Interval::TOP, 0, 100);
         assert_eq!(wild.status, crate::verdict::VerdictStatus::Open);
-        assert!(!wild.provably_failing, "⊤ store is open, never provably failing");
+        assert!(
+            !wild.provably_failing,
+            "⊤ store is open, never provably failing"
+        );
 
         let bad = InTreeVerdict::of_range(Interval::Range { lo: 150, hi: 150 }, 0, 100);
         assert_eq!(bad.status, crate::verdict::VerdictStatus::Open);
-        assert!(bad.provably_failing, "out-of-range store → provably_failing");
+        assert!(
+            bad.provably_failing,
+            "out-of-range store → provably_failing"
+        );
     }
 
     /// The linear flow through a callee body: a constant return narrows the
     /// output interval (the C2 discharge source).
     #[test]
     fn linear_flow_tracks_constants_through_arithmetic() {
+        let mut mem = FlatMem;
         let mut st = State::callee_entry(0, 4);
-        st.step(&OpKind::ConstI64(100), sr_static());
-        st.step(&OpKind::ConstI64(50), sr_static());
-        st.step(&OpKind::SubI64, sr_static());
+        st.step(
+            &OpKind::ConstI64(100),
+            sr_static(),
+            TargetSpec::X86_64,
+            &mut mem,
+        );
+        st.step(
+            &OpKind::ConstI64(50),
+            sr_static(),
+            TargetSpec::X86_64,
+            &mut mem,
+        );
+        st.step(&OpKind::SubI64, sr_static(), TargetSpec::X86_64, &mut mem);
         assert_eq!(st.top_interval(), Interval::Range { lo: 50, hi: 50 });
-        st.step(&OpKind::ConstI64(3), sr_static());
-        st.step(&OpKind::AddI64, sr_static());
+        st.step(
+            &OpKind::ConstI64(3),
+            sr_static(),
+            TargetSpec::X86_64,
+            &mut mem,
+        );
+        st.step(&OpKind::AddI64, sr_static(), TargetSpec::X86_64, &mut mem);
         assert_eq!(st.top_interval(), Interval::Range { lo: 53, hi: 53 });
-        // A Load cuts the flow to ⊤ (Q4 — memory is not modeled).
-        st.step(&OpKind::Load { ty: ir::TypeId(0) }, sr_static());
+        // A Load cuts the flow to ⊤ (FlatMem — memory not modeled; the
+        // parameterized model boundary, PLAN-VERIFY-3 P2).
+        st.step(
+            &OpKind::Load { ty: ir::TypeId(0) },
+            sr_static(),
+            TargetSpec::X86_64,
+            &mut mem,
+        );
         assert_eq!(st.top_interval(), Interval::TOP);
     }
 

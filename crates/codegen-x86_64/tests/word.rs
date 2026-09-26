@@ -1,5 +1,5 @@
 use codegen_core::CodegenError;
-use ir::{Atom, Block, BlockId, CmpKind, OpKind, TrapCode, Word, TY_BOOL, TY_I64, TY_PTR, TY_STR};
+use ir::{BlockId, CmpKind, OpKind, TrapCode, Word, TY_BOOL, TY_I64, TY_PTR};
 
 mod util;
 use util::*;
@@ -10,7 +10,6 @@ use util::*;
 
 const IMM: i64 = 0xBEEF;
 const IMM2: i64 = 0xCAFE;
-const IMM3: i64 = 0xDEAD;
 
 #[test]
 fn emit_const_i64() {
@@ -430,7 +429,10 @@ fn emit_load() {
                 OpKind::AddrOf {
                     place: atom(b"x"),
                     mutable: true,
-                    base: ir::AddrOfBase::Mmio { aperture: 0, offset: 0x1000 },
+                    base: ir::AddrOfBase::Mmio {
+                        aperture: 0,
+                        offset: 0x1000,
+                    },
                 },
                 OpKind::Load { ty: TY_I64 },
                 OpKind::Ret,
@@ -450,7 +452,10 @@ fn emit_store() {
                 OpKind::AddrOf {
                     place: atom(b"x"),
                     mutable: true,
-                    base: ir::AddrOfBase::Mmio { aperture: 0, offset: 0x1000 },
+                    base: ir::AddrOfBase::Mmio {
+                        aperture: 0,
+                        offset: 0x1000,
+                    },
                 },
                 OpKind::ConstI64(IMM),
                 OpKind::Store { ty: TY_I64 },
@@ -476,7 +481,10 @@ fn emit_ptr_add_const() {
                 OpKind::AddrOf {
                     place: atom(b"x"),
                     mutable: false,
-                    base: ir::AddrOfBase::Mmio { aperture: 0, offset: 0x1000 },
+                    base: ir::AddrOfBase::Mmio {
+                        aperture: 0,
+                        offset: 0x1000,
+                    },
                 },
                 OpKind::PtrAddConst {
                     ty: TY_PTR,
@@ -644,7 +652,10 @@ fn emit_load_i64_from_ptr() {
                 OpKind::AddrOf {
                     place: atom(b"x"),
                     mutable: false,
-                    base: ir::AddrOfBase::Mmio { aperture: 0, offset: 0x1000 },
+                    base: ir::AddrOfBase::Mmio {
+                        aperture: 0,
+                        offset: 0x1000,
+                    },
                 },
                 OpKind::Load { ty: TY_I64 },
                 OpKind::Ret,
@@ -686,10 +697,10 @@ fn multi_block_labels_are_unique() {
         let asm = out.as_str();
         // Count label occurrences: they should be distinct (e.g., .L1, .L2)
         // A simple check: verify the output contains different label patterns.
-        let label_count_0 = asm.matches(".L0").count();
-        let label_count_1 = asm.matches(".L1").count();
+        let _label_count_0 = asm.matches(".L0").count();
+        let _label_count_1 = asm.matches(".L1").count();
         // The important thing is that the backend didn't crash or produce
         // duplicate label definitions.
-        assert!(asm.len() > 0, "output should not be empty");
+        assert!(!asm.is_empty(), "output should not be empty");
     });
 }

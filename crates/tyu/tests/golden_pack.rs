@@ -28,7 +28,7 @@ fn golden_dir() -> PathBuf {
 fn golden_pack_matches_committed() {
     // Ensure lmod-pack is built.
     let status = Command::new(env!("CARGO"))
-        .current_dir(&workspace_root())
+        .current_dir(workspace_root())
         .args(["build", "-q", "-p", "langc", "-p", "lmod-pack"])
         .status()
         .expect("cargo build");

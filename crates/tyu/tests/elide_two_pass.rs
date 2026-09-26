@@ -112,7 +112,11 @@ fn module_object(out_dir: &Path) -> PathBuf {
         })
         .collect();
     hits.sort();
-    assert!(!hits.is_empty(), "no module object in {}", out_dir.display());
+    assert!(
+        !hits.is_empty(),
+        "no module object in {}",
+        out_dir.display()
+    );
     hits.remove(0)
 }
 
@@ -130,7 +134,11 @@ fn stack_overflow_refs(obj: &Path) -> usize {
 
 #[test]
 fn finite_main_elides_guards_on_metal() {
-    let (out_dir, stderr, ok) = build("finite_elided", &[METAL, &["--elide-stack-guards"]].concat(), FINITE_MOD);
+    let (out_dir, stderr, ok) = build(
+        "finite_elided",
+        &[METAL, &["--elide-stack-guards"]].concat(),
+        FINITE_MOD,
+    );
     assert!(ok, "elided metal build must succeed:\n{stderr}");
     let r = report(&out_dir);
     assert_eq!(r["contexts"]["stack"]["guards"], "elided");
@@ -157,12 +165,22 @@ fn finite_main_elides_guards_on_metal() {
 
 #[test]
 fn recursive_main_keeps_guards_with_open_reason() {
-    let (out_dir, stderr, ok) = build("recursive", &[METAL, &["--elide-stack-guards"]].concat(), RECURSIVE_MOD);
-    assert!(ok, "top-main build must still succeed (guards retained, not an error):\n{stderr}");
+    let (out_dir, stderr, ok) = build(
+        "recursive",
+        &[METAL, &["--elide-stack-guards"]].concat(),
+        RECURSIVE_MOD,
+    );
+    assert!(
+        ok,
+        "top-main build must still succeed (guards retained, not an error):\n{stderr}"
+    );
     let r = report(&out_dir);
     assert_eq!(r["contexts"]["stack"]["guards"], "retained");
     assert_eq!(r["emitted_checks"]["data_stack_guards"], true);
-    assert_eq!(r["contexts"]["stack"]["main"]["top"], true, "recursive main is high = ⊤");
+    assert_eq!(
+        r["contexts"]["stack"]["main"]["top"], true,
+        "recursive main is high = ⊤"
+    );
     assert_eq!(r["contexts"]["stack"]["main"]["verdict"], "open");
     // Guards present in the object despite the request — elision refused.
     assert!(stack_overflow_refs(&module_object(&out_dir)) > 0);
@@ -173,7 +191,11 @@ fn event_loop_diverges_but_elides() {
     // §3.2 correction pinned: a diverging-but-finite event loop (`[ poll ]
     // loop`) has finite `high`, so the image verdict discharges and elision
     // is allowed — DIVERGE is not the elision criterion.
-    let (out_dir, stderr, ok) = build("evloop", &[METAL, &["--elide-stack-guards"]].concat(), EVENT_LOOP_MOD);
+    let (out_dir, stderr, ok) = build(
+        "evloop",
+        &[METAL, &["--elide-stack-guards"]].concat(),
+        EVENT_LOOP_MOD,
+    );
     assert!(ok, "event-loop elided build must succeed:\n{stderr}");
     let r = report(&out_dir);
     assert_eq!(r["contexts"]["stack"]["guards"], "elided");
@@ -199,14 +221,28 @@ fn hosted_runtime_keeps_guards_fail_closed() {
 #[test]
 fn elide_static_only_and_requires_verify_on() {
     // Dynamic images have no single derived geometry — refused loudly.
-    let (_, stderr, ok) = build("dyn", &["--target=x86_64-unknown-none", "--platform=x86_64-unknown-none", "--elide-stack-guards"], FINITE_MOD);
+    let (_, stderr, ok) = build(
+        "dyn",
+        &[
+            "--target=x86_64-unknown-none",
+            "--platform=x86_64-unknown-none",
+            "--elide-stack-guards",
+        ],
+        FINITE_MOD,
+    );
     assert!(!ok);
-    assert!(stderr.contains("static"), "dynamic elision refused: {stderr}");
+    assert!(
+        stderr.contains("static"),
+        "dynamic elision refused: {stderr}"
+    );
     // `--verify=off` is the legacy all-checks path — elision has no verdict
     // to discharge against; refused loudly, never a silent guarded build.
     let (_, stderr2, ok2) = build("off", &["--verify=off", "--elide-stack-guards"], FINITE_MOD);
     assert!(!ok2);
-    assert!(stderr2.contains("--verify=on"), "verify=off elision refused: {stderr2}");
+    assert!(
+        stderr2.contains("--verify=on"),
+        "verify=off elision refused: {stderr2}"
+    );
 }
 
 #[test]
@@ -215,7 +251,11 @@ fn pass1_failure_leaves_no_partial_outputs() {
     // `.tyu-elide-pass1-*` scratch and no partial module artifacts.
     let dir = fresh_dir("pass1fail");
     let mod_path = dir.join("M.mod");
-    fs::write(&mod_path, "module M;\n: main ( -- i64 )\n @@@ not valid ;\nend;\n").unwrap();
+    fs::write(
+        &mod_path,
+        "module M;\n: main ( -- i64 )\n @@@ not valid ;\nend;\n",
+    )
+    .unwrap();
     let out_dir = dir.join("out");
     fs::create_dir_all(&out_dir).unwrap();
     let status = Command::new(tyu_exe())
@@ -267,7 +307,11 @@ fn elided_and_guarded_builds_have_distinct_cache_entries() {
             cmd.arg(a);
         }
         let out = cmd.output().expect("tyu invocation");
-        assert!(out.status.success(), "build failed: {}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "build failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     };
 
     run(&["--elide-stack-guards"]);
@@ -279,7 +323,11 @@ fn elided_and_guarded_builds_have_distinct_cache_entries() {
         .collect();
     assert_eq!(elided_objs.len(), 1);
     let elided_obj = out_dir.join(&elided_objs[0]);
-    assert_eq!(stack_overflow_refs(&elided_obj), 0, "elided object has no guards");
+    assert_eq!(
+        stack_overflow_refs(&elided_obj),
+        0,
+        "elided object has no guards"
+    );
 
     run(&["--elide-stack-guards"]);
     let elided_objs2: Vec<String> = fs::read_dir(&out_dir)
@@ -299,10 +347,17 @@ fn elided_and_guarded_builds_have_distinct_cache_entries() {
     // guards (FR-16: the object always agrees with the report).
     run(&[]);
     let guarded = module_object(&out_dir);
-    assert!(stack_overflow_refs(&guarded) > 0, "guarded object has guards");
+    assert!(
+        stack_overflow_refs(&guarded) > 0,
+        "guarded object has guards"
+    );
     let _ = fs::remove_dir_all(&dir);
 
-    let (out_dir2, _stderr2, ok2) = build("cache_after_guarded", &[METAL, &["--elide-stack-guards"]].concat(), FINITE_MOD);
+    let (out_dir2, _stderr2, ok2) = build(
+        "cache_after_guarded",
+        &[METAL, &["--elide-stack-guards"]].concat(),
+        FINITE_MOD,
+    );
     assert!(ok2);
     let r2 = report(&out_dir2);
     assert_eq!(r2["contexts"]["stack"]["guards"], "elided");
@@ -322,5 +377,8 @@ fn assert_no_pass1_scratch(out_dir: &Path) {
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .filter(|n| n.contains(".tyu-elide-pass1"))
         .collect();
-    assert!(leftovers.is_empty(), "pass-1 scratch must be discarded: {leftovers:?}");
+    assert!(
+        leftovers.is_empty(),
+        "pass-1 scratch must be discarded: {leftovers:?}"
+    );
 }

@@ -22,8 +22,8 @@ pub fn read_site(site: &[u8], site_off: usize) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{apply, read_site};
     use super::super::APERTURE_BASE_SITE_SIZE;
+    use super::{apply, read_site};
 
     #[test]
     fn arm_site_roundtrip() {

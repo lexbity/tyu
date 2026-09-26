@@ -20,6 +20,10 @@
 //!   hash-bound object (`tyu.stmt/1.0`) a developer's proof binds to, plus
 //!   the `.obl.json` v2 growth (intent, assumption edges, cycles, target/
 //!   model relativity; see `devdocs/plans/developer-proof-pipeline.md`).
+//! - PLAN-VERIFY-3 P2: the parameterized reference semantics — verifier-local
+//!   target identity ([`target`]), the memory-model boundary ([`mem`]), the
+//!   promoted program generator ([`gen`]), and the width-relative
+//!   `(TargetSpec, MemModel)` threading through [`interp`].
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -27,10 +31,13 @@
 extern crate alloc;
 
 pub mod codec;
-pub mod interval;
+pub mod gen;
 pub mod interp;
+pub mod interval;
+pub mod mem;
 pub mod model;
 pub mod report;
 pub mod semantics;
 pub mod stmt;
+pub mod target;
 pub mod verdict;

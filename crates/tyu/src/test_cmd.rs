@@ -57,6 +57,9 @@ fn required_tools(target: Target) -> &'static [&'static str] {
 }
 
 #[derive(Clone, Debug)]
+// Variants deliberately differ in size: the platform branch carries the resolved pack, the
+// target-only branch is a single byte; boxing would add indirection to every access.
+#[allow(clippy::large_enum_variant)]
 enum TestSelection {
     Target(Target),
     Platform(ResolvedPlatformSelection),
@@ -264,7 +267,7 @@ pub fn run(args: &TestArgs) -> Result<(), TyuError> {
                 continue;
             }
 
-            let result = run_single_suite(fixture, &selection, fixtures_dir, feature_set);
+            let result = run_single_suite(fixture, selection, fixtures_dir, feature_set);
             let result = poison_verdict(fixture, result);
             match result {
                 Ok(()) => {
@@ -483,13 +486,11 @@ fn fixture_qemu_eligible(fixture: &FixtureEntry, target: Target) -> Option<Strin
                     ));
                 }
             }
-            AxisGate::Qemu(QemuAxisGate::InterruptSource) => {
-                if qemu.interrupt_source.is_none() {
-                    return Some(format!(
-                        "axis '{}' requires interrupt_source which this target lacks",
-                        axis.as_str()
-                    ));
-                }
+            AxisGate::Qemu(QemuAxisGate::InterruptSource) if qemu.interrupt_source.is_none() => {
+                return Some(format!(
+                    "axis '{}' requires interrupt_source which this target lacks",
+                    axis.as_str()
+                ));
             }
             _ => {}
         }
@@ -511,12 +512,12 @@ fn required_axes_for_selection(
                 .iter()
                 .any(|service| capabilities.contains(*service)),
             AxisGate::Qemu(qag) => {
-                target.spec().qemu.map_or(false, |q| match qag {
+                target.spec().qemu.is_some_and(|q| match qag {
                     QemuAxisGate::MmioScratch => q.mmio_scratch.is_some(),
                     QemuAxisGate::InterruptSource => q.interrupt_source.is_some(),
-                }) && fixtures
-                    .iter()
-                    .any(|fixture| eligible_fixture_covers_axis(fixture, target, capabilities, axis))
+                }) && fixtures.iter().any(|fixture| {
+                    eligible_fixture_covers_axis(fixture, target, capabilities, axis)
+                })
             }
         };
         if is_required {
@@ -838,7 +839,7 @@ fn run_single_suite(
 
     // Build langc first.
     let _ = Command::new(env!("CARGO"))
-        .current_dir(&workspace_root())
+        .current_dir(workspace_root())
         .args(["build", "-q", "-p", "langc"])
         .status();
 
@@ -970,7 +971,7 @@ fn run_single_suite(
         };
 
         let extra = escalate_text
-            .or_else(|| {
+            .or({
                 if diag_text.is_empty() {
                     None
                 } else {
@@ -1081,7 +1082,7 @@ fn decode_diags_from_stdout(stdout: &[u8], fixture_o: &Path, fixture_src: Option
     let debug_bytes = elf_reader::read_elf_section(&elf_bytes, b".lang.debug");
     let modinfo_bytes = elf_reader::read_elf_section(&elf_bytes, b".lang.modinfo");
 
-    let index = if let Some(ref dbg) = debug_bytes {
+    let index = if let Some(dbg) = debug_bytes {
         match diag_core::decode::ModinfoIndex::from_debug_bytes(dbg) {
             Some(idx) => idx,
             None => {
@@ -1091,7 +1092,7 @@ fn decode_diags_from_stdout(stdout: &[u8], fixture_o: &Path, fixture_src: Option
                 )
             }
         }
-    } else if let Some(ref minfo) = modinfo_bytes {
+    } else if let Some(minfo) = modinfo_bytes {
         match diag_core::decode::ModinfoIndex::from_modinfo_bytes(minfo) {
             Some(idx) => idx,
             None => {
@@ -1378,7 +1379,15 @@ fn compile_mod(
     let sysroot = workspace_root().join("sysroot");
     let mut include_dirs = vec![fixtures_dir()];
     include_dirs.push(ctx.out_dir.clone());
-    compile_mod_pipeline(ctx, src, is_lib, feature_set, &sysroot, &include_dirs, policy)
+    compile_mod_pipeline(
+        ctx,
+        src,
+        is_lib,
+        feature_set,
+        &sysroot,
+        &include_dirs,
+        policy,
+    )
 }
 
 /// The legacy single-module compile (pre-slice-8 behavior): langc
@@ -1428,7 +1437,10 @@ fn compile_mod_pipeline(
     // per fixture, so repeated runs share the slot and the cache discipline).
     let slot_dir = ctx.out_dir.join(".tyu-verify");
     std::fs::create_dir_all(&slot_dir).map_err(TyuError::Io)?;
-    let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("fixture");
+    let stem = src
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("fixture");
     let slot = slot_dir.join(format!("{stem}-policy.verdicts.json"));
     let empty = verifier::verdict::encode_verdicts(
         "tyu",
@@ -1477,20 +1489,19 @@ fn compile_mod_pipeline(
 
     // langc names the object after the module *declaration*; pick the newly
     // produced `.o` (same heuristic as `build::compile_simple`).
-    Ok(std::fs::read_dir(&ctx.out_dir)
+    std::fs::read_dir(&ctx.out_dir)
         .ok()
         .into_iter()
         .flat_map(|rd| rd.filter_map(|e| e.ok()))
         .map(|e| e.path())
-        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("o") && !before.contains(p))
-        .next()
+        .find(|p| p.extension().and_then(|x| x.to_str()) == Some("o") && !before.contains(p))
         .ok_or_else(|| {
             TyuError::Test(format!(
                 "langc produced no .o for '{}' in '{}'",
                 src.display(),
                 ctx.out_dir.display(),
             ))
-        })?)
+        })
 }
 
 /// Slice 8: hold a policy-adopting fixture to its declared `verify_policy`
@@ -1507,7 +1518,9 @@ fn enforce_fixture_verify_policy(
     policy: crate::args::VerifyPolicy,
 ) -> Result<(), TyuError> {
     let artifact = ctx.out_dir.join(format!("{module_name}.obl.json"));
-    let echo_path = ctx.out_dir.join(format!("{module_name}.verdicts.inTree.json"));
+    let echo_path = ctx
+        .out_dir
+        .join(format!("{module_name}.verdicts.inTree.json"));
     let obls = std::fs::read(&artifact).map_err(|e| {
         TyuError::Test(format!(
             "verify_policy={}: reading '{}': {e}",
@@ -1515,8 +1528,12 @@ fn enforce_fixture_verify_policy(
             artifact.display()
         ))
     })?;
-    let set = verifier::codec::read_obl(&obls)
-        .map_err(|e| TyuError::Test(format!("obligation artifact invalid (E{}): {e:?}", e.code())))?;
+    let set = verifier::codec::read_obl(&obls).map_err(|e| {
+        TyuError::Test(format!(
+            "obligation artifact invalid (E{}): {e:?}",
+            e.code()
+        ))
+    })?;
     let echo = verifier::verdict::read_echo(&std::fs::read(&echo_path).map_err(|e| {
         TyuError::Test(format!(
             "verify_policy={}: reading verdicts echo '{}': {e}",
@@ -1534,14 +1551,18 @@ fn enforce_fixture_verify_policy(
     let assumed: Vec<&verifier::model::Obligation> = set
         .obligations
         .iter()
-        .filter_map(|o| match echo.verdicts.lookup(&o.id, &o.id_hash) {
-            Some(r) if r.status == verifier::verdict::VerdictStatus::Assumed => Some(o),
-            _ => None,
+        .filter(|o| {
+            matches!(
+                echo.verdicts.lookup(&o.id, &o.id_hash),
+                Some(r) if r.status == verifier::verdict::VerdictStatus::Assumed
+            )
         })
         .collect();
 
-    let fails_open = matches!(policy, crate::args::VerifyPolicy::NoOpen | crate::args::VerifyPolicy::NoOpenNoAssumptions)
-        && !open.is_empty();
+    let fails_open = matches!(
+        policy,
+        crate::args::VerifyPolicy::NoOpen | crate::args::VerifyPolicy::NoOpenNoAssumptions
+    ) && !open.is_empty();
     let fails_assumed =
         policy == crate::args::VerifyPolicy::NoOpenNoAssumptions && !assumed.is_empty();
     if fails_open || fails_assumed {
@@ -1639,35 +1660,6 @@ mod tests {
 
     fn report_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("tyu_test_cmd_{name}_{}.json", std::process::id()))
-    }
-
-    fn write_pack(root: &Path, rel: &str, name: &str, triple: &str, rung: &str) {
-        let path = root.join(rel);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(
-            path,
-            format!(
-                r#"
-[platform]
-name = "{name}"
-compiler-interface = 1
-
-[[platform.isa]]
-triple = "{triple}"
-arch = "x86_64"
-default = true
-
-[metal]
-path = "."
-startup = "runtime.asm"
-linker = "link.ld"
-
-[test]
-rung = "{rung}"
-"#
-            ),
-        )
-        .unwrap();
     }
 
     #[test]

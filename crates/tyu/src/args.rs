@@ -441,7 +441,8 @@ fn parse_common(args: &[String], extra_known: &[&str]) -> Result<CommonArgs, ()>
             metal_sign_key = Some(val.to_string());
         } else if let Some(val) = a.strip_prefix("--metal-kek=") {
             metal_kek = Some(val.to_string());
-        } else if let Some(val) = a.strip_prefix("--metal-encrypt=")
+        } else if let Some(val) = a
+            .strip_prefix("--metal-encrypt=")
             .or_else(|| a.strip_prefix("--metal-enc="))
         {
             metal_encrypt_mode = match val {
@@ -1111,8 +1112,14 @@ mod tests {
             parse_build(&strings(&["Main.mod", "--platform"])),
             Command::Usage
         ));
-        assert!(matches!(parse_build(&strings(&["Main.mod", "--isa"])), Command::Usage));
-        assert!(matches!(parse_build(&strings(&["Main.mod", "-I"])), Command::Usage));
+        assert!(matches!(
+            parse_build(&strings(&["Main.mod", "--isa"])),
+            Command::Usage
+        ));
+        assert!(matches!(
+            parse_build(&strings(&["Main.mod", "-I"])),
+            Command::Usage
+        ));
     }
 
     #[test]

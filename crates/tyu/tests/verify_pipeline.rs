@@ -15,15 +15,6 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
-fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf()
-}
-
 fn tyu_exe() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_tyu"))
 }
@@ -99,14 +90,21 @@ fn default_build_populates_cache_and_second_build_hits() {
     };
 
     let first = run(&[]);
-    assert!(first.contains("verify:"), "one-line summary (NFR-9): {first}");
+    assert!(
+        first.contains("verify:"),
+        "one-line summary (NFR-9): {first}"
+    );
     let cache_dir = out_dir.join(".tyu-verify");
     let entries: Vec<String> = fs::read_dir(&cache_dir)
         .unwrap()
         .filter_map(|e| e.ok())
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .collect();
-    assert_eq!(entries.len(), 1, "one module → one verdicts cache slot: {entries:?}");
+    assert_eq!(
+        entries.len(),
+        1,
+        "one module → one verdicts cache slot: {entries:?}"
+    );
     let echo = fs::read(cache_dir.join(&entries[0])).unwrap();
     let parsed = verifier::verdict::read_echo(&echo).expect("echo is a valid verdicts/echo file");
     // P5: the interval engine discharged bounded_inc's C2 return + main's C3
@@ -117,7 +115,10 @@ fn default_build_populates_cache_and_second_build_hits() {
     let report1 = fs::read(out_dir.join("verify-report.json")).unwrap();
 
     let second = run(&[]);
-    assert!(second.contains("cache hit"), "second build must hit the cache: {second}");
+    assert!(
+        second.contains("cache hit"),
+        "second build must hit the cache: {second}"
+    );
     let report2 = fs::read(out_dir.join("verify-report.json")).unwrap();
     assert_eq!(
         report1, report2,
@@ -152,7 +153,12 @@ fn corrupt_cache_slot_self_heals_as_a_miss() {
     // Corrupt the verdicts slot AND the re-homed object's obl sibling is
     // fine; only the verdicts echo is attacked.
     let cache_dir = out_dir.join(".tyu-verify");
-    let slot = fs::read_dir(&cache_dir).unwrap().filter_map(|e| e.ok()).next().unwrap().path();
+    let slot = fs::read_dir(&cache_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .next()
+        .unwrap()
+        .path();
     fs::write(&slot, b"not a verdicts file at all {").unwrap();
 
     let third = build_once();
@@ -181,8 +187,7 @@ fn verify_off_reports_legacy_policy_with_all_checks() {
         serde_json::from_slice(&fs::read(out_dir.join("verify-report.json")).unwrap()).unwrap();
     assert_eq!(v["policy"], "off", "legacy all-checks mode is documented");
     assert_eq!(
-        v["emitted_checks"]["subtype_range"],
-        4,
+        v["emitted_checks"]["subtype_range"], 4,
         "every subtype site emitted under verify=off"
     );
     assert_eq!(v["emitted_checks"]["data_stack_guards"], true);
@@ -237,10 +242,7 @@ subtype Percent = i64 range 0..100;
 end;
 ";
 
-    for (tag, src, expect_trap) in [
-        ("clean", CLEAN, false),
-        ("trap150", TRAP150, true),
-    ] {
+    for (tag, src, expect_trap) in [("clean", CLEAN, false), ("trap150", TRAP150, true)] {
         let dir = fresh_dir(tag);
         let mod_path = dir.join("M.mod");
         fs::write(&mod_path, src).unwrap();

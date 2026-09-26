@@ -114,7 +114,7 @@ fn hex_val(b: u8) -> Option<u8> {
 
 /// Decode a hex string into bytes.
 pub fn hex_decode(hex: &[u8]) -> Option<Vec<u8>> {
-    if hex.len() % 2 != 0 {
+    if !hex.len().is_multiple_of(2) {
         return None;
     }
     let mut out = Vec::with_capacity(hex.len() / 2);
@@ -248,10 +248,7 @@ impl RspClient {
     pub fn read_registers(&mut self) -> io::Result<Vec<u8>> {
         let resp = self.send_and_recv(b"g")?;
         if resp == b"E01" || resp == b"E" {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "g (read registers) failed",
-            ));
+            return Err(io::Error::other("g (read registers) failed"));
         }
         hex_decode(&resp).ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidData, "g response is not valid hex")
@@ -263,10 +260,7 @@ impl RspClient {
         let cmd = format!("p{:02x}", reg);
         let resp = self.send_and_recv(cmd.as_bytes())?;
         if resp == b"E01" || resp == b"E" {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("p{:02x} failed", reg),
-            ));
+            return Err(io::Error::other(format!("p{:02x} failed", reg)));
         }
         hex_decode(&resp).ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidData, "p response is not valid hex")
@@ -278,10 +272,7 @@ impl RspClient {
         let cmd = format!("m{:x},{:x}", addr, len);
         let resp = self.send_and_recv(cmd.as_bytes())?;
         if resp == b"E01" || resp == b"E" {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("m failed at {:#x}", addr),
-            ));
+            return Err(io::Error::other(format!("m failed at {:#x}", addr)));
         }
         hex_decode(&resp).ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidData, "m response is not valid hex")
@@ -300,10 +291,7 @@ impl RspClient {
         if resp == b"OK" {
             Ok(())
         } else {
-            Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("M failed at {:#x}", addr),
-            ))
+            Err(io::Error::other(format!("M failed at {:#x}", addr)))
         }
     }
 
@@ -314,10 +302,7 @@ impl RspClient {
         if resp == b"OK" {
             Ok(())
         } else {
-            Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("Z0 failed at {:#x}", addr),
-            ))
+            Err(io::Error::other(format!("Z0 failed at {:#x}", addr)))
         }
     }
 
@@ -329,10 +314,7 @@ impl RspClient {
         if resp == b"OK" {
             Ok(())
         } else {
-            Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("z0 failed at {:#x}", addr),
-            ))
+            Err(io::Error::other(format!("z0 failed at {:#x}", addr)))
         }
     }
 
@@ -351,13 +333,10 @@ impl RspClient {
             match resp.first().copied() {
                 Some(b'S') | Some(b'T') => return Ok(()),
                 Some(b'W') | Some(b'X') => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        format!(
-                            "interrupt stopped exited target: {}",
-                            String::from_utf8_lossy(&resp)
-                        ),
-                    ));
+                    return Err(io::Error::other(format!(
+                        "interrupt stopped exited target: {}",
+                        String::from_utf8_lossy(&resp)
+                    )));
                 }
                 _ => {
                     // Ignore non-stop packets until the target actually halts.
@@ -529,12 +508,11 @@ mod tests {
 
         let mut child = qemu
             .spawn()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("qemu spawn failed: {e}")))?;
+            .map_err(|e| io::Error::other(format!("qemu spawn failed: {e}")))?;
 
-        let stream = connect_retry("127.0.0.1", port).map_err(|e| {
+        let stream = connect_retry("127.0.0.1", port).inspect_err(|_e| {
             let _ = child.kill();
             let _ = child.wait();
-            e
         })?;
         let mut client = RspClient {
             stream,

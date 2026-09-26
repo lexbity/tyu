@@ -522,8 +522,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 // resolved verdict (interval engine + verdicts file) gates
                 // the check (P5); under `All` the gate is constant true
                 // (FR-5 — identical emitted code).
-                let verdict =
-                    self.record_cast_obligation(from_ty, to_ty, &st, pre_cast, name_abs);
+                let verdict = self.record_cast_obligation(from_ty, to_ty, &st, pre_cast, name_abs);
                 if self.emit_subtype_check(verdict) {
                     let tmp = self.temp_base_slot();
                     self.emit_op(cur, lir::OpKind::Dup { ty: to_id }, name_abs)?;

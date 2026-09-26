@@ -5,7 +5,7 @@
 //!   cargo test -- --ignored
 
 use harness_core::{parse_output, parse_records, Record};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use tyu::test_helpers::*;
 
@@ -43,7 +43,7 @@ fn hardware_fleet_encrypted_stm32() {
     }
 
     let s = Command::new(env!("CARGO"))
-        .current_dir(&workspace_root())
+        .current_dir(workspace_root())
         .args([
             "build",
             "-q",
@@ -68,7 +68,7 @@ fn hardware_fleet_encrypted_stm32() {
     let sysroot = workspace_root().join("sysroot");
     let out_dir = dir.join("out");
     let kek = hex::encode([0xab; 32]);
-    let serial_port = std::env::var("TYU_SERIAL_PORT").unwrap_or_else(|_| "/dev/ttyACM0".into());
+    let _serial_port = std::env::var("TYU_SERIAL_PORT").unwrap_or_else(|_| "/dev/ttyACM0".into());
 
     let output = Command::new(tyu_exe())
         .args([
@@ -103,7 +103,7 @@ fn hardware_device_encrypted_stm32() {
     }
 
     let s = Command::new(env!("CARGO"))
-        .current_dir(&workspace_root())
+        .current_dir(workspace_root())
         .args([
             "build",
             "-q",
@@ -154,7 +154,7 @@ fn hardware_device_encrypted_stm32() {
     }
 }
 
-fn build_rp2350_demo_image(isa: &str, src: &str, dir: &PathBuf) -> PathBuf {
+fn build_rp2350_demo_image(isa: &str, src: &str, dir: &Path) -> PathBuf {
     let main_mod = dir.join(format!("main-{}.mod", isa));
     std::fs::write(&main_mod, src).unwrap();
 
@@ -240,7 +240,7 @@ fn hardware_rp2350_manual_hil() {
     }
 
     let s = Command::new(env!("CARGO"))
-        .current_dir(&workspace_root())
+        .current_dir(workspace_root())
         .args(["build", "-q", "-p", "langc", "-p", "tyu"])
         .status()
         .expect("cargo build");
@@ -296,7 +296,7 @@ fn hardware_rp2350_cross_arch_abi_mismatch_demo() {
     }
 
     let s = Command::new(env!("CARGO"))
-        .current_dir(&workspace_root())
+        .current_dir(workspace_root())
         .args(["build", "-q", "-p", "langc", "-p", "tyu"])
         .status()
         .expect("cargo build");

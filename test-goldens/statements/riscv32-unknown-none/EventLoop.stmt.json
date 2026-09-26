@@ -1,0 +1,10 @@
+{
+  "schema": "tyu.stmt-goldens/1.0",
+  "semantics": "tyu.ir-sem/1.0",
+  "stmt": "tyu.stmt/1.0",
+  "target": "riscv32-unknown-none",
+  "model_semantics": "unmodeled",
+  "module": "EventLoop",
+  "statements": [
+  ]
+}

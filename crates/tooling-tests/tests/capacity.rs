@@ -59,14 +59,6 @@ fn assert_ok(src: &str) {
     assert!(code == 0, "expected ok, got exit={code}, stderr: {stderr}");
 }
 
-fn assert_fails(src: &str) {
-    let (code, stderr) = compile(src);
-    assert!(
-        code != 0,
-        "expected fail, got exit={code}, stderr: {stderr}"
-    );
-}
-
 // ---------------------------------------------------------------------------
 // Ops within the 96-op per-block limit
 // ---------------------------------------------------------------------------

@@ -28,9 +28,9 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
+use crate::codec::{push_i64_json, push_str_json};
 use crate::model::Obligation;
 use crate::semantics::SEMANTICS_VERSION;
-use crate::codec::{push_str_json, push_i64_json};
 
 /// Schema identifier of verdicts files (`tyu.verdicts/v1`).
 pub const VERDICTS_SCHEMA: &str = "tyu.verdicts/v1";
@@ -279,6 +279,7 @@ fn push_record_json(out: &mut Vec<u8>, r: &VerdictRecord) {
 /// accounting, `provably_failing` records, and open reasons (P4/P5). The
 /// result is itself a valid `--verdicts` input — unknown keys are skipped by
 /// the strict reader.
+#[allow(clippy::too_many_arguments)]
 pub fn encode_echo(
     tool_name: &str,
     tool_version: &str,
@@ -506,7 +507,7 @@ impl<'a> VReader<'a> {
                 "schema" => schema = Some(self.parse_string()?),
                 "semantics" => semantics = Some(self.parse_string()?),
                 "tool" => {
-                    let _ = self.parse_tool()?;
+                    self.parse_tool()?;
                 }
                 "verdicts" => records = Some(self.parse_records()?),
                 // Echo extras (P4/P5): parsed here so tyu's report composition
@@ -826,42 +827,38 @@ impl<'a> VReader<'a> {
         self.skip_ws();
         let c = self.bump()?;
         match c {
-            b'{' => {
-                loop {
-                    self.skip_ws();
-                    if self.peek() == Some(b'}') {
-                        self.i += 1;
-                        break;
-                    }
-                    if self.peek() == Some(b',') {
-                        self.i += 1;
-                        continue;
-                    }
-                    if self.peek().is_none() {
-                        return self.err();
-                    }
-                    self.parse_string()?;
-                    self.expect(b':')?;
-                    self.skip_value()?;
+            b'{' => loop {
+                self.skip_ws();
+                if self.peek() == Some(b'}') {
+                    self.i += 1;
+                    break;
                 }
-            }
-            b'[' => {
-                loop {
-                    self.skip_ws();
-                    if self.peek() == Some(b']') {
-                        self.i += 1;
-                        break;
-                    }
-                    if self.peek() == Some(b',') {
-                        self.i += 1;
-                        continue;
-                    }
-                    if self.peek().is_none() {
-                        return self.err();
-                    }
-                    self.skip_value()?;
+                if self.peek() == Some(b',') {
+                    self.i += 1;
+                    continue;
                 }
-            }
+                if self.peek().is_none() {
+                    return self.err();
+                }
+                self.parse_string()?;
+                self.expect(b':')?;
+                self.skip_value()?;
+            },
+            b'[' => loop {
+                self.skip_ws();
+                if self.peek() == Some(b']') {
+                    self.i += 1;
+                    break;
+                }
+                if self.peek() == Some(b',') {
+                    self.i += 1;
+                    continue;
+                }
+                if self.peek().is_none() {
+                    return self.err();
+                }
+                self.skip_value()?;
+            },
             b'"' => {
                 self.i -= 1;
                 self.parse_string()?;
@@ -1042,10 +1039,21 @@ mod tests {
 
     #[test]
     fn encode_decode_is_lossless_with_fixed_order() {
-        let bytes = encode_verdicts("tyu-intervals", "0.1.0", &sample_records(), 1, &EmittedChecksData { subtype_range: 4, contract: 2, mmio_bounds: 0 })
-            .expect("encode");
+        let bytes = encode_verdicts(
+            "tyu-intervals",
+            "0.1.0",
+            &sample_records(),
+            1,
+            &EmittedChecksData {
+                subtype_range: 4,
+                contract: 2,
+                mmio_bounds: 0,
+            },
+        )
+        .expect("encode");
         let text = String::from_utf8_lossy(&bytes);
-        assert!(text.starts_with("{\"schema\":\"tyu.verdicts/v1\",\"tool\":{\"name\":\"tyu-intervals\""));
+        assert!(text
+            .starts_with("{\"schema\":\"tyu.verdicts/v1\",\"tool\":{\"name\":\"tyu-intervals\""));
         // Unknown keys (echo extras) are skipped by the strict reader, which
         // must still validate schema + semantics and return the records.
         let parsed = read_verdicts(&bytes).expect("decode");
@@ -1054,7 +1062,8 @@ mod tests {
 
     #[test]
     fn empty_file_is_valid() {
-        let bytes = encode_verdicts("tyu", "0.1.0", &[], 0, &EmittedChecksData::default()).expect("encode");
+        let bytes =
+            encode_verdicts("tyu", "0.1.0", &[], 0, &EmittedChecksData::default()).expect("encode");
         let parsed = read_verdicts(&bytes).expect("empty verdicts are valid");
         assert!(parsed.records.is_empty());
     }
@@ -1062,12 +1071,23 @@ mod tests {
     #[test]
     fn lookup_matches_id_and_hash_together() {
         let v = read_verdicts(
-            &encode_verdicts("t", "0", &sample_records(), 0, &EmittedChecksData::default()).expect("encode"),
+            &encode_verdicts(
+                "t",
+                "0",
+                &sample_records(),
+                0,
+                &EmittedChecksData::default(),
+            )
+            .expect("encode"),
         )
         .expect("decode");
-        assert!(v.lookup("Bank::withdraw::subtype-range::0", "91cc0f2a4e7b18d3").is_some());
+        assert!(v
+            .lookup("Bank::withdraw::subtype-range::0", "91cc0f2a4e7b18d3")
+            .is_some());
         // Wrong hash for the same id — fail-closed (absent), never a match.
-        assert!(v.lookup("Bank::withdraw::subtype-range::0", "0000000000000000").is_none());
+        assert!(v
+            .lookup("Bank::withdraw::subtype-range::0", "0000000000000000")
+            .is_none());
         // Unknown id — absent.
         assert!(v.lookup("nope", "91cc0f2a4e7b18d3").is_none());
     }
@@ -1075,7 +1095,14 @@ mod tests {
     #[test]
     fn unknown_status_is_malformed() {
         let mut doc = String::from_utf8_lossy(
-            &encode_verdicts("t", "0", &sample_records(), 0, &EmittedChecksData::default()).expect("encode"),
+            &encode_verdicts(
+                "t",
+                "0",
+                &sample_records(),
+                0,
+                &EmittedChecksData::default(),
+            )
+            .expect("encode"),
         )
         .into_owned();
         doc = doc.replace("\"status\":\"discharged\"", "\"status\":\"proven\"");
@@ -1115,12 +1142,20 @@ mod tests {
 
     #[test]
     fn stale_count_keeps_matched_and_counts_mismatched_and_unknown() {
-        use crate::model::{canonical_id, fnv1a64, format_hex, ExtractionCtx, Formula, Kind, Oel, Provenance};
+        use crate::model::{
+            canonical_id, fnv1a64, format_hex, ExtractionCtx, Formula, Kind, Oel, Provenance,
+        };
         let mut ctx = ExtractionCtx::new(b"Bank");
         ctx.begin_word(b"withdraw");
         ctx.record(
             Kind::SubtypeRange,
-            Formula::InRange { value: Oel::Var { name: "in.0".to_string() }, lo: 0, hi: 100 },
+            Formula::InRange {
+                value: Oel::Var {
+                    name: "in.0".to_string(),
+                },
+                lo: 0,
+                hi: 100,
+            },
             0,
             0,
             Provenance::Direct,
@@ -1157,8 +1192,16 @@ mod tests {
         ];
         assert_eq!(recs.len() as u32, 3);
         // Sanity: canonical id/hash pipeline is stable (Q3).
-        assert_eq!(format_hex(fnv1a64(canonical_id("Bank", b"withdraw", Kind::SubtypeRange, 0).as_bytes())), obligations[0].id_hash);
-        let v = Verdicts { semantics: SEMANTICS_VERSION.to_string(), records: recs };
+        assert_eq!(
+            format_hex(fnv1a64(
+                canonical_id("Bank", b"withdraw", Kind::SubtypeRange, 0).as_bytes()
+            )),
+            obligations[0].id_hash
+        );
+        let v = Verdicts {
+            semantics: SEMANTICS_VERSION.to_string(),
+            records: recs,
+        };
         assert_eq!(v.stale_count(&obligations), 2);
     }
 }

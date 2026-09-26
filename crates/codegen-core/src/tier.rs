@@ -24,8 +24,14 @@ pub fn arm_op_tier(op: &OpKind) -> OpSupport {
         OpKind::ConstI64(_) => OpSupport::Supported,
         OpKind::ConstBool(_) => OpSupport::Supported,
         OpKind::ConstStr(_) => OpSupport::Supported,
-        OpKind::AddrOf { base: AddrOfBase::Runtime, .. } => OpSupport::Supported,
-        OpKind::AddrOf { base: AddrOfBase::Mmio { .. }, .. } => OpSupport::Supported,
+        OpKind::AddrOf {
+            base: AddrOfBase::Runtime,
+            ..
+        } => OpSupport::Supported,
+        OpKind::AddrOf {
+            base: AddrOfBase::Mmio { .. },
+            ..
+        } => OpSupport::Supported,
         OpKind::MmioPlace { .. } => OpSupport::Supported,
         OpKind::ScopedEnter { .. } => OpSupport::Supported,
         OpKind::TaskSpawn { .. } => OpSupport::Supported,
@@ -69,8 +75,14 @@ pub fn riscv_op_tier(op: &OpKind) -> OpSupport {
         OpKind::ConstI64(_) => OpSupport::Supported,
         OpKind::ConstBool(_) => OpSupport::Supported,
         OpKind::ConstStr(_) => OpSupport::Supported,
-        OpKind::AddrOf { base: AddrOfBase::Runtime, .. } => OpSupport::Supported,
-        OpKind::AddrOf { base: AddrOfBase::Mmio { .. }, .. } => OpSupport::Supported,
+        OpKind::AddrOf {
+            base: AddrOfBase::Runtime,
+            ..
+        } => OpSupport::Supported,
+        OpKind::AddrOf {
+            base: AddrOfBase::Mmio { .. },
+            ..
+        } => OpSupport::Supported,
         OpKind::MmioPlace { .. } => OpSupport::Supported,
         OpKind::ScopedEnter { .. } => OpSupport::Supported,
         OpKind::TaskSpawn { .. } => OpSupport::Supported,

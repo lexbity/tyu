@@ -117,7 +117,7 @@ fn build_rp2350_emits_image_def_and_lmod() {
     );
 
     let s = Command::new(env!("CARGO"))
-        .current_dir(&workspace_root())
+        .current_dir(workspace_root())
         .args(["build", "-q", "-p", "langc", "-p", "tyu"])
         .status()
         .expect("cargo build");

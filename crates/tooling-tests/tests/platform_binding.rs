@@ -20,9 +20,9 @@ mod common;
 use common::*;
 use hosted::loader::HostedLoaderPlatform;
 use lmod::validate::Container;
+use loader_core::apertures::{bind_apertures, ApertureRegistry};
 use loader_core::load::{load_module, LoadedSet};
 use loader_core::symbols::SymMap;
-use loader_core::apertures::{bind_apertures, ApertureRegistry};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -76,7 +76,10 @@ fn build_mmio_module(dir: &Path) -> PathBuf {
     assert!(obj.exists(), "langc must produce Main.o");
     let lmod = dir.join("Main.lmod");
     let status = Command::new(exe("lmod-pack"))
-        .args([obj.to_string_lossy().as_ref(), lmod.to_string_lossy().as_ref()])
+        .args([
+            obj.to_string_lossy().as_ref(),
+            lmod.to_string_lossy().as_ref(),
+        ])
         .status()
         .expect("lmod-pack");
     assert!(status.success(), "lmod-pack failed");
@@ -110,8 +113,8 @@ fn load_hosted(
     let bytes = std::fs::read(lmod).unwrap();
     let container = Container::parse(&bytes).expect("container parses");
     // +64 bytes for the call-target trampoline that keeps BL targets in range.
-    let bsize = (container.code().len() + container.rodata().len() + container.data().len() + 4095)
-        & !4095;
+    let bsize =
+        (container.code().len() + container.rodata().len() + container.data().len() + 4095) & !4095;
     let mut platform = HostedLoaderPlatform::new(ARM_ABI_HASH);
     if let Some(h) = platform_hash {
         platform = platform.with_board(h, apertures);
@@ -128,7 +131,8 @@ fn load_hosted(
     let tramp = unsafe { core::slice::from_raw_parts_mut(block.add(bsize), 8) };
     tramp[0..2].copy_from_slice(&0x4b00u16.to_le_bytes()); // ldr r3, [pc, #0]
     tramp[2..4].copy_from_slice(&0x4718u16.to_le_bytes()); // bx r3
-    tramp[4..8].copy_from_slice(&(common::extern_c_fn_stub as usize as u32).to_le_bytes());
+    tramp[4..8]
+        .copy_from_slice(&(common::extern_c_fn_stub as *const () as usize as u32).to_le_bytes());
     let stack_overflow_addr = (block as usize + bsize) | 1;
 
     // Register the runtime symbols the compiled module needs, with
@@ -136,8 +140,14 @@ fn load_hosted(
     for (name, addr) in [
         ("__stack_overflow", stack_overflow_addr),
         ("__lang_ds_high", ds_high),
-        ("__lang_trap", common::extern_c_fn_stub as usize),
-        ("__lang_trap_loc", common::extern_c_fn_stub as usize),
+        (
+            "__lang_trap",
+            common::extern_c_fn_stub as *const () as usize,
+        ),
+        (
+            "__lang_trap_loc",
+            common::extern_c_fn_stub as *const () as usize,
+        ),
         ("__lang_ds_base", ds_high),
         ("__lang_ds_limit", ds_high + 0x1000),
         ("__lang_stack_limit", ds_high),
@@ -230,7 +240,10 @@ fn rp2350_module_rejected_by_arm_runtime_board() {
             "--emit=obj",
             "--target=armv7m-unknown-none",
             &format!("--sysroot={}", workspace_root().join("sysroot").display()),
-            &format!("--platform={}", workspace_root().join("platforms/rp2350").display()),
+            &format!(
+                "--platform={}",
+                workspace_root().join("platforms/rp2350").display()
+            ),
             &format!("--out-dir={}", out_dir.display()),
             src.to_string_lossy().as_ref(),
         ])
@@ -316,7 +329,10 @@ fn v3_module_rejected_e5224() {
     std::fs::write(&patched, &bytes).unwrap();
     let (ph, apertures) = arm_board();
     let err = load_hosted(&patched, Some(ph), &apertures).unwrap_err();
-    assert_eq!(err, loader_core::error::LoadError::ModinfoVersionUnsupported);
+    assert_eq!(
+        err,
+        loader_core::error::LoadError::ModinfoVersionUnsupported
+    );
     assert_eq!(err.code(), 5224);
 }
 
@@ -335,7 +351,7 @@ fn failed_load_rolls_back_aperture_reservations() {
     // would have been made (E5222 for a good second entry — here the single
     // entry is corrupted to fail during reservation).
     let mut bad = bytes.clone();
-    let mi_off = lmod_modinfo_off(&mut bad);
+    let mi_off = lmod_modinfo_off(&bad);
     let wu = lmod::modinfo::aperture_use_offset(&bad[mi_off..]).unwrap() + mi_off;
     let orig = u64::from_le_bytes(bad[wu..wu + 8].try_into().unwrap());
     bad[wu..wu + 8].copy_from_slice(&(orig ^ 1).to_le_bytes());
@@ -356,7 +372,11 @@ fn failed_load_rolls_back_aperture_reservations() {
     .unwrap_err();
     assert_eq!(err, loader_core::error::LoadError::ApertureUnresolved);
     reg.rollback(mark);
-    assert_eq!(reg.bound_count(), 0, "failed load must leave the registry empty");
+    assert_eq!(
+        reg.bound_count(),
+        0,
+        "failed load must leave the registry empty"
+    );
 
     // A subsequent good module binds the same aperture successfully.
     bind_apertures(mi, Some(ph), &apertures, &mut reg, 0xBBBB).unwrap();

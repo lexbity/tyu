@@ -13,7 +13,7 @@ use tyu::test_helpers::*;
 
 fn ensure_langc() {
     let status = Command::new(env!("CARGO"))
-        .current_dir(&workspace_root())
+        .current_dir(workspace_root())
         .args(["build", "-q", "-p", "langc"])
         .status()
         .expect("cargo build");
@@ -68,7 +68,7 @@ fn escalate_not_invoked_on_clean_pass() {
 
     let dir = temp_dir("escalate_clean");
     std::fs::write(
-        &dir.join("clean.mod"),
+        dir.join("clean.mod"),
         "\
 module Clean;
 import platform/testio { testio.write-byte };
@@ -79,7 +79,7 @@ end;
     )
     .unwrap();
     std::fs::write(
-        &dir.join("manifest.toml"),
+        dir.join("manifest.toml"),
         "\
 [[fixture]]
 name = \"clean\"
@@ -207,7 +207,6 @@ fn langc_compile(
         .unwrap()
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("o") && !before.contains(p))
-        .next()
+        .find(|p| p.extension().and_then(|x| x.to_str()) == Some("o") && !before.contains(p))
         .expect("langc produced no .o file")
 }

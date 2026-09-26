@@ -75,6 +75,7 @@ fn subtype_value_returned_as_base_passes_ir_verification() {
             };
             let mut obs = NullObserver;
             let out = build_ir_word(
+                verifier::target::TargetSpec::X86_64,
                 &decl,
                 &src,
                 &env[..len],
@@ -142,6 +143,7 @@ fn subtype_argument_to_base_param_passes_ir_verification() {
             };
             let mut obs = NullObserver;
             let out = build_ir_word(
+                verifier::target::TargetSpec::X86_64,
                 &decl,
                 &src,
                 &envw,

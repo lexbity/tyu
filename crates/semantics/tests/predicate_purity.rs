@@ -32,8 +32,8 @@ fn compile(source: Vec<u8>) -> Result<(), u32> {
             let (env, len) = builtin_env();
             let env: Vec<common::WordEntry> = env[..len].to_vec();
             let subtypes: Vec<SubtypeInfo> = Vec::new();
-            let mut resources = semantics::typecheck::db::build_resource_db(&module, &src)
-                .expect("resource db");
+            let mut resources =
+                semantics::typecheck::db::build_resource_db(&module, &src).expect("resource db");
             match semantics::typecheck::for_each_ir_word(
                 &module,
                 &src,
@@ -41,6 +41,7 @@ fn compile(source: Vec<u8>) -> Result<(), u32> {
                 &subtypes,
                 semantics::typecheck::ChecksMode::All,
                 false,
+                verifier::target::TargetSpec::X86_64,
                 &mut resources,
                 None,
                 None,

@@ -5,15 +5,15 @@
 //! D-6: missing --device-keys errors.
 //! D-7: empty --device-keys directory errors.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use lmod::enc::EncMode;
 use tyu::test_helpers::*;
 
 use hosted::loader::HostedLoaderPlatform;
-use loader_core::load::{load_module, LoadedSet, E_ENC_NO_KEY};
 use loader_core::apertures::ApertureRegistry;
+use loader_core::load::{load_module, LoadedSet, E_ENC_NO_KEY};
 use loader_core::platform::TrustLevel;
 use loader_core::symbols::SymMap;
 
@@ -23,7 +23,7 @@ module Main;\nimport platform/testio { testio.write-byte };\n\
 
 fn ensure_tools() {
     let status = Command::new(env!("CARGO"))
-        .current_dir(&workspace_root())
+        .current_dir(workspace_root())
         .args([
             "build",
             "-q",
@@ -41,7 +41,7 @@ fn ensure_tools() {
     assert!(status.success(), "cargo build failed");
 }
 
-fn create_device_keys(dir: &PathBuf, ids_and_keys: &[(&str, &[u8; 32])]) -> PathBuf {
+fn create_device_keys(dir: &Path, ids_and_keys: &[(&str, &[u8; 32])]) -> PathBuf {
     let keys_dir = dir.join("device-keys");
     std::fs::create_dir_all(&keys_dir).unwrap();
     for (id, key) in ids_and_keys {
@@ -51,7 +51,7 @@ fn create_device_keys(dir: &PathBuf, ids_and_keys: &[(&str, &[u8; 32])]) -> Path
 }
 
 /// Minimal loader setup for inspecting a signed .lmod.
-fn load_with_kek(signed_path: &PathBuf, kek: &[u8; 32]) -> Result<(), u32> {
+fn load_with_kek(signed_path: &Path, kek: &[u8; 32]) -> Result<(), u32> {
     let raw = std::fs::read(signed_path).unwrap();
     let container = lmod::validate::Container::parse(&raw).unwrap();
     let abi_hash = container.header().abi_hash;
@@ -71,12 +71,18 @@ fn load_with_kek(signed_path: &PathBuf, kek: &[u8; 32]) -> Result<(), u32> {
     register_generated_runtime_symbols(signed_path, &mut map, stub, ds_high)?;
 
     let mut set = LoadedSet::<64>::new();
-    load_module(&container, &mut plat, &mut map, &mut set, &mut ApertureRegistry::new())?;
+    load_module(
+        &container,
+        &mut plat,
+        &mut map,
+        &mut set,
+        &mut ApertureRegistry::new(),
+    )?;
     Ok(())
 }
 
 fn register_generated_runtime_symbols(
-    signed_path: &PathBuf,
+    signed_path: &Path,
     map: &mut SymMap<'_, 256>,
     stub: usize,
     ds_high: usize,

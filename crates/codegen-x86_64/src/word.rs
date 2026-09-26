@@ -23,7 +23,11 @@ impl<'a> X86_64HostedBackend<'a> {
         self.cur_word_id = fnv1a_u64(w.name.as_bytes());
         // P6: fuse this word's aperture-use entries into the module table.
         for wu in w.apertures.iter() {
-            codegen_core::merge_aperture_use(&mut self.mi_apertures, &mut self.mi_aperture_count, wu);
+            codegen_core::merge_aperture_use(
+                &mut self.mi_apertures,
+                &mut self.mi_aperture_count,
+                wu,
+            );
         }
         // Collect debug metadata for every word when debug_trap_loc is set.
         if self.debug_trap_loc {
@@ -165,7 +169,9 @@ impl<'a> X86_64HostedBackend<'a> {
                 emit_push_rax(self.out, !self.ds_guards_elided);
                 Ok(true)
             }
-            lir::OpKind::MmioPlace { aperture, offset, .. } => {
+            lir::OpKind::MmioPlace {
+                aperture, offset, ..
+            } => {
                 self.uses_mmio = true;
                 let addr = self.mmio_aperture_addr(aperture, offset)?;
                 emit_push_u64(self.out, addr, !self.ds_guards_elided);
@@ -215,19 +221,17 @@ impl<'a> X86_64HostedBackend<'a> {
                         write_u32(self.out, offset);
                         self.out.write(b"]\n");
                         emit_push_rax(self.out, !self.ds_guards_elided);
-                        return Ok(true);
+                        Ok(true)
                     }
                     lir::TypeClass::RegionRef | lir::TypeClass::RegionRefMut => {
                         emit_dup(self.out, !self.ds_guards_elided);
-                        return Ok(true);
+                        Ok(true)
                     }
                     // D-13: an unmatched class is a loud error, never a
                     // silent no-op (the G-5 bug class this slice retires).
-                    _ => {
-                        return Err(CodegenError::UnsupportedOp {
-                            op_name: b"ScopedEnter",
-                        });
-                    }
+                    _ => Err(CodegenError::UnsupportedOp {
+                        op_name: b"ScopedEnter",
+                    }),
                 }
             }
             lir::OpKind::TaskSpawn { name, .. } => {

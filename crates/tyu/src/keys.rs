@@ -58,13 +58,14 @@ impl KeyRef {
             return Ok(KeyRef::Fd(n));
         }
         // If it has no recognized prefix, reject bare hex / raw string.
-        Err(TyuError::Key(format!(
+        Err(TyuError::Key(
             "refusing to read key from command-line argument.\n  \
              Use one of:\n    \
              --key=file:<path>   (read key from a file)\n    \
              --key=env:<VAR>     (read key from environment variable)\n    \
              --key=fd:<n>        (read key from file descriptor)"
-        )))
+                .to_string(),
+        ))
     }
 }
 

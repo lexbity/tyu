@@ -71,6 +71,9 @@ evidence = "{evidence}"
     }
 }
 
+// The 9 parameters are the manifest fields being exercised verbatim; a builder struct would
+// add indirection without clarifying the per-field test intent.
+#[allow(clippy::too_many_arguments)]
 fn write_manifest_with_debug_agent(
     path: &Path,
     name: &str,

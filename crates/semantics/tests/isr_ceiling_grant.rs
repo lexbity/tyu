@@ -42,14 +42,13 @@ fn compile_with_isr_grant(source: Vec<u8>, isr_stack_slots: u32) -> Result<(), u
             let env: Vec<common::WordEntry> = env[..len].to_vec();
             let subtypes: Vec<SubtypeInfo> = Vec::new();
 
-            let mut descriptor = CompiledDescriptor::default();
-            descriptor.verification = VerificationGrants {
-                isr_stack_slots,
-                ..VerificationGrants::default()
+            let descriptor = CompiledDescriptor {
+                verification: VerificationGrants { isr_stack_slots },
+                ..CompiledDescriptor::default()
             };
 
-            let mut resources = semantics::typecheck::db::build_resource_db(&module, &src)
-                .expect("resource db");
+            let mut resources =
+                semantics::typecheck::db::build_resource_db(&module, &src).expect("resource db");
             match semantics::typecheck::for_each_ir_word(
                 &module,
                 &src,
@@ -57,6 +56,7 @@ fn compile_with_isr_grant(source: Vec<u8>, isr_stack_slots: u32) -> Result<(), u
                 &subtypes,
                 semantics::typecheck::ChecksMode::All,
                 false,
+                verifier::target::TargetSpec::X86_64,
                 &mut resources,
                 Some(&descriptor),
                 None,
@@ -81,7 +81,10 @@ use semantics::typecheck::db::SubtypeInfo;
 #[test]
 fn isr_grant_above_peak_allows_the_handler() {
     // N_isr = 40 (descriptor grant) ≥ 34-peak handler → compiles.
-    assert_eq!(compile_with_isr_grant(HANDLER_PEAK_34.as_bytes().to_vec(), 40), Ok(()));
+    assert_eq!(
+        compile_with_isr_grant(HANDLER_PEAK_34.as_bytes().to_vec(), 40),
+        Ok(())
+    );
 }
 
 #[test]
@@ -98,5 +101,8 @@ fn default_isr_grant_rejects_peak_above_32() {
 #[test]
 fn boundary_exact_fit_is_legal() {
     // peak == grant is allowed (the check is `high > N_isr` rejects).
-    assert_eq!(compile_with_isr_grant(HANDLER_PEAK_34.as_bytes().to_vec(), 34), Ok(()));
+    assert_eq!(
+        compile_with_isr_grant(HANDLER_PEAK_34.as_bytes().to_vec(), 34),
+        Ok(())
+    );
 }

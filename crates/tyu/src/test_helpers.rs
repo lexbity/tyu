@@ -180,10 +180,7 @@ pub fn write_device_keys(dir: &Path, ids_and_keys: &[(&str, [u8; 32])]) -> PathB
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lmod::enc::{
-        EncHeader, WrappedCekSlot, WRAPPED_SLOT_SIZE, WRAP_LEN,
-        WRAP_SCHEME_SYMMETRIC_CHACHA20POLY1305,
-    };
+    use lmod::enc::{EncHeader, WrappedCekSlot, WRAP_LEN, WRAP_SCHEME_SYMMETRIC_CHACHA20POLY1305};
     use lmod::header::{self, compute_layout, encode_header, FORMAT_VER};
 
     /// Build a minimal valid plaintext .lmod container on disk.

@@ -38,15 +38,17 @@ end;
 ";
 
 fn compile_with(tag: &str, extra: &[&str]) -> (bool, String) {
-    let dir = std::env::temp_dir().join("tyu_contract_emission").join(format!(
-        "{}_{}_{}",
-        tag,
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let dir = std::env::temp_dir()
+        .join("tyu_contract_emission")
+        .join(format!(
+            "{}_{}_{}",
+            tag,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
     std::fs::create_dir_all(&dir).unwrap();
     let mod_path = dir.join("P.mod");
     std::fs::write(&mod_path, POST_MOD).unwrap();

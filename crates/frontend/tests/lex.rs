@@ -806,15 +806,12 @@ mod proptests {
         fn lexer_eof_is_terminal(bytes: Vec<u8>) {
             let mut lex = Lexer::new(&bytes);
             // Consume all tokens until Eof.
-            let mut first_eof = None;
-            loop {
+            let first = loop {
                 let tok = lex.next();
                 if tok.kind == TokenKind::Eof {
-                    first_eof = Some(tok);
-                    break;
+                    break tok;
                 }
-            }
-            let first = first_eof.unwrap();
+            };
             // Subsequent calls must return Eof with the same span.
             for _ in 0..3 {
                 let tok = lex.next();

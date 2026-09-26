@@ -11,12 +11,8 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-
 fn platform_arg() -> String {
-    format!(
-        "--platform={}",
-        workspace_root().join("runtime").display()
-    )
+    format!("--platform={}", workspace_root().join("runtime").display())
 }
 
 fn build_tools() {
@@ -82,7 +78,9 @@ end;\n",
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
         .arg(format!("--sysroot={}", repo_sysroot().to_string_lossy()))
-        .args(["--emit=asm"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=asm"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -127,7 +125,9 @@ end;\n",
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
         .arg(&sysroot_arg)
-        .args(["--emit=asm"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=asm"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -166,7 +166,9 @@ end;\n",
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=ir"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -199,7 +201,9 @@ end;\n",
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
         .arg(&sysroot_arg)
-        .args(["--emit=asm"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=asm"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -259,7 +263,9 @@ end;\n",
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
         .arg(&sysroot_arg)
-        .args(["--emit=asm"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=asm"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -302,7 +308,9 @@ end;\n",
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=ir"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -337,7 +345,9 @@ end;\n",
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=ir"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -384,7 +394,9 @@ end;\n",
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
         .arg(&sysroot_arg)
-        .args(["--emit=asm"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=asm"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -427,7 +439,9 @@ end;\n",
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
         .arg(&sysroot_arg)
-        .args(["--emit=asm"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=asm"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -487,7 +501,9 @@ fn milestone8_sysroot_flag_allows_imports() {
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
         .arg(format!("--sysroot={}", sysroot.to_string_lossy()))
-        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=ir"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -537,7 +553,9 @@ fn milestone8_sysroot_iface_mismatch_fails() {
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
         .arg(format!("--sysroot={}", sysroot.to_string_lossy()))
-        .args(["--emit=ast"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=ast"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -565,7 +583,9 @@ end;\n",
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
         .arg(format!("--sysroot={}", repo_sysroot().to_string_lossy()))
-        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=ir"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -593,7 +613,9 @@ end;\n",
 
     let status = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=obj", "--target=x86_64-unknown-linux-gnu"]).arg(platform_arg()).arg("--out-dir=.")
+        .args(["--emit=obj", "--target=x86_64-unknown-linux-gnu"])
+        .arg(platform_arg())
+        .arg("--out-dir=.")
         .arg(&sysroot_arg)
         .arg("Main.mod")
         .status()
@@ -641,7 +663,9 @@ end;\n",
 
     let status = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=obj", "--target=x86_64-unknown-linux-gnu"]).arg(platform_arg()).arg("--out-dir=.")
+        .args(["--emit=obj", "--target=x86_64-unknown-linux-gnu"])
+        .arg(platform_arg())
+        .arg("--out-dir=.")
         .arg(&sysroot_arg)
         .arg("Main.mod")
         .status()
@@ -686,7 +710,9 @@ end;\n",
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=asm"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=asm"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -733,7 +759,9 @@ end;\n",
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
         .arg(&sysroot_arg)
-        .args(["--emit=asm"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=asm"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -801,7 +829,9 @@ end;\n",
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
         .arg(&sysroot_arg)
-        .args(["--emit=asm"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=asm"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -843,7 +873,9 @@ end;\n",
 
     let status = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=obj", "--target=x86_64-unknown-linux-gnu"]).arg(platform_arg()).arg("--out-dir=.")
+        .args(["--emit=obj", "--target=x86_64-unknown-linux-gnu"])
+        .arg(platform_arg())
+        .arg("--out-dir=.")
         .arg(&sysroot_arg)
         .arg("Main.mod")
         .status()
@@ -892,7 +924,9 @@ end;\n",
 
     let status = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=obj", "--target=x86_64-unknown-linux-gnu"]).arg(platform_arg()).arg("--out-dir=.")
+        .args(["--emit=obj", "--target=x86_64-unknown-linux-gnu"])
+        .arg(platform_arg())
+        .arg("--out-dir=.")
         .arg(&sysroot_arg)
         .arg("Main.mod")
         .status()
@@ -938,7 +972,9 @@ end;\n",
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=ir"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -964,7 +1000,9 @@ end;\n",
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=ir"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -986,7 +1024,9 @@ fn milestone9_golden_ir_dump_if_while_locals() {
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=ir"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -1017,7 +1057,9 @@ fn milestone4_checks_flag_controls_insertion() {
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir", "--checks=contracts"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=ir", "--checks=contracts"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -1031,7 +1073,9 @@ fn milestone4_checks_flag_controls_insertion() {
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir", "--checks=off"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=ir", "--checks=off"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -1057,7 +1101,9 @@ fn milestone5_rejects_mutable_borrow_of_local() {
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=ir"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -1078,7 +1124,9 @@ fn milestone5_scoped_borrow_must_be_consumed() {
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=ir"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -1099,7 +1147,9 @@ fn milestone5_rejects_suspend_with_scoped_live() {
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=ir"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -1120,7 +1170,9 @@ fn milestone5_rejects_suspend_inside_mut_scoped_block() {
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=ir"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -1141,7 +1193,9 @@ fn milestone5_rejects_suspend_inside_lock() {
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=ir"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -1162,7 +1216,9 @@ fn milestone5_allows_drop_before_yield() {
 
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=ir"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(
@@ -1183,7 +1239,9 @@ fn langc_x86_64_unknown_none_target_recognized() {
     .unwrap();
     let out = Command::new(exe("langc"))
         .current_dir(&dir)
-        .args(["--emit=ir", "--target=x86_64-unknown-none"]).arg(platform_arg()).arg("Main.mod")
+        .args(["--emit=ir", "--target=x86_64-unknown-none"])
+        .arg(platform_arg())
+        .arg("Main.mod")
         .output()
         .unwrap();
     assert!(

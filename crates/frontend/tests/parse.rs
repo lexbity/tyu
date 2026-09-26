@@ -162,11 +162,17 @@ fn legacy_bang_effect_is_migration_hint() {
 #[test]
 fn migration_hint_messages() {
     assert_eq!(
-        ParseError::LegacyRequiresContract { span: Span::UNKNOWN }.message(),
+        ParseError::LegacyRequiresContract {
+            span: Span::UNKNOWN
+        }
+        .message(),
         b"parse error: use `needs [` for contract predicates"
     );
     assert_eq!(
-        ParseError::LegacyEffectBang { span: Span::UNKNOWN }.message(),
+        ParseError::LegacyEffectBang {
+            span: Span::UNKNOWN
+        }
+        .message(),
         b"parse error: use `performs { ... }` for effect sets"
     );
 }

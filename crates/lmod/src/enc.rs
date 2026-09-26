@@ -137,6 +137,9 @@ pub const fn enc_header_len(wrapped_count: usize) -> usize {
 /// `buf` must be at least `enc_header_len(wrapped_slots.len())` bytes.
 /// Returns the number of bytes written on success, or an error if `buf` is
 /// too short or the enc-header has an invalid mode/aead_id.
+// `Err(())` matches the unit-error convention of the rest of this codec
+// module's encode/decode API (callers only branch on success/failure).
+#[allow(clippy::result_unit_err)]
 pub fn encode_enc_header(buf: &mut [u8], eh: &EncHeader) -> Result<usize, ()> {
     let total = eh.wire_len();
     if buf.len() < total {

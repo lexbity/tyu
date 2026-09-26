@@ -119,7 +119,7 @@ fn phase18_fuzz_container_random_mutations_no_panic() {
 #[test]
 fn phase18_fuzz_container_truncation_no_panic() {
     let dir = fresh_dir("fuzz_trunc");
-    let base = std::fs::read(&compile_and_pack(
+    let base = std::fs::read(compile_and_pack(
         "module Main;\n: main ( -- i64 ) 42 ;\nend;\n",
         &dir,
     ))

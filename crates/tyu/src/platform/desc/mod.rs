@@ -332,11 +332,13 @@ pub fn full_mask(width: u8) -> u64 {
 pub fn load_descriptor(root: &Path, name: &str) -> Result<Option<Descriptor>, TyuError> {
     let manifest_path = super::config::find_pack_manifest_path(root, name)
         .ok_or_else(|| TyuError::Platform(format!("platform pack '{}' not found", name)))?;
-    let text = std::fs::read_to_string(&manifest_path).map_err(|e| {
-        TyuError::Platform(format!("reading '{}': {}", manifest_path.display(), e))
-    })?;
+    let text = std::fs::read_to_string(&manifest_path)
+        .map_err(|e| TyuError::Platform(format!("reading '{}': {}", manifest_path.display(), e)))?;
     parse::parse_descriptor(&text).map_err(|e| {
-        TyuError::Platform(format!("E{} descriptor for '{}': {}", e.code, name, e.detail))
+        TyuError::Platform(format!(
+            "E{} descriptor for '{}': {}",
+            e.code, name, e.detail
+        ))
     })
 }
 

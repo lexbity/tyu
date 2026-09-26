@@ -7,7 +7,7 @@ use frontend::{
     parse::{ModuleAst, Parser},
     span::Span,
 };
-use ir::{Atom, Block, BlockId, CapSet, EffectSet, Op, OpKind, Sig, StackBound, Word, TY_I64};
+use ir::{Atom, Block, BlockId, CapSet, EffectSet, Op, OpKind, Sig, StackBound, Word};
 
 /// Minimal `Output` that captures bytes in a `Vec`.
 pub struct TestOut(Vec<u8>);
@@ -103,6 +103,9 @@ pub fn single_block_word(sig: Sig, ops: &[OpKind]) -> Word {
     }
 }
 
+// This module is compiled once per test binary; helpers used by `word` but
+// not by `postlude_mmio` are dead in that binary only.
+#[allow(dead_code)]
 pub fn sig_0_0() -> Sig {
     Sig::empty()
 }
@@ -112,6 +115,7 @@ pub fn sig_0_1(out: ir::TypeId) -> Sig {
     s.outputs[0] = out;
     s
 }
+#[allow(dead_code)]
 pub fn sig_0_2(a: ir::TypeId, b: ir::TypeId) -> Sig {
     let mut s = Sig::empty();
     s.out_len = 2;
@@ -119,34 +123,33 @@ pub fn sig_0_2(a: ir::TypeId, b: ir::TypeId) -> Sig {
     s.outputs[1] = b;
     s
 }
+#[allow(dead_code)]
 pub fn sig_1_0(inp: ir::TypeId) -> Sig {
     let mut s = Sig::empty();
     s.in_len = 1;
     s.inputs[0] = inp;
     s
 }
-pub fn sig_1_1(inp: ir::TypeId, out: ir::TypeId) -> Sig {
-    let mut s = Sig::empty();
-    s.in_len = 1;
-    s.inputs[0] = inp;
-    s.out_len = 1;
-    s.outputs[0] = out;
-    s
-}
 
 /// Emit a word and return the output.
+#[allow(dead_code)]
 pub fn emit(w: &Word) -> String {
     let mod_ast = empty_module(b"module m; end;");
     let mut out = TestOut::new();
     let mut backend = X86_64HostedBackend::new(&mod_ast, b"", &mut out, false, AsmMode::Executable);
     backend
-        .set_mmio_apertures(codegen_core::Target::X86_64UnknownNone.spec().mmio_apertures)
+        .set_mmio_apertures(
+            codegen_core::Target::X86_64UnknownNone
+                .spec()
+                .mmio_apertures,
+        )
         .unwrap();
     backend.emit_word(w).unwrap();
     out.as_str().to_string()
 }
 
 /// Emit a word expecting a `CodegenError`.
+#[allow(dead_code)]
 pub fn emit_err(w: &Word) -> CodegenError {
     let mod_ast = empty_module(b"module m; end;");
     let mut out = TestOut::new();

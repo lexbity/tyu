@@ -45,6 +45,7 @@ pub fn emit_ir(
     subtypes: &[SubtypeInfo],
     checks: ChecksMode,
     allow_raw_casts: bool,
+    target_spec: verifier::target::TargetSpec,
     descriptor: Option<&codegen_core::compiled_desc::CompiledDescriptor>,
     out: &mut impl Output,
 ) -> Result<(), TcError> {
@@ -62,6 +63,7 @@ pub fn emit_ir(
         subtypes,
         &mmio,
         descriptor,
+        target_spec,
         &resources,
         &nominals,
         &iso,
@@ -117,6 +119,7 @@ pub fn emit_ir(
         let mut null_obs = NullObserver;
         arena.reset();
         let out_words = build_ir_word(
+            target_spec,
             decl,
             src,
             &summary_env,
@@ -272,6 +275,7 @@ pub fn emit_stackcheck(
     env: &[WordEntry],
     subtypes: &[SubtypeInfo],
     checks: ChecksMode,
+    target_spec: verifier::target::TargetSpec,
     descriptor: Option<&codegen_core::compiled_desc::CompiledDescriptor>,
     out: &mut impl Output,
 ) -> Result<(), TcError> {
@@ -289,6 +293,7 @@ pub fn emit_stackcheck(
         subtypes,
         &mmio,
         descriptor,
+        target_spec,
         &resources,
         &nominals,
         &iso,
@@ -317,6 +322,7 @@ pub fn emit_stackcheck(
             let mut obs = irgen::StackcheckObserver { out: &mut *out };
             arena.reset();
             let _ = build_ir_word(
+                target_spec,
                 decl,
                 src,
                 &summary_env,
@@ -356,6 +362,7 @@ pub fn for_each_ir_word<E, F>(
     subtypes: &[SubtypeInfo],
     checks: ChecksMode,
     allow_raw_casts: bool,
+    target_spec: verifier::target::TargetSpec,
     resources: &mut ResourceDb,
     descriptor: Option<&codegen_core::compiled_desc::CompiledDescriptor>,
     mut extraction: Option<&mut verifier::model::ExtractionCtx>,
@@ -379,6 +386,7 @@ where
         subtypes,
         &mmio,
         descriptor,
+        target_spec,
         resources,
         &nominals,
         &iso,
@@ -404,12 +412,12 @@ where
             continue;
         }
         for n in crate::typecheck::util::contract_predicate_names(src, d.requires) {
-            if !predicate_names.iter().any(|p| *p == n) {
+            if !predicate_names.contains(&n) {
                 predicate_names.push(n);
             }
         }
         for n in crate::typecheck::util::contract_predicate_names(src, d.ensures) {
-            if !predicate_names.iter().any(|p| *p == n) {
+            if !predicate_names.contains(&n) {
                 predicate_names.push(n);
             }
         }
@@ -438,6 +446,7 @@ where
             ctx.begin_word(slice_span(src, decl.name));
         }
         let out_words = build_ir_word(
+            target_spec,
             decl,
             src,
             &summary_env,
@@ -487,11 +496,13 @@ where
             // computed record callers and external tools match against —
             // E6413 staleness). Only words the module's contract clauses
             // name; the op-text form is `ir::write_word_ops` (§6.3).
-            if predicate_names.iter().any(|p| *p == slice_span(src, decl.name)) {
+            if predicate_names
+                .iter()
+                .any(|p| *p == slice_span(src, decl.name))
+            {
                 let mut ops = VecOut(Vec::new());
                 lir::write_word_ops(&mut ops, out_words.word);
-                let mut lines: alloc::vec::Vec<alloc::string::String> =
-                    alloc::vec::Vec::new();
+                let mut lines: alloc::vec::Vec<alloc::string::String> = alloc::vec::Vec::new();
                 for line in ops.0.split(|&b| b == b'\n') {
                     if line.is_empty() {
                         continue;
@@ -525,13 +536,14 @@ fn local_summary_env(
     subtypes: &[SubtypeInfo],
     mmio: &MmioDb,
     descriptor: Option<&codegen_core::compiled_desc::CompiledDescriptor>,
+    target_spec: verifier::target::TargetSpec,
     resources: &ResourceDb,
     nominals: &NominalDb,
     iso: &IsoDb,
     checks: ChecksMode,
     allow_raw_casts: bool,
 ) -> Result<Vec<WordEntry>, TcError> {
-    let mut summary_env: Vec<WordEntry> = env.iter().copied().collect();
+    let mut summary_env: Vec<WordEntry> = env.to_vec();
     let mut arena = irgen::arena::ArenaAllocator::new();
     let max_passes = module.decls.len().saturating_add(1);
 
@@ -550,6 +562,7 @@ fn local_summary_env(
             arena.reset();
             let mut null_obs = NullObserver;
             let out_words = build_ir_word(
+                target_spec,
                 decl,
                 src,
                 &summary_env,

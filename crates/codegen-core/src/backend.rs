@@ -70,7 +70,11 @@ pub trait CodegenBackend {
 /// first use wins for the aperture facts, later uses OR in the access mask.
 /// Shared by every backend so the modinfo aperture table is derived identically
 /// (NFR-6: one implementation).
-pub fn merge_aperture_use(table: &mut [ir::ApertureUse; 8], count: &mut usize, wu: &ir::ApertureUse) {
+pub fn merge_aperture_use(
+    table: &mut [ir::ApertureUse; 8],
+    count: &mut usize,
+    wu: &ir::ApertureUse,
+) {
     for existing in table.iter_mut().take(*count) {
         if existing.id == wu.id {
             existing.access_mask |= wu.access_mask;

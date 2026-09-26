@@ -218,7 +218,7 @@ pub fn bind_apertures(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lmod::board_table::{BoardTable, BoardAperture, APERTURE_CAP as BOARD_APERTURE_CAP};
+    use lmod::board_table::{BoardAperture, BoardTable, APERTURE_CAP as BOARD_APERTURE_CAP};
     use lmod::hash::fnv1a_u64;
     use lmod::modinfo::{encode_into, ApertureUseEntry, ACCESS_READ, ACCESS_WRITE};
 
@@ -243,7 +243,18 @@ mod tests {
 
     fn modinfo_with(platform_hash: u64, apertures: &[ApertureUseEntry]) -> alloc::vec::Vec<u8> {
         let mut buf = [0u8; 1024];
-        let n = encode_into(&mut buf, b"T", &[], &[], 0, 0, &[], platform_hash, apertures).unwrap();
+        let n = encode_into(
+            &mut buf,
+            b"T",
+            &[],
+            &[],
+            0,
+            0,
+            &[],
+            platform_hash,
+            apertures,
+        )
+        .unwrap();
         buf[..n].to_vec()
     }
 
@@ -441,7 +452,11 @@ mod tests {
         let err = bind_apertures(&bad_mi, Some(0xabc), b.apertures(), &mut reg, 7).unwrap_err();
         assert_eq!(err, LoadError::ApertureUnresolved);
         reg.rollback(mark);
-        assert_eq!(reg.bound_count(), 0, "failed load must leave no reservations");
+        assert_eq!(
+            reg.bound_count(),
+            0,
+            "failed load must leave no reservations"
+        );
         // A subsequent conflicting load now succeeds (transactionality proof).
         bind_apertures(&ok_mi, Some(0xabc), b.apertures(), &mut reg, 1).unwrap();
         assert!(reg.is_bound(0));

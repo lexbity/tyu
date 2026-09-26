@@ -523,7 +523,7 @@ fn import_reloc_kind(machine: u16, r_type: u32) -> Option<u8> {
         (EM_ARM, 10) => Some(RelocKind::ArmThmCall as u8),
         (EM_ARM, 30) => Some(RelocKind::ArmThmJump24 as u8),
         (EM_RISCV, 1) => Some(RelocKind::RiscV32 as u8),
-        (EM_RISCV, 17 | 18 | 19) => Some(RelocKind::RiscVCall as u8),
+        (EM_RISCV, 17..=19) => Some(RelocKind::RiscVCall as u8),
         _ => None,
     }
 }
@@ -683,21 +683,21 @@ pub fn pack(input: &[u8]) -> Result<Vec<u8>, PackError> {
 
             let sym = &symbols[sym_idx];
 
-if sym.shndx == SHN_UNDEF || (sym.name.is_empty() && sym_idx != 0) {
+            if sym.shndx == SHN_UNDEF || (sym.name.is_empty() && sym_idx != 0) {
                 // P6: a aperture-base reference (`__lang_aperture_{N}_base`) is a
                 // binding-time reloc, not an ordinary import. It carries the
                 // aperture id in the symbol-hash field and is bound to the
                 // concrete base at pack time.
                 if let Some(aperture_id) = aperture_base_id(sym.name.as_bytes()) {
-                    let site_base = elf
-                        .lmod_section_base(target_idx, &lmod::header::LmodHeader::new());
+                    let site_base =
+                        elf.lmod_section_base(target_idx, &lmod::header::LmodHeader::new());
                     import_relocs.push((site_base + r_offset, aperture_id as u64, 10));
                 } else {
                     let kind = import_reloc_kind(elf.machine, r_type)
                         .ok_or(PackError::UnsupportedInternalReloc(r_type))?;
                     let sym_hash = lmod::hash::linked_symbol_hash(sym.name.as_bytes());
-                    let site_base = elf
-                        .lmod_section_base(target_idx, &lmod::header::LmodHeader::new());
+                    let site_base =
+                        elf.lmod_section_base(target_idx, &lmod::header::LmodHeader::new());
                     import_relocs.push((site_base + r_offset, sym_hash, kind));
                 }
             } else if sym.shndx != SHN_ABS {
@@ -880,58 +880,6 @@ mod tests {
         buf[59] = 0; // shentsize = 64
         buf[60] = 0;
         buf[61] = 0; // shnum = 0
-        buf
-    }
-
-    /// Minimal 64-bit ELF ET_REL with one .text section header.
-    /// Returns (buf, shoff) so callers can patch the section header.
-    fn elf64_with_text_section(text_size: u32) -> Vec<u8> {
-        let mut buf = elf64_empty();
-        // Set e_shoff = 64 (section headers immediately after ELF header)
-        buf[40..48].copy_from_slice(&64u64.to_le_bytes());
-        // e_shnum = 1
-        buf[60..62].copy_from_slice(&1u16.to_le_bytes());
-        // e_shstrndx = 1 (second section = strtab)
-        buf[62..64].copy_from_slice(&1u16.to_le_bytes());
-
-        // Section header 0: .text  (at offset 64)
-        // sh_name at +0: 4 bytes
-        // sh_type at +4: 4 bytes (SHT_PROGBITS = 1)
-        // sh_flags at +8: 8 bytes
-        // sh_addr at +16: 8 bytes
-        // sh_offset at +24: 8 bytes
-        // sh_size at +32: 8 bytes
-        // sh_link at +40: 4 bytes
-        // sh_info at +44: 4 bytes
-        // sh_addralign at +48: 8 bytes
-        // sh_entsize at +56: 8 bytes
-        let mut sh = vec![0u8; 64];
-        // sh_name = offset into shstrtab for ".text" — will be set later
-        // sh_type = SHT_PROGBITS (1)
-        sh[4..8].copy_from_slice(&1u32.to_le_bytes());
-        // sh_offset = after headers + section headers (64 + 64 + 64 = 192)
-        let text_off: u64 = 64 + 64 + 64;
-        sh[24..32].copy_from_slice(&text_off.to_le_bytes());
-        sh[32..36].copy_from_slice(&text_size.to_le_bytes());
-        buf.extend_from_slice(&sh);
-
-        // Section header 1: .shstrtab (at offset 128)
-        let mut shstr = vec![0u8; 64];
-        shstr[4..8].copy_from_slice(&3u32.to_le_bytes()); // SHT_STRTAB
-        let strtab_off = text_off + text_size as u64;
-        shstr[24..32].copy_from_slice(&strtab_off.to_le_bytes());
-        shstr[32..36].copy_from_slice(&32u32.to_le_bytes()); // size
-        buf.extend_from_slice(&shstr);
-
-        // .text section data (at text_off)
-        let text_padding = vec![0xCCu8; text_size as usize];
-        buf.extend_from_slice(&text_padding);
-
-        // .shstrtab data: include ".text\0"
-        let mut strtab = vec![0u8; 32];
-        strtab[0..6].copy_from_slice(b".text\0");
-        buf.extend_from_slice(&strtab);
-
         buf
     }
 
@@ -1134,6 +1082,8 @@ mod tests {
     }
 
     #[test]
+    // Name intentionally mirrors the ELF relocation formula S + A - P.
+    #[allow(non_snake_case)]
     fn apply_r_x86_64_pc32_is_S_plus_A_minus_P() {
         let mut out = vec![0u8; 16];
         apply_internal_reloc(&mut out, EM_X86_64, 2, 0, 0x1000, 8, -4).unwrap();
@@ -1142,6 +1092,8 @@ mod tests {
     }
 
     #[test]
+    // Name intentionally mirrors the ELF relocation formula S + A - P.
+    #[allow(non_snake_case)]
     fn apply_r_x86_64_plt32_is_S_plus_A_minus_P() {
         // kind=3 (PLT32) uses S+A-P unconditionally — no address check.
         let mut out = vec![0u8; 16];

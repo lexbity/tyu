@@ -6,24 +6,24 @@
 //! Phase 9 additions: transactional rollback, `__lang_mod_init` hook,
 //! load-once enforcement, failure atomicity.
 
+use crate::apertures::{bind_apertures, ApertureRegistry};
 use crate::error::LoadError;
 use crate::platform::{LoaderPlatform, Region, Rw, Rx};
 use crate::symbols::SymMap;
-use crate::apertures::{bind_apertures, ApertureRegistry};
 use lmod::validate::Container;
 #[cfg(feature = "encryption")]
 use zeroize::Zeroize;
 
 // Re-export the error type and legacy numeric shims for external callers.
-pub use crate::error::{
-    E_ABI_MISMATCH, E_BAD_CONTAINER, E_CONTAINER_ENCRYPTED, E_ENC_AUTH_FAIL, E_ENC_BAD_HEADER,
-    E_ENC_NO_KEY, E_ENC_REQUIRES_SIGNED, E_ENC_UNSUPPORTED, E_MODULE_ALREADY_LOADED,
-    E_MODULE_DECLARES_ISR, E_PLATFORM_HASH_MISMATCH, E_RELOC_UNSUPPORTED,
-    E_RESOURCE_SHARING_MISMATCH, E_SIG_INVALID, E_STACK_BOUND_UNVERIFIABLE, E_SYMBOL_CONFLICT,
-    E_SYMBOL_UNRESOLVED, E_APERTURE_BASE_MISMATCH, E_APERTURE_CONFLICT, E_APERTURE_TABLE_MALFORMED,
-    E_APERTURE_UNRESOLVED,
-};
 pub use crate::apertures::APERTURE_TABLE_CAP;
+pub use crate::error::{
+    E_ABI_MISMATCH, E_APERTURE_BASE_MISMATCH, E_APERTURE_CONFLICT, E_APERTURE_TABLE_MALFORMED,
+    E_APERTURE_UNRESOLVED, E_BAD_CONTAINER, E_CONTAINER_ENCRYPTED, E_ENC_AUTH_FAIL,
+    E_ENC_BAD_HEADER, E_ENC_NO_KEY, E_ENC_REQUIRES_SIGNED, E_ENC_UNSUPPORTED,
+    E_MODULE_ALREADY_LOADED, E_MODULE_DECLARES_ISR, E_PLATFORM_HASH_MISMATCH, E_RELOC_UNSUPPORTED,
+    E_RESOURCE_SHARING_MISMATCH, E_SIG_INVALID, E_STACK_BOUND_UNVERIFIABLE, E_SYMBOL_CONFLICT,
+    E_SYMBOL_UNRESOLVED,
+};
 
 /// Name of the optional per-module init word.
 const MOD_INIT_NAME: &[u8] = b"__lang_mod_init";
@@ -82,9 +82,9 @@ impl<'a, 'e, const N: usize> Drop for RollbackGuard<'a, 'e, N> {
     }
 }
 
-/// Intentionally empty — allocation release is a future phase.
-/// Phase 9 guarantees symbol-map atomicity; allocation cleanup is
-/// process-scoped for TrustLevel Zero (exiting frees all mmap'd regions).
+// Intentionally empty — allocation release is a future phase.
+// Phase 9 guarantees symbol-map atomicity; allocation cleanup is
+// process-scoped for TrustLevel Zero (exiting frees all mmap'd regions).
 
 /// A fixed-capacity set of module identifiers used to enforce load-once.
 ///
@@ -93,6 +93,12 @@ impl<'a, 'e, const N: usize> Drop for RollbackGuard<'a, 'e, N> {
 pub struct LoadedSet<const N: usize> {
     hashes: [u64; N],
     len: usize,
+}
+
+impl<const N: usize> Default for LoadedSet<N> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<const N: usize> LoadedSet<N> {
@@ -889,6 +895,31 @@ fn lookup_mod_init<'a>(container: &'a Container<'a>, code_base: u64) -> usize {
     0
 }
 
+/// Dispatch an import relocation to the correct architecture backend.
+fn dispatch_import_reloc(
+    code: &mut [u8],
+    site_off: usize,
+    kind: u8,
+    sym_addr: u64,
+) -> Result<(), LoadError> {
+    // Determine addend based on relocation kind.
+    let addend = match kind {
+        1 => 0,      // R_X86_64_64
+        2 | 3 => -4, // R_X86_64_PC32 / R_X86_64_PLT32
+        4 => 0,      // R_ARM_ABS32
+        5 => 0,      // R_ARM_THM_CALL (ARM backend applies PC = site + 4)
+        6 => 0,      // R_ARM_THM_JUMP24
+        7 => 0,      // R_ARM_REL32
+        _ => 0,
+    };
+    match kind {
+        1..=3 => crate::reloc_x86_64::apply_import_reloc(code, site_off, kind, sym_addr, addend),
+        4..=7 => crate::reloc_arm::apply_import_reloc(code, site_off, kind, sym_addr, addend),
+        8 | 9 => crate::reloc_riscv::apply_import_reloc(code, site_off, kind, sym_addr, addend),
+        _ => Err(LoadError::RelocUnsupported),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -994,7 +1025,8 @@ mod tests {
     fn signed_flag_without_trust_level_one_rejected() {
         // Build a module with the SIGNED flag set, but use a TrustLevel-One platform.
         let mut mi_buf = [0u8; 128];
-        let mi_size = lmod::modinfo::encode_into(&mut mi_buf, b"T", &[], &[], 0, 0, &[], 0, &[]).unwrap();
+        let mi_size =
+            lmod::modinfo::encode_into(&mut mi_buf, b"T", &[], &[], 0, 0, &[], 0, &[]).unwrap();
         let mut raw = build_minimal_lmod_with_modinfo(&mi_buf[..mi_size], 64);
         raw[6] |= lmod::header::LMOD_FLAG_SIGNED as u8;
 
@@ -1008,7 +1040,13 @@ mod tests {
             fail: false,
             trust_level: TrustLevel::One,
         };
-        let result = load_module(&container, &mut plat, &mut map, &mut set, &mut ApertureRegistry::new());
+        let result = load_module(
+            &container,
+            &mut plat,
+            &mut map,
+            &mut set,
+            &mut ApertureRegistry::new(),
+        );
         assert!(
             result.is_err(),
             "signed module on TrustLevel One should be rejected"
@@ -1019,7 +1057,8 @@ mod tests {
     #[test]
     fn encrypted_container_rejected() {
         let mut mi_buf = [0u8; 128];
-        let mi_size = lmod::modinfo::encode_into(&mut mi_buf, b"T", &[], &[], 0, 0, &[], 0, &[]).unwrap();
+        let mi_size =
+            lmod::modinfo::encode_into(&mut mi_buf, b"T", &[], &[], 0, 0, &[], 0, &[]).unwrap();
         let mut raw = build_minimal_lmod_with_modinfo(&mi_buf[..mi_size], 64);
         raw[6] |= 0x02; // set ENCRYPTED flag
 
@@ -1036,7 +1075,13 @@ mod tests {
             fail: false,
             trust_level: TrustLevel::Zero,
         };
-        let result = load_module(&container, &mut plat, &mut map, &mut set, &mut ApertureRegistry::new());
+        let result = load_module(
+            &container,
+            &mut plat,
+            &mut map,
+            &mut set,
+            &mut ApertureRegistry::new(),
+        );
 
         #[cfg(not(feature = "encryption"))]
         assert_eq!(result.unwrap_err(), E_ENC_UNSUPPORTED);
@@ -1090,7 +1135,8 @@ mod tests {
             },
         ];
         let mut mi_buf = [0u8; 256];
-        let size = lmod::modinfo::encode_into(&mut mi_buf, b"T", &exports, &[], 0, 0, &[], 0, &[]).unwrap();
+        let size = lmod::modinfo::encode_into(&mut mi_buf, b"T", &exports, &[], 0, 0, &[], 0, &[])
+            .unwrap();
         let container_bytes = build_minimal_lmod_with_modinfo(&mi_buf[..size], 64);
         let container = lmod::validate::Container::parse(&container_bytes).unwrap();
         let result = lookup_mod_init(&container, 0x2000);
@@ -1119,13 +1165,20 @@ mod tests {
             trust_level: TrustLevel::Zero,
         };
         // This will fail (unresolved symbols) but must not panic.
-        let _result = load_module(&container, &mut plat, &mut map, &mut set, &mut ApertureRegistry::new());
+        let _result = load_module(
+            &container,
+            &mut plat,
+            &mut map,
+            &mut set,
+            &mut ApertureRegistry::new(),
+        );
     }
 
     /// Build a minimal .lmod container with a given code section size.
     fn build_minimal_lmod(code_size: u32) -> alloc::vec::Vec<u8> {
         let mut mi_buf = [0u8; 128];
-        let mi_size = lmod::modinfo::encode_into(&mut mi_buf, b"T", &[], &[], 0, 0, &[], 0, &[]).unwrap();
+        let mi_size =
+            lmod::modinfo::encode_into(&mut mi_buf, b"T", &[], &[], 0, 0, &[], 0, &[]).unwrap();
         build_minimal_lmod_with_modinfo(&mi_buf[..mi_size], code_size)
     }
 
@@ -1279,8 +1332,9 @@ mod tests {
             alloc::vec![]
         };
         let mut mi_buf = [0u8; 512];
-        let mi_size = lmod::modinfo::encode_into(&mut mi_buf, b"T", &exports, &[], abi_hash, 0, &[], 0, &[])
-            .unwrap_or(0) as u32;
+        let mi_size =
+            lmod::modinfo::encode_into(&mut mi_buf, b"T", &exports, &[], abi_hash, 0, &[], 0, &[])
+                .unwrap_or(0) as u32;
         let reloc_count = 0u32;
         let layout =
             lmod::header::compute_layout(abi_hash, mi_size, code_len, 0, 0, 0, reloc_count, 0);
@@ -1306,7 +1360,13 @@ mod tests {
         let mut map: SymMap<'_, 256> = SymMap::new();
         let mut set = LoadedSet::<64>::new();
 
-        let result = load_module(&container, &mut plat, &mut map, &mut set, &mut ApertureRegistry::new());
+        let result = load_module(
+            &container,
+            &mut plat,
+            &mut map,
+            &mut set,
+            &mut ApertureRegistry::new(),
+        );
         assert_eq!(result.unwrap_err(), LoadError::StackBoundUnverifiable);
     }
 
@@ -1326,7 +1386,13 @@ mod tests {
         let mut map: SymMap<'_, 256> = SymMap::new();
         let mut set = LoadedSet::<64>::new();
 
-        let result = load_module(&container, &mut plat, &mut map, &mut set, &mut ApertureRegistry::new());
+        let result = load_module(
+            &container,
+            &mut plat,
+            &mut map,
+            &mut set,
+            &mut ApertureRegistry::new(),
+        );
         assert!(
             result.is_ok(),
             "signed+encrypted module must load, got {:?}",
@@ -1368,7 +1434,13 @@ mod tests {
         let mut map: SymMap<'_, 256> = SymMap::new();
         let mut set = LoadedSet::<64>::new();
 
-        let result = load_module(&container, &mut plat, &mut map, &mut set, &mut ApertureRegistry::new());
+        let result = load_module(
+            &container,
+            &mut plat,
+            &mut map,
+            &mut set,
+            &mut ApertureRegistry::new(),
+        );
         assert_eq!(
             result.unwrap_err(),
             LoadError::SigInvalid,
@@ -1395,7 +1467,13 @@ mod tests {
         let mut map: SymMap<'_, 256> = SymMap::new();
         let mut set = LoadedSet::<64>::new();
 
-        let result = load_module(&container, &mut plat, &mut map, &mut set, &mut ApertureRegistry::new());
+        let result = load_module(
+            &container,
+            &mut plat,
+            &mut map,
+            &mut set,
+            &mut ApertureRegistry::new(),
+        );
         assert_eq!(
             result.unwrap_err(),
             LoadError::EncAuthFail,
@@ -1442,7 +1520,13 @@ mod tests {
         set.insert(0x1234).unwrap();
         let set_len_before = set.len;
 
-        let result = load_module(&container, &mut plat, &mut map, &mut set, &mut ApertureRegistry::new());
+        let result = load_module(
+            &container,
+            &mut plat,
+            &mut map,
+            &mut set,
+            &mut ApertureRegistry::new(),
+        );
         assert!(
             result.is_err(),
             "load_module must fail when make_exec fails"
@@ -1483,7 +1567,13 @@ mod tests {
         let mut plat = FullPlatform::new(plat_hash, [0; 32]);
         let mut map: SymMap<'_, 256> = SymMap::new();
         let mut set = LoadedSet::<64>::new();
-        let result = load_module(&container, &mut plat, &mut map, &mut set, &mut ApertureRegistry::new());
+        let result = load_module(
+            &container,
+            &mut plat,
+            &mut map,
+            &mut set,
+            &mut ApertureRegistry::new(),
+        );
         assert_eq!(result.unwrap_err(), LoadError::AbiMismatch);
     }
 
@@ -1499,8 +1589,9 @@ mod tests {
         // Build modinfo with HAS_ISR flag set.
         let exports = [];
         let mut mi_buf = [0u8; 512];
-        let mi_size = lmod::modinfo::encode_into(&mut mi_buf, b"T", &exports, &[], abi_hash, 0, &[], 0, &[])
-            .unwrap() as u32;
+        let mi_size =
+            lmod::modinfo::encode_into(&mut mi_buf, b"T", &exports, &[], abi_hash, 0, &[], 0, &[])
+                .unwrap() as u32;
         // Set the HAS_ISR flag in the modinfo header (byte 6, bit 0 = 0x01).
         mi_buf[6] |= 0x01;
 
@@ -1520,7 +1611,13 @@ mod tests {
         let mut plat = FullPlatform::new(abi_hash, key);
         let mut map: SymMap<'_, 256> = SymMap::new();
         let mut set = LoadedSet::<64>::new();
-        let result = load_module(&container, &mut plat, &mut map, &mut set, &mut ApertureRegistry::new());
+        let result = load_module(
+            &container,
+            &mut plat,
+            &mut map,
+            &mut set,
+            &mut ApertureRegistry::new(),
+        );
         assert_eq!(result.unwrap_err(), LoadError::ModuleDeclaresIsr);
     }
 
@@ -1537,9 +1634,18 @@ mod tests {
         let exports = [];
         let mut mi_buf = [0u8; 512];
         // encode_into needs module_name, exports, imports, abi_hash, flags, res_metas
-        let mi_size =
-            lmod::modinfo::encode_into(&mut mi_buf, b"T", &exports, &[], abi_hash, 0, &[res_meta], 0, &[])
-                .unwrap() as u32;
+        let mi_size = lmod::modinfo::encode_into(
+            &mut mi_buf,
+            b"T",
+            &exports,
+            &[],
+            abi_hash,
+            0,
+            &[res_meta],
+            0,
+            &[],
+        )
+        .unwrap() as u32;
 
         let code_len = code.len() as u32;
         let layout = lmod::header::compute_layout(abi_hash, mi_size, code_len, 0, 0, 0, 0, 0);
@@ -1558,7 +1664,13 @@ mod tests {
         let mut plat = FullPlatform::new(abi_hash, key);
         let mut map: SymMap<'_, 256> = SymMap::new();
         let mut set = LoadedSet::<64>::new();
-        let result = load_module(&container, &mut plat, &mut map, &mut set, &mut ApertureRegistry::new());
+        let result = load_module(
+            &container,
+            &mut plat,
+            &mut map,
+            &mut set,
+            &mut ApertureRegistry::new(),
+        );
         assert_eq!(result.unwrap_err(), LoadError::ResourceSharingMismatch);
     }
 
@@ -1579,40 +1691,23 @@ mod tests {
         let mut set = LoadedSet::<64>::new();
 
         // First load should succeed.
-        let r1 = load_module(&container, &mut plat, &mut map, &mut set, &mut ApertureRegistry::new());
+        let r1 = load_module(
+            &container,
+            &mut plat,
+            &mut map,
+            &mut set,
+            &mut ApertureRegistry::new(),
+        );
         assert!(r1.is_ok(), "first load must succeed");
 
         // Second load (same abi_hash) should fail.
-        let r2 = load_module(&container, &mut plat, &mut map, &mut set, &mut ApertureRegistry::new());
+        let r2 = load_module(
+            &container,
+            &mut plat,
+            &mut map,
+            &mut set,
+            &mut ApertureRegistry::new(),
+        );
         assert_eq!(r2.unwrap_err(), LoadError::ModuleAlreadyLoaded);
-    }
-}
-
-/// Dispatch an import relocation to the correct architecture backend.
-fn dispatch_import_reloc(
-    code: &mut [u8],
-    site_off: usize,
-    kind: u8,
-    sym_addr: u64,
-) -> Result<(), LoadError> {
-    // Determine addend based on relocation kind.
-    let addend = match kind {
-        1 => 0,      // R_X86_64_64
-        2 | 3 => -4, // R_X86_64_PC32 / R_X86_64_PLT32
-        4 => 0,      // R_ARM_ABS32
-        5 => 0,      // R_ARM_THM_CALL (ARM backend applies PC = site + 4)
-        6 => 0,      // R_ARM_THM_JUMP24
-        7 => 0,      // R_ARM_REL32
-        _ => 0,
-    };
-    match kind {
-        1 | 2 | 3 => {
-            crate::reloc_x86_64::apply_import_reloc(code, site_off, kind, sym_addr, addend)
-        }
-        4 | 5 | 6 | 7 => {
-            crate::reloc_arm::apply_import_reloc(code, site_off, kind, sym_addr, addend)
-        }
-        8 | 9 => crate::reloc_riscv::apply_import_reloc(code, site_off, kind, sym_addr, addend),
-        _ => Err(LoadError::RelocUnsupported),
     }
 }

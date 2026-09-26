@@ -24,27 +24,37 @@ pub fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
+// Shared QEMU-harness helper surface; consumers span per-arch test binaries.
+#[allow(dead_code)]
 pub fn tyu_exe() -> PathBuf {
     workspace_root().join("target").join("debug").join("tyu")
 }
 
+// Shared QEMU-harness helper surface; consumers span per-arch test binaries.
+#[allow(dead_code)]
 pub fn fixtures_manifest() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("fixtures")
         .join("manifest.toml")
 }
 
+// Shared QEMU-harness helper surface; consumers span per-arch test binaries.
+#[allow(dead_code)]
 pub fn runtime_dir(target: Target) -> PathBuf {
     let triple = std::str::from_utf8(target.triple()).unwrap();
     workspace_root().join("runtime").join(triple)
 }
 
+// Shared QEMU-harness helper surface; consumers span per-arch test binaries.
+#[allow(dead_code)]
 pub fn sysroot_dir() -> PathBuf {
     workspace_root().join("sysroot")
 }
 
 /// The platform pack directory whose compiled descriptor (`platform.desc`)
 /// sources MMIO aperture/device facts for a target's execution fixtures (P4).
+// Shared QEMU-harness helper surface; consumers span per-arch test binaries.
+#[allow(dead_code)]
 pub fn platform_desc_dir(target: Target) -> PathBuf {
     let triple = std::str::from_utf8(target.triple()).unwrap();
     if triple == "x86_64-unknown-linux-gnu" {
@@ -58,6 +68,8 @@ pub fn platform_desc_dir(target: Target) -> PathBuf {
 /// carries — decoded from `<target>/platform.desc` with the shared codec
 /// (P6, decision D-5). Hosted loaders must carry this to accept modules
 /// compiled against the same descriptor.
+// Shared QEMU-harness helper surface; consumers span per-arch test binaries.
+#[allow(dead_code)]
 pub fn board_identity_for(target: Target) -> (u64, Vec<lmod::board_table::BoardAperture>) {
     let desc_path = platform_desc_dir(target).join("platform.desc");
     let bytes = std::fs::read(&desc_path).expect("platform.desc present");
@@ -76,6 +88,8 @@ pub fn board_identity_for(target: Target) -> (u64, Vec<lmod::board_table::BoardA
     (cd.platform_hash, apertures)
 }
 
+// Shared QEMU-harness helper surface; consumers span per-arch test binaries.
+#[allow(dead_code)]
 pub fn langc_exe() -> PathBuf {
     workspace_root().join("target").join("debug").join("langc")
 }
@@ -106,6 +120,8 @@ pub use tyu::toolchain::{
     RISCV_NM_CANDIDATES as RISCV_NM,
 };
 
+// Shared QEMU-harness helper surface; consumers span per-arch test binaries.
+#[allow(dead_code)]
 #[derive(Clone, Copy)]
 pub struct DynamicTarget {
     pub target: Target,
@@ -113,9 +129,13 @@ pub struct DynamicTarget {
     pub tools: &'static [&'static [&'static str]],
 }
 
+// Shared QEMU-harness helper surface; consumers span per-arch test binaries.
+#[allow(dead_code)]
 pub const X86_DYNAMIC_TOOLS: &[&[&str]] =
     &[&["langc"], &["fasm"], &["ld"], &["qemu-system-x86_64"]];
 
+// Shared QEMU-harness helper surface; consumers span per-arch test binaries.
+#[allow(dead_code)]
 pub const ARM_DYNAMIC_TOOLS: &[&[&str]] = &[
     &["langc"],
     &["arm-none-eabi-as"],
@@ -123,9 +143,13 @@ pub const ARM_DYNAMIC_TOOLS: &[&[&str]] = &[
     &["qemu-system-arm"],
 ];
 
+// Shared QEMU-harness helper surface; consumers span per-arch test binaries.
+#[allow(dead_code)]
 pub const RISCV_DYNAMIC_TOOLS: &[&[&str]] =
     &[&["langc"], RISCV_AS, RISCV_LD, &["qemu-system-riscv32"]];
 
+// Shared QEMU-harness helper surface; consumers span per-arch test binaries.
+#[allow(dead_code)]
 pub const DYNAMIC_TARGETS: &[DynamicTarget] = &[
     DynamicTarget {
         target: Target::X86_64UnknownNone,
@@ -175,6 +199,8 @@ pub fn first_available(candidates: &[&str]) -> Option<String> {
 }
 
 /// Environment-aware tool gating.
+// Shared QEMU-harness helper surface; consumers span per-arch test binaries.
+#[allow(dead_code)]
 pub fn require_tools(tools: &[&str]) -> bool {
     let groups: Vec<&[&str]> = tools.iter().map(std::slice::from_ref).collect();
     require_tool_groups(&groups)
@@ -215,6 +241,8 @@ pub fn require_tool_groups(groups: &[&[&str]]) -> bool {
 // ---------------------------------------------------------------------------
 
 /// Compile a .mod source file with langc for the given target.
+// Shared QEMU-harness helper surface; consumers span per-arch test binaries.
+#[allow(dead_code)]
 pub fn langc_compile(target: Target, src: &Path, out_dir: &Path, is_lib: bool) -> PathBuf {
     let triple = std::str::from_utf8(target.triple()).unwrap();
     let before: std::collections::HashSet<PathBuf> = std::fs::read_dir(out_dir)
@@ -251,8 +279,7 @@ pub fn langc_compile(target: Target, src: &Path, out_dir: &Path, is_lib: bool) -
         .unwrap()
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("o") && !before.contains(p))
-        .next()
+        .find(|p| p.extension().and_then(|x| x.to_str()) == Some("o") && !before.contains(p))
         .expect("langc produced no .o file")
 }
 
@@ -261,6 +288,8 @@ pub fn langc_compile(target: Target, src: &Path, out_dir: &Path, is_lib: bool) -
 ///
 /// Optional units (e.g. `static_entry.asm`, `modload.asm`) are assembled only when the
 /// corresponding `.asm` file exists in the runtime directory.
+// Shared QEMU-harness helper surface; consumers span per-arch test binaries.
+#[allow(dead_code)]
 pub fn assemble_runtime(target: Target, out_dir: &Path) -> Vec<PathBuf> {
     let spec = target.spec();
     let rt_dir = runtime_dir(target);
@@ -326,6 +355,8 @@ pub fn assemble_runtime(target: Target, out_dir: &Path) -> Vec<PathBuf> {
 }
 
 /// Link object files + runtime into an ELF.
+// Shared QEMU-harness helper surface; consumers span per-arch test binaries.
+#[allow(dead_code)]
 pub fn link_image(target: Target, objs: &[PathBuf], out_dir: &Path) -> PathBuf {
     let spec = target.spec();
     let rt_dir = runtime_dir(target);
@@ -361,6 +392,8 @@ pub fn link_image(target: Target, objs: &[PathBuf], out_dir: &Path) -> PathBuf {
 }
 
 /// Run an execution image through the product runner path.
+// Shared QEMU-harness helper surface; consumers span per-arch test binaries.
+#[allow(dead_code)]
 pub fn run_with_product_runner(
     target: Target,
     image: &Path,
@@ -374,6 +407,8 @@ pub fn run_with_product_runner(
 /// Return the set of symbol names that MUST be present in a linked image
 /// for a given feature set.  Core symbols are always required; optional
 /// unit symbols are included iff the corresponding feature is enabled.
+// Shared QEMU-harness helper surface; consumers span per-arch test binaries.
+#[allow(dead_code)]
 pub fn expected_symbols(feature_set: codegen_core::FeatureSet) -> Vec<&'static str> {
     let mut syms: Vec<&'static str> = vec![
         // Core runtime symbols (abi-contract §4.4.1).

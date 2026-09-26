@@ -32,14 +32,15 @@ fn def_word_accepts_paren_performs_annotation() {
     let d = first_decl(&ast);
     assert_eq!(d.kind, DeclKind::Word);
     assert!(d.has_explicit_performs);
-    assert_ne!(d.effect_bits, 0, "performs ( suspend ) must set effect bits");
+    assert_ne!(
+        d.effect_bits, 0,
+        "performs ( suspend ) must set effect bits"
+    );
 }
 
 #[test]
 fn def_word_accepts_multi_effect_paren_performs() {
-    let ast = parse_module(
-        "module Bank;\n: w ( -- )\n  performs ( suspend, mmio ) ;\nend;\n",
-    );
+    let ast = parse_module("module Bank;\n: w ( -- )\n  performs ( suspend, mmio ) ;\nend;\n");
     let d = first_decl(&ast);
     assert_eq!(d.kind, DeclKind::Word);
     let bits = d.effect_bits;
@@ -148,8 +149,14 @@ fn intent_span_covers_quoted_literal() {
     let ast = parse_module(src);
     let d = first_decl(&ast);
     let span = d.intent.expect("intent clause must be captured");
-    assert!(src.as_bytes()[span.start] == b'"', "span starts at the opening quote");
-    assert!(src.as_bytes()[span.end - 1] == b'"', "span ends at the closing quote");
+    assert!(
+        src.as_bytes()[span.start] == b'"',
+        "span starts at the opening quote"
+    );
+    assert!(
+        src.as_bytes()[span.end - 1] == b'"',
+        "span ends at the closing quote"
+    );
     let text = &src[span.start + 1..span.end - 1];
     assert_eq!(text, "withdraw never exceeds balance");
 }
@@ -180,5 +187,8 @@ fn intent_accepted_in_clause_group_any_order() {
     );
     let d = first_decl(&ast);
     assert!(d.ensures.is_some());
-    assert!(d.intent.is_some(), "intent in the clause group must be captured");
+    assert!(
+        d.intent.is_some(),
+        "intent in the clause group must be captured"
+    );
 }

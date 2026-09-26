@@ -8,8 +8,8 @@ pub const LMOD_MAGIC: u32 = 0x4c4d4f44; // "LMOD"
 ///
 /// - 2: original (no encryption envelope).
 /// - 3: adds optional `EncHeader` after the container header (inside the
-///      signed region) and before modinfo.  A v3 container with
-///      `enc_header_len == 0` is byte-identical to v2 except this field.
+///   signed region) and before modinfo.  A v3 container with
+///   `enc_header_len == 0` is byte-identical to v2 except this field.
 pub const FORMAT_VER: u16 = 3;
 
 /// Size of the fixed container header in bytes.
@@ -51,6 +51,12 @@ pub struct LmodHeader {
     pub reloc_count: u32,
     pub sig_off: u32,
     pub sig_len: u32,
+}
+
+impl Default for LmodHeader {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl LmodHeader {
@@ -154,6 +160,9 @@ pub fn decode_header(bytes: &[u8]) -> Option<LmodHeader> {
 ///   2. If `enc_header_len > 0`, write the enc-header at offset `HEADER_SIZE`.
 ///   3. Write `modinfo` at `header.modinfo_off`.
 ///   4. Write code at `header.code_off`, rodata, data, etc.
+// Arguments mirror the positional fields of the wire-format header in order;
+// a config struct would decouple the signature from the on-disk layout.
+#[allow(clippy::too_many_arguments)]
 pub fn compute_layout(
     abi_hash: u64,
     modinfo_len: u32,

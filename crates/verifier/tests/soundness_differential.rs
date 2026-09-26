@@ -1,5 +1,5 @@
 //! Differential soundness harness for the interval engine (static-
-//! verification.md Q9/P5, FR-20/NFR-3).
+//! verification.md Q9/P5, FR-20/NFR-3; PLAN-VERIFY-3 P2).
 //!
 //! A *concrete reference interpreter* for the OEL program shape evaluates the
 //! engine's transfer functions (`verifier::interp::State::step`) against
@@ -13,18 +13,27 @@
 //!
 //! Exhaustive suites over crafted programs with inputs from tiny domains
 //! (≤ 2^14 points), plus a deterministic seeded generator producing ≥ 10^5
-//! random straight-line programs per run. The generator is seeded (fixed
-//! seed), so a run is byte-reproducible across machines.
+//! random straight-line programs per run. The generator lives in
+//! `verifier::gen` (PLAN-VERIFY-3 P2.3 — one generator, shared with future
+//! port differentials); the concrete evaluator stays here (it is the *test's*
+//! ground truth, not a shared surface).
+//!
+//! P2 adds the **per-target** suite: the reference semantics is a function of
+//! `(TargetSpec, MemModel)` (§Q3), and since the IR data ops are full-width
+//! i64 on every target (the runtime emulates 64-bit arithmetic on 32-bit
+//! targets), the discharge behavior MUST be identical across all four
+//! recognized targets under the default `FlatMem` model. The suite asserts
+//! per-program identity (tri + final interval) across targets — the width
+//! parameterization must be a *no-op on the data domain*.
 
 use ir::{Atom, BlockId, CmpKind, OpKind, Sig, Span, TypeId};
+use std::collections::HashMap;
+use verifier::gen::{gen_program, MemDesc, Program, Rng, SUB_HI, SUB_ID, SUB_LO};
+use verifier::interp::{
+    exit_state, run_cfg, ApertureMem, FlatMem, Origin, Slot, State, SubtypeRange,
+};
 use verifier::interval::{eval_in_range, Interval, Tri};
-use verifier::interp::{run_cfg, State, SubtypeRange};
-
-/// The harness's single subtype: `TypeId(2)` ranges `0..=100` (mirrors the
-/// `Percent` books example).
-const SUB_ID: u8 = 2;
-const SUB_LO: i64 = 0;
-const SUB_HI: i64 = 100;
+use verifier::target::TargetSpec;
 
 fn subtype_range_lookup(tid: TypeId) -> Option<(i64, i64)> {
     if tid.0 == SUB_ID {
@@ -38,50 +47,7 @@ fn sr() -> &'static SubtypeRange<'static> {
     &subtype_range_lookup
 }
 
-// ---------------------------------------------------------------------------
-// Deterministic PRNG (no external dep)
-// ---------------------------------------------------------------------------
-
-pub struct Rng(u64);
-
-impl Rng {
-    fn next(&mut self) -> u64 {
-        self.0 = self
-            .0
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        self.0
-    }
-
-    fn below(&mut self, n: u64) -> u64 {
-        self.next() % n.max(1)
-    }
-
-    fn i64_between(&mut self, lo: i64, hi: i64) -> i64 {
-        let span = hi.saturating_sub(lo).saturating_add(1) as u64;
-        lo.wrapping_add((self.next() % span.max(1)) as i64)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Program model: straight-line ops over `n_inputs` inputs, ending with an
-// `InRange` obligation on the final top of the abstract stack.
-// ---------------------------------------------------------------------------
-
-/// One straight-line program with its input domains and the final obligation.
-#[derive(Debug)]
-pub struct Program {
-    pub n_inputs: usize,
-    /// Per-input (lo, hi) concrete domains — the concrete enumeration is
-    /// EXACTLY these intervals, so the exhaustive check is complete over the
-    /// domain the discharge claims.
-    pub domains: Vec<(i64, i64)>,
-    pub ops: Vec<OpKind>,
-    pub target: (i64, i64),
-    /// When true, the obligation is on the PRE-cast value of the final
-    /// `Cast` op (the cast's own site) — concrete runs trap on out-of-range.
-    pub cast_site: bool,
-}
+// -------- Program model & enumeration ----------------------------------------
 
 /// Enumerate every combination of input values across the domains.
 fn enumerate_inputs(domains: &[(i64, i64)], out: &mut Vec<Vec<i64>>) {
@@ -104,10 +70,19 @@ fn enumerate_inputs(domains: &[(i64, i64)], out: &mut Vec<Vec<i64>>) {
 // Concrete semantics ---------------------------------------------------------
 
 /// Concrete result of one straight-line run: a value, or a trap (the cast
-/// rejected an out-of-range value — the runtime trap).
+/// rejected an out-of-range value — the runtime trap). Memory mirrors the
+/// abstract [`ApertureMem`] (PLAN-VERIFY-3 P2): point addresses within the
+/// program's RAM region record stores and replay them on load; a never-
+/// written cell reads as 0 ("any value"); MMIO reads answer the program's
+/// scripted register value (0 when unscripted).
 pub fn concrete_eval(prog: &Program, inputs: &[i64]) -> Option<i64> {
     let mut stack: Vec<i64> = Vec::new();
     let mut locals = [0i64; 4];
+    let mut ram: HashMap<i64, i64> = HashMap::new();
+    let (ram_lo, ram_hi) = match prog.mem.ram {
+        Some((lo, hi)) => (lo as i128, hi as i128),
+        None => (0, 0),
+    };
     for v in inputs.iter() {
         stack.push(*v);
     }
@@ -183,7 +158,7 @@ pub fn concrete_eval(prog: &Program, inputs: &[i64]) -> Option<i64> {
                 let v = stack.pop()?;
                 if to.0 == SUB_ID {
                     // The runtime cast TRAPS on out-of-range values.
-                    if v < SUB_LO || v > SUB_HI {
+                    if !(SUB_LO..=SUB_HI).contains(&v) {
                         return None; // trap
                     }
                 }
@@ -191,14 +166,44 @@ pub fn concrete_eval(prog: &Program, inputs: &[i64]) -> Option<i64> {
             }
             OpKind::Bitcast { .. } => {}
             OpKind::Load { .. } => {
-                let _ = stack.pop()?;
-                stack.push(0); // reads anything (the abstraction is ⊤)
+                let addr = stack.pop()?;
+                // Reads are RAM-modeled (P2): a point address inside the
+                // program's region replays the recorded store; anything else
+                // reads "any value" (0 here — the abstract answer is ⊤).
+                let inside = (addr as i128) >= ram_lo && (addr as i128) <= ram_hi;
+                let v = if inside {
+                    ram.get(&addr).copied().unwrap_or(0)
+                } else {
+                    0
+                };
+                stack.push(v);
             }
             OpKind::Store { .. } => {
+                // `[addr, value]` — value is on top; the runtime pops value,
+                // then address.
+                let val = stack.pop()?;
+                let addr = stack.pop()?;
+                let inside = (addr as i128) >= ram_lo && (addr as i128) <= ram_hi;
+                if inside {
+                    ram.insert(addr, val);
+                }
+            }
+            OpKind::MmioVolLoad { place, .. } | OpKind::MmioVolLoadField { place, .. } => {
+                let _ = stack.pop()?;
+                let scripted = prog
+                    .mem
+                    .scripted
+                    .iter()
+                    .find(|(k, _)| k == place)
+                    .map(|(_, v)| *v)
+                    .unwrap_or(0);
+                stack.push(scripted);
+            }
+            OpKind::MmioVolStore { .. } | OpKind::MmioVolStoreField { .. } => {
                 let _ = stack.pop()?;
                 let _ = stack.pop()?;
             }
-            // Ops the generator never emits (control flow, calls, mmio…):
+            // Ops the generator never emits (control flow, calls, …):
             _ => return None, // treat as a trap / opaque — excluded by generator
         }
     }
@@ -207,16 +212,29 @@ pub fn concrete_eval(prog: &Program, inputs: &[i64]) -> Option<i64> {
 
 // Abstract semantics ----------------------------------------------------------
 
-/// The discharge verdict of a program: `(tri_of_obligation, final_interval)`.
-/// For `cast_site` programs the obligation is on the PRE-cast value.
+/// The discharge verdict of a program under a given target identity:
+/// `(tri_of_obligation, final_interval)`. For `cast_site` programs the
+/// obligation is on the PRE-cast value. The memory model is the program's
+/// [`MemDesc`]: `FlatMem` when no surface is enabled, else an `ApertureMem`
+/// carrying the program's RAM region and scripted MMIO reads (P2 — the
+/// differential steps the actual `(TargetSpec, MemModel)` pair, §Q3).
 pub fn abstract_verdict(prog: &Program) -> (Tri, Interval) {
-    let mut st = State::callee_entry(prog.n_inputs, 4);
+    let mut flat = FlatMem;
+    let mut ap: Option<ApertureMem> = None;
+    if prog.mem.ram.is_some() || !prog.mem.scripted.is_empty() {
+        let mut m = ApertureMem::new(prog.mem.ram.unwrap_or((0, 0)));
+        for &(k, v) in prog.mem.scripted.iter() {
+            m.script_read(&k, Interval::const_val(v));
+        }
+        ap = Some(m);
+    }
+    let mut st = State::callee_entry(prog.n_inputs(), 4);
     // Seed the abstract inputs from the domains.
     st.stack.clear();
     for &(lo, hi) in &prog.domains {
-        st.stack.push(verifier::interp::Slot {
+        st.stack.push(Slot {
             iv: Interval::Range { lo, hi },
-            origin: verifier::interp::Origin::Arg(0),
+            origin: Origin::Arg(0),
         });
     }
     let mut pre_cast: Option<Interval> = None;
@@ -224,7 +242,10 @@ pub fn abstract_verdict(prog: &Program) -> (Tri, Interval) {
         if matches!(op, OpKind::Cast { to, .. } if to.0 == SUB_ID) {
             pre_cast = Some(st.top_interval());
         }
-        st.step(op, sr());
+        match &mut ap {
+            Some(m) => st.step(op, sr(), prog.spec, m),
+            None => st.step(op, sr(), prog.spec, &mut flat),
+        }
     }
     let (tri, val) = if prog.cast_site {
         let v = pre_cast.unwrap_or(Interval::TOP);
@@ -258,142 +279,18 @@ fn assert_discharge_sound(prog: &Program, tag: &str) {
         }
         Tri::DefFalse => {
             for input in &inputs {
-                let v = concrete_eval(prog, input);
-                match v {
-                    Some(v) => assert!(
+                // A trap also "violates" the target in-range predicate (the
+                // cast's check stops control flow before the return).
+                if let Some(v) = concrete_eval(prog, input) {
+                    assert!(
                         v < tlo || v > thi,
                         "{tag}: DefFalse but {input:?} evaluates to {v} INSIDE [{tlo},{thi}]"
-                    ),
-                    // A trap also "violates" the target in-range predicate.
-                    None => {}
+                    );
                 }
             }
         }
         Tri::Top => {} // open: nothing to check; the check stays (conservative)
     }
-}
-
-// ---------------------------------------------------------------------------
-// Generators
-// ---------------------------------------------------------------------------
-
-/// Stack-safe random straight-line program. `cast_final` produces a program
-/// whose last op is a narrowing casts (the obligation sits on the cast pre).
-fn gen_program(rng: &mut Rng, n_inputs: usize, cast_final: bool) -> Program {
-    let domains: Vec<(i64, i64)> = (0..n_inputs)
-        .map(|_| {
-            let lo = rng.i64_between(-3, 0);
-            let hi = rng.i64_between(1, 4);
-            (lo, hi)
-        })
-        .collect();
-    let ops: Vec<OpKind> = gen_op_chain(rng, n_inputs, cast_final);
-    // A cast-site program's obligation IS the cast itself — its target is the
-    // subtype range, not an arbitrary target (the cast traps on values
-    // outside it).
-    let target = if cast_final {
-        (SUB_LO, SUB_HI)
-    } else {
-        let tlo = rng.i64_between(-6, 2);
-        let thi = rng.i64_between(3, 10);
-        (tlo, thi)
-    };
-    Program {
-        n_inputs,
-        domains,
-        ops,
-        target,
-        cast_site: cast_final,
-    }
-}
-
-fn gen_op_chain(rng: &mut Rng, n_inputs: usize, cast_final: bool) -> Vec<OpKind> {
-    // The generator tracks a symbolic stack so it only emits valid pops
-    // (the abstract/concrete evaluators treat underflow as a trap, so the
-    // programs must be well-typed by construction).
-    let mut depth = n_inputs.max(1);
-    let mut ops: Vec<OpKind> = Vec::new();
-    let length = 1 + rng.below(8) as usize; // 1..=8 ops
-    let budget = if cast_final { length } else { length };
-    for _ in 0..budget {
-        // Avoid emitting the final cast before the last slot.
-        if cast_final && ops.len() + 1 == budget {
-            break;
-        }
-        let choice = rng.below(11);
-        match choice {
-            0 => {
-                ops.push(OpKind::ConstI64(rng.i64_between(-5, 5)));
-                depth += 1;
-            }
-            1 | 2 | 3 => {
-                if depth < 2 {
-                    // not enough operands — retry next time
-                    continue;
-                }
-                ops.push(match choice {
-                    1 => OpKind::AddI64,
-                    2 => OpKind::SubI64,
-                    _ => OpKind::MulI64,
-                });
-                depth -= 1;
-            }
-            4 => {
-                if depth >= 1 {
-                    ops.push(OpKind::Dup { ty: TypeId(0) });
-                    depth += 1;
-                }
-            }
-            5 => {
-                if depth >= 2 {
-                    ops.push(OpKind::Drop { ty: TypeId(0) });
-                    depth -= 1;
-                }
-            }
-            6 => {
-                if depth >= 2 {
-                    ops.push(OpKind::Swap {
-                        a: TypeId(0),
-                        b: TypeId(0),
-                    });
-                }
-            }
-            7 => {
-                if depth >= 1 {
-                    ops.push(OpKind::LocalSet { slot: 0, ty: TypeId(0) });
-                    depth -= 1;
-                }
-            }
-            // LocalGet of slot 0 is a +1 net op; on the FIRST op it may read a
-            // never-written local (⊤ abstract / 0 concrete) — sound either way.
-            8 => {
-                ops.push(OpKind::LocalGet { slot: 0, ty: TypeId(0) });
-                depth += 1;
-            }
-            9 => {
-                if depth >= 2 {
-                    ops.push(OpKind::Cmp {
-                        out: TypeId(1),
-                        kind: CmpKind::Eq,
-                    });
-                    depth -= 1;
-                }
-            }
-            _ => {
-                ops.push(OpKind::Bitcast {
-                    from: TypeId(0),
-                    to: TypeId(0),
-                });
-            }
-        }
-    }
-    if cast_final {
-        ops.push(OpKind::Cast {
-            from: TypeId(0),
-            to: TypeId(SUB_ID),
-        });
-    }
-    ops
 }
 
 // ---------------------------------------------------------------------------
@@ -405,11 +302,12 @@ fn gen_op_chain(rng: &mut Rng, n_inputs: usize, cast_final: bool) -> Vec<OpKind>
 #[test]
 fn crafted_suite_exhaustive_over_tiny_domains() {
     let mk = |domains: Vec<(i64, i64)>, ops: Vec<OpKind>, target: (i64, i64), cast: bool| Program {
-        n_inputs: domains.len(),
         domains,
         ops,
         target,
         cast_site: cast,
+        spec: TargetSpec::X86_64,
+        mem: MemDesc::flat(),
     };
 
     // 100 - 50 in-range chain: `100 50 -` → [50,50] ⊆ [0,100].
@@ -448,12 +346,7 @@ fn crafted_suite_exhaustive_over_tiny_domains() {
     assert_discharge_sound(&p, "a*b+c-in-range");
 
     // Two-argument subtraction with a mixed domain → Top (open).
-    let p = mk(
-        vec![(-3, 3), (-3, 3)],
-        vec![OpKind::SubI64],
-        (0, 3),
-        false,
-    );
+    let p = mk(vec![(-3, 3), (-3, 3)], vec![OpKind::SubI64], (0, 3), false);
     assert_eq!(abstract_verdict(&p).0, Tri::Top);
     assert_discharge_sound(&p, "mixed-sub");
 
@@ -463,7 +356,10 @@ fn crafted_suite_exhaustive_over_tiny_domains() {
         vec![
             OpKind::ConstI64(0),
             OpKind::AddI64,
-            OpKind::Cast { from: TypeId(0), to: TypeId(SUB_ID) },
+            OpKind::Cast {
+                from: TypeId(0),
+                to: TypeId(SUB_ID),
+            },
         ],
         (0, 100),
         true,
@@ -474,7 +370,10 @@ fn crafted_suite_exhaustive_over_tiny_domains() {
     // Cast final: input domain above the target — the cast always traps.
     let p = mk(
         vec![(150, 200)],
-        vec![OpKind::Cast { from: TypeId(0), to: TypeId(SUB_ID) }],
+        vec![OpKind::Cast {
+            from: TypeId(0),
+            to: TypeId(SUB_ID),
+        }],
         (0, 100),
         true,
     );
@@ -484,7 +383,10 @@ fn crafted_suite_exhaustive_over_tiny_domains() {
     // Cast final: input domain straddling the boundary → open.
     let p = mk(
         vec![(-20, 200)],
-        vec![OpKind::Cast { from: TypeId(0), to: TypeId(SUB_ID) }],
+        vec![OpKind::Cast {
+            from: TypeId(0),
+            to: TypeId(SUB_ID),
+        }],
         (0, 100),
         true,
     );
@@ -495,8 +397,14 @@ fn crafted_suite_exhaustive_over_tiny_domains() {
     let p = mk(
         vec![(0, 5)],
         vec![
-            OpKind::LocalSet { slot: 1, ty: TypeId(0) },
-            OpKind::LocalGet { slot: 1, ty: TypeId(0) },
+            OpKind::LocalSet {
+                slot: 1,
+                ty: TypeId(0),
+            },
+            OpKind::LocalGet {
+                slot: 1,
+                ty: TypeId(0),
+            },
         ],
         (0, 5),
         false,
@@ -507,7 +415,10 @@ fn crafted_suite_exhaustive_over_tiny_domains() {
     // Dup/Drop/Swap are no-ops on the value flow.
     let p = mk(
         vec![(0, 5)],
-        vec![OpKind::Dup { ty: TypeId(0) }, OpKind::Drop { ty: TypeId(0) }],
+        vec![
+            OpKind::Dup { ty: TypeId(0) },
+            OpKind::Drop { ty: TypeId(0) },
+        ],
         (0, 5),
         false,
     );
@@ -529,7 +440,7 @@ fn crafted_suite_exhaustive_over_tiny_domains() {
 /// domains (NFR-3: zero false-Discharged).
 #[test]
 fn random_straight_line_soundness_100k() {
-    let mut rng = Rng(0x0d15_a5e_0d15_a5e);
+    let mut rng = Rng::new(0x0d15_a5e0_d15a_5e0d);
     let mut discharged = 0u64;
     let mut provably_failing = 0u64;
     let mut open = 0u64;
@@ -538,7 +449,13 @@ fn random_straight_line_soundness_100k() {
     for idx in 0..N {
         let n_inputs = 1 + (rng.below(3) as usize); // 1..=3
         let cast_final = rng.below(4) == 0; // ~25% cast-site programs
-        let prog = gen_program(&mut rng, n_inputs, cast_final);
+        let prog = gen_program(
+            &mut rng,
+            TargetSpec::X86_64,
+            &MemDesc::flat(),
+            n_inputs,
+            cast_final,
+        );
         let (tri, _) = abstract_verdict(&prog);
         match tri {
             Tri::DefTrue => {
@@ -564,7 +481,10 @@ fn random_straight_line_soundness_100k() {
     // Sanity that the generator exercised all three verdicts (a degenerate
     // generator would silently pass).
     assert!(discharged > 0, "generator produced no discharges");
-    assert!(provably_failing > 0, "generator produced no provably-failing");
+    assert!(
+        provably_failing > 0,
+        "generator produced no provably-failing"
+    );
     assert!(open > 0, "generator produced no open verdicts");
 }
 
@@ -600,18 +520,190 @@ fn find_satisfying(prog: &Program) -> Option<Vec<i64>> {
 }
 
 // ---------------------------------------------------------------------------
+// Per-target width-relativism (PLAN-VERIFY-3 §Q3, P2): the discharge verdict
+// of a data-only program MUST be identical under every recognized target
+// (the runtime emulates 64-bit data arithmetic on 32-bit targets; only the
+// address/usize and MMIO domains are width-relative, and FlatMem never
+// touches them). A second generator run at an independent seed keeps the
+// sample fresh per CI run while remaining deterministic.
+// ---------------------------------------------------------------------------
+
+const PER_TARGET_SAMPLE: u64 = 5_000;
+
+#[test]
+fn per_target_identity_of_data_domain_discharge() {
+    let targets = [
+        TargetSpec::X86_64_UNKNOWN_LINUX_GNU,
+        TargetSpec::X86_64_UNKNOWN_NONE,
+        TargetSpec::ARM_V7M_UNKNOWN_NONE,
+        TargetSpec::RISCV32_UNKNOWN_NONE,
+    ];
+    // The reference spec is x86_64-unknown-none (the in-tree default).
+    let reference = TargetSpec::X86_64;
+    for seed in 0..4u64 {
+        let mut rng = Rng::new(0x5eed_00d5_0000_0000 + seed);
+        for idx in 0..PER_TARGET_SAMPLE {
+            let n_inputs = 1 + (rng.below(3) as usize);
+            let cast_final = rng.below(4) == 0;
+            let base = gen_program(&mut rng, reference, &MemDesc::flat(), n_inputs, cast_final);
+            let (ref_tri, ref_iv) = abstract_verdict(&base);
+            // Same program, every target: verdicts must be identical.
+            for &spec in targets.iter() {
+                if spec == reference {
+                    continue;
+                }
+                let mut p = base.clone();
+                p.spec = spec;
+                let (tri, iv) = abstract_verdict(&p);
+                assert_eq!(
+                    (tri, iv),
+                    (ref_tri, ref_iv),
+                    "seed {seed} idx {idx} ({spec:?}): data-domain discharge differs from {} — \
+                     the width parameterization changed semantics",
+                    reference.triple
+                );
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Memory-model boundary differential (PLAN-VERIFY-3 P2.1/P2.3): programs that
+// carry a [`MemDesc`] — point `Store`/`Load` pairs inside a modeled RAM
+// region and scripted MMIO reads — are checked against the concrete RAM the
+// same way the data programs are checked against wrapping-i64 execution. The
+// abstract engine answers a store-then-load point with the stored interval
+// and a scripted MMIO read with the scripted value; a false Discharged would
+// mean the `(TargetSpec, MemModel)` parametrization elided a check the
+// concrete memory would violate.
+// ---------------------------------------------------------------------------
+
+fn memory_suite_mem() -> MemDesc {
+    MemDesc::ram_and_dev_script(0x1000, 0x2000, 7)
+}
+
+/// ≥ 10^5 memory-bearing programs, exhaustively checked against the concrete
+/// RAM (zero false-Discharged). Also conservatively exercises the
+/// unscripted-MMIO path (reads answer 0 concretely, `⊤` abstractly — open).
+#[test]
+fn memory_differential_soundness_100k() {
+    let mem = memory_suite_mem();
+    let mut rng = Rng::new(0xdead_beef_d00d_cafe);
+    let mut op_counter = [0u64; 4]; // [store, load, mmio-read, mmio-write]
+    const N: u64 = 75_000;
+    let mut first_mismatch: Option<String> = None;
+    for idx in 0..N {
+        let n_inputs = 1 + (rng.below(3) as usize);
+        let cast_final = rng.below(4) == 0;
+        let prog = gen_program(&mut rng, TargetSpec::X86_64, &mem, n_inputs, cast_final);
+        for op in &prog.ops {
+            match op {
+                OpKind::Store { .. } => op_counter[0] += 1,
+                OpKind::Load { .. } => op_counter[1] += 1,
+                OpKind::MmioVolLoad { .. } | OpKind::MmioVolLoadField { .. } => op_counter[2] += 1,
+                OpKind::MmioVolStore { .. } | OpKind::MmioVolStoreField { .. } => {
+                    op_counter[3] += 1
+                }
+                _ => {}
+            }
+        }
+        let (tri, _) = abstract_verdict(&prog);
+        if tri == Tri::DefTrue {
+            if let Some(inputs) = find_violating(&prog) {
+                first_mismatch = Some(format!(
+                    "memory idx {idx}: DISCHARGE but {inputs:?} violates ({prog:?})"
+                ));
+            }
+        } else if tri == Tri::DefFalse {
+            if let Some(inputs) = find_satisfying(&prog) {
+                first_mismatch = Some(format!(
+                    "memory idx {idx}: DefFalse but {inputs:?} satisfies ({prog:?})"
+                ));
+            }
+        }
+        assert!(
+            first_mismatch.is_none(),
+            "{}",
+            first_mismatch.as_deref().unwrap_or_default()
+        );
+    }
+    // The generator really exercised the memory surface (a degenerate
+    // descriptor would silently pass).
+    assert!(op_counter[0] > 0, "no Store emitted in the memory suite");
+    assert!(op_counter[1] > 0, "no Load emitted in the memory suite");
+    assert!(
+        op_counter[2] > 0,
+        "no MMIO read emitted in the memory suite"
+    );
+    eprintln!(
+        "memory suite op mix: store={} load={} mmio-read={} mmio-write={}",
+        op_counter[0], op_counter[1], op_counter[2], op_counter[3]
+    );
+}
+
+/// The memory suite is *specific*: a store→load pair at a point address
+/// discharges only when the stored value is in range (abstract [v,v] matching
+/// concrete v), and a scripted MMIO read discharges exactly the scripted
+/// value. Both directions are proven concrete-sound.
+#[test]
+fn memory_store_load_pair_is_sound_in_both_directions() {
+    let mem = memory_suite_mem();
+    let addr = 0x1234i64;
+    let mk_pair = |value: i64, target: (i64, i64)| Program {
+        domains: vec![],
+        ops: vec![
+            OpKind::ConstI64(addr),
+            OpKind::ConstI64(value),
+            OpKind::Store { ty: TypeId(0) },
+            OpKind::ConstI64(addr),
+            OpKind::Load { ty: TypeId(0) },
+        ],
+        target,
+        cast_site: false,
+        spec: TargetSpec::X86_64,
+        mem: mem.clone(),
+    };
+    // Stored 7 ∈ [0,100] → the load discharges; the concrete load returns 7.
+    let p = mk_pair(7, (0, 100));
+    assert_eq!(abstract_verdict(&p).0, Tri::DefTrue);
+    assert_eq!(concrete_eval(&p, &[]), Some(7));
+    // Stored 150 ∉ [0,100] → provably failing; the concrete load returns 150.
+    let p = mk_pair(150, (0, 100));
+    assert_eq!(abstract_verdict(&p).0, Tri::DefFalse);
+    assert_eq!(concrete_eval(&p, &[]), Some(150));
+
+    // A scripted MMIO read answers the script: 7 → discharge, and the
+    // concrete read mirrors it.
+    let dev = Atom::new(b"dev").unwrap();
+    let read_prog = |target: (i64, i64)| Program {
+        domains: vec![],
+        ops: vec![
+            OpKind::ConstI64(0),
+            OpKind::MmioVolLoad {
+                ty: TypeId(0),
+                place: dev,
+                read_kind: ir::ReadKind::Plain,
+                atomic_max: 64,
+                barrier: ir::BarrierKind::None,
+            },
+        ],
+        target,
+        cast_site: false,
+        spec: TargetSpec::X86_64,
+        mem: mem.clone(),
+    };
+    assert_eq!(abstract_verdict(&read_prog((0, 100))).0, Tri::DefTrue);
+    assert_eq!(concrete_eval(&read_prog((0, 100)), &[]), Some(7));
+}
+
+// ---------------------------------------------------------------------------
 // Loop CFG flavor: the back-edge widening (FR-12) must never discharge a
 // loop-carried value (a false discharge would be an unsound elision).
 // ---------------------------------------------------------------------------
 
-/// Build the synthetic word:
-/// `x = input; while (x < 10) { x = x + 1 }; ret x` over input n ∈ [0,5].
-/// True concrete finals: 10.., so `target [0,8]` gives DefFalse SOUND ans,
-/// but the abstract engine must widen x to ⊤ (open) — discharging would be
-/// unsound (x=0 loops to 10 ∉ [0,8]).
 fn loop_word() -> ir::Word {
     let mut w = ir::Word {
-        name: Atom::new(b"loopish").unwrap(),
+        name: ir::Atom::new(b"loopish").unwrap(),
         sig: Sig {
             in_len: 1,
             out_len: 1,
@@ -637,7 +729,12 @@ fn loop_word() -> ir::Word {
             ops: Default::default(),
         };
         for (i, op) in ops.into_iter().enumerate() {
-            b.ops.push(ir::Op { kind: op, span: Span::UNKNOWN }).unwrap_or_else(|_| panic!("op {i}"));
+            b.ops
+                .push(ir::Op {
+                    kind: op,
+                    span: Span::UNKNOWN,
+                })
+                .unwrap_or_else(|_| panic!("op {i}"));
         }
         w.blocks.push(b).expect("block fits");
         id
@@ -651,8 +748,14 @@ fn loop_word() -> ir::Word {
     bx(vec![
         OpKind::LocalGet { slot: 1, ty },
         OpKind::ConstI64(10),
-        OpKind::Cmp { out: TypeId(1), kind: CmpKind::Lt },
-        OpKind::BrIf { then_tgt: BlockId(2), else_tgt: BlockId(3) },
+        OpKind::Cmp {
+            out: TypeId(1),
+            kind: CmpKind::Lt,
+        },
+        OpKind::BrIf {
+            then_tgt: BlockId(2),
+            else_tgt: BlockId(3),
+        },
     ]);
     // block 2 (body): x = x + 1; br 1
     bx(vec![
@@ -663,10 +766,7 @@ fn loop_word() -> ir::Word {
         OpKind::Br { target: BlockId(1) },
     ]);
     // block 3 (exit): ret x
-    bx(vec![
-        OpKind::LocalGet { slot: 1, ty },
-        OpKind::Ret,
-    ]);
+    bx(vec![OpKind::LocalGet { slot: 1, ty }, OpKind::Ret]);
     w
 }
 
@@ -675,11 +775,12 @@ fn loop_word() -> ir::Word {
 #[test]
 fn drop_disjoint_target_probe() {
     let p = Program {
-        n_inputs: 2,
         domains: vec![(-2, 1), (0, 3)],
         ops: vec![OpKind::Drop { ty: TypeId(0) }],
         target: (2, 8),
         cast_site: false,
+        spec: TargetSpec::X86_64,
+        mem: MemDesc::flat(),
     };
     assert_eq!(abstract_verdict(&p).0, Tri::DefFalse);
     assert!(
@@ -691,8 +792,9 @@ fn drop_disjoint_target_probe() {
 #[test]
 fn loop_back_edge_widening_never_false_discharges() {
     let w = loop_word();
-    let cf = run_cfg(&w, sr());
-    let exit = verifier::interp::exit_state(&cf, &w, sr());
+    let mut mem = FlatMem;
+    let cf = run_cfg(&w, sr(), TargetSpec::X86_64, &mut mem);
+    let exit = exit_state(&cf, &w, sr(), TargetSpec::X86_64, &mut mem);
     eprintln!(
         "exit stack: {:?}",
         exit.stack.iter().map(|s| s.iv).collect::<Vec<_>>()

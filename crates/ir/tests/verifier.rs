@@ -1,8 +1,8 @@
 use frontend::{fixed::FixedVec, span::Span};
 
 use ir::{
-    AddrOfBase, Atom, Block, BlockId, CapSet, EffectSet, Op, OpKind, Sig, StackBound, TypeId,
-    Word, TY_BOOL, TY_EMPTY, TY_I64, TY_MMIO, TY_PTR, TY_PTR_MUT, TY_STR,
+    AddrOfBase, Atom, Block, BlockId, CapSet, EffectSet, Op, OpKind, Sig, StackBound, TypeId, Word,
+    TY_BOOL, TY_EMPTY, TY_I64, TY_MMIO, TY_PTR, TY_PTR_MUT, TY_STR,
 };
 
 fn atom(bytes: &[u8]) -> Atom {
@@ -67,7 +67,11 @@ fn word_with_single_block(sig: Sig, block_ops: &[OpKind]) -> Word {
 }
 
 /// Like [`word_with_single_block`] but with a aperture-use table (P4).
-fn word_with_single_block_and_apertures(sig: Sig, block_ops: &[OpKind], apertures: &[ir::ApertureUse]) -> Word {
+fn word_with_single_block_and_apertures(
+    sig: Sig,
+    block_ops: &[OpKind],
+    apertures: &[ir::ApertureUse],
+) -> Word {
     let mut ops: FixedVec<Op, 96> = FixedVec::new();
     for &kind in block_ops {
         ops.push(Op {
@@ -566,12 +570,12 @@ fn verify_rejects_mmio_vol_load_from_non_pointer() {
         &[
             OpKind::ConstBool(true), // not a pointer/mmio
             OpKind::MmioVolLoad {
-                    ty: TY_I64,
-                    place: atom(b"r"),
-                    read_kind: ir::ReadKind::Plain,
-                    atomic_max: 64,
-                    barrier: ir::BarrierKind::None,
-                },
+                ty: TY_I64,
+                place: atom(b"r"),
+                read_kind: ir::ReadKind::Plain,
+                atomic_max: 64,
+                barrier: ir::BarrierKind::None,
+            },
             OpKind::Ret,
         ],
     );
@@ -628,15 +632,15 @@ fn verify_rejects_mmio_load_field_not_mmio() {
         &[
             OpKind::ConstI64(42), // not an MMIO place
             OpKind::MmioVolLoadField {
-                    reg_ty: TY_I64,
-                    field_ty: TY_BOOL,
-                    place: atom(b"r"),
-                    mask: 0xff,
-                    shift: 0,
-                    read_kind: ir::ReadKind::Plain,
-                    atomic_max: 64,
-                    barrier: ir::BarrierKind::None,
-                },
+                reg_ty: TY_I64,
+                field_ty: TY_BOOL,
+                place: atom(b"r"),
+                mask: 0xff,
+                shift: 0,
+                read_kind: ir::ReadKind::Plain,
+                atomic_max: 64,
+                barrier: ir::BarrierKind::None,
+            },
             OpKind::Ret,
         ],
     );
@@ -660,16 +664,16 @@ fn verify_rejects_mmio_store_field_type_mismatch() {
             },
             OpKind::ConstI64(42),
             OpKind::MmioVolStoreField {
-                    reg_ty: TY_I64,
-                    field_ty: TY_BOOL,
-                    place: atom(b"r"),
-                    mask: 0xff,
-                    shift: 0,
-                    write_kind: ir::WriteKind::Plain,
-                    read_kind: ir::ReadKind::Plain,
-                    atomic_max: 64,
-                    barrier: ir::BarrierKind::None,
-                },
+                reg_ty: TY_I64,
+                field_ty: TY_BOOL,
+                place: atom(b"r"),
+                mask: 0xff,
+                shift: 0,
+                write_kind: ir::WriteKind::Plain,
+                read_kind: ir::ReadKind::Plain,
+                atomic_max: 64,
+                barrier: ir::BarrierKind::None,
+            },
         ],
         &[win(0, 0x2000)],
     );
@@ -1439,7 +1443,10 @@ fn verify_accepts_scoped_enter_slice_class() {
 
     let mut ops: FixedVec<Op, 96> = FixedVec::new();
     ops.push(Op {
-        kind: OpKind::ScopedEnter { ty: slice_ty, len: 16 },
+        kind: OpKind::ScopedEnter {
+            ty: slice_ty,
+            len: 16,
+        },
         span: Span::UNKNOWN,
     })
     .unwrap();
@@ -1619,12 +1626,12 @@ fn verify_accepts_mmio_load() {
                 offset: 0x1000,
             },
             OpKind::MmioVolLoad {
-                    ty: TY_I64,
-                    place: atom(b"r"),
-                    read_kind: ir::ReadKind::Plain,
-                    atomic_max: 64,
-                    barrier: ir::BarrierKind::None,
-                },
+                ty: TY_I64,
+                place: atom(b"r"),
+                read_kind: ir::ReadKind::Plain,
+                atomic_max: 64,
+                barrier: ir::BarrierKind::None,
+            },
             OpKind::Ret,
         ],
         &[win(0, 0x2000)],
@@ -1645,13 +1652,13 @@ fn verify_accepts_mmio_store() {
             },
             OpKind::ConstI64(0),
             OpKind::MmioVolStore {
-                    ty: TY_I64,
-                    place: atom(b"r"),
-                    write_kind: ir::WriteKind::Plain,
-                    read_kind: ir::ReadKind::Plain,
-                    atomic_max: 64,
-                    barrier: ir::BarrierKind::None,
-                },
+                ty: TY_I64,
+                place: atom(b"r"),
+                write_kind: ir::WriteKind::Plain,
+                read_kind: ir::ReadKind::Plain,
+                atomic_max: 64,
+                barrier: ir::BarrierKind::None,
+            },
             OpKind::ConstI64(0),
             OpKind::Ret,
         ],
@@ -1722,8 +1729,14 @@ fn verifier_accepts_subtype_in_local_set() {
                 from: TY_I64,
                 to: TypeId(7),
             },
-            OpKind::LocalSet { slot: 0, ty: TY_I64 },
-            OpKind::LocalGet { slot: 0, ty: TY_I64 },
+            OpKind::LocalSet {
+                slot: 0,
+                ty: TY_I64,
+            },
+            OpKind::LocalGet {
+                slot: 0,
+                ty: TY_I64,
+            },
             OpKind::Ret,
         ],
     );
@@ -1781,8 +1794,14 @@ fn verifier_rejects_base_value_where_subtype_declared() {
         sig0_1(TypeId(7)),
         &[
             OpKind::ConstI64(0),
-            OpKind::LocalSet { slot: 0, ty: TypeId(7) },
-            OpKind::LocalGet { slot: 0, ty: TypeId(7) },
+            OpKind::LocalSet {
+                slot: 0,
+                ty: TypeId(7),
+            },
+            OpKind::LocalGet {
+                slot: 0,
+                ty: TypeId(7),
+            },
             OpKind::Ret,
         ],
     );
@@ -1994,7 +2013,11 @@ fn verify_rejects_over_wide_load() {
         &[win(0, 0x2000)],
     );
     let err = ir::verify_word(&w).unwrap_err();
-    assert_eq!(err.code(), 9041, "64-bit access with atomic_max=32 must be E9041");
+    assert_eq!(
+        err.code(),
+        9041,
+        "64-bit access with atomic_max=32 must be E9041"
+    );
 }
 
 #[test]

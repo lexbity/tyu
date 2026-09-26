@@ -85,9 +85,9 @@ pub fn fnv1a_u64(name: &[u8]) -> u64 {
     h
 }
 
-pub fn slice_span<'a>(src: &'a [u8], span: Span) -> &'a [u8] {
-    let s = span.start as usize;
-    let e = span.end as usize;
+pub fn slice_span(src: &[u8], span: Span) -> &[u8] {
+    let s = span.start;
+    let e = span.end;
     if s < e && e <= src.len() {
         &src[s..e]
     } else {

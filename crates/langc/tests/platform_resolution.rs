@@ -152,7 +152,10 @@ end;\n";
 fn e3642_field_store_on_effectful() {
     // A field store is inherently read-modify-write; on an effectful register
     // the RMW's read is a phantom bus read (rule R1).
-    let stderr = compile_ir(E3642_FIELD_STORE_ON_EFFECTFUL, Some(hosted_desc_dir().to_str().unwrap()));
+    let stderr = compile_ir(
+        E3642_FIELD_STORE_ON_EFFECTFUL,
+        Some(hosted_desc_dir().to_str().unwrap()),
+    );
     assert!(
         stderr.contains("E3642"),
         "field store on an effectful register must be E3642, got: {stderr}"
@@ -172,7 +175,10 @@ end;\n";
 #[test]
 fn e3643_over_wide_access() {
     // STATUS is atomic_max=32; a 64-bit access is over-wide (rule R2).
-    let stderr = compile_ir(E3643_OVER_WIDE_64_BIT, Some(hosted_desc_dir().to_str().unwrap()));
+    let stderr = compile_ir(
+        E3643_OVER_WIDE_64_BIT,
+        Some(hosted_desc_dir().to_str().unwrap()),
+    );
     assert!(
         stderr.contains("E3643"),
         "64-bit access on an atomic_max=32 register must be E3643, got: {stderr}"

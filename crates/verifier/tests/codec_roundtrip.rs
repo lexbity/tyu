@@ -252,7 +252,7 @@ fn image_verdicts_roundtrip_and_fail_closed() {
         ..rec
     };
     let b2 = encode_image_verdicts(&retained).expect("encode");
-    assert!(read_image_verdicts(&b2).expect("decode").elided == false);
+    assert!(!read_image_verdicts(&b2).expect("decode").elided);
 
     // Malformed input → E6415, never a silent default.
     let err = read_image_verdicts(b"{\"schema\":\"tyu.image-verdicts/v9\"}").unwrap_err();

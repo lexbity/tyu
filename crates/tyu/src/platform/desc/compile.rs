@@ -12,8 +12,8 @@ use std::path::{Path, PathBuf};
 
 use codegen_core::compiled_desc::{
     encode_compiled_desc, validate_compiled_desc, CompiledDescriptor, CompiledDevice,
-    CompiledRegister, COMPILED_DESC_DEVICE_CAP, COMPILED_DESC_MAX_BYTES,
-    COMPILED_DESC_REGISTER_CAP, COMPILED_DESC_APERTURE_CAP, REG_ACCESS_RO, REG_ACCESS_RW,
+    CompiledRegister, COMPILED_DESC_APERTURE_CAP, COMPILED_DESC_DEVICE_CAP,
+    COMPILED_DESC_MAX_BYTES, COMPILED_DESC_REGISTER_CAP, REG_ACCESS_RO, REG_ACCESS_RW,
     REG_ACCESS_WO, REG_BARRIER_AFTER, REG_BARRIER_BEFORE, REG_BARRIER_BOTH, REG_BARRIER_NONE,
     REG_READ_EFFECTFUL, REG_READ_PLAIN, REG_WRITE_PLAIN, REG_WRITE_W1C, REG_WRITE_W1S,
     REG_WRITE_XOR,
@@ -21,8 +21,8 @@ use codegen_core::compiled_desc::{
 use codegen_core::{MmioApertureKind, MmioApertureSpec};
 
 use super::{
-    AccessKind, BarrierKind, Descriptor, DescriptorError, E_DESC_INVALID, ReadKind, ApertureKind,
-    WriteKind, canonical, parse::parse_descriptor, validate::validate,
+    canonical, parse::parse_descriptor, validate::validate, AccessKind, ApertureKind, BarrierKind,
+    Descriptor, DescriptorError, ReadKind, WriteKind, E_DESC_INVALID,
 };
 use crate::error::TyuError;
 
@@ -177,9 +177,8 @@ pub fn ensure_compiled_descriptor(
     manifest_path: &Path,
     pack_root: &Path,
 ) -> Result<CompiledDescriptor, TyuError> {
-    let text = fs::read_to_string(manifest_path).map_err(|e| {
-        TyuError::Platform(format!("reading '{}': {}", manifest_path.display(), e))
-    })?;
+    let text = fs::read_to_string(manifest_path)
+        .map_err(|e| TyuError::Platform(format!("reading '{}': {}", manifest_path.display(), e)))?;
     let desc = parse_descriptor(&text)
         .map_err(|e| TyuError::Platform(format!("E{} descriptor: {}", e.code, e.detail)))?
         .ok_or_else(|| {
@@ -210,8 +209,9 @@ pub fn ensure_compiled_descriptor(
     match fs::read(&desc_path) {
         Ok(existing) if existing == fresh => {}
         _ => {
-            fs::write(&desc_path, fresh)
-                .map_err(|e| TyuError::Platform(format!("writing '{}': {}", desc_path.display(), e)))?;
+            fs::write(&desc_path, fresh).map_err(|e| {
+                TyuError::Platform(format!("writing '{}': {}", desc_path.display(), e))
+            })?;
         }
     }
     Ok(compiled)

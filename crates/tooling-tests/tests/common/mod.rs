@@ -11,8 +11,8 @@ pub mod bin;
 use hosted::loader::HostedLoaderPlatform;
 use hosted::mem;
 use lmod::validate::Container;
-use loader_core::load::load_module;
 use loader_core::apertures::ApertureRegistry;
+use loader_core::load::load_module;
 use loader_core::platform::TrustLevel;
 use loader_core::symbols::SymMap;
 use std::path::PathBuf;
@@ -68,7 +68,9 @@ pub fn ensure_bins() {
 pub fn platform_arg() -> String {
     format!(
         "--platform={}",
-        workspace_root().join("runtime/linux-x86_64-hosted").display()
+        workspace_root()
+            .join("runtime/linux-x86_64-hosted")
+            .display()
     )
 }
 
@@ -267,7 +269,13 @@ impl LoaderHarness {
         let ds_page = allocate_runtime_page();
         let mut map = Self::fresh_map(ds_page);
         let mut set = loader_core::load::LoadedSet::<64>::new();
-        load_module(c, &mut plat, &mut map, &mut set, &mut ApertureRegistry::new())?;
+        load_module(
+            c,
+            &mut plat,
+            &mut map,
+            &mut set,
+            &mut ApertureRegistry::new(),
+        )?;
         Ok(())
     }
 
@@ -283,7 +291,13 @@ impl LoaderHarness {
         let ds_page = allocate_runtime_page();
         let mut map = Self::fresh_map(ds_page);
         let mut set = loader_core::load::LoadedSet::<64>::new();
-        let _loaded = load_module(c, &mut plat, &mut map, &mut set, &mut ApertureRegistry::new())?;
+        let _loaded = load_module(
+            c,
+            &mut plat,
+            &mut map,
+            &mut set,
+            &mut ApertureRegistry::new(),
+        )?;
 
         let main_sym = map.lookup_by_name(b"main").ok_or(0u32)?;
         let code_base = main_sym.addr;

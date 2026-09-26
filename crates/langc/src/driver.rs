@@ -28,6 +28,20 @@ struct DriverEnv {
     import_env_end: usize,
 }
 
+/// Lift the backend's resolved target into the verifier's boundary identity
+/// (PLAN-VERIFY-3 §Q3, P2): the reference semantics is a function of
+/// `(verifier::target::TargetSpec, MemModel)`; the verifier must not depend
+/// on `codegen-core` (layering), so langc does the single lift here.
+fn verifier_target_spec(target: Target) -> verifier::target::TargetSpec {
+    let spec = target.spec();
+    verifier::target::TargetSpec::new(
+        core::str::from_utf8(target.triple()).expect("target triple is UTF-8"),
+        spec.slot_bytes,
+        spec.word_bits,
+        spec.calling_conv.arch_tag(),
+    )
+}
+
 /// Human-readable message for a codegen error code.  Most codegen failures
 /// share the generic "asm emission error" text, but E8013 (modinfo too large)
 /// must surface the specific "too many exports for modinfo" diagnostic (BUG-006).
@@ -55,22 +69,6 @@ fn count_mmio_ops(w: &ir::Word) -> u32 {
         }
     }
     n
-}
-
-#[cfg(test)]
-mod tests {
-    use super::codegen_error_message;
-
-    #[test]
-    fn e8013_names_too_many_exports() {
-        assert_eq!(codegen_error_message(8013), b"too many exports for modinfo");
-    }
-
-    #[test]
-    fn other_codegen_codes_stay_generic() {
-        assert_eq!(codegen_error_message(8001), b"asm emission error");
-        assert_eq!(codegen_error_message(0), b"asm emission error");
-    }
 }
 
 fn init_env(
@@ -128,6 +126,9 @@ fn init_env(
     })
 }
 
+// `too_many_arguments`: structured-emit entry point mirrors the other emit
+// drivers; parameters map 1:1 onto the typecheck API.
+#[allow(clippy::too_many_arguments)]
 pub fn emit_ir_driver(
     module: &ModuleAst,
     src: &[u8],
@@ -153,6 +154,7 @@ pub fn emit_ir_driver(
         &es.st_buf[..es.st_len],
         checks,
         allow_raw_casts,
+        verifier_target_spec(target),
         descriptor,
         out,
     ) {
@@ -219,6 +221,7 @@ pub fn emit_asm_driver(
         &es.st_buf[..es.st_len],
         checks,
         allow_raw_casts,
+        verifier_target_spec(target),
         &mut resources,
         descriptor,
         None, // --emit=asm: no obligation extraction (P2 scope is obl/obj)
@@ -255,6 +258,9 @@ pub fn emit_asm_driver(
     0
 }
 
+// `too_many_arguments`: structured-emit entry point mirrors the other emit
+// drivers; parameters map 1:1 onto the typecheck API.
+#[allow(clippy::too_many_arguments)]
 pub fn emit_tc_driver(
     module: &ModuleAst,
     src: &[u8],
@@ -279,6 +285,7 @@ pub fn emit_tc_driver(
         &es.env[..es.env_len],
         &es.st_buf[..es.st_len],
         checks,
+        verifier_target_spec(target),
         descriptor,
         out,
     ) {
@@ -465,6 +472,7 @@ pub fn emit_obj_driver(
         &es.st_buf[..es.st_len],
         checks,
         allow_raw_casts,
+        verifier_target_spec(target),
         &mut resources,
         descriptor,
         extract_ctx.as_mut(),
@@ -632,8 +640,7 @@ pub fn emit_obj_driver(
         // cache round-trip (Q11/§7.4); consumers that do not participate keep
         // the default code path (FR-22).
         let resolved = ctx.resolved();
-        let mut records: alloc::vec::Vec<verifier::verdict::VerdictRecord> =
-            alloc::vec::Vec::new();
+        let mut records: alloc::vec::Vec<verifier::verdict::VerdictRecord> = alloc::vec::Vec::new();
         for r in resolved.iter() {
             if r.status.is_open() {
                 continue;
@@ -653,9 +660,7 @@ pub fn emit_obj_driver(
         };
         let subtype_emitted = resolved
             .iter()
-            .filter(|r| {
-                r.kind == verifier::model::Kind::SubtypeRange && r.status.is_open()
-            })
+            .filter(|r| r.kind == verifier::model::Kind::SubtypeRange && r.status.is_open())
             .count() as u32;
         let emitted = verifier::verdict::EmittedChecksData {
             subtype_range: subtype_emitted,
@@ -665,18 +670,17 @@ pub fn emit_obj_driver(
         // P5: provably-failing records (interval ∅ vs the target range, check
         // retained) and open-reason records (FR-18 quality bar) ride the echo
         // so the report's `no-open` diagnostics carry the why.
-        let provably_failing: alloc::vec::Vec<verifier::verdict::ProvablyFailingRecord> =
-            resolved
-                .iter()
-                .filter(|r| r.provably_failing)
-                .map(|r| verifier::verdict::ProvablyFailingRecord {
-                    id: r.id.clone(),
-                    note: r
-                        .reason
-                        .clone()
-                        .unwrap_or_else(|| "interval ∩ type range = ∅".to_string()),
-                })
-                .collect();
+        let provably_failing: alloc::vec::Vec<verifier::verdict::ProvablyFailingRecord> = resolved
+            .iter()
+            .filter(|r| r.provably_failing)
+            .map(|r| verifier::verdict::ProvablyFailingRecord {
+                id: r.id.clone(),
+                note: r
+                    .reason
+                    .clone()
+                    .unwrap_or_else(|| "interval ∩ type range = ∅".to_string()),
+            })
+            .collect();
         let open_reasons: alloc::vec::Vec<verifier::verdict::OpenReasonRecord> = resolved
             .iter()
             .filter(|r| r.status.is_open() && r.reason.is_some())
@@ -708,8 +712,12 @@ pub fn emit_obj_driver(
             }
         };
         let mut echo_buf = [0u8; 512];
-        let echo_path = match join_path(&mut echo_buf, out_dir, module_name, b".verdicts.inTree.json")
-        {
+        let echo_path = match join_path(
+            &mut echo_buf,
+            out_dir,
+            module_name,
+            b".verdicts.inTree.json",
+        ) {
             Some(p) => p,
             None => {
                 let _ = diag::error_simple(1013, b"output path too long");
@@ -779,6 +787,7 @@ pub fn emit_obl_driver(
         &es.st_buf[..es.st_len],
         checks,
         allow_raw_casts,
+        verifier_target_spec(target),
         &mut resources,
         descriptor,
         Some(&mut ctx),
@@ -838,7 +847,10 @@ fn add_builtins(env: &mut [WordEntry; 256], len: &mut usize, _spec: &codegen_cor
 /// `.def` boundary carries them (Q7: `.def` uses names, never bodies). Only
 /// clean identifiers count: an inline quotation body (`dup 0 >=`) is not a
 /// name and contributes nothing to the named surface.
-fn contract_clause_names<'s>(src: &'s [u8], span: Option<frontend::span::Span>) -> alloc::vec::Vec<&'s [u8]> {
+fn contract_clause_names<'s>(
+    src: &'s [u8],
+    span: Option<frontend::span::Span>,
+) -> alloc::vec::Vec<&'s [u8]> {
     let mut out: alloc::vec::Vec<&'s [u8]> = alloc::vec::Vec::new();
     let Some(span) = span else { return out };
     if span.end <= span.start + 2 {
@@ -945,7 +957,8 @@ fn transclude_contract_predicates(
             o.site.word.clone().into_bytes()
         };
         let is_needs = kind == verifier::model::Kind::ContractPre;
-        let resolved = resolve_predicate_name(module, src, search_dirs, &imports, &callee, is_needs)?;
+        let resolved =
+            resolve_predicate_name(module, src, search_dirs, &imports, &callee, is_needs)?;
         let Some((pred_name, callee_module)) = resolved else {
             // Inline (unnamed) predicate clause: nothing to transclude — the
             // record stays an opaque inline reference; its verdict resolves
@@ -966,7 +979,8 @@ fn transclude_contract_predicates(
             // unavailable the conservative edge is `runtime-check` — the
             // emitted check IS the discharge.
             if kind == verifier::model::Kind::ContractPre {
-                o.assumptions.push(verifier::model::AssumptionEdge::RuntimeCheck);
+                o.assumptions
+                    .push(verifier::model::AssumptionEdge::RuntimeCheck);
             }
             continue;
         };
@@ -994,15 +1008,16 @@ fn transclude_contract_predicates(
         // id. (A spurious edge is the safe-failing direction: it keeps the
         // dependent open, never invents a discharge.)
         if kind == verifier::model::Kind::ContractPre && !stub.module.is_empty() {
-            o.assumptions.push(verifier::model::AssumptionEdge::Obligation {
-                id: verifier::model::canonical_id(
-                    &stub.module,
-                    callee.as_slice(),
-                    verifier::model::Kind::ContractPre,
-                    0,
-                ),
-                module: stub.module.clone(),
-            });
+            o.assumptions
+                .push(verifier::model::AssumptionEdge::Obligation {
+                    id: verifier::model::canonical_id(
+                        &stub.module,
+                        callee.as_slice(),
+                        verifier::model::Kind::ContractPre,
+                        0,
+                    ),
+                    module: stub.module.clone(),
+                });
         }
     }
     Ok(())
@@ -1012,7 +1027,7 @@ fn transclude_contract_predicates(
 /// literal `"…"` with the quotes stripped. Backslash sequences are taken
 /// verbatim — the artifact carries exactly the declared text (enforceable
 /// prose is not the deal; the kernel enforces the statement).
-fn authored_intent<'s>(src: &'s [u8], span: Option<frontend::span::Span>) -> Option<&'s [u8]> {
+fn authored_intent(src: &[u8], span: Option<frontend::span::Span>) -> Option<&[u8]> {
     let span = span?;
     if span.end <= span.start + 2 {
         return None;
@@ -1078,13 +1093,13 @@ fn resolve_contract_intent(
     callee: &[u8],
 ) -> Option<alloc::string::String> {
     if let Some(d) = find_decl(module, src, callee) {
-        return authored_intent(src, d.intent).map(|t| verifier::model::utf8_lossy(t));
+        return authored_intent(src, d.intent).map(verifier::model::utf8_lossy);
     }
     let mname = imports.module_of(callee)?;
     let def_src = try_load_module_file(search_dirs, mname, b".def")?;
     let def_ast = Parser::new(def_src.as_slice()).parse_module_ast().ok()?;
     let d = find_decl(&def_ast, def_src.as_slice(), callee)?;
-    authored_intent(def_src.as_slice(), d.intent).map(|t| verifier::model::utf8_lossy(t))
+    authored_intent(def_src.as_slice(), d.intent).map(verifier::model::utf8_lossy)
 }
 
 /// PLAN-VERIFY-3 §Q17 (P1.2), pass 2: after transclusion the predicate name
@@ -1297,4 +1312,20 @@ fn load_local_sigs(
         *env_len += 1;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::codegen_error_message;
+
+    #[test]
+    fn e8013_names_too_many_exports() {
+        assert_eq!(codegen_error_message(8013), b"too many exports for modinfo");
+    }
+
+    #[test]
+    fn other_codegen_codes_stay_generic() {
+        assert_eq!(codegen_error_message(8001), b"asm emission error");
+        assert_eq!(codegen_error_message(0), b"asm emission error");
+    }
 }

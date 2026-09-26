@@ -6,19 +6,21 @@
 pub use frontend::fixed::FixedVec;
 pub use semantics::typecheck::db::{IsoDb, NominalDb, ResourceDb, SubtypeInfo};
 pub use semantics::typecheck::irgen::{arena, build_ir_word, NullObserver};
-pub use semantics::typecheck::mmio::{AccessMode, MmioDb};
+pub use semantics::typecheck::mmio::MmioDb;
 pub use semantics::typecheck::ChecksMode;
 pub use semantics::types::{TypeAtom, WordEntry, WordSig};
 
 use frontend::parse::{DeclAst, DeclKind};
 use frontend::span::Span;
 use ir::{CapSet, EffectSet, StackBound, Word};
-use semantics::typecheck::mmio::MmioFieldInfo;
 
 pub fn ta(bytes: &[u8]) -> TypeAtom {
     TypeAtom::new(bytes).unwrap()
 }
 
+// Shared checker-test helper surface; consumers span test binaries, so any
+// given binary may see these items as unused.
+#[allow(dead_code)]
 pub fn sig(inp: &[&[u8]], out: &[&[u8]]) -> WordSig {
     let mut s = WordSig::empty();
     s.in_len = inp.len() as u8;
@@ -32,6 +34,8 @@ pub fn sig(inp: &[&[u8]], out: &[&[u8]]) -> WordSig {
     s
 }
 
+// Shared checker-test helper surface; consumers span test binaries.
+#[allow(dead_code)]
 pub fn entry(name: &[u8], inp: &[&[u8]], out: &[&[u8]]) -> WordEntry {
     WordEntry {
         name: ta(name),
@@ -54,6 +58,8 @@ pub fn empty_env() -> [WordEntry; 256] {
     }; 256]
 }
 
+// Shared checker-test helper surface; consumers span test binaries.
+#[allow(dead_code)]
 pub fn make_decl(body: &str) -> (DeclAst, Vec<u8>) {
     let mut src = Vec::new();
     src.extend_from_slice(b"main");
@@ -97,17 +103,21 @@ pub fn builtin_env() -> ([WordEntry; 256], usize) {
 // Dbs — semantic database builder
 // ---------------------------------------------------------------------------
 
+// Shared checker-test helper surface; consumers span test binaries.
+#[allow(dead_code)]
 pub struct Dbs {
     pub subtypes: Vec<SubtypeInfo>,
 }
 
 impl Dbs {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Dbs {
             subtypes: Vec::new(),
         }
     }
 
+    #[allow(dead_code)]
     pub fn with_subtype(mut self, name: &[u8], base: &[u8], min: i64, max: i64) -> Self {
         self.subtypes.push(SubtypeInfo {
             name: TypeAtom::new(name).unwrap(),
@@ -126,6 +136,8 @@ impl Dbs {
 /// Run the typechecker with given body/inputs/outputs/env/dbs/checks.
 /// The `on_word` callback runs inside the big-stack thread with access to
 /// the built IR `Word` (on success).  On error the error code is returned.
+// Shared checker-test helper surface; consumers span test binaries.
+#[allow(dead_code)]
 pub fn check(
     body: &str,
     inputs: &[&[u8]],
@@ -173,6 +185,7 @@ pub fn check(
             };
             let mut obs = NullObserver;
             match build_ir_word(
+                verifier::target::TargetSpec::X86_64,
                 &decl,
                 &src,
                 &env_owned,
@@ -200,6 +213,8 @@ pub fn check(
         .unwrap()
 }
 
+// Shared checker-test helper surface; consumers span test binaries.
+#[allow(dead_code)]
 pub fn check_ok(body: &str, inputs: &[&[u8]], outputs: &[&[u8]], env: &[WordEntry]) {
     let dbs = Dbs::new();
     check(
@@ -219,6 +234,8 @@ pub fn check_ok(body: &str, inputs: &[&[u8]], outputs: &[&[u8]], env: &[WordEntr
 /// Like `check_ok` but also invokes `on_word` with the built IR word
 /// so callers can assert IR shape (op kinds, block count, etc.).
 /// The callback runs inside the 8MB-stack thread.
+// Shared checker-test helper surface; consumers span test binaries.
+#[allow(dead_code)]
 pub fn check_ok_with<F>(
     body: &str,
     inputs: &[&[u8]],
@@ -266,6 +283,7 @@ pub fn check_ok_with<F>(
             let subtypes: &[SubtypeInfo] = &[];
             let mut obs = NullObserver;
             match build_ir_word(
+                verifier::target::TargetSpec::X86_64,
                 &decl,
                 &src,
                 &env_owned,
@@ -297,6 +315,8 @@ pub fn check_ok_with<F>(
         .unwrap()
 }
 
+// Shared checker-test helper surface; consumers span test binaries.
+#[allow(dead_code)]
 pub fn check_err(
     body: &str,
     inputs: &[&[u8]],

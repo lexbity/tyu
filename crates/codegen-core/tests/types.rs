@@ -1,5 +1,4 @@
 use codegen_core::{AssemblerKind, CodegenError, EmitMode, Target};
-use ir;
 
 // ---------------------------------------------------------------------------
 // Target::parse — exhaustive roundtrip via Target::ALL

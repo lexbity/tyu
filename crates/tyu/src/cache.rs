@@ -191,7 +191,8 @@ impl BuildCache {
 
     /// Drop every record whose object path is one of `paths`.
     pub fn remove_objects(&mut self, paths: &[PathBuf]) {
-        self.artifacts.retain(|_, rec| !paths.contains(&rec.object_path));
+        self.artifacts
+            .retain(|_, rec| !paths.contains(&rec.object_path));
     }
 
     /// Iterate over every object path the cache still references.
@@ -440,7 +441,10 @@ mod tests {
         let v2 = r#"{"version":2,"artifacts":{}}"#;
         fs::write(&p, v2).unwrap();
         let c = make_cache(&p);
-        assert!(c.artifacts.is_empty(), "v2 cache must be cold after BUG-002 fix");
+        assert!(
+            c.artifacts.is_empty(),
+            "v2 cache must be cold after BUG-002 fix"
+        );
     }
 
     #[test]
@@ -453,6 +457,9 @@ mod tests {
         let v3 = r#"{"version":3,"artifacts":{}}"#;
         fs::write(&p, v3).unwrap();
         let c = make_cache(&p);
-        assert!(c.artifacts.is_empty(), "v3 cache must be cold after feature-key fix");
+        assert!(
+            c.artifacts.is_empty(),
+            "v3 cache must be cold after feature-key fix"
+        );
     }
 }

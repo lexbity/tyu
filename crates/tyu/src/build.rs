@@ -18,7 +18,7 @@ use crate::cache::{self, BuildCache};
 use crate::error::TyuError;
 use crate::graph::{resolve_graph, ModuleNode};
 use crate::keys::{KeyMaterial, KeyRef};
-use crate::platform::{self, ResolvedPlatformSelection, desc};
+use crate::platform::{self, desc, ResolvedPlatformSelection};
 use crate::toolchain;
 
 /// Build an image from the given build arguments.
@@ -68,7 +68,7 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
     let build_started = std::time::SystemTime::now();
 
     // Ensure output directory exists.
-    fs::create_dir_all(&out_dir).map_err(|e| TyuError::Io(e))?;
+    fs::create_dir_all(&out_dir).map_err(TyuError::Io)?;
 
     // Resolve module graph.
     let modules = resolve_graph(&args.input, &args.include_dirs, args.sysroot.as_deref())?;
@@ -98,8 +98,11 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
     // langc's `--platform=<dir>` always reads a fresh compiled form (P3).
     let platform_hash = if let Some(selection) = platform_selection.as_ref() {
         Some(
-            desc::ensure_compiled_descriptor(&selection.pack.manifest_path, selection.pack.pack_root())?
-                .platform_hash,
+            desc::ensure_compiled_descriptor(
+                &selection.pack.manifest_path,
+                selection.pack.pack_root(),
+            )?
+            .platform_hash,
         )
     } else {
         None
@@ -114,13 +117,21 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
                     &sel.pack.manifest_path,
                     sel.pack.pack_root(),
                 )?;
-                eprintln!("tyu: platform={} platform_hash=0x{:016x}", sel.pack.name(), cd.platform_hash);
+                eprintln!(
+                    "tyu: platform={} platform_hash=0x{:016x}",
+                    sel.pack.name(),
+                    cd.platform_hash
+                );
                 for w in cd.apertures() {
                     eprintln!(
                         "tyu:   aperture id={} name={} kind={} base={:#x} size={:#x}",
                         w.id,
                         String::from_utf8_lossy(w.name.as_bytes()),
-                        if w.kind == codegen_core::target::MmioApertureKind::Bus { "bus" } else { "emulated" },
+                        if w.kind == codegen_core::target::MmioApertureKind::Bus {
+                            "bus"
+                        } else {
+                            "emulated"
+                        },
                         w.base.unwrap_or(0),
                         w.size
                     );
@@ -184,8 +195,7 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
     let mut elide_ds = false;
     let mut runtime_objs: Vec<PathBuf> = Vec::new();
     if args.elide_stack_guards {
-        runtime_objs =
-            assemble_runtime_for_context_mode(&ctx, feature_set, mode)?;
+        runtime_objs = assemble_runtime_for_context_mode(&ctx, feature_set, mode)?;
         let pass1 = extract_obligations_for_elision(
             &langc,
             &modules,
@@ -206,7 +216,10 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
             modules.last().map(|m| m.name.as_str()),
             super::verify::derive_main_budget(&ctx),
         );
-        let record = verifier::codec::ImageVerdicts { elided: elide_ds, main };
+        let record = verifier::codec::ImageVerdicts {
+            elided: elide_ds,
+            main,
+        };
         write_image_verdicts(&out_dir, &record)?;
         if elide_ds {
             eprintln!(
@@ -335,7 +348,8 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
         modules.last().map(|m| m.name.as_str()),
         args.verify,
         args.verify_policy,
-        args.feature_set.contains(codegen_core::Feature::ModuleLoading),
+        args.feature_set
+            .contains(codegen_core::Feature::ModuleLoading),
         elide_ds,
     )?;
 
@@ -587,7 +601,9 @@ fn lmod_modinfo_flags_offset(bytes: &[u8]) -> Result<usize, TyuError> {
 /// bytes 20..24), validated as a v4 modinfo header.
 fn lmod_modinfo_off(bytes: &[u8]) -> Result<usize, TyuError> {
     if bytes.len() < lmod::header::HEADER_SIZE as usize {
-        return Err(TyuError::Build("test lmod mutation: header too short".into()));
+        return Err(TyuError::Build(
+            "test lmod mutation: header too short".into(),
+        ));
     }
     let modinfo_off = u32::from_le_bytes(bytes[20..24].try_into().unwrap()) as usize;
     let modinfo_len = u32::from_le_bytes(bytes[24..28].try_into().unwrap()) as usize;
@@ -722,8 +738,8 @@ fn pack_final_lmod(
         .map_err(|e| TyuError::Build(format!("reading '{}': {}", obj_path.display(), e)))?;
     // P6 (decision D-4): the pack records `MmioApertureBase` relocs but binds no
     // bases; the loader writes the board's aperture bases at load time.
-    let packed = lmod_pack::pack(&obj_bytes)
-        .map_err(|e| TyuError::Build(format!("lmod-pack: {}", e)))?;
+    let packed =
+        lmod_pack::pack(&obj_bytes).map_err(|e| TyuError::Build(format!("lmod-pack: {}", e)))?;
     std::fs::write(&lmod_path, &packed)
         .map_err(|e| TyuError::Build(format!("writing '{}': {}", lmod_path.display(), e)))?;
     Ok(lmod_path)
@@ -770,7 +786,9 @@ fn assemble_image_def(target: Target, out_dir: &Path) -> Result<PathBuf, TyuErro
                     obj_path.file_name().unwrap().to_string_lossy().as_ref(),
                 ])
                 .status()
-                .map_err(|e| TyuError::Build(format!("running {} for image_def: {}", asm.display(), e)))?;
+                .map_err(|e| {
+                    TyuError::Build(format!("running {} for image_def: {}", asm.display(), e))
+                })?;
             if !status.success() {
                 return Err(TyuError::Build(format!(
                     "{} failed to assemble image_def",
@@ -845,6 +863,8 @@ fn render_image_def_asm(target: Target) -> Result<String, TyuError> {
 
 /// Compile a single `.mod` file with langc, without caching.
 /// Returns the path to the produced `.o`.
+// 8 parameters mirror the langc invocation surface 1:1; bundling them would obscure the call sites.
+#[allow(clippy::too_many_arguments)]
 pub fn compile_simple(
     target: Target,
     src: &Path,
@@ -897,9 +917,10 @@ pub fn compile_simple(
         .status()
         .map_err(|e| TyuError::Build(format!("running langc: {}", e)))?;
     if !status.success() {
-        return Err(TyuError::Build(
-            format!("langc failed on '{}'", src.display()).into(),
-        ));
+        return Err(TyuError::Build(format!(
+            "langc failed on '{}'",
+            src.display()
+        )));
     }
 
     let expected_obj_path = expected_object_path(src, out_dir);
@@ -912,8 +933,7 @@ pub fn compile_simple(
             .map_err(|e| TyuError::Build(format!("reading out_dir: {}", e)))?
             .filter_map(|e| e.ok())
             .map(|e| e.path())
-            .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("o") && !before.contains(p))
-            .next()
+            .find(|p| p.extension().and_then(|x| x.to_str()) == Some("o") && !before.contains(p))
             .ok_or_else(|| {
                 TyuError::Build(format!(
                     "langc produced no .o file for '{}' in '{}'",
@@ -979,6 +999,9 @@ fn expected_object_path(src: &Path, out_dir: &Path) -> PathBuf {
 /// re-homed over the cache slot via rename — so the next identical build
 /// resolves from cache (Q11/FR-17). `--verify=off` passes exactly today's
 /// argv (FR-22).
+// 15 parameters model the compile pipeline state (hashes, cache, mode flags); a struct would
+// just relocate the same fields without reducing real coupling.
+#[allow(clippy::too_many_arguments)]
 fn compile_module(
     langc: &Path,
     _target: Target,
@@ -1009,10 +1032,9 @@ fn compile_module(
             let verdicts_slot = out_dir
                 .join(".tyu-verify")
                 .join(format!("{}-{:016x}.verdicts.json", module.name, inputs_fp));
-            let verdicts_usable = verifier::verdict::read_verdicts(
-                &fs::read(&verdicts_slot).unwrap_or_default(),
-            )
-            .is_ok();
+            let verdicts_usable =
+                verifier::verdict::read_verdicts(&fs::read(&verdicts_slot).unwrap_or_default())
+                    .is_ok();
             if verdicts_usable {
                 eprintln!("tyu: cache hit for '{}'", module.path.display());
                 return Ok(CompiledModule {
@@ -1150,7 +1172,14 @@ fn compile_module(
     // The scratch directory is per-process and per-compilation; drop it now.
     let _ = fs::remove_dir_all(&scratch);
 
-    cache.insert(compiler_fp, inputs_fp, abi_hash, features, triple, &obj_path)?;
+    cache.insert(
+        compiler_fp,
+        inputs_fp,
+        abi_hash,
+        features,
+        triple,
+        &obj_path,
+    )?;
 
     Ok(CompiledModule {
         object_path: obj_path,
@@ -1185,7 +1214,8 @@ fn extract_obligations_for_elision(
 ) -> Result<Vec<(String, Option<verifier::model::OblSet>)>, TyuError> {
     let scratch = out_dir.join(format!(".tyu-elide-pass1-{}", std::process::id()));
     fs::create_dir_all(&scratch).map_err(TyuError::Io)?;
-    let mut sets: Vec<(String, Option<verifier::model::OblSet>)> = Vec::with_capacity(modules.len());
+    let mut sets: Vec<(String, Option<verifier::model::OblSet>)> =
+        Vec::with_capacity(modules.len());
     let fail = |e: TyuError| -> TyuError {
         let _ = fs::remove_dir_all(&scratch);
         e
@@ -1262,13 +1292,21 @@ fn extract_obligations_for_elision(
 /// immediately read back + validated: a malformed record is E6415 (fail-loud
 /// — a corrupt decision record can never silently report a different guard
 /// state than the object actually has, FR-16).
-fn write_image_verdicts(out_dir: &Path, record: &verifier::codec::ImageVerdicts) -> Result<(), TyuError> {
+fn write_image_verdicts(
+    out_dir: &Path,
+    record: &verifier::codec::ImageVerdicts,
+) -> Result<(), TyuError> {
     let dir = out_dir.join(".tyu-verify");
     fs::create_dir_all(&dir).map_err(TyuError::Io)?;
-    let bytes = verifier::codec::encode_image_verdicts(record)
-        .map_err(|e| TyuError::Build(format!("image-verdicts encode failed (E{}): {e:?}", e.code())))?;
+    let bytes = verifier::codec::encode_image_verdicts(record).map_err(|e| {
+        TyuError::Build(format!(
+            "image-verdicts encode failed (E{}): {e:?}",
+            e.code()
+        ))
+    })?;
     let tmp = dir.join(format!(".image-verdicts.tmp-{}", std::process::id()));
-    fs::write(&tmp, &bytes).map_err(|e| TyuError::Build(format!("writing '{}': {e}", tmp.display())))?;
+    fs::write(&tmp, &bytes)
+        .map_err(|e| TyuError::Build(format!("writing '{}': {e}", tmp.display())))?;
     let final_path = dir.join("image-verdicts.json");
     fs::rename(&tmp, &final_path)
         .map_err(|e| TyuError::Build(format!("re-homing image verdicts: {e}")))?;
@@ -1375,9 +1413,12 @@ fn ensure_verdicts_cache_file(slot: &Path) -> Result<PathBuf, TyuError> {
         // Corrupt/stale entry — drop it and re-derive (a miss).
         let _ = fs::remove_file(slot);
     }
-    let dir = slot
-        .parent()
-        .ok_or_else(|| TyuError::Build(format!("verdicts slot '{}' has no parent dir", slot.display())))?;
+    let dir = slot.parent().ok_or_else(|| {
+        TyuError::Build(format!(
+            "verdicts slot '{}' has no parent dir",
+            slot.display()
+        ))
+    })?;
     fs::create_dir_all(dir).map_err(TyuError::Io)?;
     let bytes = verifier::verdict::encode_verdicts(
         "tyu",
@@ -1386,17 +1427,16 @@ fn ensure_verdicts_cache_file(slot: &Path) -> Result<PathBuf, TyuError> {
         0,
         &verifier::verdict::EmittedChecksData::default(),
     )
-    .map_err(|e| {
-        TyuError::Build(format!("encoding empty verdicts cache: {e:?}"))
-    })?;
+    .map_err(|e| TyuError::Build(format!("encoding empty verdicts cache: {e:?}")))?;
     let tmp = dir.join(format!(
         ".{}.tmp{}",
-        slot.file_name().and_then(|n| n.to_str()).unwrap_or("verdicts"),
+        slot.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("verdicts"),
         std::process::id(),
     ));
-    fs::write(&tmp, &bytes).map_err(|e| {
-        TyuError::Build(format!("writing '{}': {}", tmp.display(), e))
-    })?;
+    fs::write(&tmp, &bytes)
+        .map_err(|e| TyuError::Build(format!("writing '{}': {}", tmp.display(), e)))?;
     fs::rename(&tmp, slot).map_err(|e| {
         TyuError::Build(format!(
             "re-homing '{}' -> '{}': {}",
@@ -1599,7 +1639,10 @@ fn assemble_asm_file(
                 .status()
                 .map_err(|e| TyuError::Build(format!("running fasm: {}", e)))?;
             if !status.success() {
-                return Err(TyuError::Build(format!("fasm failed to assemble '{}'", label)).into());
+                return Err(TyuError::Build(format!(
+                    "fasm failed to assemble '{}'",
+                    label
+                )));
             }
         }
         AssemblerKind::GasArm => {
@@ -1627,8 +1670,7 @@ fn assemble_asm_file(
                 return Err(TyuError::Build(format!(
                     "arm-none-eabi-as failed to assemble '{}'",
                     label
-                ))
-                .into());
+                )));
             }
         }
         AssemblerKind::GasRiscV => {
@@ -1659,8 +1701,7 @@ fn assemble_asm_file(
                     "{} failed to assemble '{}'",
                     asm.display(),
                     label
-                ))
-                .into());
+                )));
             }
         }
     }
@@ -1720,7 +1761,11 @@ fn assemble_runtime_with_mode(
     }
 
     // P6: the MMIO aperture-base table the on-device loader re-derives against.
-    objs.push(assemble_mmio_apertures_object(target, out_dir, platform_selection)?);
+    objs.push(assemble_mmio_apertures_object(
+        target,
+        out_dir,
+        platform_selection,
+    )?);
 
     // Feature-specific runtime units: assemble each stem that maps to
     // an enabled feature.  `assemble_unit` returns an error for missing
@@ -1809,7 +1854,13 @@ fn assemble_mmio_apertures_object(
     let obj_path = out_dir.join("mmio_apertures_generated.o");
     let asm = render_mmio_apertures_asm(target, compiled.as_ref());
     fs::write(&asm_path, asm).map_err(TyuError::Io)?;
-    assemble_asm_file(target, &asm_path, &obj_path, Some(out_dir), "mmio_apertures")?;
+    assemble_asm_file(
+        target,
+        &asm_path,
+        &obj_path,
+        Some(out_dir),
+        "mmio_apertures",
+    )?;
     Ok(obj_path)
 }
 
@@ -2152,37 +2203,36 @@ pub fn link_image(
     // default. Host-native targets (`qemu: None`, e.g. x86_64-unknown-linux-gnu)
     // link as ordinary Linux ELF executables via ld's built-in script; only
     // bare-metal targets need a custom `link.ld` to place sections in flash/RAM.
-    let linker_script: Option<PathBuf> =
-        if let Some(selection) = platform_selection {
-            // `boot = "image_def"` only adds the PICOBIN block object to the
-            // link (see `assemble_image_def`); layout stays owned by the
-            // pack's `metal/<isa>/link.ld`, which must place `.image_def`
-            // within the bootrom's first-4 kB scan window (DS2 5.9.5).
-            if selection.metal().linker.is_empty() {
-                // Hosted packs (e.g. linux-x86_64-hosted) declare `linker = ""`.
-                None
-            } else {
-                Some(
-                    selection
-                        .pack_root()
-                        .join(&selection.metal().path)
-                        .join(&selection.metal().linker),
-                )
-            }
-        } else if spec.qemu.is_none() {
+    let linker_script: Option<PathBuf> = if let Some(selection) = platform_selection {
+        // `boot = "image_def"` only adds the PICOBIN block object to the
+        // link (see `assemble_image_def`); layout stays owned by the
+        // pack's `metal/<isa>/link.ld`, which must place `.image_def`
+        // within the bootrom's first-4 kB scan window (DS2 5.9.5).
+        if selection.metal().linker.is_empty() {
+            // Hosted packs (e.g. linux-x86_64-hosted) declare `linker = ""`.
             None
         } else {
             Some(
-                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .parent()
-                    .unwrap()
-                    .parent()
-                    .unwrap()
-                    .join("runtime")
-                    .join(triple)
-                    .join("link.ld"),
+                selection
+                    .pack_root()
+                    .join(&selection.metal().path)
+                    .join(&selection.metal().linker),
             )
-        };
+        }
+    } else if spec.qemu.is_none() {
+        None
+    } else {
+        Some(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .join("runtime")
+                .join(triple)
+                .join("link.ld"),
+        )
+    };
     let out_path = out_dir.join("image.elf");
 
     let mut cmd = Command::new(&linker);
@@ -2201,7 +2251,10 @@ pub fn link_image(
         .status()
         .map_err(|e| TyuError::Build(format!("running linker '{}': {}", linker_name, e)))?;
     if !status.success() {
-        return Err(TyuError::Build(format!("{} failed to link image", linker_name)).into());
+        return Err(TyuError::Build(format!(
+            "{} failed to link image",
+            linker_name
+        )));
     }
 
     Ok(out_path)
@@ -2210,4 +2263,3 @@ pub fn link_image(
 pub fn link_image_for_context(ctx: &BuildContext, objs: &[PathBuf]) -> Result<PathBuf, TyuError> {
     link_image(ctx.target, objs, &ctx.out_dir, ctx.platform_selection())
 }
-

@@ -8,8 +8,8 @@ mod common;
 use common::*;
 use hosted::loader::HostedLoaderPlatform;
 use lmod::validate::Container;
-use loader_core::load::{load_module, LoadedSet};
 use loader_core::apertures::ApertureRegistry;
+use loader_core::load::{load_module, LoadedSet};
 use loader_core::symbols::SymMap;
 
 #[test]
@@ -38,14 +38,21 @@ fn phase8_dynamic_load_matches_static() {
     register_test_runtime_symtab(&mut global_map, ds_high);
 
     let mut loaded_set = LoadedSet::<64>::new();
-    let _loaded = load_module(&container, &mut plat, &mut global_map, &mut loaded_set, &mut ApertureRegistry::new()).unwrap();
+    let _loaded = load_module(
+        &container,
+        &mut plat,
+        &mut global_map,
+        &mut loaded_set,
+        &mut ApertureRegistry::new(),
+    )
+    .unwrap();
 
     let main_sym = global_map.lookup_by_name(b"main").unwrap();
     let code_base = main_sym.addr;
 
     let result: i64;
     const DS_SIZE: usize = 65536;
-    let mut ds_buf = vec![0u8; DS_SIZE];
+    let ds_buf = vec![0u8; DS_SIZE];
     let ds_base = ds_buf.as_ptr() as u64;
     let ds_limit = ds_base + DS_SIZE as u64;
     unsafe {
@@ -77,7 +84,13 @@ fn phase8_module_without_runtime_symbols_fails() {
 
     let mut global_map: SymMap<'_, 256> = SymMap::new();
     let mut loaded_set = LoadedSet::<64>::new();
-    let result = load_module(&container, &mut plat, &mut global_map, &mut loaded_set, &mut ApertureRegistry::new());
+    let result = load_module(
+        &container,
+        &mut plat,
+        &mut global_map,
+        &mut loaded_set,
+        &mut ApertureRegistry::new(),
+    );
     assert!(result.is_err(), "load should fail without runtime symbols");
     assert_eq!(result.unwrap_err(), 5205);
 }

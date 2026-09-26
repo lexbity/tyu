@@ -49,10 +49,6 @@ fn fresh_dir(name: &str) -> PathBuf {
     dir
 }
 
-fn repo_sysroot() -> PathBuf {
-    workspace_root().join("sysroot")
-}
-
 #[test]
 fn phase0_et_rel_object_structure() {
     build_tools();
@@ -260,7 +256,7 @@ fn phase1_modinfo_section_present_and_decodable() {
     let name_off = u32::from_le_bytes(blob[16..20].try_into().unwrap()) as usize;
     let name_len = u32::from_le_bytes(blob[20..24].try_into().unwrap()) as usize;
     let export_count = u32::from_le_bytes(blob[24..28].try_into().unwrap());
-    let import_count = u32::from_le_bytes(blob[28..32].try_into().unwrap());
+    let _import_count = u32::from_le_bytes(blob[28..32].try_into().unwrap());
 
     // Verify module name.
     let module_name = &blob[name_off..name_off + name_len];

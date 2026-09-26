@@ -151,11 +151,19 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
     /// (`swap` — the E3312 hole), the Interval catches value replacements
     /// (`drop true true`, `1 +` on the subject). The subject slots of a
     /// *legal* predicate are only ever `dup`/joined — both stay fixed.
-    fn predicate_origin_snapshot(&self, cur: lir::BlockId, n: usize) -> [verifier::interp::Slot; 8] {
+    fn predicate_origin_snapshot(
+        &self,
+        cur: lir::BlockId,
+        n: usize,
+    ) -> [verifier::interp::Slot; 8] {
         let st = self.interp.state_or_fresh(cur);
         let mut snap = [verifier::interp::Slot::top(); 8];
-        for i in 0..n {
-            snap[i] = st.stack.get(i).copied().unwrap_or(verifier::interp::Slot::top());
+        for (i, slot) in snap.iter_mut().enumerate().take(n) {
+            *slot = st
+                .stack
+                .get(i)
+                .copied()
+                .unwrap_or(verifier::interp::Slot::top());
         }
         snap
     }
@@ -167,9 +175,13 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         snap: &[verifier::interp::Slot; 8],
     ) -> bool {
         let st = self.interp.state_or_fresh(cur);
-        for i in 0..n {
-            let now = st.stack.get(i).copied().unwrap_or(verifier::interp::Slot::top());
-            if now != snap[i] {
+        for (i, was) in snap.iter().enumerate().take(n) {
+            let now = st
+                .stack
+                .get(i)
+                .copied()
+                .unwrap_or(verifier::interp::Slot::top());
+            if now != *was {
                 return false;
             }
         }

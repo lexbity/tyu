@@ -105,7 +105,11 @@ fn golden_bytes(name: &str) -> Vec<u8> {
 fn assert_matches_golden(tag: &str, source: &str, golden: &str) {
     let (_name, bytes) = emit_obligations(tag, source);
     if std::env::var_os("TYU_BLESS_OBL_GOLDEN").is_some() {
-        fs::write(workspace_root().join("test-goldens/obl").join(golden), &bytes).unwrap();
+        fs::write(
+            workspace_root().join("test-goldens/obl").join(golden),
+            &bytes,
+        )
+        .unwrap();
         return;
     }
     assert_eq!(
@@ -261,7 +265,8 @@ fn site_classes_and_provenance_semantics() {
     assert_eq!(by_id("Bank::clamp::subtype-range::0").site.occurrence, 0);
     assert_eq!(by_id("Bank::clamp::subtype-range::1").site.occurrence, 1);
     assert_eq!(
-        by_id("Bank::clamp::subtype-range::0").site.word, "clamp",
+        by_id("Bank::clamp::subtype-range::0").site.word,
+        "clamp",
         "site.word is the canonical word name"
     );
 }
@@ -310,10 +315,13 @@ fn write_obl_with_obj_matches_obligations_mode() {
         .status()
         .unwrap();
     assert!(st.success(), "--emit=obj --write-obl must succeed");
-    let artifact = fs::read(out_dir.join("Bank.obl.json"))
-        .expect("--write-obl must write Bank.obl.json");
+    let artifact =
+        fs::read(out_dir.join("Bank.obl.json")).expect("--write-obl must write Bank.obl.json");
     let (_n, obl_mode) = emit_obligations("writeobl-ref", BANK_MOD);
-    assert_eq!(obl_mode, artifact, "--write-obl artifact must match --emit=obligations");
+    assert_eq!(
+        obl_mode, artifact,
+        "--write-obl artifact must match --emit=obligations"
+    );
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -428,8 +436,7 @@ fn mmio_bounds_obligations_per_access() {
         assert!(o.assumptions.is_empty());
     }
     assert_eq!(
-        mmio_records[0].id,
-        "MmioWin::read::mmio-bounds::0",
+        mmio_records[0].id, "MmioWin::read::mmio-bounds::0",
         "ids follow the canonical per-word per-kind ordinals"
     );
 }

@@ -42,7 +42,13 @@ pub fn format_descriptor_report(desc: &Descriptor) -> String {
         let _ = writeln!(
             &mut out,
             "  [{}] {} kind={}{} base={} size={:#x}{}",
-            w.id, w.name, w.kind.as_str(), bind, base, w.size, scratch
+            w.id,
+            w.name,
+            w.kind.as_str(),
+            bind,
+            base,
+            w.size,
+            scratch
         );
     }
 
@@ -96,7 +102,11 @@ pub fn format_descriptor_report(desc: &Descriptor) -> String {
 
     match desc.scoped {
         Some(s) => {
-            let _ = writeln!(&mut out, "scoped metadata_slots_max={}", s.metadata_slots_max);
+            let _ = writeln!(
+                &mut out,
+                "scoped metadata_slots_max={}",
+                s.metadata_slots_max
+            );
         }
         None => {
             let _ = writeln!(&mut out, "scoped (none)");

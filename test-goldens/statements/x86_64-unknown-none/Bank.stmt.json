@@ -1,0 +1,18 @@
+{
+  "schema": "tyu.stmt-goldens/1.0",
+  "semantics": "tyu.ir-sem/1.0",
+  "stmt": "tyu.stmt/1.0",
+  "target": "x86_64-unknown-none",
+  "model_semantics": "unmodeled",
+  "module": "Bank",
+  "statements": [
+    {"id": "Bank::clamp::subtype-range::0", "id_hash": "cd26026bd5a14df0", "statement_hash": "a2b061ed3024e8acc63e108f7f9cf2924a0d5931ad1671e94f84172336d98e93"},
+    {"id": "Bank::clamp::subtype-range::1", "id_hash": "cd26036bd5a14fa3", "statement_hash": "04913886644e87486e259093e229de4f914700e8cbc222017c4208ae11237d98"},
+    {"id": "Bank::bounded_inc::subtype-range::0", "id_hash": "227b8c4b5d456bd1", "statement_hash": "d5be9c389f46542e51fa1ab9243da0717c56d2083ec8b53b991952fd5e883423"},
+    {"id": "Bank::bounded_inc::subtype-range::1", "id_hash": "227b8b4b5d456a1e", "statement_hash": "d790f026224afe8a0581978747133469b96103b4351fca39f747b57b352507d8"},
+    {"id": "Bank::bounded_inc::subtype-range::2", "id_hash": "227b8a4b5d45686b", "statement_hash": "998203922e5c1a8e9acbb7de81393d1a11b49247ed635e5b5728d026f68b752a"},
+    {"id": "Bank::main::subtype-range::0", "id_hash": "f0d073cb45166b88", "statement_hash": "894c1e6fdfdebcf4fa722800a57a0491be30309fb78b87c6661d096a3e7a5b54"},
+    {"id": "Bank::main::subtype-range::1", "id_hash": "f0d074cb45166d3b", "statement_hash": "d8efc7f07cd227404c62696d2dd652af3928860871e1c0439f396b03ffd6dbf6"},
+    {"id": "Bank::main::subtype-range::2", "id_hash": "f0d075cb45166eee", "statement_hash": "51e7bb6b0076f2b443ac2d1257ff339c3cd36d1247b97d7ec555e665f98da2fa"}
+  ]
+}

@@ -1,6 +1,5 @@
 //! Tests for the project manifest (tyu.toml) parser.
 
-use std::path::Path;
 use tyu::project::{parse_project_manifest, resolve_target, ProjectManifest};
 
 #[test]
@@ -99,7 +98,7 @@ fn resolve_direct_triple() {
 fn find_manifest_walks_up() {
     let dir = std::env::temp_dir().join("tyu_test_find_manifest");
     let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir.join("sub")).unwrap();
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
     let path = dir.join("tyu.toml");
     std::fs::write(&path, "[project]\nmain = \"main.mod\"\n").unwrap();
 

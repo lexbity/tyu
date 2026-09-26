@@ -7,7 +7,7 @@
 
 use core::marker::PhantomData;
 
-pub use lmod::board_table::{BoardTable, BoardAperture};
+pub use lmod::board_table::{BoardAperture, BoardTable};
 
 // ---------------------------------------------------------------------------
 // Region — a slab of mapped memory

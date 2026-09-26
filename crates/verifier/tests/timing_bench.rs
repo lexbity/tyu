@@ -6,8 +6,9 @@
 //! guards against accidental blowups, never flakes).
 
 use ir::{BlockId, CmpKind, OpKind, Sig, Span, TypeId};
-use verifier::interp::run_cfg;
 use std::time::Instant;
+use verifier::interp::{run_cfg, FlatMem};
+use verifier::target::TargetSpec;
 
 fn sr() -> &'static verifier::interp::SubtypeRange<'static> {
     &|tid| if tid.0 == 2 { Some((0, 100)) } else { None }
@@ -43,7 +44,12 @@ fn dense_word() -> ir::Word {
             ops: Default::default(),
         };
         for op in ops {
-            b.ops.push(ir::Op { kind: op, span: Span::UNKNOWN }).unwrap();
+            b.ops
+                .push(ir::Op {
+                    kind: op,
+                    span: Span::UNKNOWN,
+                })
+                .unwrap();
         }
         w.blocks.push(b).unwrap();
         id
@@ -60,8 +66,14 @@ fn dense_word() -> ir::Word {
         bx(vec![
             OpKind::LocalGet { slot: 1, ty },
             OpKind::ConstI64(10),
-            OpKind::Cmp { out: TypeId(1), kind: CmpKind::Lt },
-            OpKind::BrIf { then_tgt: body, else_tgt: header },
+            OpKind::Cmp {
+                out: TypeId(1),
+                kind: CmpKind::Lt,
+            },
+            OpKind::BrIf {
+                then_tgt: body,
+                else_tgt: header,
+            },
         ]);
         bx(vec![
             OpKind::LocalGet { slot: 1, ty },
@@ -85,9 +97,10 @@ fn discharge_cost_per_word_is_bounded() {
     let w = dense_word();
     // Warm-up ignored; measure the steady-state per-word discharge.
     let iters = 2000u32;
+    let mut mem = FlatMem;
     let started = Instant::now();
     for _ in 0..iters {
-        let _cf = run_cfg(&w, sr());
+        let _cf = run_cfg(&w, sr(), TargetSpec::X86_64, &mut mem);
     }
     let elapsed = started.elapsed();
     let per_word_us = elapsed.as_micros() as f64 / iters as f64;

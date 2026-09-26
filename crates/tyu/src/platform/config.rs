@@ -558,12 +558,7 @@ pub(crate) fn find_pack_manifest_path(root: &Path, name: &str) -> Option<PathBuf
         root.join("runtime").join(name).join("platform.toml"),
         root.join("runtime").join(format!("{}.platform.toml", name)),
     ];
-    for candidate in candidates {
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-    }
-    None
+    candidates.into_iter().find(|candidate| candidate.is_file())
 }
 
 pub fn discover_platforms() -> Result<Vec<PlatformPack>, TyuError> {
@@ -683,7 +678,13 @@ pub fn platform_pack_for_target(
 
     let candidates: Vec<&PlatformPack> = packs
         .iter()
-        .filter(|p| p.manifest.platform.isa.iter().any(|isa| isa.triple == triple))
+        .filter(|p| {
+            p.manifest
+                .platform
+                .isa
+                .iter()
+                .any(|isa| isa.triple == triple)
+        })
         .collect();
     match candidates.as_slice() {
         [] => Ok(None),

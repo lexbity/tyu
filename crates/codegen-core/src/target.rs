@@ -724,8 +724,7 @@ mod tests {
             Some(&b"qemu-system-arm"[..])
         );
         assert_eq!(
-            spec.qemu
-                .and_then(|q| Some(q.exit_convention.host_pass_exit())),
+            spec.qemu.map(|q| q.exit_convention.host_pass_exit()),
             Some(0),
         );
     }

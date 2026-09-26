@@ -63,7 +63,7 @@ end;
 
     // Build first so the .o exists.
     let s = Command::new(env!("CARGO"))
-        .current_dir(&workspace_root())
+        .current_dir(workspace_root())
         .args(["build", "-q", "-p", "langc"])
         .status()
         .expect("cargo build");

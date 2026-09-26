@@ -151,7 +151,7 @@ fn lint_pack_manifest(
     let manifest = &pack.manifest;
     let pack_name = pack.name().to_string();
     let pack_root = pack.manifest_path.parent().unwrap_or(root);
-    if !all && errors.len() > 0 {
+    if !all && !errors.is_empty() {
         return Ok(LintOutcome {
             pack: pack_name,
             errors,

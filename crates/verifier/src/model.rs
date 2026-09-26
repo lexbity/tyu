@@ -188,11 +188,19 @@ pub struct PredicateRef {
 /// is opaque).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Formula {
-    InRange { value: Oel, lo: i64, hi: i64 },
+    InRange {
+        value: Oel,
+        lo: i64,
+        hi: i64,
+    },
     /// `off` is the aperture-relative byte offset of the access. `None`
     /// means the offset is not compile-time known (future dynamic-offset
     /// accesses) — such an obligation is open by construction.
-    OffsetLE { off: Option<u32>, width: u32, size: u32 },
+    OffsetLE {
+        off: Option<u32>,
+        width: u32,
+        size: u32,
+    },
     /// A contract predicate must hold: `needs` at a call site
     /// (`contract-pre`) or `ensures` at return (`contract-post`). `args`
     /// binds the predicate's stack inputs (caller-side provenance; `$top`
@@ -439,8 +447,12 @@ impl OblSet {
     /// this before encode (fail-closed) and consumers may use it before use.
     pub fn validate(&self) -> Result<(), OblError> {
         for o in &self.obligations {
-            let expected_id =
-                canonical_id(&self.module, o.site.word.as_bytes(), o.kind, o.site.occurrence);
+            let expected_id = canonical_id(
+                &self.module,
+                o.site.word.as_bytes(),
+                o.kind,
+                o.site.occurrence,
+            );
             if o.id != expected_id {
                 return Err(OblError::CanonicalIdMismatch {
                     id: o.id.clone(),
@@ -830,6 +842,12 @@ pub fn default_intent(kind: Kind, subject: &str) -> Intent {
 /// computed as mutual-reachability classes — Tarjan-equivalent, iterative,
 /// no recursion, deterministic (cycles ordered by minimum block id; block
 /// names `b<id>` ascending).
+//
+// `needless_range_loop` is allowed deliberately: the Warshall closure below
+// is inherently random-access — every iteration reads `reach[i][k]` /
+// `reach[k][j]` and writes `reach[i][j]` from the same matrix, so an
+// iterator formulation would obscure the algorithm for no gain.
+#[allow(clippy::needless_range_loop)]
 pub fn compute_cycles(w: &ir::Word) -> Vec<Cycle> {
     // Deduplicated, ascending block ids.
     let mut ids: Vec<u16> = Vec::new();
@@ -859,10 +877,7 @@ pub fn compute_cycles(w: &ir::Word) -> Vec<Cycle> {
                         edges.push((i, t));
                     }
                 }
-                ir::OpKind::BrIf {
-                    then_tgt,
-                    else_tgt,
-                } => {
+                ir::OpKind::BrIf { then_tgt, else_tgt } => {
                     if let Some(t) = index_of(then_tgt.0) {
                         edges.push((i, t));
                     }

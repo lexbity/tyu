@@ -36,10 +36,7 @@ fn platform_arg() -> String {
         .unwrap()
         .parent()
         .unwrap();
-    format!(
-        "--platform={}",
-        workspace.join("runtime").display()
-    )
+    format!("--platform={}", workspace.join("runtime").display())
 }
 
 fn fresh_dir(label: &str) -> std::path::PathBuf {

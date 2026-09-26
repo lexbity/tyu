@@ -130,7 +130,10 @@ impl<'a> RiscVBackend<'a> {
     /// Set the MMIO apertures this backend lowers against (P3, D-7). The langc
     /// driver supplies either the target's static defaults or the compiled
     /// platform descriptor's apertures.
-    pub fn set_mmio_apertures(&mut self, apertures: &[MmioApertureSpec]) -> Result<(), CodegenError> {
+    pub fn set_mmio_apertures(
+        &mut self,
+        apertures: &[MmioApertureSpec],
+    ) -> Result<(), CodegenError> {
         if apertures.len() > 8 {
             return Err(CodegenError::TooManyMmioApertures);
         }
@@ -175,8 +178,7 @@ impl<'a> RiscVBackend<'a> {
             requires_caps: 0,
             stack_bound: 0,
         }; 64];
-        for i in 0..export_count {
-            let mi = &self.mi_exports[i];
+        for (i, mi) in self.mi_exports.iter().take(export_count).enumerate() {
             let name = mi.name.as_bytes();
             export_entries[i] = lmod::modinfo::ExportEntry {
                 sym_hash: lmod::hash::fnv1a_u64(name),
@@ -190,8 +192,8 @@ impl<'a> RiscVBackend<'a> {
             sym_hash: 0,
             name: b"",
         }; 64];
-        for i in 0..import_count {
-            let name = self.mi_imports[i].name.as_bytes();
+        for (i, imp) in self.mi_imports.iter().take(import_count).enumerate() {
+            let name = imp.name.as_bytes();
             import_entries[i] = lmod::modinfo::ImportEntry {
                 sym_hash: lmod::hash::fnv1a_u64(name),
                 name,
@@ -206,8 +208,12 @@ impl<'a> RiscVBackend<'a> {
             aperture_id: 0,
             access_mask: 0,
         }; 8];
-        for i in 0..self.mi_aperture_count {
-            let wu = &self.mi_apertures[i];
+        for (i, wu) in self
+            .mi_apertures
+            .iter()
+            .take(self.mi_aperture_count)
+            .enumerate()
+        {
             aperture_entries[i] = lmod::modinfo::ApertureUseEntry {
                 name_hash: lmod::hash::fnv1a_u64(wu.name.as_bytes()),
                 size: wu.size,
@@ -243,9 +249,9 @@ impl<'a> RiscVBackend<'a> {
         self.out.write(b"\t.section .lang.modinfo\n\t.byte ");
         if size > 0 {
             ophelpers::write_u32(self.out, buf[0] as u32);
-            for i in 1..size {
+            for b in buf.iter().take(size).skip(1) {
                 self.out.write(b",");
-                ophelpers::write_u32(self.out, buf[i] as u32);
+                ophelpers::write_u32(self.out, *b as u32);
             }
         }
         self.out.write(b"\n");
@@ -298,7 +304,9 @@ pub fn mmio_cell(
                 WriteKind::W1s => StrategyCell::Supported { pattern: "RMW or" },
                 WriteKind::Xor => StrategyCell::Supported { pattern: "RMW xor" },
             },
-            MmioOp::StoreField => StrategyCell::Supported { pattern: "RMW field" },
+            MmioOp::StoreField => StrategyCell::Supported {
+                pattern: "RMW field",
+            },
         },
     }
 }

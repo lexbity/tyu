@@ -46,17 +46,19 @@ fn every_pack_compiled_descriptor_is_in_sync() {
         let compiled = ensure_compiled_descriptor(&pack.manifest_path, pack.pack_root())
             .unwrap_or_else(|e| panic!("compile {}: {e}", pack.name()));
         let desc_path = tyu::platform::descriptor_file_path(pack.pack_root());
-        let bytes = fs::read(&desc_path)
-            .unwrap_or_else(|e| panic!("read {}: {e}", desc_path.display()));
+        let bytes =
+            fs::read(&desc_path).unwrap_or_else(|e| panic!("read {}: {e}", desc_path.display()));
         let decoded = tyu::platform::desc::compile::decode_and_validate(&bytes)
             .unwrap_or_else(|e| panic!("decode {}: {e}", desc_path.display()));
         assert_eq!(
-            decoded.platform_hash, compiled.platform_hash,
+            decoded.platform_hash,
+            compiled.platform_hash,
             "{} compiled descriptor hash drifted from its platform.toml",
             pack.name()
         );
         assert_eq!(
-            decoded.apertures(), compiled.apertures(),
+            decoded.apertures(),
+            compiled.apertures(),
             "{} compiled descriptor apertures drifted from its platform.toml",
             pack.name()
         );

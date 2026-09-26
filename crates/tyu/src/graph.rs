@@ -82,7 +82,7 @@ pub fn resolve_graph(
             continue;
         }
 
-        deps.entry(mod_name.clone()).or_insert_with(Vec::new);
+        deps.entry(mod_name.clone()).or_default();
         mod_paths
             .entry(mod_name.clone())
             .or_insert_with(|| mod_path.clone());
@@ -119,8 +119,7 @@ pub fn resolve_graph(
                         return Err(TyuError::Graph(format!(
                             "module '{}' imported by '{}' not found",
                             import_name, mod_name,
-                        ))
-                        .into());
+                        )));
                     }
                 }
             }
@@ -130,7 +129,7 @@ pub fn resolve_graph(
     // Topological sort (Kahn's algorithm).
     // in_degree[node] = number of dependencies (things it imports) within our graph.
     let mut in_degree: HashMap<&str, usize> = HashMap::new();
-    for (name, _) in &deps {
+    for name in deps.keys() {
         in_degree.insert(name.as_str(), 0);
     }
     for (name, edges) in &deps {
@@ -150,7 +149,7 @@ pub fn resolve_graph(
             if deps.contains_key(dep.as_str()) {
                 dependents
                     .entry(dep.as_str())
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(name.as_str());
             }
         }
@@ -209,9 +208,9 @@ pub fn resolve_graph(
     }
 
     if sorted_set.len() != deps.len() {
-        return Err(
-            TyuError::Graph("circular dependency detected in module graph".to_string()).into(),
-        );
+        return Err(TyuError::Graph(
+            "circular dependency detected in module graph".to_string(),
+        ));
     }
 
     Ok(order)
@@ -225,7 +224,8 @@ fn resolve_module_file(
     search_dirs: &[PathBuf],
 ) -> Option<PathBuf> {
     // First search the containing directory of the importing module.
-    for candidate in &[containing_dir.to_path_buf()] {
+    {
+        let candidate = &containing_dir.to_path_buf();
         let p = candidate.join(format!("{}.mod", module_name));
         if p.is_file() {
             return Some(p);

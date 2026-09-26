@@ -145,9 +145,7 @@ pub fn access_can_write(access: AccessMode) -> bool {
 
 /// Fused per-aperture access-mask bits for a register access (design doc §5.5).
 pub fn aperture_access_bits(access: AccessMode) -> u8 {
-    use ir::{
-        ACCESS_EFFECTFUL_READ, ACCESS_READ, ACCESS_W1C, ACCESS_W1S, ACCESS_WRITE,
-    };
+    use ir::{ACCESS_EFFECTFUL_READ, ACCESS_READ, ACCESS_W1C, ACCESS_W1S, ACCESS_WRITE};
     match access {
         AccessMode::Ro => ACCESS_READ,
         AccessMode::Wo => ACCESS_WRITE,
@@ -273,19 +271,31 @@ fn descriptor_instance_meta(
             codegen_core::compiled_desc::REG_WRITE_W1C => ir::WriteKind::W1c,
             codegen_core::compiled_desc::REG_WRITE_W1S => ir::WriteKind::W1s,
             codegen_core::compiled_desc::REG_WRITE_XOR => ir::WriteKind::Xor,
-            _ => return Err(TcError::MmioUnknownRegisterKind { span: Span::UNKNOWN }),
+            _ => {
+                return Err(TcError::MmioUnknownRegisterKind {
+                    span: Span::UNKNOWN,
+                })
+            }
         };
         let read_kind = match r.read_kind {
             codegen_core::compiled_desc::REG_READ_EFFECTFUL => ir::ReadKind::Effectful,
             codegen_core::compiled_desc::REG_READ_PLAIN => ir::ReadKind::Plain,
-            _ => return Err(TcError::MmioUnknownRegisterKind { span: Span::UNKNOWN }),
+            _ => {
+                return Err(TcError::MmioUnknownRegisterKind {
+                    span: Span::UNKNOWN,
+                })
+            }
         };
         let barrier = match r.barrier {
             codegen_core::compiled_desc::REG_BARRIER_BEFORE => ir::BarrierKind::Before,
             codegen_core::compiled_desc::REG_BARRIER_AFTER => ir::BarrierKind::After,
             codegen_core::compiled_desc::REG_BARRIER_BOTH => ir::BarrierKind::Both,
             codegen_core::compiled_desc::REG_BARRIER_NONE => ir::BarrierKind::None,
-            _ => return Err(TcError::MmioUnknownRegisterKind { span: Span::UNKNOWN }),
+            _ => {
+                return Err(TcError::MmioUnknownRegisterKind {
+                    span: Span::UNKNOWN,
+                })
+            }
         };
         let _ = rows.push(RegAccessMeta {
             offset: r.offset,
@@ -338,20 +348,23 @@ fn resolve_instance_base(
             .ok_or(TcError::MmioNameInvalid { span: board_span })?;
         let atom = ir::Atom::new(instance.as_bytes())
             .ok_or(TcError::MmioNameInvalid { span: board_span })?;
-        let device = desc.device(atom).ok_or(TcError::MmioBoardInstanceNotFound {
-            span: board_span,
-        })?;
+        let device = desc
+            .device(atom)
+            .ok_or(TcError::MmioBoardInstanceNotFound { span: board_span })?;
         return Ok(InstanceBase::Symbolic {
             aperture: device.aperture,
             base_offset: device.base_offset,
         });
     }
     // Raw integer base.
-    let base_addr = parse_u32_any(slice_span(src, inst.base_addr))
-        .ok_or(TcError::MmioAddrInvalid { span: inst.base_addr })?
-        as u64;
+    let base_addr =
+        parse_u32_any(slice_span(src, inst.base_addr)).ok_or(TcError::MmioAddrInvalid {
+            span: inst.base_addr,
+        })? as u64;
     if descriptor.is_some() {
-        return Err(TcError::MmioRawBaseUnderDescriptor { span: inst.base_addr });
+        return Err(TcError::MmioRawBaseUnderDescriptor {
+            span: inst.base_addr,
+        });
     }
     Ok(InstanceBase::Raw(base_addr))
 }
@@ -445,7 +458,10 @@ fn check_regmap_against_descriptor(
                         TokenKind::PunctRBrace => break,
                         TokenKind::Eof => {
                             return Err(TcError::MmioUnexpectedEof {
-                                span: Span::new(body.start + tok.span.start, body.start + tok.span.end),
+                                span: Span::new(
+                                    body.start + tok.span.start,
+                                    body.start + tok.span.end,
+                                ),
                             })
                         }
                         _ => {}
@@ -456,14 +472,13 @@ fn check_regmap_against_descriptor(
 
         let reg_name_bytes = &slice[name_tok.span.start..name_tok.span.end];
         let Some(reg_name) = TypeAtom::new(reg_name_bytes) else {
-            return Err(TcError::MmioNameInvalid { span: name_tok.span });
+            return Err(TcError::MmioNameInvalid {
+                span: name_tok.span,
+            });
         };
         if !descriptor_has_row(descriptor, map_name, offset, reg_name, width, access) {
             return Err(TcError::MmioRowDivergesFromDescriptor {
-                span: Span::new(
-                    body.start + tok.span.start,
-                    body.start + ty_tok.span.end,
-                ),
+                span: Span::new(body.start + tok.span.start, body.start + ty_tok.span.end),
             });
         }
     }
@@ -1035,7 +1050,7 @@ pub fn resolve_mmio_place(
     // Walk the steps to extract register and optional field/index.
     // Expected pattern: root.Field(reg)[.Index(n)][.Field(field)]
     let step_len = place.steps.len();
-    if step_len < 1 || step_len > 3 {
+    if !(1..=3).contains(&step_len) {
         return Err(TcError::MmioPlaceTooDeep { span: place_span });
     }
 
@@ -1147,7 +1162,7 @@ fn place_aperture_offset(inst: MmioInstance, reg_offset: u32, idx: u64, width: u
             let offset = base_offset
                 .wrapping_add(reg_offset)
                 .wrapping_add(idx.wrapping_mul(width) as u32);
-            (aperture, offset as u32)
+            (aperture, offset)
         }
         InstanceBase::Raw(base_addr) => {
             // Legacy raw path: aperture 0 is the module's single raw aperture and
@@ -1203,25 +1218,30 @@ mod tests {
         let bs = src.len();
         src.extend_from_slice(b"0x00 REG u32 rw\n");
         let body_span = Span::new(bs, src.len());
-        decls.push(DeclAst {
-            kind: DeclKind::RegisterMap,
-            name: name_span,
-            sig: None,
-            attrs: FixedVec::new(),
-            body: Some(body_span),
-            requires: None,
-            ensures: None,
-            intent: None,
-            cap_set: None,
-            effect_bits: 0,
-            effect_net: 0,
-            effect_high: 0,
-            has_explicit_performs: false,
-        })
-        .unwrap();
+        decls
+            .push(DeclAst {
+                kind: DeclKind::RegisterMap,
+                name: name_span,
+                sig: None,
+                attrs: FixedVec::new(),
+                body: Some(body_span),
+                requires: None,
+                ensures: None,
+                intent: None,
+                cap_set: None,
+                effect_bits: 0,
+                effect_net: 0,
+                effect_high: 0,
+                has_explicit_performs: false,
+            })
+            .unwrap();
     }
 
-    fn module(src: &[u8], instances: FixedVec<RegMapInstanceAst, 64>, decls: FixedVec<DeclAst, 256>) -> ModuleAst {
+    fn module(
+        src: &[u8],
+        instances: FixedVec<RegMapInstanceAst, 64>,
+        decls: FixedVec<DeclAst, 256>,
+    ) -> ModuleAst {
         ModuleAst {
             name: Span::new(0, 4.min(src.len())),
             imports: FixedVec::new(),
@@ -1242,7 +1262,11 @@ mod tests {
         push_instance(&mut src, &mut instances, "gpio", "not-a-number");
         let m = module(&src, instances, FixedVec::new());
         let err = build_mmio_db(&m, &src, None).map(|_| ()).unwrap_err();
-        assert_eq!(err.code(), 3638, "malformed base addr must be MmioAddrInvalid");
+        assert_eq!(
+            err.code(),
+            3638,
+            "malformed base addr must be MmioAddrInvalid"
+        );
     }
 
     #[test]
@@ -1269,14 +1293,17 @@ mod tests {
             push_regmap(&mut src, &mut decls, &format!("m{}", i));
         }
         let m = module(&src, instances, decls);
-        assert!(build_mmio_db(&m, &src, None).is_ok(), "limits are inclusive");
+        assert!(
+            build_mmio_db(&m, &src, None).is_ok(),
+            "limits are inclusive"
+        );
     }
 
     /// Build a compiled descriptor with a single device/register.
     fn desc_with_write_kind(kind: u8) -> codegen_core::compiled_desc::CompiledDescriptor {
         use codegen_core::compiled_desc::{
-            CompiledDevice, CompiledDescriptor, CompiledRegister, VerificationGrants,
-            COMPILED_DESC_DEVICE_CAP, COMPILED_DESC_REGISTER_CAP, COMPILED_DESC_APERTURE_CAP,
+            CompiledDescriptor, CompiledDevice, CompiledRegister, VerificationGrants,
+            COMPILED_DESC_APERTURE_CAP, COMPILED_DESC_DEVICE_CAP, COMPILED_DESC_REGISTER_CAP,
         };
         use codegen_core::target::MmioApertureSpec;
         let mut regs = [CompiledRegister::EMPTY; COMPILED_DESC_REGISTER_CAP];
@@ -1331,6 +1358,9 @@ mod tests {
         let inst = TypeAtom::new(b"strategy").unwrap();
         let rows = descriptor_instance_meta(&desc, inst).expect("known kinds accepted");
         assert_eq!(rows.iter().count(), 1);
-        assert_eq!(rows.iter().next().unwrap().meta.write_kind, ir::WriteKind::Plain);
+        assert_eq!(
+            rows.iter().next().unwrap().meta.write_kind,
+            ir::WriteKind::Plain
+        );
     }
 }

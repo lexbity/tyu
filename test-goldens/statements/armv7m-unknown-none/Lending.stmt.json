@@ -1,0 +1,14 @@
+{
+  "schema": "tyu.stmt-goldens/1.0",
+  "semantics": "tyu.ir-sem/1.0",
+  "stmt": "tyu.stmt/1.0",
+  "target": "armv7m-unknown-none",
+  "model_semantics": "unmodeled",
+  "module": "Lending",
+  "statements": [
+    {"id": "Lending::pct-in-range::subtype-range::0", "id_hash": "3f8aeeef262e9e47", "statement_hash": "7a5fbeb9f7506cbef9327a813a377c37eb3c28f796ba7265d4a1ca1f894095df"},
+    {"id": "Lending::pct-in-range::subtype-range::1", "id_hash": "3f8aedef262e9c94", "statement_hash": "a9746e2a3b39e87986c2168a8f37e35394ce5cb833504dd8945a6f62efd8c4d9"},
+    {"id": "Lending::withdraw::subtype-range::0", "id_hash": "8ba8ba9849570178", "statement_hash": "565f349db7cfb5684eff82dbadccc2238d58d96af84266f1efe1be29b5f4ff1b"},
+    {"id": "Lending::withdraw::contract-pre::0", "id_hash": "b4e880b7b809ef6c", "statement_hash": "89ac354210d64cd44c32221c697e05470735f10af8c1f4a3831a55e402fb2905"}
+  ]
+}

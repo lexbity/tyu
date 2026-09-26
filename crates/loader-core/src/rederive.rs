@@ -292,8 +292,7 @@ mod tests {
     // ADDS R4, R4, #imm3 = push (DS grows upward)
     fn encode_thumb_add_r4(imm3: u8) -> Vec<u8> {
         let iii = imm3 & 0x7;
-        let w: u16 = (0b0001_1 << 11)   // fixed pattern bits 15:11 = 00011
-            | (0 << 10)                  // op = ADD
+        let w: u16 = (0b0_0011 << 11)                  // op = ADD
             | ((iii as u16) << 7)        // imm3
             | (4 << 4)                   // Rn = R4
             | 4; // Rd = R4
@@ -302,7 +301,7 @@ mod tests {
     // SUBS R4, R4, #imm3 = pop (DS shrinks)
     fn encode_thumb_sub_r4(imm3: u8) -> Vec<u8> {
         let iii = imm3 & 0x7;
-        let w: u16 = (0b0001_1 << 11)
+        let w: u16 = (0b0_0011 << 11)
             | (1 << 10)                  // op = SUB
             | ((iii as u16) << 7)
             | (4 << 4)
@@ -313,7 +312,7 @@ mod tests {
     // ---- RISC-V encoder ----
     fn encode_riscv_addi_s2(imm: i32) -> Vec<u8> {
         let imm12 = imm as u32 & 0xfff;
-        let insn = (imm12 << 20) | (18 << 15) | (0 << 12) | (18 << 7) | 0x13;
+        let insn = ((imm12 << 20) | (18 << 15)) | (18 << 7) | 0x13;
         let bytes = insn.to_le_bytes();
         let mut v = Vec::new();
         v.extend_from_slice(&bytes[..4]);
@@ -437,7 +436,7 @@ mod tests {
     fn arm_thumb_r7_not_ds_register() {
         // SUBS R7, R7, #4: encoding uses Rd=Rn=7
         let iii = 4u8 & 0x7;
-        let w: u16 = (0b0001_1 << 11) | (1 << 10) | ((iii as u16) << 7) | (7 << 4) | 7;
+        let w: u16 = (0b0_0011 << 11) | (1 << 10) | ((iii as u16) << 7) | (7 << 4) | 7;
         let code = w.to_le_bytes().to_vec();
         // Should NOT match (r4 only) → peak = 0
         assert_eq!(rederive_stack_high(&code, Arch::ArmThumb, 4), 0);
@@ -603,26 +602,15 @@ mod tests {
     #[test]
     fn loop_yields_top() {
         // Backward jmp over a push → static scan cannot bound iterations.
-        let mut code = Vec::new();
-        code.push(0x49);
-        code.push(0x83);
-        code.push(0xc7);
-        code.push(8); // add r15, 8
-        code.push(0xEB);
-        code.push(-6i8 as u8); // jmp -6 (back to add)
+        // 49 83 c7 08 = add r15, 8; EB FA = jmp -6 (back to add)
+        let code = vec![0x49, 0x83, 0xc7, 8, 0xEB, -6i8 as u8];
         assert_eq!(rederive_stack_high(&code, Arch::X86_64, 8), TOP_SENTINEL);
     }
 
     #[test]
     fn backward_jcc_yields_top() {
-        // je rel8 pointing backwards
-        let mut code = Vec::new();
-        code.push(0x49);
-        code.push(0x83);
-        code.push(0xc7);
-        code.push(8);
-        code.push(0x74);
-        code.push(-6i8 as u8); // je -6
+        // je rel8 pointing backwards: 49 83 c7 08 = add r15, 8; 74 FA = je -6
+        let code = vec![0x49, 0x83, 0xc7, 8, 0x74, -6i8 as u8];
         assert_eq!(rederive_stack_high(&code, Arch::X86_64, 8), TOP_SENTINEL);
     }
 

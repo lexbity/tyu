@@ -10,7 +10,7 @@ use tyu::test_helpers::*;
 
 fn ensure_langc() {
     let status = Command::new(env!("CARGO"))
-        .current_dir(&workspace_root())
+        .current_dir(workspace_root())
         .args(["build", "-q", "-p", "langc"])
         .status()
         .expect("cargo build");
@@ -139,7 +139,7 @@ fn test_failing_fixture_detected() {
 
     let dir = temp_dir("fail_fixture");
     std::fs::write(
-        &dir.join("fail_test.mod"),
+        dir.join("fail_test.mod"),
         "\
 module FailTest;\nimport platform/testio { testio.write-byte };\n\
 : fail-test-run ( -- ) 70 testio.write-byte ;\n\
@@ -147,7 +147,7 @@ module FailTest;\nimport platform/testio { testio.write-byte };\n\
     )
     .unwrap();
     std::fs::write(
-        &dir.join("manifest.toml"),
+        dir.join("manifest.toml"),
         "\
 [[fixture]]\nname = \"fail_test\"\nfile = \"fail_test.mod\"\naxes = [\"trap\"]\nrequires = []\n",
     )

@@ -28,10 +28,7 @@ pub const APERTURE_USE_ENTRY_SIZE: u32 = 16; // u64 name_hash + u32 size + u16 a
 /// Fused per-aperture access-mask bits (design doc §5.5). One source of truth:
 /// these are re-exported from `ir` so the module format, the compiler, and the
 /// loader all agree on the wire bits.
-pub use ir::{
-    ACCESS_EFFECTFUL_READ as ACCESS_EFFECTFUL_READ, ACCESS_READ as ACCESS_READ,
-    ACCESS_W1C as ACCESS_W1C, ACCESS_W1S as ACCESS_W1S, ACCESS_WRITE as ACCESS_WRITE,
-};
+pub use ir::{ACCESS_EFFECTFUL_READ, ACCESS_READ, ACCESS_W1C, ACCESS_W1S, ACCESS_WRITE};
 
 /// Fixed header field offsets (little-endian). v4 header = 48 bytes:
 /// `0 magic · 4 modinfo_ver · 6 flags · 8 abi_hash · 16 name_off · 20 name_len
@@ -129,6 +126,9 @@ fn poke_u64(buf: &mut [u8], off: usize, v: u64) {
 ///
 /// Returns the number of bytes written on success, or `None` if `buf` is
 /// too small.
+// Arguments mirror the positional sections of the wire-format modinfo block
+// in order; a config struct would decouple the signature from the layout.
+#[allow(clippy::too_many_arguments)]
 pub fn encode_into<'a>(
     buf: &mut [u8],
     module_name: &[u8],
@@ -211,7 +211,7 @@ pub fn encode_into<'a>(
     poke_u64(buf, off, platform_hash);
     off += 8;
     off += 4; // _pad (reserved)
-    // header = 48 bytes
+              // header = 48 bytes
 
     // 2. Name table — module name
     let module_name_off = off as u32;
@@ -490,8 +490,10 @@ fn res_meta_offset(data: &[u8]) -> Option<usize> {
 /// or `None` if the data is truncated.
 pub fn aperture_use_offset(data: &[u8]) -> Option<usize> {
     let hdr = decode(data)?;
-    let res_meta_end = res_meta_offset(data)? + (hdr.res_meta_count as usize) * RES_META_SIZE as usize;
-    if res_meta_end + (hdr.aperture_count as usize) * APERTURE_USE_ENTRY_SIZE as usize > data.len() {
+    let res_meta_end =
+        res_meta_offset(data)? + (hdr.res_meta_count as usize) * RES_META_SIZE as usize;
+    if res_meta_end + (hdr.aperture_count as usize) * APERTURE_USE_ENTRY_SIZE as usize > data.len()
+    {
         return None;
     }
     Some(res_meta_end)
@@ -619,16 +621,32 @@ mod tests {
         ];
         let mut buf = [0u8; 512];
         let ah = test_abi_hash();
-        let n = encode_into(&mut buf, b"W", &[], &[], ah, 0, &[], 0xdead_beef_cafe_f00du64, &apertures)
-            .unwrap();
+        let n = encode_into(
+            &mut buf,
+            b"W",
+            &[],
+            &[],
+            ah,
+            0,
+            &[],
+            0xdead_beef_cafe_f00du64,
+            &apertures,
+        )
+        .unwrap();
         let decoded = decode(&buf[..n]).unwrap();
         assert_eq!(decoded.aperture_count, 2);
         assert_eq!(decoded.platform_hash, 0xdead_beef_cafe_f00du64);
         for (i, expect) in apertures.iter().enumerate() {
             let got = read_aperture_use(&buf[..n], i as u32).unwrap();
-            assert_eq!(got, *expect, "aperture-use entry {i} must survive roundtrip");
+            assert_eq!(
+                got, *expect,
+                "aperture-use entry {i} must survive roundtrip"
+            );
         }
-        assert!(read_aperture_use(&buf[..n], 2).is_none(), "index past count must be None");
+        assert!(
+            read_aperture_use(&buf[..n], 2).is_none(),
+            "index past count must be None"
+        );
     }
 
     #[test]
@@ -784,8 +802,8 @@ mod tests {
             stack_bound: 0,
         };
         let exports = [export];
-        let encoded_len =
-            encode_into(&mut buf, b"M", &exports, &[], 0, 0, &[], 0, &[]).expect("encode minimal module");
+        let encoded_len = encode_into(&mut buf, b"M", &exports, &[], 0, 0, &[], 0, &[])
+            .expect("encode minimal module");
 
         // Word meta starts after header + module name strings +
         // 1 export entry (16 bytes) + 0 import entries.

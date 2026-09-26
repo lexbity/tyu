@@ -247,6 +247,7 @@ mod tests {
     use super::*;
     use crate::{DiagRecord, DS_DECLARED_UNKNOWN};
     use std::string::ToString;
+    use std::vec;
     use std::vec::Vec;
 
     /// Helper: the expected abi_hash for test vectors.
@@ -270,10 +271,19 @@ mod tests {
             })
             .collect();
 
-        let mut buf = Vec::with_capacity(4096);
-        buf.resize(4096, 0);
-        let n = modinfo::encode_into(&mut buf, b"test", &export_entries, &[], abi_hash, 0, &[], 0, &[])
-            .expect("encode modinfo");
+        let mut buf = vec![0; 4096];
+        let n = modinfo::encode_into(
+            &mut buf,
+            b"test",
+            &export_entries,
+            &[],
+            abi_hash,
+            0,
+            &[],
+            0,
+            &[],
+        )
+        .expect("encode modinfo");
         buf.truncate(n);
         buf
     }

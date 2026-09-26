@@ -1,46 +1,32 @@
 //! Interval lattice law conformance (static-verification.md §7.2, slice P5):
 //! join/meet laws over randomized pairs, subset/intersect coherence, and the
-//! transfer-table hand cases. Seeded PRNG (deterministic — no external dep),
-//! so failures are reproducible byte-for-byte.
+//! transfer-table hand cases. Seeded via the library-owned LCG
+//! (`verifier::gen::Rng` — the one generator in the tree), so failures are
+//! reproducible byte-for-byte and the stream matches every other consumer
+//! of the same seed.
 
+use verifier::gen::Rng;
 use verifier::interval::{eval_in_range, Interval, Tri};
 
-/// Deterministic 64-bit LCG (no external dep). Same algorithm as the P4
-/// cache FNV seeds: fixed seed, fixed sequence.
-struct Rng(u64);
-
-impl Rng {
-    fn next(&mut self) -> u64 {
-        // PCG-XSH-RR-style step with fixed increment.
-        self.0 = self
-            .0
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        self.0
-    }
-
-    fn i64(&mut self, lo: i64, hi: i64) -> i64 {
-        let span = hi.saturating_sub(lo).saturating_add(1) as u64;
-        lo.wrapping_add((self.next() % span.max(1)) as i64)
-    }
-
-    fn interval(&mut self) -> Interval {
-        let a = self.i64(-50, 50);
-        let b = self.i64(-50, 50);
-        Interval::Range {
-            lo: core::cmp::min(a, b),
-            hi: core::cmp::max(a, b),
-        }
+/// Test-local helper over the library LCG: a small random interval
+/// (`i64_between` is the library form; the [−50, 50] window keeps the law
+/// cases in the interesting dense region).
+fn interval(rng: &mut Rng) -> Interval {
+    let a = rng.i64_between(-50, 50);
+    let b = rng.i64_between(-50, 50);
+    Interval::Range {
+        lo: core::cmp::min(a, b),
+        hi: core::cmp::max(a, b),
     }
 }
 
 #[test]
 fn join_is_commutative_associative_idempotent() {
-    let mut rng = Rng(0x5eed_5eed_5eed_5eed);
+    let mut rng = Rng::new(0x5eed_5eed_5eed_5eed);
     for _ in 0..4000 {
-        let a = rng.interval();
-        let b = rng.interval();
-        let c = rng.interval();
+        let a = interval(&mut rng);
+        let b = interval(&mut rng);
+        let c = interval(&mut rng);
         assert_eq!(a.join(b), b.join(a), "commutativity");
         assert_eq!(a.join(a), a, "idempotence");
         assert_eq!(a.join(b).join(c), a.join(b.join(c)), "associativity");
@@ -52,10 +38,10 @@ fn join_is_commutative_associative_idempotent() {
 
 #[test]
 fn meet_is_commutative_and_absorbs() {
-    let mut rng = Rng(0xcafe_face_cafe_face);
+    let mut rng = Rng::new(0xcafe_face_cafe_face);
     for _ in 0..2000 {
-        let a = rng.interval();
-        let b = rng.interval();
+        let a = interval(&mut rng);
+        let b = interval(&mut rng);
         assert_eq!(a.intersect(b), b.intersect(a), "commutativity");
         // meet ⊆ both operands.
         let m = a.intersect(b);
@@ -65,10 +51,10 @@ fn meet_is_commutative_and_absorbs() {
 
 #[test]
 fn join_is_an_upper_bound_and_subset_is_coherent() {
-    let mut rng = Rng(0x1234_5678_9abc_def0);
+    let mut rng = Rng::new(0x1234_5678_9abc_def0);
     for _ in 0..2000 {
-        let a = rng.interval();
-        let b = rng.interval();
+        let a = interval(&mut rng);
+        let b = interval(&mut rng);
         let j = a.join(b);
         assert!(a.subset_of(j) && b.subset_of(j), "join is an upper bound");
         if j == a {
@@ -79,14 +65,17 @@ fn join_is_an_upper_bound_and_subset_is_coherent() {
 
 #[test]
 fn eval_range_matches_disjointness_and_containment() {
-    let mut rng = Rng(0x0dd_b0dd_0dd_b0dd);
+    let mut rng = Rng::new(0x0dd0_b0dd_0dd0_b0dd);
     for _ in 0..2000 {
-        let a = rng.interval();
+        let a = interval(&mut rng);
         if let Interval::Range { lo, hi } = a {
             // The interval exactly equals the target → contained → DefTrue.
             assert_eq!(eval_in_range(a, lo, hi), Tri::DefTrue);
             // An expanded target is trivially contained → DefTrue.
-            assert_eq!(eval_in_range(a, lo.saturating_sub(1), hi.saturating_add(1)), Tri::DefTrue);
+            assert_eq!(
+                eval_in_range(a, lo.saturating_sub(1), hi.saturating_add(1)),
+                Tri::DefTrue
+            );
             // A shifted-away target → disjoint → DefFalse.
             assert_eq!(
                 eval_in_range(a, hi.saturating_add(1), hi.saturating_add(100)),

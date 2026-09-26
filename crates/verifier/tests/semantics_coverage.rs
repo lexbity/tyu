@@ -75,14 +75,13 @@ fn ops_json(rows: &[SemanticsRow]) -> String {
 fn op_variant_name(op: &OpKind) -> String {
     let debug = format!("{op:?}");
     debug
-        .find(|c: char| c == '(' || c == ' ' || c == '{')
+        .find(['(', ' ', '{'])
         .map(|i| debug[..i].to_string())
         .unwrap_or(debug)
 }
 
 fn artifact_path() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("src/semantics/ops.json")
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/semantics/ops.json")
 }
 
 /// Render a representative op through the `--emit=ir` printer and return the
@@ -107,10 +106,13 @@ fn printed_op_text(row: &SemanticsRow) -> String {
         entry_stack: FixedVec::new(),
         ops: FixedVec::new(),
     };
-    block.ops.push(Op {
-        kind: row.op,
-        span: Span::UNKNOWN,
-    }).unwrap();
+    block
+        .ops
+        .push(Op {
+            kind: row.op,
+            span: Span::UNKNOWN,
+        })
+        .unwrap();
     word.blocks.push(block).unwrap();
 
     struct StrOut(String);
@@ -141,8 +143,9 @@ fn mnemonics_match_ir_printer() {
         let expected = row.mnemonic;
         assert!(
             printed == expected
-                || printed.strip_prefix(expected)
-                    .map_or(false, |rest| rest.starts_with(' ')),
+                || printed
+                    .strip_prefix(expected)
+                    .is_some_and(|rest| rest.starts_with(' ')),
             "mnemonic drift: row '{}' but --emit=ir printer emits {:?}",
             expected,
             printed
@@ -212,8 +215,7 @@ fn check_form_ops_have_oel_projection() {
 #[test]
 fn check_form_stack_transitions() {
     let table = semantics();
-    let find =
-        |m: &str| table.iter().find(|r| r.mnemonic == m).expect("row present");
+    let find = |m: &str| table.iter().find(|r| r.mnemonic == m).expect("row present");
     // `local_get i` loads the checked value: ( -- v )
     assert_eq!((find("local_get").pops, find("local_get").pushes), (0, 1));
     // `const_i64 min`: ( -- min )
@@ -221,7 +223,10 @@ fn check_form_stack_transitions() {
     // `cmp_ge`: ( v min -- bool )
     assert_eq!((find("cmp_ge").pops, find("cmp_ge").pushes), (2, 1));
     // `trap_if_false`: ( bool -- )
-    assert_eq!((find("trap_if_false").pops, find("trap_if_false").pushes), (1, 0));
+    assert_eq!(
+        (find("trap_if_false").pops, find("trap_if_false").pushes),
+        (1, 0)
+    );
     // dup of the checked value for the pair: ( v -- v v )
     assert_eq!((find("dup").pops, find("dup").pushes), (1, 2));
 }

@@ -14,9 +14,9 @@
 //! supported set listed (decision D-2 registry rule).
 
 use super::{
-    full_mask, AccessKind, AllocatorSpec, BarrierKind, Descriptor, DescriptorError, DeviceMap,
-    E_DESC_INVALID, E_DESC_UNKNOWN_KIND, MmioAperture, MemoryModel, MemoryRegionSpec, ReadKind,
-    RegisterRow, ScopedSpec, VerificationSpec, ApertureKind, WriteKind,
+    full_mask, AccessKind, AllocatorSpec, ApertureKind, BarrierKind, Descriptor, DescriptorError,
+    DeviceMap, MemoryModel, MemoryRegionSpec, MmioAperture, ReadKind, RegisterRow, ScopedSpec,
+    VerificationSpec, WriteKind, E_DESC_INVALID, E_DESC_UNKNOWN_KIND,
 };
 
 /// Parse a platform.toml text into a validated-at-parse descriptor.
@@ -101,12 +101,9 @@ pub fn parse_descriptor(text: &str) -> Result<Option<Descriptor>, DescriptorErro
         policy: a.policy.clone().unwrap_or_default(),
     });
 
-    let scoped = platform
-        .scoped
-        .as_ref()
-        .map(|s| ScopedSpec {
-            metadata_slots_max: s.metadata_slots_max,
-        });
+    let scoped = platform.scoped.as_ref().map(|s| ScopedSpec {
+        metadata_slots_max: s.metadata_slots_max,
+    });
 
     let metal_trust = platform
         .metal
@@ -135,9 +132,9 @@ pub fn parse_descriptor(text: &str) -> Result<Option<Descriptor>, DescriptorErro
                 ));
             }
             VerificationSpec {
-                isr_stack_slots: v.isr_stack_slots.unwrap_or(
-                    codegen_core::compiled_desc::DEFAULT_ISR_STACK_SLOTS,
-                ),
+                isr_stack_slots: v
+                    .isr_stack_slots
+                    .unwrap_or(codegen_core::compiled_desc::DEFAULT_ISR_STACK_SLOTS),
             }
         }
     };
@@ -241,7 +238,11 @@ fn parse_write_kind(s: &str) -> Result<WriteKind, DescriptorError> {
         "w1s" => Ok(WriteKind::W1s),
         "w1c" => Ok(WriteKind::W1c),
         "xor" => Ok(WriteKind::Xor),
-        other => Err(unknown_kind("write kind", other, &["plain", "w1s", "w1c", "xor"])),
+        other => Err(unknown_kind(
+            "write kind",
+            other,
+            &["plain", "w1s", "w1c", "xor"],
+        )),
     }
 }
 
@@ -282,10 +283,7 @@ fn descriptor_parse_error(e: toml::de::Error) -> DescriptorError {
         .span()
         .map(|r| format!(" at byte {}..{}", r.start, r.end))
         .unwrap_or_default();
-    DescriptorError::new(
-        E_DESC_INVALID,
-        format!("descriptor parse error{span}: {e}"),
-    )
+    DescriptorError::new(E_DESC_INVALID, format!("descriptor parse error{span}: {e}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -546,7 +544,10 @@ registers = [
         let b = parse_ok(omitted);
         let reg_a = &a.devices[0].registers[0];
         let reg_b = &b.devices[0].registers[0];
-        assert_eq!(reg_a, reg_b, "explicit defaults must equal omitted defaults");
+        assert_eq!(
+            reg_a, reg_b,
+            "explicit defaults must equal omitted defaults"
+        );
         assert_eq!(reg_a.write_kind, WriteKind::Plain);
         assert_eq!(reg_a.atomic_max, 32);
         assert_eq!(reg_a.mask, 0xffff_ffff);

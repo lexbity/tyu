@@ -122,7 +122,11 @@ impl<'a> ArmThumbBackend<'a> {
         self.cur_word_id = fnv1a_u64(w.name.as_bytes());
         // P6: fuse this word's aperture-use entries into the module table.
         for wu in w.apertures.iter() {
-            codegen_core::merge_aperture_use(&mut self.mi_apertures, &mut self.mi_aperture_count, wu);
+            codegen_core::merge_aperture_use(
+                &mut self.mi_apertures,
+                &mut self.mi_aperture_count,
+                wu,
+            );
         }
         self.out.write(b"\n");
 
@@ -734,9 +738,7 @@ impl<'a> ArmThumbBackend<'a> {
                 // R1 defensive: a w1s/w1c store lowers to RMW; on an
                 // effectful register that read is a phantom bus read. The
                 // typechecker rejects it (E3642); the backend must too.
-                if read_kind == lir::ReadKind::Effectful
-                    && write_kind != lir::WriteKind::Plain
-                {
+                if read_kind == lir::ReadKind::Effectful && write_kind != lir::WriteKind::Plain {
                     return Err(CodegenError::UnsupportedOp {
                         op_name: b"MmioVolStore",
                     });
@@ -775,7 +777,9 @@ impl<'a> ArmThumbBackend<'a> {
                 self.emit_arm_store_field(_w, field_ty, mask, shift, read_kind, barrier)?;
                 Ok(())
             }
-            lir::OpKind::MmioPlace { aperture, offset, .. } => {
+            lir::OpKind::MmioPlace {
+                aperture, offset, ..
+            } => {
                 // Symbolic place: aperture_base + offset (P4), bound through a
                 // relocatable literal site (P6). The aperture is guaranteed
                 // declared by construction (descriptor resolution); the
@@ -1071,9 +1075,10 @@ impl<'a> ArmThumbBackend<'a> {
         let (rbits, _) = prim_bits_signed(_w, reg_ty).ok_or(CodegenError::UnsupportedOp {
             op_name: b"MmioVolLoadField",
         })?;
-        let (fbits, f_signed) = prim_bits_signed(_w, field_ty).ok_or(CodegenError::UnsupportedOp {
-            op_name: b"MmioVolLoadField",
-        })?;
+        let (fbits, f_signed) =
+            prim_bits_signed(_w, field_ty).ok_or(CodegenError::UnsupportedOp {
+                op_name: b"MmioVolLoadField",
+            })?;
         self.emit_mmio_barrier_before(barrier);
         self.emit_pop_one_r0();
         match rbits {
@@ -1249,7 +1254,7 @@ fn max_local_slot(w: &lir::Word) -> Option<u16> {
     for b in w.blocks.iter() {
         for op in b.ops.iter() {
             if let lir::OpKind::LocalSet { slot, .. } = op.kind {
-                if max.map_or(true, |m| slot > m) {
+                if max.is_none_or(|m| slot > m) {
                     max = Some(slot);
                 }
             }

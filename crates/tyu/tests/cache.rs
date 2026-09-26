@@ -34,7 +34,9 @@ fn insert_then_lookup_hit() {
     let obj = dir.join("out.o");
     fs::write(&obj, b"\x7fELF").unwrap();
 
-    cache.insert(1, 2, 42, 0, "x86_64-unknown-none", &obj).unwrap();
+    cache
+        .insert(1, 2, 42, 0, "x86_64-unknown-none", &obj)
+        .unwrap();
 
     let result = cache.lookup(1, 2, 42, 0);
     assert!(result.is_some(), "cache hit after insert");
@@ -101,8 +103,12 @@ fn abi_hash_isolation() {
     fs::write(&oa, b"\x7fELF").unwrap();
     fs::write(&ob, b"\x7fELF").unwrap();
 
-    cache.insert(1, 2, 100, 0, "x86_64-unknown-none", &oa).unwrap();
-    cache.insert(1, 2, 200, 0, "x86_64-unknown-none", &ob).unwrap();
+    cache
+        .insert(1, 2, 100, 0, "x86_64-unknown-none", &oa)
+        .unwrap();
+    cache
+        .insert(1, 2, 200, 0, "x86_64-unknown-none", &ob)
+        .unwrap();
 
     let r1 = cache.lookup(1, 2, 100, 0).unwrap();
     assert_eq!(r1.object_path, oa);

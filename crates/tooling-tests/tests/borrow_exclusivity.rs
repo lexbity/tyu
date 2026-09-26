@@ -21,10 +21,7 @@ fn platform_arg() -> String {
         .unwrap()
         .parent()
         .unwrap();
-    format!(
-        "--platform={}",
-        workspace.join("runtime").display()
-    )
+    format!("--platform={}", workspace.join("runtime").display())
 }
 
 fn repo_sysroot() -> std::path::PathBuf {

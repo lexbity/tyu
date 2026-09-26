@@ -23,7 +23,7 @@ fn build_image(src: &str, dir_label: &str) -> std::path::PathBuf {
     let out_dir = dir.join("out");
 
     let s = Command::new(env!("CARGO"))
-        .current_dir(&workspace_root())
+        .current_dir(workspace_root())
         .args(["build", "-q", "-p", "langc"])
         .status()
         .expect("cargo build");
@@ -112,7 +112,7 @@ fn build_cache_skips_rebuild() {
     let out_dir = dir.join("out");
 
     let s = Command::new(env!("CARGO"))
-        .current_dir(&workspace_root())
+        .current_dir(workspace_root())
         .args(["build", "-q", "-p", "langc"])
         .status()
         .expect("cargo build");

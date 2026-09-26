@@ -1,8 +1,8 @@
 //! Platform pack discovery, introspection, scaffolding, linting, and the
 //! descriptor v2 model (parsing, validation, canonical hash, report).
 
-pub mod desc;
 mod config;
+pub mod desc;
 mod linker_script;
 mod lint;
 
@@ -11,22 +11,19 @@ pub use config::{
     capabilities_for_selection, capabilities_for_target, discover_platforms, discover_platforms_in,
     info_report, is_qemu_capable_selection, list_report, load_platform_pack,
     platform_pack_for_target, print_info, print_list, resolve_platform_selection, run,
-    DebugAgentSection, DebugSection, DeploySection, DeployStep, FeatureUnit, IsaEntry, MemoryRegion,
-    MemorySection, MetalSection, PlatformManifest, PlatformPack, PlatformSection,
+    DebugAgentSection, DebugSection, DeploySection, DeployStep, FeatureUnit, IsaEntry,
+    MemoryRegion, MemorySection, MetalSection, PlatformManifest, PlatformPack, PlatformSection,
     ResolvedPlatformSelection, SecureBootSection, TestRung, TestSection,
+};
+pub use desc::compile::{descriptor_file_path, ensure_compiled_descriptor, COMPILED_DESC_FILE};
+pub use desc::{
+    full_mask, load_descriptor, AccessKind, AllocatorSpec, ApertureKind, BarrierKind, Descriptor,
+    DescriptorError, DeviceMap, MemoryModel, MemoryRegionSpec, MmioAperture, ReadKind, RegisterRow,
+    ScopedSpec, WriteKind, DESCRIPTOR_SCHEMA, E_DESC_INVALID, E_DESC_UNKNOWN_KIND, MMIO_SEM_VER,
 };
 pub use linker_script::scaffold_platform_pack;
 pub use lint::{
     ensure_build_platform_interface, format_lint_outcome, lint_pack, LintError, LintOutcome,
-};
-pub use desc::{
-    load_descriptor, AccessKind, AllocatorSpec, BarrierKind, Descriptor, DescriptorError,
-    DeviceMap, MemoryModel, MemoryRegionSpec, MmioAperture, ReadKind, RegisterRow, ScopedSpec,
-    ApertureKind, WriteKind, DESCRIPTOR_SCHEMA, E_DESC_INVALID, E_DESC_UNKNOWN_KIND, MMIO_SEM_VER,
-    full_mask,
-};
-pub use desc::compile::{
-    ensure_compiled_descriptor, descriptor_file_path, COMPILED_DESC_FILE,
 };
 
 #[cfg(test)]

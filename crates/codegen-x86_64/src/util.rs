@@ -133,11 +133,7 @@ pub fn find_word_decl<'a>(m: &'a ModuleAst, src: &[u8], name: &[u8]) -> Option<&
 
 /// Find a `resource` declaration by name (BUG-004: resources are addressable
 /// through `&`/`&!`; the backend must emit the resource symbol address).
-pub fn find_resource_decl<'a>(
-    m: &'a ModuleAst,
-    src: &[u8],
-    name: &[u8],
-) -> Option<&'a DeclAst> {
+pub fn find_resource_decl<'a>(m: &'a ModuleAst, src: &[u8], name: &[u8]) -> Option<&'a DeclAst> {
     for d in m.decls.iter() {
         if d.kind != DeclKind::Resource {
             continue;
@@ -150,10 +146,7 @@ pub fn find_resource_decl<'a>(
 }
 
 /// Names of every `resource` declared in the module.
-pub fn resource_decl_names<'a>(
-    m: &'a ModuleAst,
-    src: &'a [u8],
-) -> impl Iterator<Item = &'a [u8]> {
+pub fn resource_decl_names<'a>(m: &'a ModuleAst, src: &'a [u8]) -> impl Iterator<Item = &'a [u8]> {
     m.decls.iter().filter_map(move |d| {
         if d.kind != DeclKind::Resource {
             return None;

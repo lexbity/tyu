@@ -521,8 +521,14 @@ fn representative_ops() -> [OpKind; SEMANTICS_ROWS] {
         OpKind::NotBool,
         OpKind::InterruptDisable,
         OpKind::InterruptEnable,
-        OpKind::LocalSet { slot: 0, ty: TY_I64 },
-        OpKind::LocalGet { slot: 0, ty: TY_I64 },
+        OpKind::LocalSet {
+            slot: 0,
+            ty: TY_I64,
+        },
+        OpKind::LocalGet {
+            slot: 0,
+            ty: TY_I64,
+        },
         OpKind::Cast {
             from: TY_I64,
             to: TY_I64,
@@ -579,9 +585,7 @@ fn representative_ops() -> [OpKind; SEMANTICS_ROWS] {
         OpKind::TrapIfFalse {
             code: TrapCode::ContractFail,
         },
-        OpKind::Br {
-            target: BlockId(0),
-        },
+        OpKind::Br { target: BlockId(0) },
         OpKind::BrIf {
             then_tgt: BlockId(0),
             else_tgt: BlockId(1),

@@ -50,9 +50,19 @@ pub fn render_strategy_matrix(
 ) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "# {backend} MMIO strategy matrix (design doc §5.6)");
-    for strategy in [WriteKind::Plain, WriteKind::W1s, WriteKind::W1c, WriteKind::Xor] {
+    for strategy in [
+        WriteKind::Plain,
+        WriteKind::W1s,
+        WriteKind::W1c,
+        WriteKind::Xor,
+    ] {
         for kind in [ApertureKind::Bus, ApertureKind::Emulated] {
-            for op in [MmioOp::Load, MmioOp::Store, MmioOp::LoadField, MmioOp::StoreField] {
+            for op in [
+                MmioOp::Load,
+                MmioOp::Store,
+                MmioOp::LoadField,
+                MmioOp::StoreField,
+            ] {
                 let cell = cell(strategy, kind, op);
                 let rendered = match cell {
                     StrategyCell::Supported { pattern } => pattern.to_string(),

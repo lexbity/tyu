@@ -61,7 +61,11 @@ end;
 /// Compile `BANK_MOD` and return the emitted `.asm` text plus the out dir.
 /// `checks_undischarged` selects the P4 verdict-driven mode (requires
 /// `verdicts`), otherwise langc defaults to `--checks=all`.
-fn compile_bank(tag: &str, checks_undischarged: bool, verdicts: Option<&Path>) -> (String, PathBuf) {
+fn compile_bank(
+    tag: &str,
+    checks_undischarged: bool,
+    verdicts: Option<&Path>,
+) -> (String, PathBuf) {
     let dir = fresh_dir(tag);
     let mod_path = dir.join("Bank.mod");
     fs::write(&mod_path, BANK_MOD).unwrap();
@@ -89,7 +93,9 @@ fn compile_bank(tag: &str, checks_undischarged: bool, verdicts: Option<&Path>) -
 }
 
 fn trap_count(asm: &str) -> usize {
-    asm.lines().filter(|l| l.trim() == "jmp __lang_trap").count()
+    asm.lines()
+        .filter(|l| l.trim() == "jmp __lang_trap")
+        .count()
 }
 
 /// Emit the module's obligations and return the `(id, id_hash)` of the first
@@ -168,8 +174,7 @@ fn discharged_param_site_removes_its_trap_pair() {
     // C2/C3s) → 1 open site → 2 traps.
     assert_eq!(base, 8);
     assert_eq!(
-        und,
-        2,
+        und, 2,
         "file-discharged C1 + engine-discharged C2/main-C3 leave only the ⊤-cast open"
     );
 
@@ -178,11 +183,12 @@ fn discharged_param_site_removes_its_trap_pair() {
     let echo_bytes = fs::read(out_dir.join("Bank.verdicts.inTree.json"))
         .expect("verdicts echo written under --write-obl");
     let echo = read_echo(&echo_bytes).expect("echo parses");
-    assert_eq!(echo.verdicts.records.len(), 3, "file C1 + in-tree C2 + main C3");
     assert_eq!(
-        echo.verdicts.records[0].status,
-        VerdictStatus::Discharged
+        echo.verdicts.records.len(),
+        3,
+        "file C1 + in-tree C2 + main C3"
     );
+    assert_eq!(echo.verdicts.records[0].status, VerdictStatus::Discharged);
     assert_eq!(echo.verdicts.records[0].method.as_deref(), Some("interval"));
     assert_eq!(echo.emitted.subtype_range, 1, "emitted == open sites");
     assert_eq!(echo.in_tree_verdicts, 2, "engine closed two sites");
@@ -204,7 +210,10 @@ fn undischarged_without_verdicts_is_e6402() {
         .arg(mod_path.to_str().unwrap())
         .output()
         .unwrap();
-    assert!(!st.status.success(), "undischarged without verdicts must fail");
+    assert!(
+        !st.status.success(),
+        "undischarged without verdicts must fail"
+    );
     let err = String::from_utf8_lossy(&st.stderr);
     assert!(err.contains("6402"), "E6402 gate: {err}");
     assert!(
@@ -238,7 +247,10 @@ fn hash_mismatched_record_fails_closed_and_counts_stale() {
     let echo_bytes = fs::read(out_dir.join("Bank.verdicts.inTree.json")).unwrap();
     let echo = read_echo(&echo_bytes).unwrap();
     assert_eq!(echo.verdicts.records.len(), 2, "the two in-tree discharges");
-    assert_eq!(echo.emitted.subtype_range, 2, "open sites keep their checks");
+    assert_eq!(
+        echo.emitted.subtype_range, 2,
+        "open sites keep their checks"
+    );
     assert_eq!(echo.stale_verdicts, 1, "the mismatched record is stale");
 }
 
@@ -259,7 +271,10 @@ fn unknown_site_record_is_ignored_as_stale() {
     let echo_bytes = fs::read(out_dir.join("Bank.verdicts.inTree.json")).unwrap();
     let echo = read_echo(&echo_bytes).unwrap();
     assert_eq!(echo.stale_verdicts, 1);
-    assert_eq!(echo.in_tree_verdicts, 2, "engine discharges unaffected by the file");
+    assert_eq!(
+        echo.in_tree_verdicts, 2,
+        "engine discharges unaffected by the file"
+    );
 }
 
 #[test]

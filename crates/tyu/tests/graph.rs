@@ -118,7 +118,7 @@ fn resolve_via_include_dirs() {
             "module Mylib;\n: lib-fn ( -- i64 ) 99 ;\nexport { lib-fn };\nend;\n",
         );
         let main_path = write_mod(&main_dir, "main", "module Main;\nimport Mylib { lib-fn };\n: main ( -- i64 ) lib-fn ;\nexport { main };\nend;\n");
-        let g = graph::resolve_graph(&main_path, &[lib_dir.clone()], None).unwrap();
+        let g = graph::resolve_graph(&main_path, std::slice::from_ref(&lib_dir), None).unwrap();
         assert_eq!(g.len(), 2);
         assert!(g.iter().any(|n| n.name == "Mylib"));
     })
@@ -194,7 +194,7 @@ fn include_dir_precedence() {
             "module Util;\n: helper ( -- i64 ) 99 ;\nexport { helper };\nend;\n",
         );
         let main_path = write_mod(&main_dir, "main", "module Main;\nimport Util { helper };\n: main ( -- i64 ) helper ;\nexport { main };\nend;\n");
-        let g = graph::resolve_graph(&main_path, &[lib_dir.clone()], None).unwrap();
+        let g = graph::resolve_graph(&main_path, std::slice::from_ref(&lib_dir), None).unwrap();
         assert_eq!(g.len(), 2, "G-3: must resolve Main + Util");
         let util_node = g.iter().find(|n| n.name == "Util").unwrap();
         assert_eq!(

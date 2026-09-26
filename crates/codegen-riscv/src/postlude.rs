@@ -1,8 +1,8 @@
 use crate::ophelpers::{slice_span, write_res_label, write_u32};
 use crate::RiscVBackend;
-use frontend::parse::DeclKind;
 use codegen_core::strings::decode_string_bytes;
 use codegen_core::{AsmMode, CodegenError};
+use frontend::parse::DeclKind;
 
 impl<'a> RiscVBackend<'a> {
     pub fn emit_postlude(&mut self) -> Result<(), CodegenError> {

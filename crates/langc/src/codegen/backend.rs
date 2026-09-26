@@ -10,6 +10,9 @@ use ir as lir;
 
 /// Enum dispatch wrapper: allows using any backend through a single
 /// `CodegenBackend` impl without heap allocation.
+// `large_enum_variant`: boxing the backend variants would heap-allocate,
+// defeating the allocation-free dispatch this wrapper exists to provide.
+#[allow(clippy::large_enum_variant)]
 pub enum Backend<'a> {
     X86(X86_64HostedBackend<'a>),
     Arm(ArmThumbBackend<'a>),

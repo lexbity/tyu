@@ -1,0 +1,11 @@
+{
+  "schema": "tyu.stmt-goldens/1.0",
+  "semantics": "tyu.ir-sem/1.0",
+  "stmt": "tyu.stmt/1.0",
+  "target": "x86_64-unknown-linux-gnu",
+  "model_semantics": "unmodeled",
+  "module": "OpenCast",
+  "statements": [
+    {"id": "OpenCast::main::subtype-range::0", "id_hash": "a710641f31065365", "statement_hash": "3ddc72eae438feef4c008840f7ef463bcbcccc375b5dbd41d2e01b8d77e22105"}
+  ]
+}

@@ -24,14 +24,6 @@ fn build_tools() {
     assert!(status.success(), "cargo build langc tyu failed");
 }
 
-fn build_mutated_dynamic_image(
-    target: common::DynamicTarget,
-    mutation: &str,
-    dir: &Path,
-) -> PathBuf {
-    build_mutated_dynamic_image_with_mod(target, mutation, dir, PASS_MOD)
-}
-
 fn build_mutated_dynamic_image_with_mod(
     target: common::DynamicTarget,
     mutation: &str,
@@ -149,10 +141,16 @@ fn dynamic_aperture_base_mismatch_traps_5219() {
             return;
         }
         build_tools();
-        let dir =
-            common::temp_dir(&format!("dynamic_negative_{}_aperture-base-mismatch", target.triple));
-        let image =
-            build_mutated_dynamic_image_with_mod(*target, "aperture-base-mismatch", &dir, MMIO_PASS_MOD);
+        let dir = common::temp_dir(&format!(
+            "dynamic_negative_{}_aperture-base-mismatch",
+            target.triple
+        ));
+        let image = build_mutated_dynamic_image_with_mod(
+            *target,
+            "aperture-base-mismatch",
+            &dir,
+            MMIO_PASS_MOD,
+        );
         let outcome =
             common::run_with_product_runner(target.target, &image, Duration::from_secs(10));
         assert!(

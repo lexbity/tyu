@@ -112,7 +112,11 @@ import Bank { withdraw };
 end;
 ";
 
-fn compile_obl_in(dir: &Path, source: &str, module: &str) -> Result<verifier::model::OblSet, String> {
+fn compile_obl_in(
+    dir: &Path,
+    source: &str,
+    module: &str,
+) -> Result<verifier::model::OblSet, String> {
     let mod_path = dir.join(format!("{module}.mod"));
     std::fs::write(&mod_path, source).unwrap();
     let out = Command::new(langc_exe())
@@ -149,9 +153,7 @@ fn callee_artifact_carries_predicate_facts_and_definition_site() {
     let pre = set
         .obligations
         .iter()
-        .find(|o| {
-            o.kind == verifier::model::Kind::ContractPre && o.site.word == "withdraw"
-        })
+        .find(|o| o.kind == verifier::model::Kind::ContractPre && o.site.word == "withdraw")
         .expect("withdraw must carry a callee-side contract-pre record");
     match &pre.formula {
         verifier::model::Formula::PredicateHolds { pred, .. } => {
@@ -179,10 +181,19 @@ fn caller_transcludes_the_callee_predicate() {
         .expect("App::main must carry a caller-side contract-pre record");
     match &pre.formula {
         verifier::model::Formula::PredicateHolds { pred, .. } => {
-            assert_eq!(pred.module, "Bank", "predicate must resolve to its callee module");
+            assert_eq!(
+                pred.module, "Bank",
+                "predicate must resolve to its callee module"
+            );
             assert_eq!(pred.name, "pct-in-range");
-            assert!(!pred.ir.is_empty(), "transclusion must carry the predicate IR");
-            assert!(!pred.ir_hash.is_empty(), "transclusion must carry the predicate hash");
+            assert!(
+                !pred.ir.is_empty(),
+                "transclusion must carry the predicate IR"
+            );
+            assert!(
+                !pred.ir_hash.is_empty(),
+                "transclusion must carry the predicate hash"
+            );
         }
         other => panic!("contract-pre must be PredicateHolds, got {other:?}"),
     }
@@ -190,13 +201,11 @@ fn caller_transcludes_the_callee_predicate() {
     // assumption EDGE to the callee's own `needs` obligation (the v2
     // `assumptions` member — there is no separate trusted-facts member).
     assert!(
-        pre.assumptions
-            .iter()
-            .any(|e| matches!(
-                e,
-                verifier::model::AssumptionEdge::Obligation { id, module }
-                    if id == "Bank::withdraw::contract-pre::0" && module == "Bank"
-            )),
+        pre.assumptions.iter().any(|e| matches!(
+            e,
+            verifier::model::AssumptionEdge::Obligation { id, module }
+                if id == "Bank::withdraw::contract-pre::0" && module == "Bank"
+        )),
         "transclusion must record the callee-dependency edge, got {:?}",
         pre.assumptions
     );

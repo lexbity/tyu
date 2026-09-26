@@ -174,6 +174,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         let word = {
             let arena = unsafe { &mut *self.arena };
             let mut qgen = IrWordGen::new(
+                self.target_spec,
                 self.src,
                 self.env,
                 self.subtypes,

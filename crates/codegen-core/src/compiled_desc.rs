@@ -525,7 +525,8 @@ pub fn decode_compiled_desc(bytes: &[u8]) -> Result<CompiledDescriptor, Compiled
             if name_len > 32 || bytes.len() < p + name_len {
                 return Err(CompiledDescError::BadNameLen);
             }
-            let name = ir::Atom::new(&bytes[p..p + name_len]).ok_or(CompiledDescError::BadNameLen)?;
+            let name =
+                ir::Atom::new(&bytes[p..p + name_len]).ok_or(CompiledDescError::BadNameLen)?;
             p += name_len;
             if bytes.len() < p + 5 {
                 return Err(CompiledDescError::Truncated);
@@ -742,7 +743,9 @@ fn aperture_kind_disc(k: MmioApertureKind) -> u8 {
 /// module's fused `access_mask` is a subset of it (E5223). Host-side only —
 /// the device loads the precomputed bytes.
 pub fn aperture_capability(cd: &CompiledDescriptor, aperture_id: u16) -> u8 {
-    use ir::{ACCESS_EFFECTFUL_READ, ACCESS_READ, ACCESS_W1C, ACCESS_W1S, ACCESS_WRITE, ACCESS_XOR};
+    use ir::{
+        ACCESS_EFFECTFUL_READ, ACCESS_READ, ACCESS_W1C, ACCESS_W1S, ACCESS_WRITE, ACCESS_XOR,
+    };
     let mut cap = 0u8;
     for d in cd.devices() {
         if d.aperture != aperture_id {
@@ -778,8 +781,10 @@ mod capability_tests {
     #[test]
     fn capability_derives_from_devices() {
         use ir::{ACCESS_EFFECTFUL_READ, ACCESS_READ, ACCESS_W1C, ACCESS_WRITE};
-        let mut cd = CompiledDescriptor::default();
-        cd.aperture_count = 1;
+        let mut cd = CompiledDescriptor {
+            aperture_count: 1,
+            ..Default::default()
+        };
         cd.apertures[0] = MmioApertureSpec {
             id: 0,
             name: Atom::new(b"apb").unwrap(),
@@ -806,7 +811,10 @@ mod capability_tests {
         cd.devices[0] = dev;
         cd.device_count = 1;
         let cap = aperture_capability(&cd, 0);
-        assert_eq!(cap, ACCESS_READ | ACCESS_WRITE | ACCESS_W1C | ACCESS_EFFECTFUL_READ);
+        assert_eq!(
+            cap,
+            ACCESS_READ | ACCESS_WRITE | ACCESS_W1C | ACCESS_EFFECTFUL_READ
+        );
         assert_eq!(aperture_capability(&cd, 1), 0);
     }
 }

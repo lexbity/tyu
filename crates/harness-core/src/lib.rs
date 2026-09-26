@@ -223,10 +223,8 @@ fn parse_output_legacy(stdout: &[u8]) -> OutputSummary {
                     completed = true;
                 }
             }
-            b'H' => {
-                if i + 4 < stdout.len() {
-                    high_slots = u32::from_le_bytes(stdout[i + 1..i + 5].try_into().unwrap());
-                }
+            b'H' if i + 4 < stdout.len() => {
+                high_slots = u32::from_le_bytes(stdout[i + 1..i + 5].try_into().unwrap());
             }
             _ => {}
         }

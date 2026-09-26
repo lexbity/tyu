@@ -16,7 +16,9 @@ use common::builtin_env;
 use frontend::parse::Parser;
 use verifier::model::{ExtractionCtx, Kind};
 
-fn compile_with_extraction(source: Vec<u8>) -> (Result<(), u32>, Vec<verifier::model::ResolvedVerdict>) {
+fn compile_with_extraction(
+    source: Vec<u8>,
+) -> (Result<(), u32>, Vec<verifier::model::ResolvedVerdict>) {
     thread::Builder::new()
         .stack_size(8 << 20)
         .spawn(move || {
@@ -30,8 +32,8 @@ fn compile_with_extraction(source: Vec<u8>) -> (Result<(), u32>, Vec<verifier::m
             env.push(common::entry(b"inputy", &[b"i64"], &[b"i64"]));
             env.push(common::entry(b"main", &[], &[b"i64"]));
             let subtypes: Vec<SubtypeInfo> = Vec::new();
-            let mut resources = semantics::typecheck::db::build_resource_db(&module, &src)
-                .expect("resource db");
+            let mut resources =
+                semantics::typecheck::db::build_resource_db(&module, &src).expect("resource db");
             let mut ctx = ExtractionCtx::new(b"P");
             match semantics::typecheck::for_each_ir_word(
                 &module,
@@ -40,6 +42,7 @@ fn compile_with_extraction(source: Vec<u8>) -> (Result<(), u32>, Vec<verifier::m
                 &subtypes,
                 semantics::typecheck::ChecksMode::Undischarged,
                 false,
+                verifier::target::TargetSpec::X86_64,
                 &mut resources,
                 None,
                 Some(&mut ctx),
@@ -86,7 +89,11 @@ fn constant_ensures_discharges_input_derived_stays_open() {
         .iter()
         .filter(|r| r.kind == Kind::ContractPost)
         .collect();
-    assert_eq!(posts.len(), 2, "two words with ensures → two contract-post records");
+    assert_eq!(
+        posts.len(),
+        2,
+        "two words with ensures → two contract-post records"
+    );
     // `five` (constant output) discharges; `inputy` (⊤ output) stays open.
     let five = posts
         .iter()

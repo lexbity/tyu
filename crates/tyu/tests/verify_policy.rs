@@ -34,7 +34,13 @@ fn fresh_dir(tag: &str) -> PathBuf {
 
 fn ensure_langc() {
     let s = Command::new(env!("CARGO"))
-        .current_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap())
+        .current_dir(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap(),
+        )
         .args(["build", "-q", "-p", "langc"])
         .status()
         .expect("cargo build");
@@ -163,7 +169,10 @@ fn run_test_suite(tag: &str, manifest: &str, files: &[(&str, &str)]) -> (bool, S
         ])
         .output()
         .expect("tyu test");
-    (out.status.success(), String::from_utf8_lossy(&out.stderr).into_owned())
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
 }
 
 #[test]
@@ -197,7 +206,10 @@ verify_policy = \"no-open\"
 ",
         &[("bad.mod", BAD_FIXTURE)],
     );
-    assert!(!ok, "an input-derived cast must keep an open obligation under no-open");
+    assert!(
+        !ok,
+        "an input-derived cast must keep an open obligation under no-open"
+    );
     assert!(
         stderr.contains("E6410") && stderr.contains("NoOpenBad"),
         "failure must surface E6410 naming the fixture:\n{stderr}"
@@ -219,5 +231,8 @@ axes = [\"arith\"]
 ",
         &[("ok.mod", OK_FIXTURE)],
     );
-    assert!(ok, "legacy (no policy) suite must keep its behavior:\n{stderr}");
+    assert!(
+        ok,
+        "legacy (no policy) suite must keep its behavior:\n{stderr}"
+    );
 }

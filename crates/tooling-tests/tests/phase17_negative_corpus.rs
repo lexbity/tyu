@@ -11,14 +11,13 @@ use std::process::Command;
 use common::*;
 use hosted::loader::HostedLoaderPlatform;
 use lmod::validate::Container;
-use loader_core::load::{
-    load_module, LoadedSet, E_ENC_AUTH_FAIL, E_ENC_BAD_HEADER, E_ENC_NO_KEY, E_ENC_REQUIRES_SIGNED,
-    E_ENC_UNSUPPORTED,
-};
+use loader_core::apertures::ApertureRegistry;
+use loader_core::load::{load_module, LoadedSet, E_ENC_REQUIRES_SIGNED, E_ENC_UNSUPPORTED};
 use loader_core::platform::TrustLevel;
 use loader_core::symbols::SymMap;
-use loader_core::apertures::ApertureRegistry;
 
+// Used only by the #[cfg(feature = "encryption")] tests; dead when the feature is off.
+#[allow(dead_code)]
 const SIGN_KEY: [u8; 32] = [0xab; 32];
 
 /// Set up the platform and global map for loading.
@@ -55,7 +54,13 @@ fn e_5200_abi_hash_mismatch() {
     // Use a wrong expected_abi_hash.
     let wrong_hash = 0xDEADBEEF;
     let (mut plat, mut map, mut set) = setup_loader(&container, wrong_hash);
-    let result = load_module(&container, &mut plat, &mut map, &mut set, &mut ApertureRegistry::new());
+    let result = load_module(
+        &container,
+        &mut plat,
+        &mut map,
+        &mut set,
+        &mut ApertureRegistry::new(),
+    );
     assert!(result.is_err(), "5200: mismatched abi_hash should fail");
     assert_eq!(result.unwrap_err(), 5200);
 }
@@ -99,7 +104,13 @@ fn e_5202_signed_flag_without_tier1() {
     let container = Container::parse(&raw).unwrap();
     let abi_hash = lmod::abi_hash::compute_abi_hash(1, 8, 64, lmod::modinfo::MODINFO_VER);
     let (mut plat, mut map, mut set) = setup_loader(&container, abi_hash);
-    let result = load_module(&container, &mut plat, &mut map, &mut set, &mut ApertureRegistry::new());
+    let result = load_module(
+        &container,
+        &mut plat,
+        &mut map,
+        &mut set,
+        &mut ApertureRegistry::new(),
+    );
     assert!(
         result.is_err(),
         "5202: signed flag without signature should fail"
@@ -126,7 +137,13 @@ fn e_5202_tier1_without_signature() {
     register_test_runtime_symtab(&mut global_map, ds_high_addr);
     let mut set = LoadedSet::<64>::new();
 
-    let result = load_module(&container, &mut plat_tier1, &mut global_map, &mut set, &mut ApertureRegistry::new());
+    let result = load_module(
+        &container,
+        &mut plat_tier1,
+        &mut global_map,
+        &mut set,
+        &mut ApertureRegistry::new(),
+    );
     assert!(
         result.is_err(),
         "5202: TrustLevel One without signature should fail"
@@ -155,7 +172,13 @@ fn e_5205_unresolved_symbol() {
     let mut global_map: SymMap<'_, 256> = SymMap::new();
     let mut set = LoadedSet::<64>::new();
 
-    let result = load_module(&container, &mut plat, &mut global_map, &mut set, &mut ApertureRegistry::new());
+    let result = load_module(
+        &container,
+        &mut plat,
+        &mut global_map,
+        &mut set,
+        &mut ApertureRegistry::new(),
+    );
     assert!(result.is_err(), "5205: unresolved symbol should fail");
     assert_eq!(result.unwrap_err(), 5205);
 }
@@ -176,7 +199,13 @@ fn e_5210_already_loaded() {
     let (mut plat, mut map, mut set) = setup_loader(&container, abi_hash);
 
     // First load should succeed.
-    let r1 = load_module(&container, &mut plat, &mut map, &mut set, &mut ApertureRegistry::new());
+    let r1 = load_module(
+        &container,
+        &mut plat,
+        &mut map,
+        &mut set,
+        &mut ApertureRegistry::new(),
+    );
     assert!(r1.is_ok(), "first load should succeed: {:?}", r1.err());
 
     // Second load should fail with already-loaded.
@@ -186,7 +215,13 @@ fn e_5210_already_loaded() {
 
     // Actually the issue is that the same abi_hash is in the loaded_set.
     // We parse the container again (different object but same abi_hash).
-    let r2 = load_module(&container2, &mut plat, &mut map, &mut set, &mut ApertureRegistry::new());
+    let r2 = load_module(
+        &container2,
+        &mut plat,
+        &mut map,
+        &mut set,
+        &mut ApertureRegistry::new(),
+    );
     assert!(r2.is_err(), "5210: duplicate load should fail");
     assert_eq!(r2.unwrap_err(), 5210);
 }
@@ -213,7 +248,13 @@ fn e_5213_encrypted_container_unsupported() {
     let container = Container::parse(&raw).unwrap();
     let abi_hash = lmod::abi_hash::compute_abi_hash(1, 8, 64, lmod::modinfo::MODINFO_VER);
     let (mut plat, mut map, mut set) = setup_loader(&container, abi_hash);
-    let result = load_module(&container, &mut plat, &mut map, &mut set, &mut ApertureRegistry::new());
+    let result = load_module(
+        &container,
+        &mut plat,
+        &mut map,
+        &mut set,
+        &mut ApertureRegistry::new(),
+    );
     assert!(result.is_err(), "encrypted container should fail");
     let err = result.unwrap_err();
     assert!(
@@ -246,7 +287,13 @@ fn e_5214_encrypted_at_tier0() {
     let container = Container::parse(&raw).unwrap();
     let abi_hash = lmod::abi_hash::compute_abi_hash(1, 8, 64, lmod::modinfo::MODINFO_VER);
     let (mut plat, mut map, mut set) = setup_loader(&container, abi_hash);
-    let result = load_module(&container, &mut plat, &mut map, &mut set, &mut ApertureRegistry::new());
+    let result = load_module(
+        &container,
+        &mut plat,
+        &mut map,
+        &mut set,
+        &mut ApertureRegistry::new(),
+    );
     assert!(
         result.is_err(),
         "5214: encrypted at TrustLevel Zero should fail"
@@ -258,6 +305,8 @@ fn e_5214_encrypted_at_tier0() {
 // Helpers for encrypted test artifacts
 // ---------------------------------------------------------------------------
 
+// Used only by the #[cfg(feature = "encryption")] tests; dead when the feature is off.
+#[allow(dead_code)]
 fn exe(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -271,6 +320,8 @@ fn exe(name: &str) -> PathBuf {
 
 /// Build, compile, pack, encrypt (fleet mode), and sign a test .mod.
 /// Returns the path to the signed artifact.
+// Used only by the #[cfg(feature = "encryption")] tests; dead when the feature is off.
+#[allow(dead_code)]
 fn build_encrypt_sign(source: &str, kek: &[u8; 32], label: &str) -> PathBuf {
     let dir = fresh_dir(label);
     std::fs::write(dir.join("M.mod"), source).unwrap();
@@ -486,7 +537,13 @@ fn e_5217_bad_enc_header() {
     let mut map: SymMap<'_, 256> = SymMap::new();
     register_test_runtime_symtab(&mut map, ds_high);
     let mut set = LoadedSet::<64>::new();
-    let result = load_module(&container, &mut plat, &mut map, &mut set, &mut ApertureRegistry::new());
+    let result = load_module(
+        &container,
+        &mut plat,
+        &mut map,
+        &mut set,
+        &mut ApertureRegistry::new(),
+    );
     assert!(result.is_err(), "5217: bad enc-header should fail");
     assert_eq!(result.unwrap_err(), E_ENC_BAD_HEADER);
 }

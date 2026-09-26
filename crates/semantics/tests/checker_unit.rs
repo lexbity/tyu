@@ -364,7 +364,7 @@ fn dup_of_dup() {
         &[],
         &env[..len],
         |w: &Word| {
-            assert!(w.blocks.len() >= 1);
+            assert!(!w.blocks.is_empty());
         },
     );
 }
@@ -478,7 +478,7 @@ fn while_with_body() {
 fn const_str_drop() {
     let (env, len) = builtin_env();
     check_ok_with(r#""a" drop"#, &[], &[], &env[..len], |w: &Word| {
-        assert!(w.blocks.len() >= 1);
+        assert!(!w.blocks.is_empty());
     });
 }
 

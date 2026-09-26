@@ -30,7 +30,7 @@ const SIGN_KEY: &str = "abababababababababababababababababababababababababababab
 fn golden_sign_plain_matches_committed() {
     // Ensure tools are built.
     let status = Command::new(env!("CARGO"))
-        .current_dir(&workspace_root())
+        .current_dir(workspace_root())
         .args(["build", "-q", "-p", "lmod-sign"])
         .status()
         .expect("cargo build");

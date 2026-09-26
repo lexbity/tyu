@@ -122,7 +122,7 @@ impl HostedLoaderPlatform {
 impl HostedLoaderPlatform {
     /// Release a previously allocated region (munmap).
     fn release_region<S>(&mut self, region: Region<S>) {
-        if region.len() > 0 && !region.as_ptr().is_null() {
+        if !region.is_empty() && !region.as_ptr().is_null() {
             unsafe {
                 c::munmap(region.as_mut_ptr() as *mut core::ffi::c_void, region.len());
             }

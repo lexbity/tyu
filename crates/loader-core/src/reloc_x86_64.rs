@@ -27,9 +27,8 @@ pub use crate::error::E_RELOC_UNSUPPORTED;
 /// * `kind`     — Relocation kind (`RelocKind::X86_64_64` = 1, etc.).
 /// * `sym_addr` — Resolved absolute address of the imported symbol.
 /// * `addend`   — Addend from the relocation entry (typically stored in
-///                the low bits of the site before patching; for import
-///                fixups the addend is already embedded in the code by
-///                the compiler).
+///   the low bits of the site before patching; for import fixups the
+///   addend is already embedded in the code by the compiler).
 ///
 /// # Safety
 ///
@@ -129,7 +128,7 @@ mod tests {
     #[test]
     fn pc32_writes_four_bytes() {
         let mut buf = vec![0u8; 16];
-        let p = buf.as_ptr() as u64 + 0; // site address in virtual memory
+        let p = buf.as_ptr() as u64; // site address in virtual memory
         let sym = 0x2000u64;
         let addend = 0i64;
         let expected = (sym as i64).wrapping_add(addend).wrapping_sub(p as i64);

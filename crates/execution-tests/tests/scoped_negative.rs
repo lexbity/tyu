@@ -120,7 +120,10 @@ fn run_8mb(f: impl FnOnce() + Send + 'static) {
         .unwrap();
 }
 
-fn assert_unsupported_scoped_enter(label: &str, emit: impl FnOnce(&Word) -> Result<(), CodegenError>) {
+fn assert_unsupported_scoped_enter(
+    label: &str,
+    emit: impl FnOnce(&Word) -> Result<(), CodegenError>,
+) {
     let w = word_with_other_class_scoped_enter();
     let err = emit(&w).expect_err("D-13: ScopedEnter on Other class must fail codegen");
     match err {
@@ -191,107 +194,107 @@ fn slice_and_region_ref_classes_still_emit() {
     // Build a Slice(u8) scoped word and assert it emits (no UnsupportedOp).
     run_8mb(|| {
         let mut types: FixedVec<Atom, 64> = FixedVec::new();
-    let mut type_sizes: FixedVec<u32, 64> = FixedVec::new();
-    let mut type_classes: FixedVec<ir::TypeClass, 64> = FixedVec::new();
-    let mut push_ty = |name: &[u8], size: u32| {
-        let atom = atom(name);
-        types.push(atom).unwrap();
-        type_sizes.push(size).unwrap();
-        type_classes.push(ir::TypeClass::class_of(name)).unwrap();
-    };
-    push_ty(b"", 0);
-    push_ty(b"i64", 8);
-    push_ty(b"Slice(u8)", 16);
-
-    let slice_ty = TypeId(2);
-    let mut sig = Sig::empty();
-    sig.in_len = 0;
-    sig.out_len = 1;
-    sig.outputs[0] = slice_ty;
-
-    let mut ops: FixedVec<Op, 96> = FixedVec::new();
-    ops.push(Op {
-        kind: OpKind::ScopedEnter {
-            ty: slice_ty,
-            len: 16,
-        },
-        span: Span::UNKNOWN,
-    })
-    .unwrap();
-    ops.push(Op {
-        kind: OpKind::Ret,
-        span: Span::UNKNOWN,
-    })
-    .unwrap();
-
-    let w = Word {
-        name: atom(b"scoped_slice"),
-        sig,
-        performs: EffectSet::empty(),
-        requires: CapSet::empty(),
-        bound: StackBound::ID,
-        entry: BlockId(0),
-        types,
-        type_sizes,
-        type_classes,
-        apertures: frontend::fixed::FixedVec::new(),
-        subtype_bases: FixedVec::new(),
-        blocks: {
-            let mut blocks: FixedVec<Block, 16> = FixedVec::new();
-            blocks
-                .push(Block {
-                    id: BlockId(0),
-                    entry_stack: FixedVec::new(),
-                    ops,
-                })
-                .unwrap();
-            blocks
-        },
-    };
-
-    for label in ["armv7m", "riscv32", "x86_64"] {
-        let result = match label {
-            "armv7m" => {
-                let mod_ast = empty_module(b"module m; end;");
-                let mut out = TestOut::new();
-                let mut backend = codegen_arm::ArmThumbBackend::new(
-                    &mod_ast,
-                    b"",
-                    &mut out,
-                    false,
-                    AsmMode::Executable,
-                );
-                backend.emit_word(&w)
-            }
-            "riscv32" => {
-                let mod_ast = empty_module(b"module m; end;");
-                let mut out = TestOut::new();
-                let mut backend = codegen_riscv::RiscVBackend::new(
-                    &mod_ast,
-                    b"",
-                    &mut out,
-                    false,
-                    AsmMode::Executable,
-                );
-                backend.emit_word(&w)
-            }
-            _ => {
-                let mod_ast = empty_module(b"module m; end;");
-                let mut out = TestOut::new();
-                let mut backend = codegen_x86_64::X86_64HostedBackend::new(
-                    &mod_ast,
-                    b"",
-                    &mut out,
-                    false,
-                    AsmMode::Executable,
-                );
-                backend.emit_word(&w)
-            }
+        let mut type_sizes: FixedVec<u32, 64> = FixedVec::new();
+        let mut type_classes: FixedVec<ir::TypeClass, 64> = FixedVec::new();
+        let mut push_ty = |name: &[u8], size: u32| {
+            let atom = atom(name);
+            types.push(atom).unwrap();
+            type_sizes.push(size).unwrap();
+            type_classes.push(ir::TypeClass::class_of(name)).unwrap();
         };
-        assert!(
-            result.is_ok(),
-            "{label}: Slice-class ScopedEnter must still emit, got {result:?}"
-        );
-    }
+        push_ty(b"", 0);
+        push_ty(b"i64", 8);
+        push_ty(b"Slice(u8)", 16);
+
+        let slice_ty = TypeId(2);
+        let mut sig = Sig::empty();
+        sig.in_len = 0;
+        sig.out_len = 1;
+        sig.outputs[0] = slice_ty;
+
+        let mut ops: FixedVec<Op, 96> = FixedVec::new();
+        ops.push(Op {
+            kind: OpKind::ScopedEnter {
+                ty: slice_ty,
+                len: 16,
+            },
+            span: Span::UNKNOWN,
+        })
+        .unwrap();
+        ops.push(Op {
+            kind: OpKind::Ret,
+            span: Span::UNKNOWN,
+        })
+        .unwrap();
+
+        let w = Word {
+            name: atom(b"scoped_slice"),
+            sig,
+            performs: EffectSet::empty(),
+            requires: CapSet::empty(),
+            bound: StackBound::ID,
+            entry: BlockId(0),
+            types,
+            type_sizes,
+            type_classes,
+            apertures: frontend::fixed::FixedVec::new(),
+            subtype_bases: FixedVec::new(),
+            blocks: {
+                let mut blocks: FixedVec<Block, 16> = FixedVec::new();
+                blocks
+                    .push(Block {
+                        id: BlockId(0),
+                        entry_stack: FixedVec::new(),
+                        ops,
+                    })
+                    .unwrap();
+                blocks
+            },
+        };
+
+        for label in ["armv7m", "riscv32", "x86_64"] {
+            let result = match label {
+                "armv7m" => {
+                    let mod_ast = empty_module(b"module m; end;");
+                    let mut out = TestOut::new();
+                    let mut backend = codegen_arm::ArmThumbBackend::new(
+                        &mod_ast,
+                        b"",
+                        &mut out,
+                        false,
+                        AsmMode::Executable,
+                    );
+                    backend.emit_word(&w)
+                }
+                "riscv32" => {
+                    let mod_ast = empty_module(b"module m; end;");
+                    let mut out = TestOut::new();
+                    let mut backend = codegen_riscv::RiscVBackend::new(
+                        &mod_ast,
+                        b"",
+                        &mut out,
+                        false,
+                        AsmMode::Executable,
+                    );
+                    backend.emit_word(&w)
+                }
+                _ => {
+                    let mod_ast = empty_module(b"module m; end;");
+                    let mut out = TestOut::new();
+                    let mut backend = codegen_x86_64::X86_64HostedBackend::new(
+                        &mod_ast,
+                        b"",
+                        &mut out,
+                        false,
+                        AsmMode::Executable,
+                    );
+                    backend.emit_word(&w)
+                }
+            };
+            assert!(
+                result.is_ok(),
+                "{label}: Slice-class ScopedEnter must still emit, got {result:?}"
+            );
+        }
     });
 }

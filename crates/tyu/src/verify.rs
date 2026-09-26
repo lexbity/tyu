@@ -31,11 +31,11 @@
 use std::path::{Path, PathBuf};
 
 use verifier::codec::read_obl;
-use verifier::model::{Formula, Kind, Obligation, OblSet};
+use verifier::model::{Formula, Kind, OblSet, Obligation};
 use verifier::report::{
-    AssumedObligation, ClassAccounting, EmittedChecks, IsrContextAccounting,
-    MainContextAccounting, ModuleAccounting, OpenObligation, ProvablyFailing, RetainedObligation,
-    StackContextAccounting, ToolInfo, TrustedAssumption, VerifyReport,
+    AssumedObligation, ClassAccounting, EmittedChecks, IsrContextAccounting, MainContextAccounting,
+    ModuleAccounting, OpenObligation, ProvablyFailing, RetainedObligation, StackContextAccounting,
+    ToolInfo, TrustedAssumption, VerifyReport,
 };
 use verifier::verdict::{read_echo, Echo, VerdictStatus};
 
@@ -106,7 +106,15 @@ pub fn compose_and_write_report(
     } else {
         &GUARDS_RETAINED
     };
-    let report = compose(ctx, module_obl, root_module, verify, policy, module_loading, elision)?;
+    let report = compose(
+        ctx,
+        module_obl,
+        root_module,
+        verify,
+        policy,
+        module_loading,
+        elision,
+    )?;
     let bytes = verifier::codec::encode_report(&report)
         .map_err(|e| TyuError::Build(format!("verify-report encode failed: {e:?}")))?;
     let path = ctx.out_dir.join("verify-report.json");
@@ -187,11 +195,13 @@ pub(crate) fn compose(
 
     // Per-module class accounting + open/assumed lists + emitted/stale sums.
     let mut stale_verdicts: u32 = 0;
-    let mut emitted = EmittedChecks::default();
     // Slice P7: the honesty field names what the produced image actually
     // contains — the two-pass builder forwards the codegen flag exactly when
     // this is false (FR-16: report MUST agree with the object).
-    emitted.data_stack_guards = elision.data_stack_guards_present;
+    let mut emitted = EmittedChecks {
+        data_stack_guards: elision.data_stack_guards_present,
+        ..Default::default()
+    };
     for (i, (name, set)) in sets.iter().enumerate() {
         let echo = echoes[i].1.as_ref();
         let classes = classes_for(set.as_ref(), echo);
@@ -230,8 +240,12 @@ pub(crate) fn compose(
             emitted.mmio_bounds += mmio;
         }
     }
-    report.open.sort_by(|a, b| a.module.cmp(&b.module).then_with(|| a.id.cmp(&b.id)));
-    report.assumed.sort_by(|a, b| a.module.cmp(&b.module).then_with(|| a.id.cmp(&b.id)));
+    report
+        .open
+        .sort_by(|a, b| a.module.cmp(&b.module).then_with(|| a.id.cmp(&b.id)));
+    report
+        .assumed
+        .sort_by(|a, b| a.module.cmp(&b.module).then_with(|| a.id.cmp(&b.id)));
     report.retained.sort_by(|a, b| a.id.cmp(&b.id));
 
     // Slice P6 (FR-21): under `module-loading`, the compiler force-opens
@@ -264,25 +278,21 @@ pub(crate) fn compose(
     // grant (trusted); the derived main geometry is listed as a *runtime*
     // fact for transparency (it is abi-hash-checked, not trusted-on-faith).
     if main.verdict == "discharged" && main.budget > 0 {
-        report
-            .assumptions_trusted
-            .push(TrustedAssumption {
-                kind: "runtime".to_string(),
-                what: format!(
-                    "derived N_main={} ({} bytes / {} slot_bytes from __lang_ds_base/__lang_ds_limit)",
-                    main.budget,
-                    main.budget as u64 * ctx.target.spec().slot_bytes as u64,
-                    ctx.target.spec().slot_bytes,
-                ),
-            });
+        report.assumptions_trusted.push(TrustedAssumption {
+            kind: "runtime".to_string(),
+            what: format!(
+                "derived N_main={} ({} bytes / {} slot_bytes from __lang_ds_base/__lang_ds_limit)",
+                main.budget,
+                main.budget as u64 * ctx.target.spec().slot_bytes as u64,
+                ctx.target.spec().slot_bytes,
+            ),
+        });
     }
     if isr.verdict == "discharged" && isr.handlers > 0 {
-        report
-            .assumptions_trusted
-            .push(TrustedAssumption {
-                kind: "descriptor".to_string(),
-                what: format!("isr_stack_slots={}", isr.budget),
-            });
+        report.assumptions_trusted.push(TrustedAssumption {
+            kind: "descriptor".to_string(),
+            what: format!("isr_stack_slots={}", isr.budget),
+        });
     }
     // The aperture sizes used by mmio-bounds discharges come from each
     // record's own `assumptions` (T2) — the composition re-reads them.
@@ -291,7 +301,9 @@ pub(crate) fn compose(
             collect_mmio_sizes(set, name, &mut report.assumptions_trusted);
         }
     }
-    report.assumptions_trusted.sort_by(|a, b| a.what.cmp(&b.what));
+    report
+        .assumptions_trusted
+        .sort_by(|a, b| a.what.cmp(&b.what));
 
     Ok(report)
 }
@@ -407,9 +419,11 @@ pub(crate) fn main_context(
             verdict: "n/a".to_string(),
         };
     };
-    let root_set = sets.iter().find(|(n, _)| n == root).and_then(|(_, s)| s.as_ref());
-    let main_word = root_set
-        .and_then(|set| set.facts.words.iter().find(|w| w.name == "main"));
+    let root_set = sets
+        .iter()
+        .find(|(n, _)| n == root)
+        .and_then(|(_, s)| s.as_ref());
+    let main_word = root_set.and_then(|set| set.facts.words.iter().find(|w| w.name == "main"));
     let Some(word) = main_word else {
         return MainContextAccounting {
             high: 0,
@@ -499,8 +513,10 @@ fn resolved_status(o: &Obligation, echo: Option<&Echo>) -> VerdictStatus {
 /// Per-module class accounting over all five kinds, in fixed order, from the
 /// resolved verdicts. A module without an artifact yields zeros.
 fn classes_for(set: Option<&OblSet>, echo: Option<&Echo>) -> Vec<ClassAccounting> {
-    let mut classes: Vec<ClassAccounting> =
-        KIND_ORDER.iter().map(|k| ClassAccounting::zero(k)).collect();
+    let mut classes: Vec<ClassAccounting> = KIND_ORDER
+        .iter()
+        .map(|k| ClassAccounting::zero(k))
+        .collect();
     let Some(set) = set else { return classes };
     for o in &set.obligations {
         let idx = o.kind.idx();
@@ -536,13 +552,12 @@ fn collect_open(set: &OblSet, echo: Option<&Echo>, module: &str, out: &mut Vec<O
         if resolved_status(o, echo) != VerdictStatus::Open {
             continue;
         }
-        let reason = echo
-            .and_then(|e| {
-                e.open_reasons
-                    .iter()
-                    .find(|r| r.id == o.id)
-                    .map(|r| r.reason.clone())
-            });
+        let reason = echo.and_then(|e| {
+            e.open_reasons
+                .iter()
+                .find(|r| r.id == o.id)
+                .map(|r| r.reason.clone())
+        });
         out.push(OpenObligation {
             id: o.id.clone(),
             kind: o.kind.as_str().to_string(),
@@ -583,7 +598,12 @@ fn collect_provably_failing(
 
 /// Every obligation resolving assumed lands in the `assumed` list with its
 /// recorded justification (P4, FR-15).
-fn collect_assumed(set: &OblSet, echo: Option<&Echo>, module: &str, out: &mut Vec<AssumedObligation>) {
+fn collect_assumed(
+    set: &OblSet,
+    echo: Option<&Echo>,
+    module: &str,
+    out: &mut Vec<AssumedObligation>,
+) {
     for o in &set.obligations {
         let Some(e) = echo else { continue };
         let Some(r) = e.verdicts.lookup(&o.id, &o.id_hash) else {
@@ -648,12 +668,16 @@ fn enforce_policy(report: &VerifyReport, policy: VerifyPolicy) -> Result<(), Tyu
     match policy {
         VerifyPolicy::OpenOk => Ok(()),
         VerifyPolicy::NoOpen | VerifyPolicy::NoOpenNoAssumptions => {
-            let fails_assumed = policy == VerifyPolicy::NoOpenNoAssumptions && !report.assumed.is_empty();
+            let fails_assumed =
+                policy == VerifyPolicy::NoOpenNoAssumptions && !report.assumed.is_empty();
             if report.open.is_empty() && !fails_assumed {
                 return Ok(());
             }
             if !report.open.is_empty() {
-                eprintln!("tyu: error[E6410]: open obligations (--verify-policy={}):", policy.as_str());
+                eprintln!(
+                    "tyu: error[E6410]: open obligations (--verify-policy={}):",
+                    policy.as_str()
+                );
                 for o in report.open.iter().take(64) {
                     eprintln!(
                         "  {} — {}::{}.{} line {}",
@@ -687,7 +711,11 @@ fn enforce_policy(report: &VerifyReport, policy: VerifyPolicy) -> Result<(), Tyu
             Err(TyuError::Build(format!(
                 "E6410: {} open obligations and {} assumed under --verify-policy={}",
                 report.open.len(),
-                if fails_assumed { report.assumed.len() } else { 0 },
+                if fails_assumed {
+                    report.assumed.len()
+                } else {
+                    0
+                },
                 policy.as_str(),
             )))
         }
@@ -708,7 +736,11 @@ mod tests {
             b"main",
             StackBound {
                 net: 0,
-                high: if top { High::Top } else { High::Slots(main_high) },
+                high: if top {
+                    High::Top
+                } else {
+                    High::Slots(main_high)
+                },
             },
             EffectSet::empty(),
         );

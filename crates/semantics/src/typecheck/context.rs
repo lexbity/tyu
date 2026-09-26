@@ -175,6 +175,12 @@ pub struct ContextStack {
     pub ambient_forbids: EffectSet,
 }
 
+impl Default for ContextStack {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ContextStack {
     pub const fn new() -> Self {
         const EMPTY: ContextFrame = ContextFrame {
@@ -289,7 +295,7 @@ mod tests {
     #[test]
     fn matrix_rows_are_distinct() {
         let mut kinds: Vec<ContextKind> = MATRIX.iter().map(|r| r.kind).collect();
-        kinds.sort_by(|a, b| (*a as u8).cmp(&(*b as u8)));
+        kinds.sort_by_key(|a| *a as u8);
         kinds.dedup();
         assert_eq!(kinds.len(), MATRIX.len(), "duplicate ContextKind in MATRIX");
     }

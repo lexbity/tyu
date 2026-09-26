@@ -28,7 +28,7 @@ pub use crate::error::E_RELOC_UNSUPPORTED;
 /// * `kind`     — Relocation kind.
 /// * `sym_addr` — Resolved absolute address of the imported symbol.
 /// * `addend`   — Addend (typically -4 for PC-relative ARM relocs,
-///                0 for absolute).
+///   0 for absolute).
 pub fn apply_import_reloc(
     buf: &mut [u8],
     site_off: usize,
@@ -120,7 +120,7 @@ fn encode_thumb_bl(insn: &mut [u8], offset: i64) -> Result<(), ()> {
     }
     let half = offset >> 1; // convert bytes to halfwords
                             // Check signed 24-bit range (±16MB)
-    if half > 0x7FFFFF || half < -0x800000 {
+    if !(-0x800000..=0x7FFFFF).contains(&half) {
         return Err(());
     }
 

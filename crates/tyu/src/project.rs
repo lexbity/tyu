@@ -113,10 +113,10 @@ pub fn resolve_target(name: &str, manifest: &ProjectManifest) -> Option<codegen_
 /// Get toolchain config for a target, checking toolchain section first,
 /// then falling back to manifest target aliases.
 #[allow(dead_code)]
-pub fn toolchain_for_target<'a>(
+pub fn toolchain_for_target(
     target: codegen_core::Target,
-    manifest: &'a ProjectManifest,
-) -> Option<&'a ToolchainConfig> {
+    manifest: &ProjectManifest,
+) -> Option<&ToolchainConfig> {
     let triple = std::str::from_utf8(target.triple()).ok()?;
     manifest.toolchain.get(triple)
 }
