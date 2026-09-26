@@ -984,6 +984,44 @@ done
 [ "$g27_fail" -eq 0 ] && msg $GREEN "  G27: per-target vector corpus (tyu.vec/1) present for all four triples"
 failures=$((failures + g27_fail))
 
+# --- G32: PLAN-VERIFY-3 P4.2 — T-C substrate surface ---
+# T-C (the first registry theorem) must be *present as a theorem,* not as a
+# label: the concrete semantics file, the stack-algebra file with the
+# registry theorem names, the axiom-audit surface, the stackmeta goldens
+# (the empirical hook), and the exporting tooling-test must all exist. The
+# *proving* is the blocking port gate (`ci/port.sh`); this gate pins the
+# surface in the regular Rust CI.
+g32_fail=0
+PORT_DIR=verification/ports/lean
+for f in Tyu/Step.lean Tyu/Sound.lean AxiomAudit.lean; do
+    if [ ! -f "$PORT_DIR/$f" ]; then
+        msg $RED "  G32 FAIL: $PORT_DIR/$f missing (P4 substrate)"
+        g32_fail=1
+    fi
+done
+if ! grep -q "theorem stack_algebra_sequence" "$PORT_DIR/Tyu/Sound.lean" || \
+   ! grep -q "theorem stack_algebra_walk" "$PORT_DIR/Tyu/Sound.lean" || \
+   ! grep -q "theorem stepOk_length" "$PORT_DIR/Tyu/Sound.lean"; then
+    msg $RED "  G32 FAIL: T-C registry theorem names missing from Tyu/Sound.lean"
+    g32_fail=1
+fi
+if [ ! -f crates/tooling-tests/tests/stackmeta_export.rs ]; then
+    msg $RED "  G32 FAIL: stackmeta exporter test missing (T-C empirical hook)"
+    g32_fail=1
+fi
+sm_count=0
+for triple in x86_64-unknown-linux-gnu x86_64-unknown-none armv7m-unknown-none riscv32-unknown-none; do
+    for f in test-goldens/stackmeta/$triple/*.json; do
+        [ -f "$f" ] && sm_count=$((sm_count + 1))
+    done
+done
+if [ "$sm_count" -lt 20 ]; then
+    msg $RED "  G32 FAIL: stackmeta goldens thin ($sm_count files; expected ≥ 20 across four triples)"
+    g32_fail=1
+fi
+[ "$g32_fail" -eq 0 ] && msg $GREEN "  G32: T-C substrate (Step + Sound theorems, axiom audit, stackmeta goldens + exporter)"
+failures=$((failures + g32_fail))
+
 # --- G28: PLAN-VERIFY-3 §P0 — workspace bar: rustfmt ---
 # Every slice ends `cargo fmt --check` green (§P0 workspace bar). The gate is
 # the check itself — mechanical, zero judgement, no bypass path short of

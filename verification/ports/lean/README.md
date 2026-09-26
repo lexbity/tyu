@@ -67,6 +67,9 @@ Or, from the repo root: `bash ci/port.sh` (blocking CI gate).
 | `SEMANTICS_total` completeness | P3.1 | done (axiom-free, `by decide`) |
 | Drift lock (`TYU_EXPORT_PORTS=1` + byte-compare) | P3.1 | done |
 | Conformance runner over `tyu.vec/1` (236 vectors × 4 triples) | P3.2 | done — zero divergence |
-| `ci/port.sh` port gate | P3.2 | done |
-| Concrete `Tyu/Step.lean` semantics + T-C | P4 | next |
-| Gen renderer (`Tyu/Gen/`), harvest, axiom audit | P5/P7 | next |
+| `ci/port.sh` port gate | P3.2 | done (conformance + axiom audit + stackmeta) |
+| Concrete `Tyu/Step.lean` semantics + `Terminates` | P4.1 | done |
+| T-C: stack algebra (`Tyu/Sound.lean`, monoid + per-op + walk + net-zero loop) | P4.2 | done — axiom audit green (permitted set only) |
+| T-C empirical hook (`--level stackmeta`, `tyu.stackmeta/1` goldens) | P4.2 | done — 52 words, zero divergence |
+| Registry + trust documents rev 1 | P4.3 | done — `devdocs/plans/design-doc/formal-semantics-core.md`, `verification-trust.md`, `devdocs/plans/REVIEW.md` |
+| Gen renderer (`Tyu/Gen/`), harvest, axiom audit exe | P5/P7 | next |

@@ -316,6 +316,44 @@ fn render_semantics_lean(rows: &[SemanticsRow]) -> String {
     out.push_str(&format!(
         "theorem row_count : rows.length = {SEMANTICS_ROWS} := by\n  decide\n\n"
     ));
+    // The per-op stack effect, generated from the same rows (one per form):
+    // T-C (stack algebra, P4) proves the concrete step against these.
+    out.push_str(
+        "/-- The table's stack effect, per form (P4's T-C substrate):\n\
+         `pops` slots consumed, `pushes` produced, `net = pushes - pops`. -/\n\
+         def OpForm.pops : OpForm → Nat\n",
+    );
+    for row in rows {
+        out.push_str(&format!(
+            "  | .{} => {}\n",
+            op_ctor(row.mnemonic).expect(REGISTRY_MISSING),
+            row.pops
+        ));
+    }
+    out.push_str("\ndef OpForm.pushes : OpForm → Nat\n");
+    for row in rows {
+        out.push_str(&format!(
+            "  | .{} => {}\n",
+            op_ctor(row.mnemonic).expect(REGISTRY_MISSING),
+            row.pushes
+        ));
+    }
+    out.push_str("\ndef OpForm.net : OpForm → Int\n");
+    for row in rows {
+        out.push_str(&format!(
+            "  | .{} => {}\n",
+            op_ctor(row.mnemonic).expect(REGISTRY_MISSING),
+            row.pushes as i64 - row.pops as i64
+        ));
+    }
+    out.push_str("\n-- sanity pin: the generated table is internally consistent\n");
+    out.push_str(
+        "theorem pops_eq_row : ∀ f : OpForm, ∃ r : SemanticsRow, r ∈ rows ∧ r.form = f ∧ r.pops = OpForm.pops f := by\n  intro f\n  cases f with\n"
+    );
+    for row in rows {
+        let ctor = op_ctor(row.mnemonic).expect(REGISTRY_MISSING);
+        out.push_str(&format!("    | {ctor} => decide\n"));
+    }
     out.push_str(
         "/-- Completeness: every op form has a row in the table (P3.1's\n\
          `SEMANTICS_total`; kernel-checked by `decide` — a hand-edited generated\n\

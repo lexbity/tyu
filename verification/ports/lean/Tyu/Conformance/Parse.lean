@@ -40,6 +40,10 @@ def asArr : Json → Option (List Json)
   | .jarr xs => some xs
   | _ => none
 
+def fieldObj : Json → Option (List (String × Json))
+  | .jobj flds => some flds
+  | _ => none
+
 end Json
 
 /-- Split a string on a character. -/

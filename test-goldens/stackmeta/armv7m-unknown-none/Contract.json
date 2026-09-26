@@ -1,0 +1,12 @@
+{
+  "schema": "tyu.stackmeta/1",
+  "semantics": "tyu.ir-sem/1.0",
+  "target": "armv7m-unknown-none",
+  "model_semantics": "unmodeled",
+  "module": "Contract",
+  "words": [
+    {"name": "pct-in-range", "net": 1, "high": 2, "top": false, "blocks": "block b0\nlocal_set 0\nlocal_get 0\nconst_i64 0\ncmp_ge\ntrap_if_false SUBTYPE_FAIL\nlocal_get 0\nconst_i64 100\ncmp_le\ntrap_if_false SUBTYPE_FAIL\nlocal_get 0\ndup Percent\nconst_i64 0\ncmp_ge\nbr_if b1 b2\nblock b1\ndup Percent\nconst_i64 100\ncmp_le\nbr b3\nblock b2\nconst_i64 0\nconst_i64 0\ncmp_eq\nbr b3\nblock b3\nlocal_set 3\nlocal_set 2\nlocal_get 2\nconst_i64 0\ncmp_ge\ntrap_if_false SUBTYPE_FAIL\nlocal_get 2\nconst_i64 100\ncmp_le\ntrap_if_false SUBTYPE_FAIL\nlocal_get 2\nlocal_get 3\nret\n", "calls": {}},
+    {"name": "withdraw", "net": 0, "high": 2, "top": false, "blocks": "block b0\nlocal_set 0\nlocal_get 0\nconst_i64 0\ncmp_ge\ntrap_if_false SUBTYPE_FAIL\nlocal_get 0\nconst_i64 100\ncmp_le\ntrap_if_false SUBTYPE_FAIL\nlocal_get 0\ncall pct-in-range\ntrap_if_false CONTRACT_FAIL\ndrop Percent\nconst_bool true\nlocal_set 2\nlocal_get 2\nret\n", "calls": {"pct-in-range": 1}},
+    {"name": "main", "net": 1, "high": 3, "top": false, "blocks": "block b0\nconst_i64 50\ncast Percent\ndup Percent\nlocal_set 1\nlocal_get 1\nconst_i64 0\ncmp_ge\ntrap_if_false SUBTYPE_FAIL\nlocal_get 1\nconst_i64 100\ncmp_le\ntrap_if_false SUBTYPE_FAIL\ncall withdraw\ndrop bool\nconst_i64 0\nlocal_set 1\nlocal_get 1\nret\n", "calls": {"withdraw": 0}}
+  ]
+}

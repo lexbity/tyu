@@ -1,0 +1,12 @@
+{
+  "schema": "tyu.stackmeta/1",
+  "semantics": "tyu.ir-sem/1.0",
+  "target": "armv7m-unknown-none",
+  "model_semantics": "unmodeled",
+  "module": "EventLoop",
+  "words": [
+    {"name": "poll", "net": 0, "high": 1, "top": false, "blocks": "block b0\nconst_i64 1\ndrop i64\nret\n", "calls": {}},
+    {"name": "event-loop", "net": 0, "high": 1, "top": false, "blocks": "block b0\nbr b1\nblock b1\nconst_bool true\nbr_if b2 b3\nblock b2\ncall poll\nbr b1\nblock b3\nret\n", "calls": {"poll": 0}},
+    {"name": "main", "net": 1, "high": 1, "top": false, "blocks": "block b0\ncall event-loop\nconst_i64 0\nlocal_set 1\nlocal_get 1\nret\n", "calls": {"event-loop": 0}}
+  ]
+}

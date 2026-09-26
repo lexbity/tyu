@@ -1,0 +1,12 @@
+{
+  "schema": "tyu.stackmeta/1",
+  "semantics": "tyu.ir-sem/1.0",
+  "target": "x86_64-unknown-none",
+  "model_semantics": "unmodeled",
+  "module": "Bank",
+  "words": [
+    {"name": "clamp", "net": 0, "high": 2, "top": false, "blocks": "block b0\nlocal_set 0\nlocal_get 0\ndup i64\nconst_i64 100\ncmp_gt\nbr_if b1 b2\nblock b1\ndrop i64\nconst_i64 100\nbr b3\nblock b2\nbr b3\nblock b3\ndup i64\nconst_i64 0\ncmp_lt\nbr_if b4 b5\nblock b4\ndrop i64\nconst_i64 0\nbr b6\nblock b5\nbr b6\nblock b6\ncast Percent\ndup Percent\nlocal_set 2\nlocal_get 2\nconst_i64 0\ncmp_ge\ntrap_if_false SUBTYPE_FAIL\nlocal_get 2\nconst_i64 100\ncmp_le\ntrap_if_false SUBTYPE_FAIL\nlocal_set 2\nlocal_get 2\nconst_i64 0\ncmp_ge\ntrap_if_false SUBTYPE_FAIL\nlocal_get 2\nconst_i64 100\ncmp_le\ntrap_if_false SUBTYPE_FAIL\nlocal_get 2\nret\n", "calls": {}},
+    {"name": "bounded_inc", "net": 0, "high": 2, "top": false, "blocks": "block b0\nlocal_set 0\nlocal_get 0\nconst_i64 0\ncmp_ge\ntrap_if_false SUBTYPE_FAIL\nlocal_get 0\nconst_i64 100\ncmp_le\ntrap_if_false SUBTYPE_FAIL\nlocal_get 0\nconst_i64 1\nadd_i64\ncast Percent\ndup Percent\nlocal_set 2\nlocal_get 2\nconst_i64 0\ncmp_ge\ntrap_if_false SUBTYPE_FAIL\nlocal_get 2\nconst_i64 100\ncmp_le\ntrap_if_false SUBTYPE_FAIL\nlocal_set 2\nlocal_get 2\nconst_i64 0\ncmp_ge\ntrap_if_false SUBTYPE_FAIL\nlocal_get 2\nconst_i64 100\ncmp_le\ntrap_if_false SUBTYPE_FAIL\nlocal_get 2\nret\n", "calls": {}},
+    {"name": "main", "net": 1, "high": 3, "top": false, "blocks": "block b0\nconst_i64 50\ncast Percent\ndup Percent\nlocal_set 1\nlocal_get 1\nconst_i64 0\ncmp_ge\ntrap_if_false SUBTYPE_FAIL\nlocal_get 1\nconst_i64 100\ncmp_le\ntrap_if_false SUBTYPE_FAIL\ncall bounded_inc\ncast Counter\ndup Counter\nlocal_set 1\nlocal_get 1\nconst_i64 0\ncmp_ge\ntrap_if_false SUBTYPE_FAIL\nlocal_get 1\nconst_i64 1000000\ncmp_le\ntrap_if_false SUBTYPE_FAIL\nlocal_set 1\nlocal_get 1\nconst_i64 0\ncmp_ge\ntrap_if_false SUBTYPE_FAIL\nlocal_get 1\nconst_i64 1000000\ncmp_le\ntrap_if_false SUBTYPE_FAIL\nlocal_get 1\nret\n", "calls": {"bounded_inc": 0}}
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "schema": "tyu.stackmeta/1",
+  "semantics": "tyu.ir-sem/1.0",
+  "target": "x86_64-unknown-linux-gnu",
+  "model_semantics": "unmodeled",
+  "module": "Clean",
+  "words": [
+    {"name": "main", "net": 1, "high": 2, "top": false, "blocks": "block b0\nconst_i64 1\nconst_i64 2\nadd_i64\nconst_i64 3\nadd_i64\nconst_i64 4\nadd_i64\nlocal_set 1\nlocal_get 1\nret\n", "calls": {}}
+  ]
+}

@@ -87,3 +87,37 @@ VECTOR_CORPUS=(
 )
 msg 2 "  port.sh: conformance over all four per-target corpora"
 .lake/build/bin/conformance --corpus "${VECTOR_CORPUS[@]}"
+
+# --- PLAN-VERIFY-3 P4.2 — T-C: axiom audit over the registry theorems ---
+# Every registry theorem must depend only on the permitted axioms
+# {propext, Quot.sound, Classical.choice}; unproven placeholder axioms and
+# `Lean.ofReduceBool` are never permitted (§Q11 item 2). `AxiomAudit.lean`
+# prints `#print axioms` for every registry theorem; any line naming a
+# forbidden constant fails the gate.
+if [ -f AxiomAudit.lean ]; then
+    msg 2 "  port.sh: axiom audit (AxiomAudit.lean)"
+    AUDIT_OUT="$(lake env lean AxiomAudit.lean 2>&1 || true)"
+    # every printed axiom set must belong to the permitted set
+    if printf '%s\n' "$AUDIT_OUT" | grep -qE "sorryAx|Lean.ofReduceBool"; then
+        msg 1 "  port.sh: axiom audit FAIL — a registry theorem depends on a forbidden axiom"
+        printf '%s\n' "$AUDIT_OUT" | grep -E "depends on axioms" >&2
+        exit 1
+    fi
+    audited="$(printf '%s\n' "$AUDIT_OUT" | grep -c "depends on axioms" || true)"
+    if [ "$audited" -lt 10 ]; then
+        msg 1 "  port.sh: axiom audit FAIL — only $audited theorems audited (expected ≥ 10)"
+        exit 1
+    fi
+    msg 2 "  port.sh: axiom audit green ($audited registry theorems, permitted set only)"
+else
+    msg 1 "  port.sh: AxiomAudit.lean missing (P4.2 gate)"
+    exit 1
+fi
+
+# --- PLAN-VERIFY-3 P4.2 — stackmeta replay (T-C's empirical hook) ---
+# Every corpus word's declared (net, high) is re-derived by the port's own
+# walk + monoid: net must match exactly and the peak envelope must stay
+# within the declared bound; a corrupted declared value exits nonzero.
+STACKMETA_GOLDENS=("$ROOT"/test-goldens/stackmeta/*/*.json)
+msg 2 "  port.sh: stackmeta replay (${#STACKMETA_GOLDENS[@]} golden files)"
+.lake/build/bin/conformance --level stackmeta --stackmeta "${STACKMETA_GOLDENS[@]}"

@@ -54,56 +54,7 @@ fn fresh_dir(tag: &str) -> PathBuf {
 /// therefore exercised by `obl_v2_roundtrip` instead). The set below is the
 /// verification corpus (the G19/G20/G22 gate's own corpus) plus the rich
 /// inline fixtures.
-const POSITIVE_FIXTURES: &[&str] = &[
-    "ci/verify-corpus/clean.mod",
-    "ci/verify-corpus/contract.mod",
-    "ci/verify-corpus/event-loop.mod",
-    "ci/verify-corpus/open-cast.mod",
-];
-
-/// Rich inline fixtures: obligation shapes the file corpus lacks or under-
-/// covers — typed subtype casts/returns (`Bank` shape), contracts with an
-/// authored `intent "…"` clause (§Q17), and a word with several cast sites.
-const RICH_FIXTURES: &[(&str, &str)] = &[
-    (
-        "Bank",
-        "\
-module Bank;
-subtype Percent = i64 range 0..100;
-subtype Counter = i64 range 0..1000000;
-: clamp ( i64 -- Percent )
-  dup 100 > [ drop 100 ] [ ] if
-  dup 0 < [ drop 0 ] [ ] if
-  as Percent ;
-: bounded_inc ( Percent -- Percent ) 1 + as Percent ;
-: main ( -- Counter ) 50 as Percent bounded_inc as Counter ;
-end;
-",
-    ),
-    (
-        "Lending",
-        "\
-module Lending;
-subtype Percent = i64 range 0..100;
-export { withdraw } ;
-: pct-in-range ( Percent -- Percent bool )
-  dup 0 >= [ dup 100 <= ] [ 0 0 == ] if ;
-: withdraw ( Percent -- bool )
-  needs [ pct-in-range ] intent \"withdraw never exceeds balance\"
-  drop true ;
-end;
-",
-    ),
-];
-
-/// The four triples the statement pipeline is parameterized over (§Q3) —
-/// statement hashes MUST differ across triples and be pinned per triple.
-const TRIPLES: &[&str] = &[
-    "x86_64-unknown-linux-gnu",
-    "x86_64-unknown-none",
-    "armv7m-unknown-none",
-    "riscv32-unknown-none",
-];
+use common::{POSITIVE_FIXTURES, RICH_FIXTURES, TRIPLES};
 
 /// Compile a fixture to its artifact and read it.
 fn compile_artifact(dir: &Path, fixture: &Path, target: &str) -> OblSet {
