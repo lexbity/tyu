@@ -1,0 +1,17 @@
+{
+  "schema": "tyu.gen/1",
+  "module": "Contract",
+  "target": "x86_64-unknown-linux-gnu",
+  "model_semantics": "unmodeled",
+  "statements": [
+  { "id": "Contract::pct-in-range::subtype-range::0", "id_hash": "ba61ba4e8b96df8c", "def": "stmt_Contract_pct_in_range_subtype_range_0", "omitted": false, "statement_hash": "f822b83909bdb3fb62239f6ce645282607a762415af8d118cd7d647dbfd5cf00" },
+  { "id": "Contract::pct-in-range::subtype-range::1", "id_hash": "ba61bb4e8b96e13f", "def": "stmt_Contract_pct_in_range_subtype_range_1", "omitted": false, "statement_hash": "9ddcffbadfc6a266c696748aa68347e38eb57b6d21c79f86274eda14caa0d5ae" },
+  { "id": "Contract::withdraw::subtype-range::0", "id_hash": "8e57b506829b9b6b", "omitted": true, "reason": "calls-unmodeled", "statement_hash": "" },
+  { "id": "Contract::withdraw::contract-pre::0", "id_hash": "6cf6259c5b9b3925", "omitted": true, "reason": "calls-unmodeled", "statement_hash": "" },
+  { "id": "Contract::main::subtype-range::0", "id_hash": "6fd7da76077c7fec", "omitted": true, "reason": "calls-unmodeled", "statement_hash": "" },
+  { "id": "Contract::main::contract-pre::0", "id_hash": "f87bcac77db19a80", "omitted": true, "reason": "calls-unmodeled", "statement_hash": "" }
+  ],
+  "words": [
+  { "name": "pct-in-range", "def": "Contract_pct_in_range", "entry": 0, "cycles": [] }
+  ]
+}

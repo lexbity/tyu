@@ -1,4 +1,5 @@
 import Tyu.Sound
+import Tyu.Gen.Stmt
 
 /-! The P4.2 axiom-audit surface: every registry theorem must depend only
 on the permitted axioms {propext, Quot.sound, Classical.choice}. Unproven
@@ -27,3 +28,4 @@ to appear in this audit. Keep the two lists in the same commit. -/
 #print axioms Tyu.Sound.Bound.compose_wf
 #print axioms Tyu.Sound.seq_net_exact
 #print axioms Tyu.Sound.seq_peak_envelope
+#print axioms Tyu.Gen.Stmt.via_cycle_sound

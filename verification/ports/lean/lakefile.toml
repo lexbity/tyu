@@ -19,3 +19,8 @@ srcDir = "."
 name = "conformance"
 srcDir = "."
 root = "Main"
+
+[[lean_exe]]
+name = "gen"
+srcDir = "."
+root = "GenMain"

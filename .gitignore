@@ -11,3 +11,6 @@ target
 # Lean port build artifacts (verification/ports/*/lakefile target outputs)
 verification/ports/*/.lake/
 verification/ports/*/lake-manifest.json
+
+# Gen golden build artifacts (generated; regen via the gen exe + port.sh)
+verification/ports/lean/.lake/

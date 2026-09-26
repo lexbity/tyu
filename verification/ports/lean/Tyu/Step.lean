@@ -419,23 +419,25 @@ inductive End where
 
 /-- Step one block: fold its ops; when a control op is reached the block
 ends (for `br_if` the condition is popped — the br_if stack effect — and
-carried in the end for routing). A trap ends the block without a successor. -/
+carried in the end for routing). A trap ends the block without a successor.
+Structural recursion over the op list (equivalent to the earlier
+`let rec` form — same semantics, but definitionally transparent so the
+statement computations and worked proofs reduce it directly). -/
 def runBlock (spec : Tyu.IR.TargetSpec) (mem : ConcreteMem) (ops : List ConcreteOp) (st : State) : ConcreteMem × End :=
-  let rec go : List ConcreteOp → ConcreteMem → State → ConcreteMem × End
-    | [], m, s => (m, .ret s)
-    | o :: rest, m, s =>
-        match o.form with
-        | .ret => (m, .ret s)
-        | .br => (m, .go (o.brTgt.getD 0) s)
-        | .br_if =>
-            let (s1, v) := State.pop1 s
-            let (t, e) := o.brIfTgts.getD (0, 0)
-            (m, .brIf t e v s1)
-        | _ =>
-            match stepOp spec m o s with
-            | (m1, .trap) => (m1, .trap)
-            | (m1, .ok s1) => go rest m1 s1
-  go ops mem st
+  match ops with
+  | [] => (mem, .ret st)
+  | o :: rest =>
+      match o.form with
+      | .ret => (mem, .ret st)
+      | .br => (mem, .go (o.brTgt.getD 0) st)
+      | .br_if =>
+          let (s1, v) := State.pop1 st
+          let (t, e) := o.brIfTgts.getD (0, 0)
+          (mem, .brIf t e v s1)
+      | _ =>
+          match stepOp spec mem o st with
+          | (m1, .trap) => (m1, .trap)
+          | (m1, .ok s1) => runBlock spec m1 rest s1
 
 end Block
 

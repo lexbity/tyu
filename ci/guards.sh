@@ -1110,6 +1110,42 @@ fi
 [ "$g31_fail" -eq 0 ] && msg $GREEN "  G31: port hygiene (no sorry/Admitted/native_decide; SEMANTICS_total present)"
 failures=$((failures + g31_fail))
 
+
+# --- G33: PLAN-VERIFY-3 P5 — Gen renderer + golden-statement surface ---
+# The statement renderer is the interface a developer's proofs bind to
+# (§Q4): the renderer exe, the semantics glue, the committed golden
+# statements (elaborated by the port gate), the corpus artifacts, and the
+# Rust-side drift test must all exist. The byte-stability + hash agreement
+# run under `cargo test --workspace` and `ci/port.sh`; this gate pins the
+# surface.
+g33_fail=0
+PORTDIR=verification/ports/lean
+for f in Tyu/Gen/Stmt.lean Tyu/Gen/Render.lean Tyu/Gen/Sha256.lean          Tyu/Gen/Golden.lean GenMain.lean goldens/obl/Bank.obl.json; do
+    if [ ! -f "$PORTDIR/$f" ]; then
+        msg $RED "  G33 FAIL: $PORTDIR/$f missing (P5 renderer surface)"
+        g33_fail=1
+    fi
+done
+for m in Bank Clean Contract EventLoop Lending LoopSub OpenCast Post; do
+    if [ ! -f "$PORTDIR/Tyu/Gen/Golden/$m.lean" ]; then
+        msg $RED "  G33 FAIL: golden statements missing for $m"
+        g33_fail=1
+    fi
+    if [ ! -f "$PORTDIR/goldens/gen/$m.gen.json" ]; then
+        msg $RED "  G33 FAIL: gen metadata missing for $m"
+        g33_fail=1
+    fi
+done
+if [ ! -f crates/tooling-tests/tests/gen_render_drift.rs ]; then
+    msg $RED "  G33 FAIL: gen-render drift test missing (crates/tooling-tests/tests/gen_render_drift.rs)"
+    g33_fail=1
+fi
+if grep -rnE 'sorry|Admitted|native_decide' "$PORTDIR/Tyu/Gen" --include='*.lean' >/dev/null 2>&1; then
+    msg $RED "  G33 FAIL: forbidden placeholder (sorry/Admitted/native_decide) in Tyu/Gen"
+    g33_fail=1
+fi
+[ "$g33_fail" -eq 0 ] && msg $GREEN "  G33: P5 statement-renderer surface (Gen + goldens + drift test)"
+failures=$((failures + g33_fail))
 echo ""
 msg $GREEN "============================================"
 msg $GREEN "Per-package test counts:"

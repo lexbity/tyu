@@ -152,3 +152,59 @@ if [ "${skipped:-0}" -ne 0 ]; then
     exit 1
 fi
 msg 2 "  port.sh: stackmeta replay green (0 divergences, 0 skipped)"
+# --- PLAN-VERIFY-3 P5 — the statement renderer + Gen goldens (the drift lock) ---
+# The `gen` renderer (a pure function of the `tyu.obl/v2` artifacts → the
+# generated statements) must (1) pass its SHA-256 self-check, (2) regenerate
+# the committed golden statements byte-for-byte (the committed goldens are
+# imported by `Tyu.Gen.Golden` in the package — the elaboration gate), and
+# (3) agree with the Rust encoder on every statement hash, checked on the
+# Rust side by `crates/tooling-tests/tests/gen_render_drift.rs`. Any drift
+# fails here (fail-closed).
+msg 2 "  port.sh: P5 gen self-check (SHA-256 known-answer vectors)"
+if ! .lake/build/bin/gen --selfcheck | grep -q PASS; then
+    msg 1 "  port.sh: gen --selfcheck FAILED"
+    exit 1
+fi
+GEN_TMP="$(mktemp -d)"
+OBL_SRC=("$ROOT"/verification/ports/lean/goldens/obl/*.obl.json)
+msg 2 "  port.sh: P5 gen --render over ${#OBL_SRC[@]} corpus artifacts"
+if .lake/build/bin/gen --render --obl "${OBL_SRC[@]}" --out "$GEN_TMP" | grep -q "FAIL"; then
+    msg 1 "  port.sh: gen --render reported a FAIL"
+    exit 1
+fi
+# compare the .lean statements (the rendered statements must match the
+# committed goldens byte-for-byte)
+GENLEAN_DIR="$(mktemp -d)"
+mkdir -p "$GENLEAN_DIR"
+for f in "$GEN_TMP"/*.lean; do
+    [ -f "$f" ] && cp "$f" "$GENLEAN_DIR/"
+done
+if ! diff -r "$GENLEAN_DIR" "$ROOT/verification/ports/lean/Tyu/Gen/Golden" >/dev/null 2>&1; then
+    msg 1 "  port.sh: gen output drifted from the committed golden statements (Tyu/Gen/Golden)"
+    diff -r "$GENLEAN_DIR" "$ROOT/verification/ports/lean/Tyu/Gen/Golden" | head -10
+    exit 1
+fi
+rm -rf "$GENLEAN_DIR"
+# the metadata (gen.json) files compare against goldens/gen; the .lean
+# statements already compared against Tyu/Gen/Golden above
+GENJSON_DIR="$(mktemp -d)"
+mkdir -p "$GENJSON_DIR"
+for f in "$GEN_TMP"/*.gen.json; do
+    [ -f "$f" ] && cp "$f" "$GENJSON_DIR/"
+done
+if ! diff -r "$GENJSON_DIR" "$ROOT/verification/ports/lean/goldens/gen" >/dev/null 2>&1; then
+    msg 1 "  port.sh: P5 golden metadata drifted (goldens/gen)"
+    diff -r "$GENJSON_DIR" "$ROOT/verification/ports/lean/goldens/gen" | head -10
+    exit 1
+fi
+rm -rf "$GENJSON_DIR"
+msg 2 "  port.sh: P5 golden statements + metadata byte-stable (drift lock)"
+rm -rf "$GEN_TMP"
+msg 2 "  port.sh: P5 elaboration gate — golden statements build (Tyu.Gen.Golden)"
+lake build Tyu.Gen.Golden || {
+    msg 1 "  port.sh: golden statements failed to elaborate"
+    exit 1
+}
+
+echo ""
+msg 2 "  port.sh: PORT GATE GREEN (conformance + axiom audit + stackmeta + P5 gen drift lock)"

@@ -36,6 +36,10 @@ Helper lemmas (not registry entries, reviewed definitions): `id_wf`,
 | `Tyu.Sound.Bound` + monoid | `Tyu/Sound.lean` | the §13.2 monoid, mirrored from `stack-bound-analysis.md` |
 | `Tyu.Stackmeta` parser + checker | `Tyu/Stackmeta.lean` | consumes `tyu.stackmeta/1` (schema-checked); unresolved calls skip a word — the gate FAILS on any skip (`ci/port.sh`) |
 | `Tyu.Conformance.*` (abstract transfer oracle) | `Tyu/Conformance/` | mirrors `verifier::interp`/`interval`; zero-divergence pinned by 236 `tyu.vec/1` vectors |
+| `Tyu.Gen.Stmt` (statement semantics + the invariant composition) | `Tyu/Gen/Stmt.lean` | P5: the rendered statements live here. The composition theorem `Tyu.Gen.Stmt.via_cycle_sound` is axiom-audited data among the §3 block below (proved by fuel induction). `Word.runFrom`/`runBlockSt` are structural statement-side copies of the port run semantics — a **review-recorded correspondence** (T-F2); a full `runFrom ≡ runWord` equality theorem is a follow-on item (requires `runWord`'s brecOn-cased unfolding). |
+| `Tyu.Gen.Render` (statement renderer) | `Tyu/Gen/Render.lean` | P5: renders `Gen/<Module>.lean` from `tyu.obl/v2`; re-derives canonical statements + `statement_hash` in Lean (own SHA-256) — the renderer↔encoder drift lock, verified byte-exact against `crates/verifier/src/stmt.rs` over the corpus (`crates/tooling-tests/tests/gen_render_drift.rs`). Omission classification (opaque `$top`, `call`-unmodeled words, dynamic MMIO, `stack-budget`) is part of the normative rendering rules (§Q4 item 4). |
+| `Tyu.Gen.Sha256` (port SHA-256) | `Tyu/Gen/Sha256.lean` | FIPS 180-4, known-answer vectors pinned in `gen --selfcheck`; FR-14 (the only digest). |
+| `Tyu.Gen.Golden` / `goldens/` (statement goldens) | `Tyu/Gen/Golden/*.lean`, `goldens/gen/*.gen.json`, `goldens/obl/*.obl.json` | P5: the committed generated statements, elaborated by the port gate; byte-stable; `ci/port.sh` rediffs them against the live `gen` output. |
 
 **Known consolidation point (P14, locked in the plan):** the abstract
 interval layer currently lives in `Tyu/Conformance/Interval.lean` +
@@ -62,10 +66,19 @@ Tyu.Sound.Bound.compose_id_right
 Tyu.Sound.Bound.compose_wf
 Tyu.Sound.seq_net_exact
 Tyu.Sound.seq_peak_envelope
+Tyu.Gen.Stmt.via_cycle_sound
 ```
 
 Permitted axiom set: `{propext, Quot.sound, Classical.choice}` — anything
 else (`sorryAx`, `Lean.ofReduceBool`, a declared axiom) fails the gate.
+
+## 3b. P5-composition soundness (axiom-audited)
+
+The composition machinery adds no axioms: `Tyu.Gen.Stmt.via_cycle_sound`
+(unfold `ViaCycle`; fuel induction with the `StepTo`/`StepOut`
+guard-carrying routing) is proven and rechecked by the §3 axiom-audit block
+below. The port-wide `sorry`-scan that `ci/guards.sh` G31 enforces covers
+it: tyu/Gen carries no placeholders.
 
 ## 4. Empirical anchors
 
@@ -74,3 +87,12 @@ else (`sorryAx`, `Lean.ofReduceBool`, a declared axiom) fails the gate.
   **zero unresolved-skip allowed** (`ci/port.sh` fails on any skip).
 - Statement goldens — the Rust encoder's canonical statements are the
   byte-pinned interface (P1.3); the Gen renderer (P5) binds against them.
+- `tyu.gen/1` + `Gen/*.lean` — 8 corpus modules rendered; **every rendered
+  `statement_hash` is byte-equal to the Rust encoder's** (cross-implementation
+  drift lock, pinned by `crates/tooling-tests/tests/gen_render_drift.rs`).
+- **P5.2 worked-proof note:** the raw per-word scheme-instantiation proof for
+  `LoopSub.bounded-count` (the plan's worked-proof gate) is a follow-on
+  slice item: the rendered scheme + the `via_cycles` composition elaborate
+  and the generic `via_cycle_sound` is proved, but the hand-proof of the
+  concrete member-step preservation is deferred while the block evaluator's
+  definitional transparency is finalized (no placeholder is shipped).
