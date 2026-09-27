@@ -221,3 +221,134 @@ fn contract_obligations_are_honestly_classified() {
         "the fixture must carry a contract-pre obligation"
     );
 }
+
+/// A call-free contract module: `m` carries `needs` + `ensures` over the
+/// call-free predicate `pct-in-range`, and its body has no calls either.
+const PURE_MOD: &str = "\
+module Pure;
+subtype Percent = i64 range 0..100;
+
+: pct-in-range ( Percent -- Percent bool )
+  dup 0 >= [ dup 100 <= ] [ 0 0 == ] if ;
+
+: m ( Percent -- Percent )
+  needs [ pct-in-range ]
+  ensures [ pct-in-range ]
+  1 + as Percent ;
+export { m };
+end;
+";
+
+/// Contract statements RENDER when the word's recorded IR is call-free —
+/// the `PredicateHolds` canonical (`args`/`op`/`predicate{ir,ir_hash,
+/// module,name}`) must agree with the Rust encoder byte-for-byte, and the
+/// rendered text must be the truthful ∀-scheme (pre) / exit-output claim
+/// (post). The raw checks-on extraction cannot produce this shape (the
+/// contract check itself lowers to a `call`, and such words honestly omit
+/// — the sibling test), so the fixture surgically removes the check
+/// call/trap pairs: the artifact a pre-check-IR extractor would emit. The
+/// renderer is indifferent to provenance; the E6418 gate is the drift lock.
+#[test]
+fn contract_statements_render_when_the_word_ir_is_call_free() {
+    common::ensure_bins();
+    let dir = fresh_dir("contract-render");
+    let raw = compile_obl(&dir, "Pure", PURE_MOD, &[]);
+    assert!(
+        raw.facts
+            .words
+            .iter()
+            .any(|w| w.name == "m" && w.ir.lines().any(|l| l.starts_with("call "))),
+        "the raw extraction carries the contract-check call"
+    );
+
+    // Surgical mutation: drop the check call/trap pairs (JSON-escaped `\\n`
+    // in the artifact text) so the word IR is call-free.
+    let path = dir.join("Pure.obl.json");
+    let text = fs::read_to_string(&path).unwrap();
+    let needle = "call pct-in-range\\ntrap_if_false CONTRACT_FAIL\\n";
+    assert!(
+        text.contains(needle),
+        "fixture shape changed — review this test's surgery"
+    );
+    fs::write(&path, text.replace(needle, "")).unwrap();
+    let set = verifier::codec::read_obl(&fs::read(&path).unwrap())
+        .expect("the mutated artifact round-trips");
+    assert!(
+        !set.facts
+            .words
+            .iter()
+            .any(|w| w.name == "m" && w.ir.contains("call ")),
+        "mutation applied"
+    );
+
+    let meta = render(&set, &dir);
+    let rows = meta["statements"].as_array().unwrap();
+    let mut saw_pre = false;
+    let mut saw_post = false;
+    for o in &set.obligations {
+        if !matches!(
+            o.kind,
+            verifier::model::Kind::ContractPre | verifier::model::Kind::ContractPost
+        ) {
+            continue;
+        }
+        let row = rows
+            .iter()
+            .find(|r| r["id"] == o.id.as_str())
+            .unwrap_or_else(|| panic!("row present for {}", o.id));
+        assert!(
+            !row["omitted"].as_bool().unwrap_or(true),
+            "a call-free contract row renders: {}",
+            o.id
+        );
+        assert_eq!(
+            row["statement_hash"].as_str().unwrap_or(""),
+            rust_hash(&set, o),
+            "the PredicateHolds canonical agrees with the Rust encoder ({}): {} vs {}",
+            o.id,
+            row["statement_hash"],
+            rust_hash(&set, o)
+        );
+        if matches!(o.kind, verifier::model::Kind::ContractPre) {
+            saw_pre = true;
+        } else {
+            saw_post = true;
+        }
+    }
+    assert!(saw_pre && saw_post, "both contract classes exercised");
+
+    // The rendered text: post claims the exit-state outputs; pre is the
+    // ∀-scheme over abstract argument values.
+    let lean = fs::read_to_string(dir.join("gen").join("Pure.lean")).unwrap();
+    assert!(
+        lean.contains("predicateHolds Pure_pct_in_range"),
+        "lean: {lean}"
+    );
+    assert!(
+        lean.contains("outputAt σf 0"),
+        "post args are concrete exit outputs: {lean}"
+    );
+    assert!(
+        lean.contains("a_0 : Int"),
+        "pre args are the ∀-scheme's abstract values: {lean}"
+    );
+
+    // Elaboration tier (port package built): the rendered contract
+    // statements must compile against the port's Tyu environment.
+    let port = common::workspace_root().join("verification/ports/lean");
+    if port.join(".lake/build/lib/lean/Tyu.olean").is_file() {
+        let out = Command::new("lake")
+            .current_dir(&port)
+            .args(["env", "lean"])
+            .arg(dir.join("gen").join("Pure.lean"))
+            .output()
+            .expect("lake spawn");
+        assert!(
+            out.status.success(),
+            "rendered contract statements must elaborate: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    } else {
+        eprintln!("skipping elaboration (port package not built)");
+    }
+}

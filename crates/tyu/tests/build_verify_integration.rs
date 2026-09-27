@@ -64,8 +64,8 @@ end;
 ";
 
 /// Build the fixture project with `--verify-tool=lean` under the given env,
-/// returning (success, report JSON value, stderr).
-fn build(tag: &str, envs: &[(&str, &str)]) -> (bool, serde_json::Value, String) {
+/// returning (fixture dir, success, report JSON value, stderr).
+fn build(tag: &str, envs: &[(&str, &str)]) -> (PathBuf, bool, serde_json::Value, String) {
     let dir = fresh_dir(tag);
     fs::write(dir.join("Bank.mod"), BANK_MOD).unwrap();
     let out_dir = dir.join("out");
@@ -91,7 +91,7 @@ fn build(tag: &str, envs: &[(&str, &str)]) -> (bool, serde_json::Value, String) 
     } else {
         serde_json::Value::Null
     };
-    (ok, report, stderr)
+    (dir, ok, report, stderr)
 }
 
 // ---------------------------------------------------------------------------
@@ -101,7 +101,7 @@ fn build(tag: &str, envs: &[(&str, &str)]) -> (bool, serde_json::Value, String) 
 #[test]
 fn tier_b_skip_mode_builds_and_reports_unproven_statements() {
     ensure_langc();
-    let (ok, report, stderr) = build("tierb", &[("TYU_SKIP_PORT_BUILD", "1")]);
+    let (dir, ok, report, stderr) = build("tierb", &[("TYU_SKIP_PORT_BUILD", "1")]);
     assert!(
         ok,
         "the build must proceed under TYU_SKIP_PORT_BUILD:\n{stderr}"
@@ -112,6 +112,9 @@ fn tier_b_skip_mode_builds_and_reports_unproven_statements() {
     assert_eq!(proof["harvest"], "not-built");
     assert_eq!(proof["gen_digest"], "skipped");
     assert_eq!(proof["statements"].as_array().unwrap().len(), 0);
+    // The fixture carries a full image + package — clean up (best-effort;
+    // /tmp accumulates a 19 MB tree per run otherwise).
+    let _ = fs::remove_dir_all(&dir);
 }
 
 // ---------------------------------------------------------------------------
@@ -181,6 +184,7 @@ fn proven_policy_fails_closed_without_proof_class_discharges() {
         reasons.iter().any(|r| r.contains("policy-proven")),
         "interval-only checked must be forced open under proven: {reasons:?}"
     );
+    let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -197,7 +201,7 @@ fn tier_a_full_pipeline_builds_and_lists_unproven_statements_per_module() {
         "TYU_PROOF_E2E=1 requires `lean` and `lake` on PATH"
     );
     ensure_langc();
-    let (ok, report, stderr) = build("tiera", &[]);
+    let (dir, ok, report, stderr) = build("tiera", &[]);
     assert!(ok, "the full pipeline must build:\n{stderr}");
     let proof = &report["proof"];
     assert_eq!(proof["tool"], "lean");
@@ -222,4 +226,25 @@ fn tier_a_full_pipeline_builds_and_lists_unproven_statements_per_module() {
         bank["rendered"].as_u64().unwrap()
     );
     assert!(stderr.contains("unproven"), "stderr: {stderr}");
+    // P7.1: the per-module axiom-audit evidence travels with the harvested
+    // verdicts — schema, module, the permitted set it was checked against,
+    // and the status. (This fixture proves nothing yet, so the theorem list
+    // is empty; the harvest fixture in ci/port.sh covers the populated form.)
+    let audit_bytes = fs::read(dir.join(".tyu-verify/harvest/Bank.axiom_audit.json"))
+        .expect("axiom-audit evidence present beside the harvested verdicts");
+    let audit: serde_json::Value = serde_json::from_slice(&audit_bytes).unwrap();
+    assert_eq!(audit["schema"], "tyu.axiom-audit/1");
+    assert_eq!(audit["status"], "ok");
+    assert_eq!(audit["module"], "Bank");
+    assert_eq!(
+        audit["permitted_axioms"].as_array().map(|a| a.len()),
+        Some(3),
+        "the benign set: propext, Quot.sound, Classical.choice"
+    );
+    assert_eq!(
+        audit["theorems"].as_array().map(|a| a.len()),
+        Some(0),
+        "no developer proofs in this fixture — nothing harvested"
+    );
+    let _ = fs::remove_dir_all(&dir);
 }

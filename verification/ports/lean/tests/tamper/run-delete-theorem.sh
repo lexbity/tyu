@@ -14,7 +14,7 @@ cd "$HV"
 [ -f TinyFix.lean ] || { echo "FAIL: $HV/TinyFix.lean missing" >&2; exit 1; }
 [ -f lean-toolchain ] || { echo "FAIL: $HV/lean-toolchain missing (copy from the port)" >&2; exit 1; }
 cp TinyFix.lean .hvdel-backup.lean
-trap 'rm -f .hvdel-backup.lean del.v2.json; mv .hvdel-built.lean TinyFix.lean 2>/dev/null || true' EXIT
+trap 'rm -f .hvdel-backup.lean del.v2.json del.v2.json.audit.json; mv .hvdel-built.lean TinyFix.lean 2>/dev/null || true' EXIT
 python3 - .hvdel-backup.lean .hvdel-built.lean <<'PYEOF'
 import re, sys
 src, dst = sys.argv[1], sys.argv[2]
@@ -38,4 +38,4 @@ for r in d["verdicts"]:
 print("  tamper delete-theorem: every obligation open (unproven is a state, not a fault)")
 PYEOF
 mv .hvdel-backup2.lean TinyFix.lean
-rm -f .hvdel-backup.lean del.v2.json
+rm -f .hvdel-backup.lean del.v2.json del.v2.json.audit.json

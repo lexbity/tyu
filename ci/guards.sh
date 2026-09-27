@@ -1238,6 +1238,15 @@ if grep -rnE 'sorry|Admitted|native_decide' verification/ports/lean/Tyu/Verdicts
     msg $RED "  G36 FAIL: sorry/Admitted/native_decide in the harvest library"
     g36_fail=1
 fi
+if ! grep -q 'tyu.axiom-audit/1' verification/ports/lean/Tyu/Verdicts/Harvest.lean; then
+    msg $RED "  G36 FAIL: harvest axiom-audit evidence missing (tyu.axiom-audit/1)"
+    g36_fail=1
+fi
+if ! grep -q 'axiom_audit' crates/tyu/src/proof.rs \
+   || ! grep -q 'harvest_error_code' crates/tyu/src/proof.rs; then
+    msg $RED "  G36 FAIL: harvest audit re-home / typed error surface missing (proof.rs)"
+    g36_fail=1
+fi
 for tok in 'tyu.verdicts/v2' 'Trust' 'Method' 'proof_ref' 'restrict_to_recognized' 'UnknownMethod'; do
     if ! grep -q "$tok" crates/verifier/src/verdict.rs; then
         msg $RED "  G36 FAIL: verdicts v2 codec lacks $tok"

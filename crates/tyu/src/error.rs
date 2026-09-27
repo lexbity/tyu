@@ -43,6 +43,14 @@ pub enum TyuError {
     #[error("build: {0}")]
     Build(String),
 
+    /// A harvest failure with its typed E-code. The port's harvest error
+    /// document (`tyu.harvest-error/1`) names the registry code — E6419
+    /// (axiom audit / malformed closure), E6420 (statement def missing) —
+    /// and the code survives the tyu boundary instead of collapsing into
+    /// the E6416 tool-failure class (§6.9).
+    #[error("E{code}: harvest: {detail}")]
+    Harvest { code: u32, detail: String },
+
     #[error("compilation failed on '{}'", path.display())]
     CompileFailed { path: std::path::PathBuf },
 
@@ -100,6 +108,13 @@ mod tests {
             (TyuError::Project("x".into()), "project: x"),
             (TyuError::Graph("x".into()), "module graph: x"),
             (TyuError::Build("x".into()), "build: x"),
+            (
+                TyuError::Harvest {
+                    code: 6419,
+                    detail: "module Tiny: axiom audit failed".into(),
+                },
+                "E6419: harvest: module Tiny: axiom audit failed",
+            ),
             (TyuError::Deploy("x".into()), "deploy: x"),
             (TyuError::Cache("x".into()), "cache: x"),
             (TyuError::Key("x".into()), "key: x"),

@@ -213,9 +213,12 @@ partial def sortBy (f : String → String) : List String → List String
 
 /-- Harvest one module: env-binding + theorems + axiom audit, then the records
 sorted by obligation id. `Except.error msg` is a hard harvest failure (E6419
-class — axiom/tamper) that propagates as a nonzero exit. -/
+class — axiom/tamper) that propagates as a nonzero exit. The second list is
+the axiom-audit evidence rows (theorem, sorted axioms) for
+`tyu.axiom-audit/1`. -/
 def harvestModule (inputs : Inputs) (document : String) :
-    CommandElabM (Except String (String × String × String × List String)) := do
+    CommandElabM (Except String (String × String × String × List String ×
+                                 List (String × List String))) := do
   let a ← match Tyu.Gen.Render.parseArtifact document with
     | .error e => return .error ("artifact parse: " ++ renderErrString e)
     | .ok a => pure a
@@ -226,6 +229,7 @@ def harvestModule (inputs : Inputs) (document : String) :
   if gm.module ≠ a.module then
     return .error ("gen metadata module mismatch: " ++ gm.module ++ " ≠ " ++ a.module)
   let mut records : List (String × String) := []   -- (id, json)
+  let mut auditRows : List (String × List String) := []   -- (theorem, axioms)
   for o in a.obligations do
     let rowMeta := gm.statements.find? (fun m => m.id == o.id)
     match rowMeta with
@@ -247,6 +251,7 @@ def harvestModule (inputs : Inputs) (document : String) :
               if ¬ auditAxioms thm.axioms then
                 return .error ("E6419: axiom audit failed for " ++ thm.name
                   ++ " — axioms: " ++ toString thm.axioms)
+              auditRows := (thm.name, sortBy (fun s => s) thm.axioms) :: auditRows
               records := (o.id, certRecord o.id o.idHash m.statementHash thm.name
                            ("proofs/" ++ a.module ++ ".lean")) :: records
   -- deterministic: sort by the obligation id (the record keys)
@@ -254,11 +259,38 @@ def harvestModule (inputs : Inputs) (document : String) :
   let sorted := sortBy (fun s => s) ids
   let byId := fun id => (records.filter (fun p => Prod.fst p == id))
   let final := sorted.flatMap (fun id => byId id |>.map Prod.snd)
-  pure (.ok (a.module, a.target, a.modelSemantics, final))
+  pure (.ok (a.module, a.target, a.modelSemantics, final, auditRows))
 
 -- --------------------------------------------------------------------------
 -- The `#eval!` runner
 -- --------------------------------------------------------------------------
+
+/-- Insertion sort by the theorem name (deterministic audit emission). -/
+partial def sortByFst : List (String × List String) → List (String × List String)
+  | [] => []
+  | x :: xs =>
+      let smaller := sortByFst (xs.filter (fun y => y.1 < x.1))
+      let larger := sortByFst (xs.filter (fun y => x.1 ≤ y.1))
+      smaller ++ x :: larger
+
+/-- The per-module axiom-audit evidence (`tyu.axiom-audit/1`): every
+harvested theorem with its transitive axiom set, next to the permitted set
+it was checked against (§Q11 item 2 — the `evidence/axiom_audit.json`
+shape, per module; tyu re-homes it to
+`.tyu-verify/harvest/<Module>.axiom_audit.json`). -/
+def auditDoc (module target model : String)
+    (rows : List (String × List String)) : String :=
+  let thms := jarrOf ((sortByFst rows).map (fun (name, axs) =>
+    jobjOf [ ("axioms", jarrOf (axs.map (fun a => Tyu.Gen.Render.jstr a)))
+           , ("theorem", Tyu.Gen.Render.jstr name) ]))
+  jobjOf
+    [ ("module", Tyu.Gen.Render.jstr module)
+    , ("model_semantics", Tyu.Gen.Render.jstr model)
+    , ("permitted_axioms", jarrOf (permittedAxioms.map (fun p => Tyu.Gen.Render.jstr p.toString)))
+    , ("schema", Tyu.Gen.Render.jstr "tyu.axiom-audit/1")
+    , ("status", Tyu.Gen.Render.jstr "ok")
+    , ("target", Tyu.Gen.Render.jstr target)
+    , ("theorems", thms) ]
 
 /-- The file-level certifier identity (§6.3, §Q11). -/
 def certifierJson : String :=
@@ -293,8 +325,10 @@ unsafe def run : CommandElabM Unit := do
         ("{\"schema\":\"tyu.harvest-error/1\",\"message\":" ++ Tyu.Gen.Render.jstr err ++ "}")
       liftIO (IO.eprintln ("harvest: " ++ err))
       liftIO (IO.Process.exit 1)
-  | .ok (_, target, model, records) =>
+  | .ok (module, target, model, records, auditRows) =>
       let doc := makeDocument target model records
       liftIO $ IO.FS.writeFile inputs.out doc
+      liftIO $ IO.FS.writeFile (inputs.out ++ ".audit.json")
+        (auditDoc module target model auditRows)
 
 end Tyu.Verdicts.Harvest

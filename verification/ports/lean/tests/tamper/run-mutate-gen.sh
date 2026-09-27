@@ -15,7 +15,7 @@ cd "$HV"
 [ -f Tiny.gen.json ] || { echo "FAIL: $HV/Tiny.gen.json missing" >&2; exit 1; }
 [ -f lean-toolchain ] || { echo "FAIL: $HV/lean-toolchain missing (copy from the port)" >&2; exit 1; }
 cp Tiny.gen.json .hvgen-backup.json
-trap 'rm -f .hvgen-backup.json gen.v2.json' EXIT
+trap 'rm -f .hvgen-backup.json gen.v2.json gen.v2.json.audit.json' EXIT
 python3 - .hvgen-backup.json .hvgen-tampered.json <<'PYEOF'
 import json, sys
 src, dst = sys.argv[1], sys.argv[2]
@@ -33,5 +33,5 @@ if TYU_HARVEST_GEN_DIR="$HV" TYU_HARVEST_OBL="$HV/Tiny.obl.json" \
 fi
 grep -q "E6420" "$HV/gen.v2.json"
 mv .hvgen-backup2.json Tiny.gen.json
-rm -f .hvgen-backup.json
+rm -f .hvgen-backup.json gen.v2.json.audit.json
 echo "  tamper mutate-gen: harvest failed closed with an E6420 error document"

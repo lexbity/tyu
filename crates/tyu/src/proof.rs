@@ -452,8 +452,13 @@ pub fn run_lean_pipeline(
     // is the built package).
     run_lake_build(&package)?;
 
-    // P7.1: the harvest — kernel-checked theorems become v2 verdicts.
+    // P7.1: the harvest — kernel-checked theorems become v2 verdicts (plus
+    // the per-module axiom-audit evidence, `tyu.axiom-audit/1`).
     let harvest = run_harvest(&package, &artifacts)?;
+    let doc_pairs: Vec<(String, String)> = harvest
+        .iter()
+        .map(|(m, v2, _)| (m.clone(), v2.clone()))
+        .collect();
 
     // P8.2: the image-level assumption closure runs BETWEEN the harvest and
     // pass-2 codegen (the plan's shape — §Q7 rule 3). A caller-side
@@ -476,7 +481,7 @@ pub fn run_lean_pipeline(
             }
         }
     }
-    let adjusted = match crate::closure::apply_harvest_closure(&closure_sets, &harvest) {
+    let adjusted = match crate::closure::apply_harvest_closure(&closure_sets, &doc_pairs) {
         Ok(docs) => docs,
         Err(crate::closure::HarvestClosureError::Cycle(cycle)) => {
             let loop_text = cycle
@@ -502,6 +507,20 @@ pub fn run_lean_pipeline(
         let path = harvest_out.join(format!("{module}.verdicts.v2.json"));
         fs::create_dir_all(harvest_out.parent().unwrap_or(&harvest_out)).ok();
         fs::write(&path, &v2).map_err(TyuError::Io)?;
+        // The axiom-audit evidence travels with the verdicts (§Q11 item 2):
+        // every harvested theorem with its transitive axiom set, next to
+        // the permitted set it was checked against. The certification
+        // package's `evidence/axiom_audit.json` (P11) re-homes these.
+        let audit = harvest
+            .iter()
+            .find(|(m, _, _)| *m == module)
+            .map(|(_, _, a)| a.clone())
+            .unwrap_or_default();
+        fs::write(
+            harvest_out.join(format!("{module}.axiom_audit.json")),
+            &audit,
+        )
+        .map_err(TyuError::Io)?;
         verdict_files.push((module.clone(), path));
         let proven = count_certificates(&v2);
         for s in statements.iter_mut().filter(|s| s.module == module) {
@@ -547,14 +566,16 @@ fn count_certificates(v2: &str) -> u32 {
 
 /// The harvest hub: run the generated package's `Harvest.lean` (the
 /// `#eval!`d interpreter action) once per module with the environment
-/// variables the Lean reader expects, and return the emitted v2 documents.
-/// Any non-zero exit (E6419 axiom violation, E6420 missing statement,
-/// malformed metadata) is E6416 — fail-closed: a tampered proof environment
-/// aborts before any check is elided for it.
+/// variables the Lean reader expects, and return the emitted documents:
+/// `(module, tyu.verdicts/v2, tyu.axiom-audit/1)`. A nonzero exit is
+/// fail-closed — a typed E-code in the harvest error document (E6419 axiom
+/// violation, E6420 missing statement) surfaces as [`TyuError::Harvest`];
+/// anything else is the E6416 tool-failure class. A tampered proof
+/// environment aborts before any check is elided for it.
 fn run_harvest(
     package: &LeanPackage,
     module_artifacts: &[PathBuf],
-) -> Result<Vec<(String, String)>, TyuError> {
+) -> Result<Vec<(String, String, String)>, TyuError> {
     // Harvest input env var names (the Lean reader's contract).
     let gen_var = "TYU_HARVEST_GEN_DIR";
     let obl_var = "TYU_HARVEST_OBL";
@@ -591,21 +612,27 @@ fn run_harvest(
                 ))
             })?;
         // The `#eval!` harness writes the document at the exit path; a
-        // nonzero exit is the fail-closed signal (E6419/E6420/…). The
-        // harness records the diagnosable reason in the out file
-        // (`tyu.harvest-error/1`), which this E6416 surfaces.
+        // nonzero exit is the fail-closed signal. The harness records the
+        // diagnosable reason in the out file (`tyu.harvest-error/1`); a
+        // typed registry code in the message (E6419/E6420) surfaces as
+        // [`TyuError::Harvest`] — the §6.9 code survives the boundary.
         if !run.status.success() {
             let reason = fs::read_to_string(&out_path)
                 .ok()
-                .filter(|s| s.contains("tyu.harvest-error/1"))
-                .unwrap_or_default();
+                .filter(|s| s.contains("tyu.harvest-error/1"));
+            let _ = fs::remove_file(&out_path);
+            if let Some((code, msg)) = reason.as_deref().and_then(harvest_error_code) {
+                return Err(TyuError::Harvest {
+                    code,
+                    detail: format!("module {module}: {msg}"),
+                });
+            }
             return Err(TyuError::Build(format!(
                 "E6416: harvest failed for module {}{}",
                 module,
-                if reason.is_empty() {
-                    String::new()
-                } else {
-                    format!(":\n{}", reason.trim_end())
+                match reason {
+                    Some(doc) => format!(":\n{}", doc.trim_end()),
+                    None => String::new(),
                 }
             )));
         }
@@ -615,14 +642,69 @@ fn run_harvest(
                 module
             ))
         })?;
+        let audit_path = audit_out_path(&out_path);
+        let audit = fs::read(&audit_path).map_err(|e| {
+            TyuError::Build(format!(
+                "E6416: harvest produced no axiom-audit evidence for {} ({e})",
+                module
+            ))
+        })?;
         let _ = fs::remove_file(&out_path);
+        let _ = fs::remove_file(&audit_path);
         out.push((
             module,
             String::from_utf8(v2)
                 .map_err(|_| TyuError::Build("E6416: harvest verdicts not UTF-8".into()))?,
+            String::from_utf8(audit)
+                .map_err(|_| TyuError::Build("E6416: harvest audit not UTF-8".into()))?,
         ));
     }
     Ok(out)
+}
+
+/// The axiom-audit evidence path for a harvest out path: the Lean writer
+/// appends `.audit.json` (no new env var — the pair travels together).
+fn audit_out_path(out_path: &Path) -> PathBuf {
+    let mut name = out_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("harvest")
+        .to_string();
+    name.push_str(".audit.json");
+    out_path.with_file_name(name)
+}
+
+/// Extract the typed E-code from a `tyu.harvest-error/1` document: the
+/// Lean writer emits `{"schema":…,"message":"<jstr-escaped err>"}`, and the
+/// harvest prefixes registry codes (`E6419: …`, `E6420: …`) on its hard
+/// failures. Returns `(code, decoded message)` when a leading code is
+/// present; `None` (the E6416 tool-failure class) when not — parse
+/// failures and metadata mismatches carry no code.
+fn harvest_error_code(doc: &str) -> Option<(u32, String)> {
+    const KEY: &str = "\"message\":\"";
+    let rest = &doc[doc.find(KEY)? + KEY.len()..];
+    let mut msg = String::new();
+    let mut chars = rest.chars();
+    loop {
+        match chars.next()? {
+            '"' => break,
+            '\\' => match chars.next()? {
+                'n' => msg.push('\n'),
+                't' => msg.push('\t'),
+                'r' => msg.push('\r'),
+                other => msg.push(other),
+            },
+            c => msg.push(c),
+        }
+    }
+    let body = msg.trim_start().strip_prefix('E')?;
+    let digits: usize = body.chars().take_while(|c| c.is_ascii_digit()).count();
+    if digits == 0 {
+        return None;
+    }
+    let code = body[..digits].parse::<u32>().ok()?;
+    let detail = body[digits..].trim_start_matches(':').trim_start();
+    Some((code, detail.to_string()))
 }
 
 // ---------------------------------------------------------------------------
@@ -1677,6 +1759,39 @@ mod tests {
             err.to_string().contains("P10"),
             "must name the phase: {err}"
         );
+    }
+
+    #[test]
+    fn harvest_error_code_surfaces_the_typed_registry_code() {
+        // The Lean writer's exact shape: a jstr-escaped message in the
+        // `tyu.harvest-error/1` document, prefixed with the registry code
+        // on hard failures.
+        let (code, msg) = harvest_error_code(
+            "{\"schema\":\"tyu.harvest-error/1\",\"message\":\"E6419: axiom audit \
+             failed for obl_Tiny_x — axioms: [\\\"sorryAx\\\"]\"}",
+        )
+        .expect("typed code present");
+        assert_eq!(code, 6419);
+        assert_eq!(
+            msg, "axiom audit failed for obl_Tiny_x — axioms: [\"sorryAx\"]",
+            "escapes decode"
+        );
+
+        let (code, msg) = harvest_error_code(
+            "{\"schema\":\"tyu.harvest-error/1\",\"message\":\"E6420: statement def \
+             missing from environment: Tyu.Gen.Corpus.Tiny.stmt_x\"}",
+        )
+        .expect("typed code present");
+        assert_eq!(code, 6420);
+        assert!(msg.starts_with("statement def missing"), "msg: {msg}");
+
+        // No leading code ⇒ the E6416 tool-failure class (parse failures,
+        // metadata mismatches).
+        assert!(harvest_error_code(
+            "{\"schema\":\"tyu.harvest-error/1\",\"message\":\"artifact parse: bad\"}"
+        )
+        .is_none());
+        assert!(harvest_error_code("not a harvest document").is_none());
     }
 
     #[test]

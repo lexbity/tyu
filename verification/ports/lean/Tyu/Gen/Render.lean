@@ -445,8 +445,8 @@ def renderPredicateHolds (a : Artifact) (o : Obl) (w : String) : String :=
   if o.kind == "contract-post" then
     let args := o.args.filterMap (fun arg =>
       match arg with
-      | .outVar i => some ("outputAt σf " ++ toString i)
-      | .inVar i => some ("inputAt σ₀ " ++ toString i)
+      | .outVar i => some ("Tyu.Gen.Stmt.outputAt σf " ++ toString i)
+      | .inVar i => some ("Tyu.Gen.Stmt.inputAt σ₀ " ++ toString i)
       | _ => none)
     "∀" ++ binders ++ " (σ₀ σf : Tyu.Step.State),\n    " ++
       "Tyu.Gen.Stmt.Word.run " ++ w ++ " spec fuel mem σ₀ = some σf →\n    " ++
@@ -531,15 +531,17 @@ def renderWordDefs (a : Artifact) : String :=
 
 /-- The contract-predicate block defs referenced by renderable contract
 statements (resolved from the transcluded ref or the module's
-`facts.predicates`). -/
-def renderPredicateDefs (a : Artifact) : String :=
+`facts.predicates`). A predicate that is itself a rendered word (its own
+obligations rendered, so `renderWordDefs` emitted its `Word` def) is
+skipped — one definition per name. -/
+def renderPredicateDefs (a : Artifact) (skip : List String) : String :=
   let used := a.obligations.filterMap (fun o =>
     match classify a o with
     | none => if o.formulaOp == "PredicateHolds"
                 then let ir := predIrOf a o; if ir.isEmpty then none else some (o.predName, ir)
                 else none
     | some _ => none) |>.eraseDups
-  String.intercalate "\n" (used.map (fun (pn, ir) =>
+  String.intercalate "\n" ((used.filter (fun (pn, _) => ¬ skip.contains pn)).map (fun (pn, ir) =>
     "/-- the contract predicate's CFG blocks (facts.predicates / transcluded ref) -/\n" ++
     "def " ++ wordRef a.module pn ++ "_blocks : List Tyu.Step.Block := " ++
     (renderBlocks (String.intercalate "\n" ir)).getD "[]" ++ "\n" ++
@@ -570,7 +572,11 @@ def renderModuleLean (a : Artifact) : String :=
                 "import Tyu.Gen.Stmt\n\n" ++
                 "namespace Tyu.Gen.Corpus." ++ ident a.module ++ "\n\n"
   let words := renderWordDefs a
-  let preds := renderPredicateDefs a
+  let wordNames := a.obligations.filterMap (fun o =>
+    match classify a o with
+    | none => some o.word
+    | some _ => none)
+  let preds := renderPredicateDefs a wordNames
   let stmts := renderAllStatements a
   let cycs := renderCycles a
   let tail := "\n\nend Tyu.Gen.Corpus." ++ ident a.module ++ "\n"
