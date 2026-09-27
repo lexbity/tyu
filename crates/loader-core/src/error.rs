@@ -61,6 +61,18 @@ pub enum LoadError {
     /// The modinfo version is not `MODINFO_VER` (v3 module on a v4 loader,
     /// decision D-12, E5224). Reject before any allocation — no shim.
     ModinfoVersionUnsupported,
+    /// The `verify_manifest` record is structurally malformed (P11, §6.5):
+    /// bad tag/length, fields out of the closed sets, unsorted obligation
+    /// ids, or a record exceeding the caps (E6500).
+    VerifyManifestMalformed,
+    /// The `verify_manifest` obligations region's SHA-256 does not match the
+    /// recorded digest — the manifest was tampered with or corrupted (E6501).
+    VerifyManifestDigest,
+    /// The platform's `verify_policy()` requirement is not satisfied by the
+    /// module's declared policy (E6502): e.g. a `RequireProven` platform
+    /// rejects an `open-ok`/`no-open` module, and a manifest-less module
+    /// under any requiring policy is rejected.
+    VerifyPolicyReject,
 }
 
 /// Allow converting from `u32` (legacy platform interface) to `LoadError`.
@@ -112,6 +124,9 @@ impl LoadError {
             Self::ApertureUnresolved => 5222,
             Self::ApertureTableMalformed => 5223,
             Self::ModinfoVersionUnsupported => 5224,
+            Self::VerifyManifestMalformed => 6500,
+            Self::VerifyManifestDigest => 6501,
+            Self::VerifyPolicyReject => 6502,
         }
     }
 }
@@ -138,6 +153,9 @@ pub const E_APERTURE_CONFLICT: u32 = LoadError::ApertureConflict.code();
 pub const E_APERTURE_UNRESOLVED: u32 = LoadError::ApertureUnresolved.code();
 pub const E_APERTURE_TABLE_MALFORMED: u32 = LoadError::ApertureTableMalformed.code();
 pub const E_MODINFO_VERSION_UNSUPPORTED: u32 = LoadError::ModinfoVersionUnsupported.code();
+pub const E_VERIFY_MANIFEST_MALFORMED: u32 = LoadError::VerifyManifestMalformed.code();
+pub const E_VERIFY_MANIFEST_DIGEST: u32 = LoadError::VerifyManifestDigest.code();
+pub const E_VERIFY_POLICY_REJECT: u32 = LoadError::VerifyPolicyReject.code();
 pub const E_ENC_UNSUPPORTED: u32 = LoadError::EncUnsupported.code();
 pub const E_ENC_REQUIRES_SIGNED: u32 = LoadError::EncRequiresSigned.code();
 pub const E_ENC_NO_KEY: u32 = LoadError::EncNoKey.code();

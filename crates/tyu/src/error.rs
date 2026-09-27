@@ -51,6 +51,13 @@ pub enum TyuError {
     #[error("E{code}: harvest: {detail}")]
     Harvest { code: u32, detail: String },
 
+    /// A deploy-time pairing rejection (§Q7 rule 3, P11.3): the deployed
+    /// module's `verify_manifest` does not satisfy the deploy's
+    /// `--verify-policy` requirement — E6510 (an `unmodeled` bundle, or a
+    /// manifest whose declared policy is below the requirement).
+    #[error("E{code}: verify pairing: {detail}")]
+    VerifyPairing { code: u32, detail: String },
+
     #[error("compilation failed on '{}'", path.display())]
     CompileFailed { path: std::path::PathBuf },
 

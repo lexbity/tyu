@@ -100,7 +100,19 @@ fn main() {
                         Err(e) => Err(e),
                     }
                 }
-                args::ProofArgs::Fill => tyu::proof::proof_fill(),
+                args::ProofArgs::Fill {
+                    dir,
+                    input,
+                    fill_budget,
+                } => match tyu::proof::project_root_for(dir.as_deref()) {
+                    Ok(root) => {
+                        let filled =
+                            tyu::proof::proof_fill(&root, input.as_deref(), &[], None, fill_budget);
+                        let _ = filled;
+                        filled.map(|_| ())
+                    }
+                    Err(e) => Err(e),
+                },
             };
             if let Err(e) = result {
                 eprintln!("tyu: proof error: {}", e);

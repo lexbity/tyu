@@ -1022,6 +1022,38 @@ fi
 [ "$g32_fail" -eq 0 ] && msg $GREEN "  G32: T-C substrate (Step + Sound theorems, axiom audit, stackmeta goldens + exporter)"
 failures=$((failures + g32_fail))
 
+# --- G40: PLAN-VERIFY-3 P11 — verify_manifest + loader policy surface ---
+# The in-module verification anchor (P11) must be present as live surface:
+# the record codec (lmod), the pack writer (lmod-pack), the loader
+# validation + policy hook (E6500/6501/6502 in loader-core), the deploy
+# pairing gate (E6510 in tyu), and their tests. Behaviour is exercised by
+# the test suites; this gate pins the surface in the regular Rust CI.
+g40_fail=0
+if [ ! -f crates/lmod/src/verify_manifest.rs ]; then
+    msg $RED "  G40 FAIL: verify_manifest record codec missing (crates/lmod/src/verify_manifest.rs)"
+    g40_fail=1
+fi
+for c in VerifyManifestMalformed VerifyManifestDigest VerifyPolicyReject; do
+    if ! grep -q "$c" crates/loader-core/src/error.rs; then
+        msg $RED "  G40 FAIL: LoadError::$c missing (E6500/6501/6502)"
+        g40_fail=1
+    fi
+done
+if ! grep -q "fn verify_policy" crates/loader-core/src/platform.rs; then
+    msg $RED "  G40 FAIL: LoaderPlatform::verify_policy hook missing"
+    g40_fail=1
+fi
+if ! grep -q "fn validate_verify_manifest" crates/loader-core/src/load.rs; then
+    msg $RED "  G40 FAIL: loader verify_manifest validation missing"
+    g40_fail=1
+fi
+if ! grep -q "VerifyPairing" crates/tyu/src/error.rs || ! grep -q "E6510" crates/tyu/src/deploy.rs; then
+    msg $RED "  G40 FAIL: deploy pairing (E6510) missing"
+    g40_fail=1
+fi
+[ "$g40_fail" -eq 0 ] && msg $GREEN "  G40: verify_manifest surface (codec + loader policy + deploy pairing)"
+failures=$((failures + g40_fail))
+
 # --- G28: PLAN-VERIFY-3 §P0 — workspace bar: rustfmt ---
 # Every slice ends `cargo fmt --check` green (§P0 workspace bar). The gate is
 # the check itself — mechanical, zero judgement, no bypass path short of
@@ -1492,6 +1524,47 @@ if ! grep -q "P9.3 fragment" ci/port.sh; then
 fi
 [ "$g39_fail" -eq 0 ] && msg $GREEN "  G39: P9.3 fragment-vector corpus (tyu.fragvec/1): Rust generator + cross_surface execution + port runner + port gate — the Lean↔Rust fragment pin"
 failures=$((failures + g39_fail))
+
+# G40: PLAN-VERIFY-3 P10 — the automation surface (tactic library, candidate
+# pipeline, attribution, deploy knob) with the §P0 discipline gates.
+g40_fail=0
+[ -d "$PORT_DIR/Tyu/Automation" ] || { msg $RED "  G40 FAIL: missing Tyu/Automation library"; g40_fail=1; }
+grep -q 'elab "tyu_auto"' "$PORT_DIR/Tyu/Automation/Auto.lean" || { msg $RED "  G40 FAIL: tyu_auto dispatcher missing"; g40_fail=1; }
+grep -q 'elab "auto_cycle"' "$PORT_DIR/Tyu/Automation/Cycle.lean" || { msg $RED "  G40 FAIL: auto_cycle missing"; g40_fail=1; }
+grep -q "via_cycles_sound" "$PORT_DIR/Tyu/Automation/Auto.lean" || { msg $RED "  G40 FAIL: via_cycles_sound missing (the composition theorem)"; g40_fail=1; }
+grep -q "automation_rate" "$PORT_DIR/lakefile.toml" || { msg $RED "  G40 FAIL: automation_rate exe not registered"; g40_fail=1; }
+grep -q "name = \"fill\"" "$PORT_DIR/lakefile.toml" || { msg $RED "  G40 FAIL: fill exe not registered"; g40_fail=1; }
+grep -q "tyu:candidate obligation" crates/tyu/src/proof.rs || { msg $RED "  G40 FAIL: candidate markers not implemented in tyu proof fill"; g40_fail=1; }
+grep -q "TYU_HARVEST_CANDIDATES" crates/tyu/src/proof.rs || { msg $RED "  G40 FAIL: harvest candidate attribution env missing"; g40_fail=1; }
+grep -q 'authoredOf' "$PORT_DIR/Tyu/Verdicts/Harvest.lean" || { msg $RED "  G40 FAIL: harvest authoredOf missing"; g40_fail=1; }
+grep -q "proven_no_candidates" crates/tyu/src/args.rs || { msg $RED "  G40 FAIL: --proven-no-candidates knob missing"; g40_fail=1; }
+grep -q "candidates" crates/verifier/src/report.rs || { msg $RED "  G40 FAIL: report candidate field missing"; g40_fail=1; }
+# FR-15: no serde anywhere new (P10 touches proof.rs).
+grep -rn "serde" crates/tyu/src/proof.rs && { msg $RED "  G40 FAIL: serde in proof.rs (FR-15)"; g40_fail=1; } || true
+# FR-14: the new codecs' digests are SHA-256 (candidates.json has no digests;
+# the statement_hash already uses sha256). Guard the fnv boundary: candidate
+# ids are NOT integrity digests anywhere (they travel as ids only).
+grep -rn "fnv" crates/tyu/src/proof.rs && { msg $RED "  G40 FAIL: fnv used in the P10 attribution path (FR-14 boundary)"; g40_fail=1; } || true
+grep -q "P10 automation" ci/port.sh || { msg $RED "  G40 FAIL: the P10 gate is not wired into ci/port.sh"; g40_fail=1; }
+grep -q "Tyu.Automation.via_cycles_sound" "$PORT_DIR/AxiomAudit.lean" || { msg $RED "  G40 FAIL: via_cycles_sound not axiom-audited"; g40_fail=1; }
+[ "$g40_fail" -eq 0 ] && msg $GREEN "  G40: PLAN-VERIFY-3 P10 automation (Tyu.Automation library + exes + tyu proof fill + harvest attribution + --proven-no-candidates + axiom audit + port gate)"
+failures=$((failures + g40_fail))
+
+# G41: PLAN-VERIFY-3 P11.1/P11.3 — the automatic verify_manifest + the
+# image-level deploy pairing (FR-8): the `tyu.vm/1` producer emits real
+# (computed) hashes, and `tyu deploy` walks the import graph under a
+# requiring policy (proven rejects unproven callees by name).
+g41_fail=0
+grep -q "write_module_summaries" crates/tyu/src/build.rs || { msg $RED "  G41 FAIL: build does not emit the per-module tyu.vm/1 summaries"; g41_fail=1; }
+[ -f crates/tyu/src/vm_summary.rs ] || { msg $RED "  G41 FAIL: missing the tyu.vm/1 producer (vm_summary.rs)"; g41_fail=1; }
+grep -q "statement_hash_hex" crates/tyu/src/vm_summary.rs || { msg $RED "  G41 FAIL: the summary must carry the canonical statement hashes"; g41_fail=1; }
+grep -q "fn check_image_pairing" crates/tyu/src/deploy.rs || { msg $RED "  G41 FAIL: missing the image-level pairing gate"; g41_fail=1; }
+grep -q "unproven callee" crates/tyu/src/deploy.rs || { msg $RED "  G41 FAIL: the pairing gate must reject unproven callees by name"; g41_fail=1; }
+grep -q "resolve_graph" crates/tyu/src/deploy.rs || { msg $RED "  G41 FAIL: the pairing gate must walk the import graph"; g41_fail=1; }
+[ -f crates/tyu/tests/vm_manifest.rs ] || { msg $RED "  G41 FAIL: missing the tyu.vm/1 producer test"; g41_fail=1; }
+grep -q "proven_deploy_walks_the_import_graph" crates/tyu/tests/deploy_verify_policy.rs || { msg $RED "  G41 FAIL: missing the two-module pairing test"; g41_fail=1; }
+[ "$g41_fail" -eq 0 ] && msg $GREEN "  G41: P11.1/P11.3 — automatic tyu.vm/1 producer + image-level deploy pairing (FR-8, compositional rule)"
+failures=$((failures + g41_fail))
 
 echo ""
 msg $GREEN "============================================"

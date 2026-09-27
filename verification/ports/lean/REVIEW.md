@@ -78,6 +78,7 @@ Tyu.Sound.Bound.compose_wf
 Tyu.Sound.seq_net_exact
 Tyu.Sound.seq_peak_envelope
 Tyu.Gen.Stmt.via_cycle_sound
+Tyu.Automation.via_cycles_sound
 Tyu.Sound.AssumptionClosure.transitive_closure_sound
 Tyu.Sound.AssumptionClosure.cyclic_not_well_closed
 Tyu.Sound.AssumptionClosure.open_edge_not_well_closed

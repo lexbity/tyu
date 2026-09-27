@@ -110,6 +110,7 @@ pub fn compose_and_write_report(
     elide_ds_guards: bool,
     proof: &verifier::report::ProofStatus,
     verify_env: &crate::proof::VerifyEnvKey,
+    proven_no_candidates: bool,
 ) -> Result<PathBuf, TyuError> {
     let elision = if elide_ds_guards {
         &GUARDS_ELIDED
@@ -139,6 +140,18 @@ pub fn compose_and_write_report(
     // report documents `policy: "off"`); the gate does not apply.
     if verify == VerifyMode::On {
         enforce_policy(&report, policy)?;
+    }
+    // P10.2 (§Q10): `--proven-no-candidates` — a proven build must have no
+    // candidate-authored certificate (a fleet-operator process knob; the
+    // default admits candidates, which are kernel-checked). Fail-loud here
+    // (the report is already written with the attribution).
+    if proven_no_candidates && policy.is_proven() {
+        let cand_total: u32 = report.proof.statements.iter().map(|s| s.candidates).sum();
+        if cand_total > 0 {
+            return Err(TyuError::Build(format!(
+                "E6416: --proven-no-candidates: {cand_total} candidate-authored                  certificate(s) in the image — review the candidates under                  proofs/candidates/ (remove the `-- tyu:candidate` markers to                  acknowledge review) or drop the flag"
+            )));
+        }
     }
     // NFR-9: one-line accounting summary on stderr.
     let (total, discharged, assumed, open) = report_totals(&report);

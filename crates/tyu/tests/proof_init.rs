@@ -114,16 +114,22 @@ fn proof_init_without_input_scaffolds_the_bare_root() {
 }
 
 #[test]
-fn proof_fill_is_registered_with_an_honest_not_yet() {
+fn proof_fill_fails_closed_without_extracted_artifacts() {
     let dir = fresh_dir("fill");
+    // Without a prior `tyu build --verify-tool=lean` extraction (and, in the
+    // hermetic tier, possibly without the port toolchain), `proof fill` must
+    // fail closed with the honest E6416 that names the missing artifact
+    // source — never a fabricated candidate.
     let out = Command::new(tyu_exe())
         .current_dir(&dir)
         .args(["proof", "fill"])
         .output()
         .expect("tyu proof fill");
-    assert!(!out.status.success(), "fill must fail honestly in P6");
+    assert!(
+        !out.status.success(),
+        "fill must fail closed without artifacts"
+    );
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("P10"), "must name the phase: {stderr}");
     assert!(stderr.contains("E6416"), "fail-closed code: {stderr}");
     let _ = fs::remove_dir_all(&dir);
 }

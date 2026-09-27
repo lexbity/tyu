@@ -8,7 +8,7 @@ description = "Host-side runtime glue for Tyu binaries."
 doctest = false
 
 [dependencies]
-loader-core = { path = "../loader-core" }
+loader-core = { path = "../loader-core", features = ["verify-manifest"] }
 lmod = { path = "../lmod" }
 
 [features]

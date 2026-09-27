@@ -95,10 +95,13 @@ fn default_build_populates_cache_and_second_build_hits() {
         "one-line summary (NFR-9): {first}"
     );
     let cache_dir = out_dir.join(".tyu-verify");
+    // The dir also carries the P11.1 `tyu.vm/1` summary sibling; the verdicts
+    // cache slot is the `.verdicts.json` entry (exactly one per module).
     let entries: Vec<String> = fs::read_dir(&cache_dir)
         .unwrap()
         .filter_map(|e| e.ok())
         .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".verdicts.json"))
         .collect();
     assert_eq!(
         entries.len(),
@@ -156,9 +159,13 @@ fn corrupt_cache_slot_self_heals_as_a_miss() {
     let slot = fs::read_dir(&cache_dir)
         .unwrap()
         .filter_map(|e| e.ok())
-        .next()
-        .unwrap()
-        .path();
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.ends_with(".verdicts.json"))
+        })
+        .expect("the verdicts cache slot must exist");
     fs::write(&slot, b"not a verdicts file at all {").unwrap();
 
     let third = build_once();

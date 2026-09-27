@@ -21,6 +21,7 @@ lmod = { path = "../lmod" }
 thiserror = "2"
 lang-symtab-gen = { path = "../lang-symtab-gen" }
 lmod-pack = { path = "../lmod-pack" }
+sha2 = { version = "0.10", default-features = false }
 lmod-encrypt = { path = "../lmod-encrypt" }
 lmod-sign = { path = "../lmod-sign" }
 serde = { version = "1", features = ["derive"] }

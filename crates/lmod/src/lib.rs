@@ -16,3 +16,4 @@ pub mod modinfo;
 pub mod reloc;
 pub mod sig;
 pub mod validate;
+pub mod verify_manifest;

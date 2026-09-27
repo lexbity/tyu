@@ -45,16 +45,25 @@ structure Inputs where
   genDir : String
   obl : String
   out : String
+  candidates : List String
 
 def getInputs : CommandElabM (Option Inputs) := do
   let g ← liftIO $ IO.getEnv "TYU_HARVEST_GEN_DIR"
   let o ← liftIO $ IO.getEnv "TYU_HARVEST_OBL"
   let out ← liftIO $ IO.getEnv "TYU_HARVEST_OUT"
+  let cand ← liftIO $ IO.getEnv "TYU_HARVEST_CANDIDATES"
   match g, o, out with
   | some g, some o, some out =>
       if g == "" || o == "" || out == "" then pure none
-      else pure (some ⟨g, o, out⟩)
+      else pure (some ⟨g, o, out, (cand.getD "").splitOn "\n" |>.filter (fun c => c ≠ "")⟩)
   | _, _, _ => pure none
+
+/-- The §Q10 attribution of a harvested certificate: a candidate (a fill-
+generated, unreviewed file carrying the marker) is `"candidate"` — the
+kernel vouches for validity; the report/package flag it so a reviewer knows
+what they are signing. -/
+def authoredOf (id : String) (candidates : List String) : String :=
+  if candidates.any (fun c => c == id) then "candidate" else "developer"
 
 -- --------------------------------------------------------------------------
 -- Gen metadata rows (`tyu.gen/1`)
@@ -178,8 +187,10 @@ def jarrOf (xs : List String) : String :=
 /-- A discharged certificate record (§6.3). `surface` is the proof surface
 (`"ir"` or `"source"`); `relies` names the registry theorems the surface
 rests on (`["T-S"]` for a source certificate, §Q2 — emitted only when
-nonempty). -/
-def certRecord (surface : String) (relies : List String) (id : String) (idHash : String)
+nonempty). `authored` is `"developer"` or `"candidate"` (P10: the fill-
+generated, unreviewed candidates carry the marker; the kernel vouches for
+validity, the attribution records who/what wrote it). -/
+def certRecord (authored surface : String) (relies : List String) (id : String) (idHash : String)
     (statementHash : String) (thmName : String) (file : String) : String :=
   let proofKvs : List (String × String) :=
     [ ("kind", Tyu.Gen.Render.jstr "certificate")
@@ -198,7 +209,7 @@ def certRecord (surface : String) (relies : List String) (id : String) (idHash :
     , ("method", Tyu.Gen.Render.jstr "certificate")
     , ("surface", Tyu.Gen.Render.jstr surface)
     , ("statement_hash", Tyu.Gen.Render.jstr statementHash)
-    , ("authored", Tyu.Gen.Render.jstr "developer")
+    , ("authored", Tyu.Gen.Render.jstr authored)
     , ("proof", jobjOf proofKvs) ]
 
 /-- An open record (unproven is a state, not a fault). -/
@@ -259,7 +270,7 @@ def harvestModule (inputs : Inputs) (document : String) :
                 return .error ("E6419: axiom audit failed for " ++ thm.name
                   ++ " — axioms: " ++ toString thm.axioms)
               auditRows := (thm.name, sortBy (fun s => s) thm.axioms) :: auditRows
-              records := (o.id, certRecord "ir" [] o.id o.idHash m.statementHash thm.name
+              records := (o.id, certRecord (authoredOf o.id inputs.candidates) "ir" [] o.id o.idHash m.statementHash thm.name
                            ("proofs/" ++ a.module ++ ".lean")) :: records
           | none =>
               -- P9: source-surface certificates — a theorem of `src_stmt_…`
@@ -280,7 +291,7 @@ def harvestModule (inputs : Inputs) (document : String) :
                       return .error ("E6419: axiom audit failed for " ++ thm.name
                         ++ " — axioms: " ++ toString thm.axioms)
                     auditRows := (thm.name, sortBy (fun s => s) thm.axioms) :: auditRows
-                    records := (o.id, certRecord "source" ["T-S"] o.id o.idHash m.statementHash thm.name
+                    records := (o.id, certRecord (authoredOf o.id inputs.candidates) "source" ["T-S"] o.id o.idHash m.statementHash thm.name
                                  ("proofs/" ++ a.module ++ ".lean")) :: records
                 | none =>
                     records := (o.id, openRecord o.id o.idHash "unproven") :: records

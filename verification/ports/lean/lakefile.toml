@@ -24,3 +24,13 @@ root = "Main"
 name = "gen"
 srcDir = "."
 root = "GenMain"
+
+[[lean_exe]]
+name = "automation_rate"
+srcDir = "."
+root = "AutomationMain"
+
+[[lean_exe]]
+name = "fill"
+srcDir = "."
+root = "FillMain"

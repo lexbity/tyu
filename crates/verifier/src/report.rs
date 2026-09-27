@@ -229,6 +229,11 @@ pub struct ModuleStatements {
     /// P7.1: kernel-checked certificate counts from the harvest.
     pub proven: u32,
     pub unproven: u32,
+    /// P10.2: of the harvested `proof` certificates, how many are
+    /// candidate-authored (`authored: "candidate"` — fill-generated,
+    /// unreviewed, kernel-gated). The report/package flag them so a reviewer
+    /// knows what they are signing (§Q10).
+    pub candidates: u32,
 }
 
 /// The report's proof section (P6.2; the §Q6 trust/method/surface accounting

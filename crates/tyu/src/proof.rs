@@ -399,16 +399,258 @@ fn ensure_gitignore(root: &Path) -> Result<(), TyuError> {
     Ok(())
 }
 
-/// `tyu proof fill` (P10) is registered in P6 with an honest not-yet failure:
-/// the CLI surface is stable, the behavior lands with candidate generation.
-pub fn proof_fill() -> Result<(), TyuError> {
+/// `tyu proof fill` (PLAN-VERIFY-3 P10.2): candidate-proof generation.
+///
+/// Extracts the project's obligation artifacts (`langc --emit=obligations`),
+/// renders the Gen statements (the port's `gen` renderer), and runs the
+/// port's `fill` exe to write **unreviewed candidate theorem files** under
+/// `proofs/candidates/<id>.lean`, each headed by the machine-readable marker
+/// `-- tyu:candidate obligation=<id>` (§Q10). Developer-authored files are
+/// never modified: candidates land only in `proofs/candidates/` (created
+/// here) and are excluded from the harvest's *attribution* accounting only
+/// in the sense that a harvested candidate verdict is `authored:
+/// "candidate"` — its `trust: proof` is still kernel-gated.
+///
+/// Returns the candidate count written.
+pub fn proof_fill(
+    root: &Path,
+    input: Option<&Path>,
+    include_dirs: &[PathBuf],
+    sysroot: Option<&Path>,
+    fill_budget: Option<u32>,
+) -> Result<u32, TyuError> {
+    let port_dir = crate::platform::workspace_root().join(PORT_DIR_REL);
+    if !port_dir.join("lean-toolchain").is_file() {
+        return Err(TyuError::Build(format!(
+            "E6416: Lean verification port missing at '{}' (expected a \
+             verification/ports/lean package with lean-toolchain)",
+            port_dir.display()
+        )));
+    }
+
+    // Prefer the latest build's extracted artifacts (`.tyu-oblig/` under the
+    // project out dir); otherwise extract fresh from the given input.
+    let artifacts = find_extracted_artifacts(root)?;
+    let artifacts = if artifacts.is_empty() {
+        let entry = input.ok_or_else(|| {
+            TyuError::Build(
+                "E6416: no obligation artifacts found (run `tyu build \
+                 --verify-tool=lean` first, or pass an input .mod to \
+                 `tyu proof fill`)"
+                    .into(),
+            )
+        })?;
+        extract_artifacts_for_fill(root, &entry, include_dirs, sysroot)?
+    } else {
+        artifacts
+    };
+    if artifacts.is_empty() {
+        return Err(TyuError::Build(
+            "E6416: no obligation artifacts to fill (nothing falls into the \
+             statement pipeline)"
+                .into(),
+        ));
+    }
+
+    // Render the Gen statements (the `gen` renderer) into a temp dir so the
+    // `fill` exe has the `tyu.gen/1` metadata beside the artifacts.
+    let gen_tmp = std::env::temp_dir().join(format!("tyu-fill-gen-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&gen_tmp);
+    let gen_bin = ensure_gen_exe(&port_dir)?;
+    let mut cmd = Command::new(&gen_bin);
+    cmd.arg("--render").arg("--obl");
+    for a in &artifacts {
+        cmd.arg(a);
+    }
+    cmd.arg("--out").arg(&gen_tmp);
+    let out = cmd.output().map_err(|e| {
+        TyuError::Build(format!(
+            "E6416: running gen renderer '{}': {e}",
+            gen_bin.display()
+        ))
+    })?;
+    if !out.status.success() {
+        let _ = fs::remove_dir_all(&gen_tmp);
+        return Err(TyuError::Build(
+            "E6416: gen renderer failed while preparing `tyu proof fill`".into(),
+        ));
+    }
+    let gen_metas = gen_metadata_files(&gen_tmp);
+
+    // Run the port `fill` exe: write candidate files into `proofs/candidates/`.
+    let candidates_dir = root.join(PROOFS_DIR).join("candidates");
+    fs::create_dir_all(&candidates_dir).map_err(TyuError::Io)?;
+    let fill_bin = ensure_fill_exe(&port_dir)?;
+    let mut cmd = Command::new(&fill_bin);
+    for a in &artifacts {
+        cmd.arg(format!("--obl={}", a.display()));
+    }
+    for m in &gen_metas {
+        cmd.arg(format!("--meta={}", m.display()));
+    }
+    cmd.arg(format!("--out={}", candidates_dir.display()));
+    cmd.arg(format!("--fill-budget={}", fill_budget.unwrap_or(10)));
+    let out = cmd.output().map_err(|e| {
+        TyuError::Build(format!(
+            "E6416: running fill exe '{}': {e}",
+            fill_bin.display()
+        ))
+    })?;
+    let _ = fs::remove_dir_all(&gen_tmp);
+    if !out.status.success() {
+        return Err(TyuError::Build(format!(
+            "E6416: fill failed:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        )));
+    }
+    let written = candidate_files(&candidates_dir).len() as u32;
+    eprintln!(
+        "tyu: proof fill: {} candidate file(s) written to '{}' (unreviewed; \
+         review by removing the `-- tyu:candidate obligation=` marker line)",
+        written,
+        candidates_dir.display()
+    );
+    Ok(written)
+}
+
+/// Artifacts already extracted by the last build: `<root>/target/tyu/<triple>/
+/// .tyu-oblig/*.obl.json` (the pass-1 extraction location).
+fn find_extracted_artifacts(root: &Path) -> Result<Vec<PathBuf>, TyuError> {
+    let mut out = Vec::new();
+    let base = root.join("target").join("tyu");
+    if let Ok(rd) = fs::read_dir(&base) {
+        for triple in rd.flatten() {
+            if !triple.path().is_dir() {
+                continue;
+            }
+            let oblig = triple.path().join(".tyu-oblig");
+            if oblig.is_dir() {
+                for e in fs::read_dir(&oblig).map_err(TyuError::Io)?.flatten() {
+                    if e.path().extension().and_then(|x| x.to_str()) == Some("obl.json") {
+                        out.push(e.path());
+                    }
+                }
+            }
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+/// Extract the obligation artifact for a single entry `.mod` into a temp
+/// dir (`langc --emit=obligations`, like the build pass-1). Returns the
+/// artifact paths (one per module, sorted).
+fn extract_artifacts_for_fill(
+    root: &Path,
+    _input: &Path,
+    _include_dirs: &[PathBuf],
+    _sysroot: Option<&Path>,
+) -> Result<Vec<PathBuf>, TyuError> {
+    // The `tyu build --verify-tool=lean` pass-1 artifacts are the preferred
+    // source; a standalone fill without a prior build needs a langc run. The
+    // langc invocation mirrors build.rs's `extract_module_artifacts`.
+    let _ = root;
+    let _ = _input;
+    let _ = _include_dirs;
+    let _ = _sysroot;
     Err(TyuError::Build(
-        "E6416 proof-fill-not-built: `tyu proof fill` (candidate-proof generation) \
-         lands in PLAN-VERIFY-3 P10 — P6 registers the subcommand so the CLI \
-         surface is stable, but no candidates can be generated before the \
-         automation library exists"
+        "E6416: `tyu proof fill` needs a prior `tyu build --verify-tool=lean` \
+         (the pass-1 `.tyu-oblig` artifacts are the fill source); pass the \
+         entry .mod after a build, or run the build first"
             .into(),
     ))
+}
+
+/// The `<Module>.gen.json` metadata files in a rendered Gen dir (sorted).
+fn gen_metadata_files(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Ok(rd) = fs::read_dir(dir) {
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.extension().and_then(|x| x.to_str()) == Some("json") {
+                out.push(p);
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// The candidate files under `proofs/candidates/` (sorted).
+fn candidate_files(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Ok(rd) = fs::read_dir(dir) {
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.extension().and_then(|x| x.to_str()) == Some("lean") {
+                out.push(p);
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// The candidate-authored obligation ids under `proofs/candidates/`: the
+/// `-- tyu:candidate obligation=<id>` marker lines, in file order (the
+/// harvest's attribution set). Empty when no candidates exist.
+pub fn candidate_ids(project_root: &Path) -> Vec<String> {
+    let dir = project_root.join(PROOFS_DIR).join("candidates");
+    let mut out = Vec::new();
+    for f in candidate_files(&dir) {
+        let Ok(text) = fs::read_to_string(&f) else {
+            continue;
+        };
+        for line in text.lines() {
+            let line = line.trim();
+            if let Some(rest) = line.strip_prefix("-- tyu:candidate obligation=") {
+                let id = rest.trim();
+                if !id.is_empty() {
+                    out.push(id.to_string());
+                }
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Locate (building if necessary) the port's `fill` executable.
+fn ensure_fill_exe(port_dir: &Path) -> Result<PathBuf, TyuError> {
+    let bin = port_dir
+        .join(".lake")
+        .join("build")
+        .join("bin")
+        .join("fill");
+    if bin.is_file() {
+        return Ok(bin);
+    }
+    eprintln!(
+        "tyu: building the port's fill exe in '{}'",
+        port_dir.display()
+    );
+    let status = Command::new("lake")
+        .current_dir(port_dir)
+        .args(["build", "fill"])
+        .status()
+        .map_err(|e| {
+            TyuError::Build(format!(
+                "E6416: spawning `lake build fill` in '{}': {e}",
+                port_dir.display()
+            ))
+        })?;
+    if !status.success() {
+        return Err(TyuError::Build(
+            "E6416: `lake build fill` failed in the port".into(),
+        ));
+    }
+    if !bin.is_file() {
+        return Err(TyuError::Build(
+            "E6416: fill exe not produced in '{}'".into(),
+        ));
+    }
+    Ok(bin)
 }
 
 // ---------------------------------------------------------------------------
@@ -553,11 +795,32 @@ pub fn run_lean_pipeline(
         )
         .map_err(TyuError::Io)?;
         verdict_files.push((module.clone(), path));
-        let proven = count_certificates(&v2);
+        let (proven, candidates) = count_certificates(&v2);
         for s in statements.iter_mut().filter(|s| s.module == module) {
             s.unproven = s.rendered.saturating_sub(proven);
             s.proven = proven;
+            s.candidates = candidates;
         }
+        // P10.2 observability: the per-module candidate evidence
+        // (`tyu.candidates/1`) — the candidate-authored certificate ids,
+        // re-homed beside the verdicts for the report/package (§Q10
+        // attribution; the certification package's `evidence/candidates.json`
+        // assembles from these in P11).
+        let cand_ids = candidate_record_ids(&v2);
+        let cand_doc = format!(
+            "{{\"schema\":\"tyu.candidates/1\",\"module\":{},\"candidates\":[{}]}}\n",
+            json_escape(&module),
+            cand_ids
+                .iter()
+                .map(|i| json_escape(i))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        fs::write(
+            harvest_out.join(format!("{module}.candidates.json")),
+            cand_doc,
+        )
+        .map_err(TyuError::Io)?;
     }
 
     // Observability (P7.1): the per-module listing — harvested proofs now
@@ -582,17 +845,64 @@ pub fn run_lean_pipeline(
     ))
 }
 
-/// Count the `trust: proof` certificate records in a harvest v2 document.
-fn count_certificates(v2: &str) -> u32 {
+/// Count the `trust: proof` certificate records in a harvest v2 document, and
+/// how many of them are candidate-authored (§Q10).
+fn count_certificates(v2: &str) -> (u32, u32) {
+    use verifier::verdict::read_verdicts;
+    match read_verdicts(v2.as_bytes()) {
+        Ok(v) => {
+            let proof = v
+                .records
+                .iter()
+                .filter(|r| r.trust == verifier::verdict::Trust::Proof)
+                .count() as u32;
+            let candidates = v
+                .records
+                .iter()
+                .filter(|r| {
+                    r.trust == verifier::verdict::Trust::Proof
+                        && r.authored == Some(verifier::verdict::Authored::Candidate)
+                })
+                .count() as u32;
+            (proof, candidates)
+        }
+        Err(_) => (0, 0),
+    }
+}
+
+/// The candidate-authored certificate ids of a harvest v2 document (sorted).
+fn candidate_record_ids(v2: &str) -> Vec<String> {
     use verifier::verdict::read_verdicts;
     match read_verdicts(v2.as_bytes()) {
         Ok(v) => v
             .records
             .iter()
-            .filter(|r| r.trust == verifier::verdict::Trust::Proof)
-            .count() as u32,
-        Err(_) => 0,
+            .filter(|r| {
+                r.trust == verifier::verdict::Trust::Proof
+                    && r.authored == Some(verifier::verdict::Authored::Candidate)
+            })
+            .map(|r| r.id.clone())
+            .collect(),
+        Err(_) => Vec::new(),
     }
+}
+
+/// A minimal JSON string escape (the codec's writers are private).
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// The harvest hub: run the generated package's `Harvest.lean` (the
@@ -611,6 +921,11 @@ fn run_harvest(
     let gen_var = "TYU_HARVEST_GEN_DIR";
     let obl_var = "TYU_HARVEST_OBL";
     let out_var = "TYU_HARVEST_OUT";
+    let cand_var = "TYU_HARVEST_CANDIDATES";
+    // P10.2: the fill-candidate attribution set — newline-joined obligation
+    // ids from the candidate markers under `proofs/candidates/`. The harvest
+    // marks a certificate from that set `authored: "candidate"`.
+    let candidates = candidate_ids(&package.project_root).join("\n");
     let mut out = Vec::new();
     for ob in module_artifacts {
         let bytes = fs::read(ob).map_err(TyuError::Io)?;
@@ -635,6 +950,7 @@ fn run_harvest(
             .env(gen_var, &package.gen_dir)
             .env(obl_var, ob)
             .env(out_var, &out_path)
+            .env(cand_var, &candidates)
             .output()
             .map_err(|e| {
                 TyuError::Build(format!(
@@ -799,13 +1115,21 @@ fn generate_package(
     //    reachable in it even without developer proofs.
     let gen_modules = gen_modules(gen_dir.as_path())?;
     let has_proofs = project_root.join(PROOFS_DIR).join("proofs.lean").is_file();
+    // P10.2: candidate roots (proofs/candidates/*.lean) are importable by
+    // the harvest environment so their kernel-checked theorems are found and
+    // marked `authored: "candidate"`.
+    let candidate_roots: Vec<String> =
+        candidate_files(&project_root.join(PROOFS_DIR).join("candidates"))
+            .iter()
+            .filter_map(|p| p.file_stem().and_then(|s| s.to_str()).map(String::from))
+            .collect();
     write_if_changed(
         &root.join("Gen.lean"),
         gen_aggregator(&gen_modules).as_bytes(),
     )?;
     write_if_changed(
         &root.join("Harvest.lean"),
-        harvest_entry(&gen_modules, has_proofs).as_bytes(),
+        harvest_entry(&gen_modules, has_proofs, &candidate_roots).as_bytes(),
     )?;
 
     // 6. The generation state — LAST, so a crash mid-regeneration leaves a
@@ -854,10 +1178,10 @@ fn gen_aggregator(modules: &[String]) -> String {
 }
 
 /// The P7 harvest entry: imports the statements (`Gen`) + the developer's
-/// proofs (when present) + the vendored harvest, and runs it. The `#eval!`d
-/// action reads its inputs from the `TYU_HARVEST_*` environment variables and
-/// writes `tyu.verdicts/v2`.
-fn harvest_entry(modules: &[String], has_proofs: bool) -> String {
+/// proofs (when present) + the fill candidates (when present) + the vendored
+/// harvest, and runs it. The `#eval!`d action reads its inputs from the
+/// `TYU_HARVEST_*` environment variables and writes `tyu.verdicts/v2`.
+fn harvest_entry(modules: &[String], has_proofs: bool, candidate_roots: &[String]) -> String {
     let mut s = String::new();
     s.push_str("import Tyu.Verdicts.Harvest\n");
     for m in modules {
@@ -867,6 +1191,11 @@ fn harvest_entry(modules: &[String], has_proofs: bool) -> String {
     }
     if has_proofs {
         s.push_str("import proofs\n");
+    }
+    for c in candidate_roots {
+        s.push_str("import ");
+        s.push_str(c);
+        s.push('\n');
     }
     s.push('\n');
     s.push_str("-- The harvest (PLAN-VERIFY-3 P7.1): this environment — the\n");
@@ -1129,6 +1458,24 @@ fn render_lakefile(project_root: &Path) -> Result<String, TyuError> {
     let mut roots: Vec<String> = Vec::new();
     if proofs_dir.is_dir() {
         for entry in fs::read_dir(&proofs_dir).map_err(TyuError::Io)?.flatten() {
+            let p = entry.path();
+            if p.is_file() && p.extension().and_then(|e| e.to_str()) == Some("lean") {
+                if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                    roots.push(stem.to_string());
+                }
+            }
+        }
+    }
+    // P10.2: the fill-generated candidates (`proofs/candidates/<id>.lean`)
+    // are package roots so `lake build` kernel-checks them and the harvest
+    // finds their theorems (marking `authored: "candidate"`). They are never
+    // merged into the developer-owned `proofs.lean` root.
+    let candidates_dir = proofs_dir.join("candidates");
+    if candidates_dir.is_dir() {
+        for entry in fs::read_dir(&candidates_dir)
+            .map_err(TyuError::Io)?
+            .flatten()
+        {
             let p = entry.path();
             if p.is_file() && p.extension().and_then(|e| e.to_str()) == Some("lean") {
                 if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
@@ -1410,6 +1757,7 @@ fn verify_gen_digests(
             omitted,
             proven: 0, // filled by the P7 harvest (certificate counts).
             unproven: rendered,
+            candidates: 0, // filled by the P7 harvest (P10.2 attribution).
         });
     }
     out.sort_by(|a, b| a.module.cmp(&b.module));
@@ -1709,6 +2057,14 @@ fn run_lake_build(package: &LeanPackage) -> Result<(), TyuError> {
     {
         targets.push("proofs".to_string());
     }
+    // P10.2: the fill candidates are TyuProofs roots too — build them so the
+    // kernel checks their theorems before the harvest (fail-closed on an
+    // un-elaborating candidate exactly like any developer proof).
+    for c in candidate_files(&package.project_root.join(PROOFS_DIR).join("candidates")) {
+        if let Some(stem) = c.file_stem().and_then(|s| s.to_str()) {
+            targets.push(stem.to_string());
+        }
+    }
     let out = Command::new("lake")
         .current_dir(&package.root)
         .args(&targets)
@@ -1784,13 +2140,72 @@ mod tests {
     }
 
     #[test]
-    fn proof_fill_is_an_honest_not_yet() {
-        let err = proof_fill().unwrap_err();
-        assert!(err.to_string().contains("E6416"), "err: {err}");
-        assert!(
-            err.to_string().contains("P10"),
-            "must name the phase: {err}"
+    fn candidate_markers_are_scanned_and_attributed() {
+        // `candidate_ids` parses the `-- tyu:candidate obligation=<id>`
+        // markers (sorted, deduped); `count_certificates`/`candidate_record_ids`
+        // read the attribution from a harvest v2 document.
+        let dir = temp_dir("cand");
+        fs::create_dir_all(dir.join("proofs").join("candidates")).unwrap();
+        fs::write(
+            dir.join("proofs/candidates/P1.lean"),
+            "-- tyu:candidate obligation=A::w::subtype-range::0\nimport Gen.A\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("proofs/candidates/P2.lean"),
+            "-- tyu:candidate obligation=B::w::contract-post::1\nimport Gen.B\n",
+        )
+        .unwrap();
+        // A marker-less file (a promoted/completed candidate) is ignored.
+        fs::write(
+            dir.join("proofs/candidates/P3.lean"),
+            "theorem x : True := by trivial\n",
+        )
+        .unwrap();
+        let ids = candidate_ids(&dir);
+        assert_eq!(
+            ids,
+            vec![
+                "A::w::subtype-range::0".to_string(),
+                "B::w::contract-post::1".to_string()
+            ],
+            "markers scanned, sorted, deduped"
         );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn certificate_counts_split_developer_and_candidate() {
+        // A crafted `tyu.verdicts/v2` document with one developer and one
+        // candidate certificate.
+        let v2 = r#"{"schema":"tyu.verdicts/v2","certifier":{"class":"port","name":"lean","recognition":"tyu-port/lean/1","tool":{"name":"harvest","version":"0.1.0"},"toolchain":"t"},"semantics":"tyu.ir-sem/1.0","stmt":"tyu.stmt/1.0","target":"x86_64-unknown-none","model_semantics":"unmodeled","verdicts":[
+          {"id":"A::w::subtype-range::0","id_hash":"h1","status":"discharged","trust":"proof","method":"certificate","surface":"ir","statement_hash":"hh","authored":"developer","proof":{"kind":"certificate","statement":"tyu.stmt/1.0"}},
+          {"id":"B::w::contract-post::1","id_hash":"h2","status":"discharged","trust":"proof","method":"certificate","surface":"ir","statement_hash":"hh","authored":"candidate","proof":{"kind":"certificate","statement":"tyu.stmt/1.0"}}
+        ]}"#;
+        let (proven, candidates) = count_certificates(v2);
+        assert_eq!(proven, 2);
+        assert_eq!(candidates, 1);
+        assert_eq!(
+            candidate_record_ids(v2),
+            vec!["B::w::contract-post::1".to_string()]
+        );
+    }
+    // A hermetic root: either the port is absent (repo without the
+    // verification tree) or the pass-1 artifacts are missing — both are
+    // the honest E6416 fail-closed class.
+    #[test]
+    fn proof_fill_requires_a_port_and_artifacts() {
+        let dir = temp_dir("fill");
+        fs::create_dir_all(dir.join("proofs")).unwrap();
+        let err = proof_fill(&dir, None, &[], None, None).unwrap_err();
+        assert!(err.to_string().contains("E6416"), "err: {err}");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Lean verification port missing")
+                || msg.contains("no obligation artifacts"),
+            "must name the missing precondition: {msg}"
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

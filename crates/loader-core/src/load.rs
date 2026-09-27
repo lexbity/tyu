@@ -8,7 +8,7 @@
 
 use crate::apertures::{bind_apertures, ApertureRegistry};
 use crate::error::LoadError;
-use crate::platform::{LoaderPlatform, Region, Rw, Rx};
+use crate::platform::{LoaderPlatform, Region, Rw, Rx, VerifyPolicy};
 use crate::symbols::SymMap;
 use lmod::validate::Container;
 #[cfg(feature = "encryption")]
@@ -342,6 +342,65 @@ fn verify_signature_if_required(
     }
     if !platform.verify_sig(signed_region, trailer.sig_bytes) {
         return Err(LoadError::SigInvalid);
+    }
+    Ok(())
+}
+
+/// P11.2: validate the `verify_manifest` record carried at the tail of the
+/// modinfo payload (PLAN-VERIFY-3 §6.5).
+///
+/// - **Well-formedness** (E6500): the `lmod::verify_manifest` scan rejects a
+///   bad tag/length, fields out of the closed sets, unsorted obligation ids,
+///   and caps overflow.
+/// - **Digest** (E6501): SHA-256 over the canonical obligations region must
+///   equal the recorded digest — recompute before trusting any obligation.
+/// - **Policy** (E6502): the platform's `verify_policy()` requirement vs the
+///   module's declared policy; a manifest-less module is rejected by any
+///   requiring policy.
+fn validate_verify_manifest(
+    modinfo_data: &[u8],
+    platform: &dyn LoaderPlatform,
+) -> Result<(), LoadError> {
+    let policy = platform.verify_policy();
+
+    let vm = match lmod::verify_manifest::scan_verify_manifest(modinfo_data) {
+        Ok(Some(vm)) => vm,
+        Ok(None) => {
+            // No manifest: only an `Off` platform admits the module.
+            if policy != VerifyPolicy::Off {
+                return Err(LoadError::VerifyPolicyReject);
+            }
+            return Ok(());
+        }
+        Err(_) => return Err(LoadError::VerifyManifestMalformed),
+    };
+
+    // Digest recompute over the canonical obligations region (E6501). Gated
+    // behind `verify-manifest` so the constrained device loader keeps its
+    // text budget (G7): structural + policy checks above are always on.
+    #[cfg(feature = "verify-manifest")]
+    {
+        use sha2::{Digest, Sha256};
+        let region = &modinfo_data[vm.obligations_start..vm.obligations_end];
+        let digest: [u8; 32] = Sha256::digest(region).into();
+        if digest != vm.digest {
+            return Err(LoadError::VerifyManifestDigest);
+        }
+    }
+
+    // Policy requirement.
+    match policy {
+        VerifyPolicy::Off => {}
+        VerifyPolicy::RequireNoOpen => {
+            if vm.policy < lmod::verify_manifest::VM_POLICY_NO_OPEN {
+                return Err(LoadError::VerifyPolicyReject);
+            }
+        }
+        VerifyPolicy::RequireProven => {
+            if vm.policy != lmod::verify_manifest::VM_POLICY_PROVEN {
+                return Err(LoadError::VerifyPolicyReject);
+            }
+        }
     }
     Ok(())
 }
@@ -747,6 +806,12 @@ pub fn load_module<'a>(
     reject_encrypted_without_feature(hdr)?;
 
     validate_modinfo_for_load(modinfo_data, platform.ds_remaining_slots())?;
+
+    // P11.2: the verify_manifest record — well-formedness (E6500), digest
+    // recompute (E6501), and the platform's verify_policy requirement
+    // (E6502). Before any allocation; the manifest is the in-module anchor
+    // the image-level `proven` pairing (deploy side) builds on.
+    validate_verify_manifest(modinfo_data, platform)?;
 
     let sym_guard = RollbackGuard::new(global_map);
 
@@ -1709,5 +1774,283 @@ mod tests {
             &mut ApertureRegistry::new(),
         );
         assert_eq!(r2.unwrap_err(), LoadError::ModuleAlreadyLoaded);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// P11.2 tests: the verify_manifest record validation + verify_policy matrix.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod verify_manifest_tests {
+    use super::*;
+    use crate::platform::{TrustLevel, VerifyPolicy};
+    use alloc::vec;
+    use alloc::vec::Vec;
+    use sha2::{Digest, Sha256};
+
+    /// A platform with a configurable verify_policy.
+    struct PolicyPlatform {
+        policy: VerifyPolicy,
+    }
+    impl LoaderPlatform for PolicyPlatform {
+        fn alloc_exec(&mut self, _len: usize) -> Result<Region<Rw>, u32> {
+            Err(1)
+        }
+        fn alloc_ro(&mut self, _len: usize) -> Result<Region<Rw>, u32> {
+            Err(1)
+        }
+        fn alloc_rw(&mut self, _len: usize) -> Result<Region<Rw>, u32> {
+            Err(1)
+        }
+        fn make_exec(&mut self, _r: Region<Rw>) -> Result<Region<Rx>, u32> {
+            Err(1)
+        }
+        fn verify_sig(&self, _signed: &[u8], _sig: &[u8]) -> bool {
+            true
+        }
+        fn expected_abi_hash(&self) -> u64 {
+            0
+        }
+        fn trust_level(&self) -> TrustLevel {
+            TrustLevel::One
+        }
+        fn verify_policy(&self) -> VerifyPolicy {
+            self.policy
+        }
+        #[cfg(feature = "encryption")]
+        fn unwrap_cek(
+            &self,
+            _key_id: u64,
+            _wrapped: &[u8],
+            _out: &mut [u8; 32],
+        ) -> Result<(), u32> {
+            Err(5215)
+        }
+    }
+
+    fn le16(v: u16) -> [u8; 2] {
+        v.to_le_bytes()
+    }
+    fn le32(v: u32) -> [u8; 4] {
+        v.to_le_bytes()
+    }
+    fn le64(v: u64) -> [u8; 8] {
+        v.to_le_bytes()
+    }
+
+    fn lenstr(out: &mut Vec<u8>, s: &[u8]) {
+        out.extend_from_slice(&le16(s.len() as u16));
+        out.extend_from_slice(s);
+    }
+
+    /// One obligation entry bytes.
+    fn entry_bytes(id: &[u8], id_hash: u64, status: u8, trust: u8, stmt: [u8; 32]) -> Vec<u8> {
+        let mut e = Vec::new();
+        lenstr(&mut e, id);
+        e.extend_from_slice(&le64(id_hash));
+        e.push(status);
+        e.push(trust);
+        e.extend_from_slice(&stmt);
+        e
+    }
+
+    /// Build a full record (payload + size + tag) with the given policy and
+    /// obligations; `tamper_digest` flips a byte of the stored digest.
+    fn record(policy: u8, obligations: &[Vec<u8>], tamper_digest: bool, prefix: &[u8]) -> Vec<u8> {
+        let mut region: Vec<u8> = Vec::new();
+        for o in obligations {
+            region.extend_from_slice(o);
+        }
+        let digest: [u8; 32] = Sha256::digest(&region).into();
+        let mut payload = Vec::new();
+        lenstr(&mut payload, b"tyu.ir-sem/1.0");
+        lenstr(&mut payload, b"tyu.stmt/1.0");
+        lenstr(&mut payload, b"x86_64-unknown-none");
+        lenstr(&mut payload, b"tyu.model/x86_64-unknown-none/1");
+        payload.push(policy);
+        payload.push(lmod::verify_manifest::VM_CERTIFIER_PORT);
+        lenstr(&mut payload, b"lean");
+        lenstr(&mut payload, b"tyu-port/lean/1");
+        payload.extend_from_slice(&le16(0));
+        payload.extend_from_slice(&le32(obligations.len() as u32));
+        payload.extend_from_slice(&le32(0)); // proof
+        payload.extend_from_slice(&le32(0)); // checked
+        payload.extend_from_slice(&le32(0)); // assumed
+        payload.extend_from_slice(&le32(obligations.len() as u32)); // open
+        payload.extend_from_slice(&region);
+        let mut d = digest;
+        if tamper_digest {
+            d[0] ^= 0x80;
+        }
+        payload.extend_from_slice(&d);
+        let mut out = prefix.to_vec();
+        let size = payload.len() as u32;
+        out.extend_from_slice(&payload);
+        out.extend_from_slice(&le32(size));
+        out.extend_from_slice(&le32(lmod::verify_manifest::VM_TAG));
+        out
+    }
+
+    fn stmt_hash(seed: u8) -> [u8; 32] {
+        [seed; 32]
+    }
+
+    #[test]
+    fn absent_manifest_ok_under_off() {
+        let plat = PolicyPlatform {
+            policy: VerifyPolicy::Off,
+        };
+        let prefix = b"header-and-stuff";
+        assert!(validate_verify_manifest(prefix, &plat).is_ok());
+    }
+
+    #[test]
+    fn absent_manifest_rejected_under_requiring() {
+        for p in [VerifyPolicy::RequireNoOpen, VerifyPolicy::RequireProven] {
+            let plat = PolicyPlatform { policy: p };
+            assert_eq!(
+                validate_verify_manifest(b"no-manifest", &plat),
+                Err(LoadError::VerifyPolicyReject)
+            );
+        }
+    }
+
+    #[cfg(feature = "verify-manifest")]
+    #[test]
+    fn manifest_digest_mismatch_rejected() {
+        let o = entry_bytes(b"Bank::m::subtype-range::0", 0x1122, 0, 0, stmt_hash(1));
+        let data = record(
+            lmod::verify_manifest::VM_POLICY_PROVEN,
+            &[o],
+            true, // tampered digest
+            b"prefix",
+        );
+        let plat = PolicyPlatform {
+            policy: VerifyPolicy::Off,
+        };
+        assert_eq!(
+            validate_verify_manifest(&data, &plat),
+            Err(LoadError::VerifyManifestDigest)
+        );
+    }
+
+    #[test]
+    fn manifest_malformed_rejected() {
+        // The size field claims more bytes than the payload holds.
+        let o = entry_bytes(b"id", 0, 0, 0, stmt_hash(1));
+        let mut data = record(lmod::verify_manifest::VM_POLICY_PROVEN, &[o], false, b"");
+        let n = data.len();
+        data[n - 8..n - 4].copy_from_slice(&le32(u32::MAX));
+        let plat = PolicyPlatform {
+            policy: VerifyPolicy::Off,
+        };
+        assert_eq!(
+            validate_verify_manifest(&data, &plat),
+            Err(LoadError::VerifyManifestMalformed)
+        );
+    }
+
+    #[test]
+    fn unsorted_obligation_ids_rejected() {
+        let a = entry_bytes(b"z", 0, 0, 0, stmt_hash(1));
+        let b = entry_bytes(b"a", 1, 0, 0, stmt_hash(2));
+        let data = record(lmod::verify_manifest::VM_POLICY_PROVEN, &[a, b], false, b"");
+        let plat = PolicyPlatform {
+            policy: VerifyPolicy::Off,
+        };
+        assert_eq!(
+            validate_verify_manifest(&data, &plat),
+            Err(LoadError::VerifyManifestMalformed)
+        );
+    }
+
+    #[test]
+    fn policy_matrix() {
+        // valid proven record
+        let oblique = |policy: u8| {
+            let o = entry_bytes(b"Bank::m::subtype-range::0", 0, 1, 2, stmt_hash(1));
+            record(policy, core::slice::from_ref(&o), false, b"")
+        };
+        let proven = oblique(lmod::verify_manifest::VM_POLICY_PROVEN);
+        let no_open = oblique(lmod::verify_manifest::VM_POLICY_NO_OPEN);
+        let open_ok = oblique(lmod::verify_manifest::VM_POLICY_OPEN_OK);
+
+        // Off admits everything.
+        for data in [&proven, &no_open, &open_ok] {
+            assert!(validate_verify_manifest(
+                data,
+                &PolicyPlatform {
+                    policy: VerifyPolicy::Off
+                }
+            )
+            .is_ok());
+        }
+        // RequireNoOpen admits no-open and proven, rejects open-ok.
+        assert!(validate_verify_manifest(
+            &no_open,
+            &PolicyPlatform {
+                policy: VerifyPolicy::RequireNoOpen
+            }
+        )
+        .is_ok());
+        assert!(validate_verify_manifest(
+            &proven,
+            &PolicyPlatform {
+                policy: VerifyPolicy::RequireNoOpen
+            }
+        )
+        .is_ok());
+        assert_eq!(
+            validate_verify_manifest(
+                &open_ok,
+                &PolicyPlatform {
+                    policy: VerifyPolicy::RequireNoOpen
+                }
+            ),
+            Err(LoadError::VerifyPolicyReject)
+        );
+        // RequireProven admits only proven.
+        assert!(validate_verify_manifest(
+            &proven,
+            &PolicyPlatform {
+                policy: VerifyPolicy::RequireProven
+            }
+        )
+        .is_ok());
+        assert_eq!(
+            validate_verify_manifest(
+                &no_open,
+                &PolicyPlatform {
+                    policy: VerifyPolicy::RequireProven
+                }
+            ),
+            Err(LoadError::VerifyPolicyReject)
+        );
+    }
+
+    #[test]
+    fn closed_sets_and_caps_enforced() {
+        // unknown trust → malformed
+        let o = entry_bytes(b"id", 0, 1, 9, stmt_hash(1));
+        let data = record(lmod::verify_manifest::VM_POLICY_PROVEN, &[o], false, b"");
+        assert!(validate_verify_manifest(
+            &data,
+            &PolicyPlatform {
+                policy: VerifyPolicy::Off
+            }
+        )
+        .is_err());
+        // oversize id → malformed
+        let long: Vec<u8> = vec![b'x'; 513];
+        let o = entry_bytes(&long, 0, 0, 0, stmt_hash(1));
+        let data = record(lmod::verify_manifest::VM_POLICY_PROVEN, &[o], false, b"");
+        assert!(validate_verify_manifest(
+            &data,
+            &PolicyPlatform {
+                policy: VerifyPolicy::Off
+            }
+        )
+        .is_err());
     }
 }

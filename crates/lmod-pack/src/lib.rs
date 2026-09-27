@@ -9,6 +9,8 @@
 //!   - Emits the import-only reloc table for external references.
 //!   - Appends an (empty) signature trailer slot.
 
+pub mod verify;
+
 use core::fmt;
 
 // ---------------------------------------------------------------------------
@@ -573,13 +575,25 @@ fn aperture_base_id(name: &[u8]) -> Option<u16> {
 /// at load time (FR-15) after enforcing `platform_hash` (E5220). Baking bases
 /// here would make dynamic modules position-dependent on device maps.
 pub fn pack(input: &[u8]) -> Result<Vec<u8>, PackError> {
+    pack_with_verify_manifest(input, &[])
+}
+
+/// The default `pack` — the verify_manifest record appended (P11).
+pub fn pack_with_verify_manifest(
+    input: &[u8],
+    manifest_record: &[u8],
+) -> Result<Vec<u8>, PackError> {
     let elf = Elf::parse(input)?;
 
-    // 1. Extract section data.
-    let modinfo_data = elf
+    // 1. Extract section data; the verify_manifest record rides on the tail
+    // of the modinfo payload (loader-core validates it before allocation).
+    let mut modinfo_owned = elf
         .section_by_name(".lang.modinfo")
         .map(|s| elf.section_data(s))
-        .unwrap_or(&[]);
+        .unwrap_or(&[])
+        .to_vec();
+    modinfo_owned.extend_from_slice(manifest_record);
+    let modinfo_data = &modinfo_owned[..];
     let code_data = elf
         .section_by_name(".text")
         .map(|s| elf.section_data(s))

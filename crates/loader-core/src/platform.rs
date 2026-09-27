@@ -129,6 +129,18 @@ pub enum TrustLevel {
     Two,
 }
 
+/// The verify_manifest policy a platform requires (P11.2, §6.5).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum VerifyPolicy {
+    /// No requirement — modules with or without a manifest load.
+    Off = 0,
+    /// The module must carry a manifest declaring at least `no-open`.
+    RequireNoOpen = 1,
+    /// The module must declare `proven`.
+    RequireProven = 2,
+}
+
 impl TrustLevel {
     /// Numeric rank: 0 = Zero, 1 = One, 2 = Two.
     pub fn rank(self) -> u32 {
@@ -203,6 +215,20 @@ pub trait LoaderPlatform {
 
     /// The trust level this platform operates at.
     fn trust_level(&self) -> TrustLevel;
+
+    /// The verify_policy this platform requires of every module's
+    /// `verify_manifest` (PLAN-VERIFY-3 §6.5, P11.2; default `Off`).
+    ///
+    /// - `Off`: no requirement — modules with or without a manifest load.
+    /// - `RequireNoOpen`: the module must carry a manifest whose declared
+    ///   policy is at least `no-open` (no obligation open).
+    /// - `RequireProven`: the module must declare `proven`.
+    ///
+    /// Enforcement happens before any allocation (E6502 on failure; a
+    /// manifest-less module under any requiring policy is rejected).
+    fn verify_policy(&self) -> VerifyPolicy {
+        VerifyPolicy::Off
+    }
 
     /// The placement policy for this target.
     ///

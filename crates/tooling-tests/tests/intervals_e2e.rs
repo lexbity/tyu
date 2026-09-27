@@ -119,10 +119,14 @@ fn provable_cast_chain_discharges_without_verdicts_file() {
     let echo_dir = out_dir.join(".tyu-verify");
     let echo_file = fs::read_dir(&echo_dir)
         .unwrap()
-        .next()
-        .unwrap()
-        .unwrap()
-        .path();
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.ends_with(".verdicts.json"))
+        })
+        .expect("a verdicts echo slot must exist");
     let echo = verifier::verdict::read_echo(&fs::read(&echo_file).unwrap()).unwrap();
     assert_eq!(echo.verdicts.records.len(), 1);
     assert_eq!(

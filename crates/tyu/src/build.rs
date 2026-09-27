@@ -13,7 +13,7 @@ use std::process::Command;
 use codegen_core::{AssemblerKind, Feature, FeatureSet, Target};
 use lang_symtab_gen::{extract_runtime_symbols, render_asm, render_names, AsmFlavor};
 
-use crate::args::{BuildArgs, BuildMode, EncryptMode};
+use crate::args::{BuildArgs, BuildMode, EncryptMode, VerifyPolicy};
 use crate::cache::{self, BuildCache};
 use crate::error::TyuError;
 use crate::graph::{resolve_graph, ModuleNode};
@@ -341,6 +341,16 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
         module_obl.push((module.name.clone(), compiled.obl_path));
     }
 
+    // P11.1: emit the per-module `tyu.vm/1` summaries (the verdicts-v2 →
+    // manifest-summary converter) beside the report — the automatic source
+    // every manifest path (this build's root lmod, deploy pairing) consumes.
+    super::vm_summary::write_module_summaries(
+        &ctx.out_dir,
+        &module_obl,
+        args.verify_policy,
+        &verify_env,
+    )?;
+
     let (final_image, exec_image) = if mode == BuildMode::Dynamic {
         build_dynamic_image(
             &ctx,
@@ -350,6 +360,7 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
             args.metal_sign_key.as_deref(),
             args.metal_kek.as_deref(),
             args.metal_encrypt_mode,
+            args.verify_manifest.as_deref(),
         )?
     } else {
         let mut objs = module_objs.clone();
@@ -376,6 +387,12 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
             }
         }
 
+        let build_manifest_record = build_manifest_record_for(
+            args.verify_manifest.as_deref(),
+            args.verify_policy,
+            &out_dir,
+            modules.last().map(|m| m.name.as_str()),
+        )?;
         let exec_image = link_image_for_context(&ctx, &objs)?;
         let final_image = if matches!(target, Target::X86_64UnknownLinuxGnu) {
             exec_image.clone()
@@ -383,7 +400,12 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
             let root_obj = module_objs
                 .get(module_count.saturating_sub(1))
                 .ok_or_else(|| TyuError::Build("no root module object to pack".into()))?;
-            pack_final_lmod(root_obj, &out_dir, modules.last().map(|m| m.name.as_str()))?
+            pack_final_lmod(
+                root_obj,
+                &out_dir,
+                modules.last().map(|m| m.name.as_str()),
+                &build_manifest_record,
+            )?
         };
         (final_image, exec_image)
     };
@@ -418,6 +440,7 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
         elide_ds,
         &proof_status,
         &verify_env,
+        args.proven_no_candidates,
     )?;
 
     Ok(BuildOutcome {
@@ -437,6 +460,7 @@ fn effective_build_mode(args: &BuildArgs, target: Target) -> BuildMode {
     }
 }
 
+#[allow(clippy::too_many_arguments)] // the image builder takes one context item per parameter
 fn build_dynamic_image(
     ctx: &BuildContext,
     feature_set: FeatureSet,
@@ -445,11 +469,23 @@ fn build_dynamic_image(
     metal_sign_key: Option<&str>,
     metal_kek: Option<&str>,
     metal_encrypt_mode: Option<EncryptMode>,
+    verify_manifest: Option<&Path>,
 ) -> Result<(PathBuf, PathBuf), TyuError> {
     let root_obj = module_objs
         .last()
         .ok_or_else(|| TyuError::Build("no root module object to pack".into()))?;
-    let app_lmod = pack_final_lmod(root_obj, &ctx.out_dir, root_module.map(|m| m.name.as_str()))?;
+    let build_manifest_record = build_manifest_record_for(
+        verify_manifest,
+        VerifyPolicy::OpenOk,
+        &ctx.out_dir,
+        root_module.map(|m| m.name.as_str()),
+    )?;
+    let app_lmod = pack_final_lmod(
+        root_obj,
+        &ctx.out_dir,
+        root_module.map(|m| m.name.as_str()),
+        &build_manifest_record,
+    )?;
     let sign_key = resolve_metal_sign_key(metal_sign_key)?;
     let kek = resolve_metal_kek(metal_kek)?;
     if kek.is_some() && sign_key.is_none() {
@@ -791,10 +827,54 @@ pub fn resolve_build_context(args: &BuildArgs) -> Result<BuildContext, TyuError>
     })
 }
 
+/// The verify_manifest record for a build: the explicit `--verify-manifest`
+/// summary when supplied, else — under a requiring policy — the ROOT
+/// module's derived `tyu.vm/1` summary (the P11.1 automatic path). Ordinary
+/// open-ok builds keep the empty record (no golden churn).
+fn build_manifest_record_for(
+    verify_manifest: Option<&Path>,
+    policy: VerifyPolicy,
+    out_dir: &Path,
+    root: Option<&str>,
+) -> Result<Vec<u8>, TyuError> {
+    match verify_manifest {
+        Some(path) => manifest_record(Some(path)),
+        None if policy != VerifyPolicy::OpenOk => match root {
+            Some(root) => {
+                let sum = crate::vm_summary::vm_summary_path(out_dir, root);
+                if sum.is_file() {
+                    manifest_record(Some(&sum))
+                } else {
+                    Ok(Vec::new())
+                }
+            }
+            None => Ok(Vec::new()),
+        },
+        None => Ok(Vec::new()),
+    }
+}
+
+/// Assemble the verify_manifest record from the build's `tyu.vm/1`
+/// summary (P11: verdict provenance rides in the packed image). An empty
+/// record when no summary was supplied.
+pub fn manifest_record(summary: Option<&Path>) -> Result<Vec<u8>, TyuError> {
+    match summary {
+        None => Ok(Vec::new()),
+        Some(path) => {
+            let text = std::fs::read_to_string(path).map_err(TyuError::Io)?;
+            let spec = lmod_pack::verify::verify_manifest_from_json(&text)
+                .map_err(|e| TyuError::Build(format!("verify-manifest: {e}")))?;
+            lmod_pack::verify::encode_verify_manifest(&spec)
+                .map_err(|e| TyuError::Build(format!("verify-manifest encode: {e}")))
+        }
+    }
+}
+
 fn pack_final_lmod(
     obj_path: &Path,
     out_dir: &Path,
     module_name: Option<&str>,
+    record: &[u8],
 ) -> Result<PathBuf, TyuError> {
     let lmod_name = match module_name {
         Some(name) if !name.is_empty() => format!("{}.lmod", name),
@@ -805,8 +885,8 @@ fn pack_final_lmod(
         .map_err(|e| TyuError::Build(format!("reading '{}': {}", obj_path.display(), e)))?;
     // P6 (decision D-4): the pack records `MmioApertureBase` relocs but binds no
     // bases; the loader writes the board's aperture bases at load time.
-    let packed =
-        lmod_pack::pack(&obj_bytes).map_err(|e| TyuError::Build(format!("lmod-pack: {}", e)))?;
+    let packed = lmod_pack::pack_with_verify_manifest(&obj_bytes, record)
+        .map_err(|e| TyuError::Build(format!("lmod-pack: {}", e)))?;
     std::fs::write(&lmod_path, &packed)
         .map_err(|e| TyuError::Build(format!("writing '{}': {}", lmod_path.display(), e)))?;
     Ok(lmod_path)

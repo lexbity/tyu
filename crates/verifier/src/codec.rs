@@ -1706,6 +1706,8 @@ fn write_report_bytes(r: &crate::report::VerifyReport) -> Vec<u8> {
         write_i64(&mut out, s.omitted as i64);
         out.extend_from_slice(b",\"unproven\":");
         write_i64(&mut out, s.unproven as i64);
+        out.extend_from_slice(b",\"candidates\":");
+        write_i64(&mut out, s.candidates as i64);
         out.push(b'}');
     }
     out.extend_from_slice(b"]}");

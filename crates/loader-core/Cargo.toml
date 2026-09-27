@@ -26,3 +26,8 @@ trybuild = "1"
 device-loader = []
 signing = ["hmac", "sha2"]
 encryption = []
+# P11.2: recompute the verify_manifest digest (E6501) — opt-in so the
+# constrained device loader (16 KiB text budget, G7) skips the crypto while
+# keeping the structural + policy checks (E6500/E6502) always on. The hosted
+# runtime and the tooling build enable it.
+verify-manifest = ["sha2"]

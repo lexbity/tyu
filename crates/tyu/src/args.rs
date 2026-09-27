@@ -38,9 +38,20 @@ pub enum ProofArgs {
         /// An entry `.mod` file whose module graph the templates enumerate.
         input: Option<PathBuf>,
     },
-    /// `tyu proof fill` — registered in P6 with an honest "not yet" failure;
-    /// candidate-proof generation lands in P10.
-    Fill,
+    /// `tyu proof fill [--dir=<root>] [input.mod]` (P10.2) — write
+    /// unreviewed candidate theorem files to `proofs/candidates/` (the
+    /// port's `fill` exe over the project's extracted obligation artifacts);
+    /// never touches developer-authored files.
+    Fill {
+        /// Project root (default: the `tyu.toml` location or CWD).
+        dir: Option<PathBuf>,
+        /// An entry `.mod` file whose artifacts are filled (used when no
+        /// `.tyu-oblig` extraction exists yet).
+        input: Option<PathBuf>,
+        /// P10.2: per-obligation automation budget in seconds (default 10;
+        /// recorded in the candidates and honored by the measurement).
+        fill_budget: Option<u32>,
+    },
 }
 
 /// The developer-proof tool requested via `--verify-tool=<tool>`
@@ -106,6 +117,19 @@ impl BuildMode {
     }
 }
 
+/// The deploy-time verify-policy requirement (P11.3, §Q7 rule 3 / FR-8):
+/// the deployed module's `verify_manifest` must satisfy it (E6510).
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
+pub enum DeployVerifyPolicy {
+    /// No requirement — modules with or without a manifest deploy.
+    #[default]
+    OpenOk,
+    /// The module must carry a manifest declaring at least `no-open`.
+    NoOpen,
+    /// `proven` — the module must declare `proven` and a modeled bundle.
+    Proven,
+}
+
 /// Arguments for the `deploy` subcommand.
 #[derive(Debug)]
 pub struct DeployArgs {
@@ -124,9 +148,26 @@ pub struct DeployArgs {
     pub device_keys_dir: Option<PathBuf>,
     pub profile: Option<String>,
     pub feature_set: FeatureSet,
+    pub verify_policy: DeployVerifyPolicy,
+    /// A `tyu.vm/1` summary the deployed module's verify_manifest is
+    /// assembled from at pack time (P11.3; the build emits it when its
+    /// verdict set satisfies the policy).
+    pub verify_manifest: Option<PathBuf>,
 }
 
 impl DeployArgs {
+    /// The build-side policy corresponding to the deploy's requirement (so
+    /// `tyu deploy --verify-policy=proven` builds under `proven` and the
+    /// derived `tyu.vm/1` summaries + root manifest carry that policy — the
+    /// automatic manifest path, P11.1).
+    fn build_policy(&self) -> VerifyPolicy {
+        match self.verify_policy {
+            DeployVerifyPolicy::OpenOk => VerifyPolicy::OpenOk,
+            DeployVerifyPolicy::NoOpen => VerifyPolicy::NoOpen,
+            DeployVerifyPolicy::Proven => VerifyPolicy::Proven,
+        }
+    }
+
     pub fn to_build_args(&self) -> BuildArgs {
         BuildArgs {
             target: self.target,
@@ -144,7 +185,9 @@ impl DeployArgs {
             metal_encrypt_mode: None,
             verbose: false,
             verify: VerifyMode::On,
-            verify_policy: VerifyPolicy::OpenOk,
+            proven_no_candidates: false,
+            verify_policy: self.build_policy(),
+            verify_manifest: self.verify_manifest.clone(),
             elide_stack_guards: false,
             verify_tool: None,
         }
@@ -175,6 +218,9 @@ pub struct BuildArgs {
     pub verify: VerifyMode,
     /// P4: policy on open/assumed obligations (default open-ok).
     pub verify_policy: VerifyPolicy,
+    /// P11: a `tyu.vm/1` summary assembled into the packed module's
+    /// `verify_manifest` record (verdict provenance travels in the image).
+    pub verify_manifest: Option<PathBuf>,
     /// Slice P7 (Q5/FR-11): `--elide-stack-guards` — two-pass elision of the
     /// x86_64 data-stack overflow guards. tyu sets `--elide-ds-guards` on
     /// langc only when its extraction pass + image composition prove the
@@ -184,6 +230,12 @@ pub struct BuildArgs {
     /// (generated statements, lake package, harvest). `None` = the classic
     /// in-tree verification pipeline only.
     pub verify_tool: Option<VerifyTool>,
+    /// P10.2 (§Q10): `--proven-no-candidates` — under `--verify-policy=
+    /// proven`, fail the build when any discharged certificate is
+    /// candidate-authored (a fleet operator MAY set this; default: candidates
+    /// are admissible — they are kernel-checked; refusing them is process
+    /// preference, not soundness).
+    pub proven_no_candidates: bool,
 }
 
 /// Arguments for the `run` subcommand.
@@ -209,10 +261,15 @@ pub struct RunArgs {
     pub verify: VerifyMode,
     /// P4: policy on open/assumed obligations (default open-ok).
     pub verify_policy: VerifyPolicy,
+    /// P11: a `tyu.vm/1` summary assembled into the packed module's
+    /// `verify_manifest` record at build time.
+    pub verify_manifest: Option<PathBuf>,
     /// Slice P7: image-level data-stack guard elision (two-pass).
     pub elide_stack_guards: bool,
     /// P6.2 (FR-3): `--verify-tool=lean` — run the developer-proof pipeline.
     pub verify_tool: Option<VerifyTool>,
+    /// P10.2: `--proven-no-candidates` (see [`BuildArgs`]).
+    pub proven_no_candidates: bool,
 }
 
 impl RunArgs {
@@ -233,7 +290,9 @@ impl RunArgs {
             metal_encrypt_mode: self.metal_encrypt_mode,
             verbose: false,
             verify: self.verify,
+            proven_no_candidates: self.proven_no_candidates,
             verify_policy: self.verify_policy,
+            verify_manifest: self.verify_manifest.clone(),
             elide_stack_guards: self.elide_stack_guards,
             verify_tool: self.verify_tool,
         }
@@ -410,6 +469,9 @@ fn print_usage() {
         "  --verify-tool=lean    P6: run the developer-proof pipeline (generated\n                      statements + lake package; harvest in P7)"
     );
     eprintln!(
+        "  --proven-no-candidates  P10: under --verify-policy=proven, fail when any\n                      discharged certificate is candidate-authored (default off)"
+    );
+    eprintln!(
         "  --elide-stack-guards  Slice P7: two-pass elision of the x86 data-stack\n                      overflow guards, legal only when the image-level\n                      stack-budget(main) verdict is discharged (report:\n                      contexts.stack.guards = elided). Requires --verify=on"
     );
     eprintln!();
@@ -442,7 +504,7 @@ fn print_usage() {
     eprintln!();
     eprintln!("Proof options:");
     eprintln!("  tyu proof init [--dir=<root>] [input.mod]   Scaffold the developer\n                      proofs/ directory (idempotent)");
-    eprintln!("  tyu proof fill                P10: generate candidate proofs (not yet)");
+    eprintln!("  tyu proof fill [--dir=<root>] [input.mod]\n                      P10: generate candidate proofs into proofs/candidates/");
     eprintln!("Run-specific options:");
     eprintln!("  --timeout=<secs>    Maximum execution time (default: 10)");
     eprintln!("  --runner=<mode>     Runner: native|qemu (default: auto)");
@@ -468,8 +530,10 @@ fn parse_common(args: &[String], extra_known: &[&str]) -> Result<CommonArgs, ()>
     let mut verbose = false;
     let mut verify = VerifyMode::On;
     let mut verify_policy = VerifyPolicy::OpenOk;
+    let mut verify_manifest: Option<PathBuf> = None;
     let mut elide_stack_guards = false;
     let mut verify_tool: Option<VerifyTool> = None;
+    let mut proven_no_candidates = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -484,6 +548,8 @@ fn parse_common(args: &[String], extra_known: &[&str]) -> Result<CommonArgs, ()>
                     return Err(());
                 }
             };
+        } else if a == "--proven-no-candidates" {
+            proven_no_candidates = true;
         } else if let Some(val) = a.strip_prefix("--target=") {
             let tb = val.as_bytes();
             target = Target::parse(tb);
@@ -554,6 +620,8 @@ fn parse_common(args: &[String], extra_known: &[&str]) -> Result<CommonArgs, ()>
                     return Err(());
                 }
             };
+        } else if let Some(val) = a.strip_prefix("--verify-manifest=") {
+            verify_manifest = Some(PathBuf::from(val));
         } else if a == "--elide-stack-guards" {
             elide_stack_guards = true;
         } else if let Some(val) = a.strip_prefix("--sysroot=") {
@@ -615,8 +683,10 @@ fn parse_common(args: &[String], extra_known: &[&str]) -> Result<CommonArgs, ()>
         metal_encrypt_mode,
         verify,
         verify_policy,
+        verify_manifest,
         elide_stack_guards,
         verify_tool,
+        proven_no_candidates,
     })
 }
 
@@ -648,8 +718,10 @@ struct CommonArgs {
     verbose: bool,
     verify: VerifyMode,
     verify_policy: VerifyPolicy,
+    verify_manifest: Option<PathBuf>,
     elide_stack_guards: bool,
     verify_tool: Option<VerifyTool>,
+    proven_no_candidates: bool,
 }
 
 fn parse_build(args: &[String]) -> Command {
@@ -680,7 +752,9 @@ fn parse_build(args: &[String]) -> Command {
         metal_encrypt_mode: common.metal_encrypt_mode,
         verbose: common.verbose,
         verify: common.verify,
+        proven_no_candidates: common.proven_no_candidates,
         verify_policy: common.verify_policy,
+        verify_manifest: common.verify_manifest,
         elide_stack_guards: common.elide_stack_guards,
         verify_tool: common.verify_tool,
     })
@@ -739,8 +813,10 @@ fn parse_run(args: &[String]) -> Command {
         verbose: common.verbose,
         verify: common.verify,
         verify_policy: common.verify_policy,
+        verify_manifest: common.verify_manifest,
         elide_stack_guards: common.elide_stack_guards,
         verify_tool: common.verify_tool,
+        proven_no_candidates: common.proven_no_candidates,
     })
 }
 
@@ -896,6 +972,8 @@ fn parse_deploy(args: &[String]) -> Command {
             "--device-keys=",
             "--sign",
             "--commit-otp",
+            "--verify-policy=",
+            "--verify-manifest=",
         ],
     ) {
         Ok(c) => c,
@@ -907,6 +985,8 @@ fn parse_deploy(args: &[String]) -> Command {
     let mut sign = false;
     let mut commit_otp = false;
     let mut device_keys_dir: Option<PathBuf> = None;
+    let mut verify_policy = DeployVerifyPolicy::default();
+    let mut verify_manifest: Option<PathBuf> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -927,6 +1007,21 @@ fn parse_deploy(args: &[String]) -> Command {
             key_sign = Some(val.to_string());
         } else if let Some(val) = a.strip_prefix("--device-keys=") {
             device_keys_dir = Some(PathBuf::from(val));
+        } else if let Some(val) = a.strip_prefix("--verify-manifest=") {
+            verify_manifest = Some(PathBuf::from(val));
+        } else if let Some(val) = a.strip_prefix("--verify-policy=") {
+            verify_policy = match val {
+                "open-ok" => DeployVerifyPolicy::OpenOk,
+                "no-open" => DeployVerifyPolicy::NoOpen,
+                "proven" => DeployVerifyPolicy::Proven,
+                _ => {
+                    eprintln!(
+                        "tyu: unknown deploy verify policy '{}' (open-ok|no-open|proven)",
+                        val
+                    );
+                    return Command::Usage;
+                }
+            };
         } else if a == "--sign" {
             sign = true;
         } else if a == "--commit-otp" {
@@ -958,6 +1053,8 @@ fn parse_deploy(args: &[String]) -> Command {
         commit_otp,
         device_keys_dir,
         profile: common.profile,
+        verify_policy,
+        verify_manifest,
         feature_set: FeatureSet::default(),
     })
 }
@@ -1062,7 +1159,7 @@ fn parse_toolchain(args: &[String]) -> Command {
 /// (PLAN-VERIFY-3 P6.1; FR-6). Unknown flags are a usage error (BUG-009).
 fn parse_proof(args: &[String]) -> Command {
     if args.is_empty() {
-        eprintln!("tyu: usage: tyu proof init [--dir=<root>] [input.mod] | tyu proof fill");
+        eprintln!("tyu: usage: tyu proof init [--dir=<root>] [input.mod] | tyu proof fill [--dir=<root>] [input.mod]");
         return Command::Usage;
     }
     match args[0].as_str() {
@@ -1093,11 +1190,46 @@ fn parse_proof(args: &[String]) -> Command {
             Command::Proof(ProofArgs::Init { dir, input })
         }
         "fill" => {
-            if args.len() != 1 {
-                eprintln!("tyu: proof fill takes no arguments in P6");
-                return Command::Usage;
+            let mut dir: Option<PathBuf> = None;
+            let mut input: Option<PathBuf> = None;
+            let mut fill_budget: Option<u32> = None;
+            let mut i = 1;
+            while i < args.len() {
+                let a = &args[i];
+                if a == "--dir" {
+                    i += 1;
+                    if i < args.len() {
+                        dir = Some(PathBuf::from(&args[i]));
+                    } else {
+                        eprintln!("tyu: proof fill --dir requires a value");
+                        return Command::Usage;
+                    }
+                } else if let Some(val) = a.strip_prefix("--dir=") {
+                    dir = Some(PathBuf::from(val));
+                } else if let Some(val) = a.strip_prefix("--fill-budget=") {
+                    fill_budget = match val.parse::<u32>() {
+                        Ok(n) if n > 0 => Some(n),
+                        _ => {
+                            eprintln!(
+                                "tyu: invalid --fill-budget '{}' (expected a positive number of seconds)",
+                                val
+                            );
+                            return Command::Usage;
+                        }
+                    };
+                } else if a.starts_with('-') {
+                    eprintln!("tyu: unknown option '{}'", a);
+                    return Command::Usage;
+                } else if input.is_none() {
+                    input = Some(PathBuf::from(a));
+                }
+                i += 1;
             }
-            Command::Proof(ProofArgs::Fill)
+            Command::Proof(ProofArgs::Fill {
+                dir,
+                input,
+                fill_budget,
+            })
         }
         other => {
             eprintln!(
@@ -1387,7 +1519,28 @@ mod tests {
     #[test]
     fn parses_proof_fill() {
         match parse_proof(&strings(&["fill"])) {
-            Command::Proof(ProofArgs::Fill) => {}
+            Command::Proof(ProofArgs::Fill {
+                dir: None,
+                input: None,
+                fill_budget: None,
+            }) => {}
+            other => panic!("unexpected command: {:?}", other),
+        }
+        match parse_proof(&strings(&[
+            "fill",
+            "--dir=/tmp/p",
+            "Main.mod",
+            "--fill-budget=30",
+        ])) {
+            Command::Proof(ProofArgs::Fill {
+                dir,
+                input,
+                fill_budget,
+            }) => {
+                assert_eq!(dir.as_deref(), Some(std::path::Path::new("/tmp/p")));
+                assert_eq!(input.as_deref(), Some(std::path::Path::new("Main.mod")));
+                assert_eq!(fill_budget, Some(30));
+            }
             other => panic!("unexpected command: {:?}", other),
         }
     }
@@ -1396,12 +1549,17 @@ mod tests {
     fn unknown_proof_subcommand_is_usage_error() {
         assert!(matches!(parse_proof(&strings(&["hack"])), Command::Usage));
         assert!(matches!(
-            parse_proof(&strings(&["fill", "extra"])),
+            parse_proof(&strings(&["init", "--bogus"])),
             Command::Usage
         ));
         assert!(matches!(
-            parse_proof(&strings(&["init", "--bogus"])),
+            parse_proof(&strings(&["fill", "--bogus"])),
             Command::Usage
+        ));
+        // `fill extra` is an input path (P10.2), not a usage error.
+        assert!(matches!(
+            parse_proof(&strings(&["fill", "Main.mod"])),
+            Command::Proof(ProofArgs::Fill { input: Some(_), .. })
         ));
     }
 

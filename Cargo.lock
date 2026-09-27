@@ -491,6 +491,7 @@ name = "lmod-pack"
 version = "0.1.0"
 dependencies = [
  "lmod",
+ "sha2",
 ]
 
 [[package]]
@@ -1003,8 +1004,10 @@ dependencies = [
  "hosted",
  "hosted-rt",
  "lmod",
+ "lmod-pack",
  "loader-core",
  "serde_json",
+ "sha2",
  "tyu",
  "verifier",
 ]
@@ -1061,6 +1064,7 @@ dependencies = [
  "rsp-client",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
  "toml 0.8.23",
  "verifier",
