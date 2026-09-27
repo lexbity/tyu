@@ -688,4 +688,27 @@ theorem transcription_offset (blocks : List Block) (entry : Nat) (off width size
       match htr with
       | ⟨sf, hr⟩ => hI spec mem fuel s0 ⟨sf, by simpa [transcription_run blocks] using hr⟩
 
+/-- The value the exit state of the one-constant word carries on top: the
+pushed constant (the statement-side "exit = entry ++ [v]" reading). -/
+theorem const_ret_output (v : Int) (spec : Tyu.IR.TargetSpec) (mem : ConcreteMem)
+    (σ₀ : State) (fuel' : Nat) :
+    outputAt { stack := σ₀.stack ++ [v], locals := σ₀.locals } 0 = v := by
+  unfold outputAt
+  simp [Nat.sub_zero, List.getLastD]
+
+/-- The exit state of a one-constant word (`const v; ret`): the value `v`
+is pushed on the entry stack and the run terminates after the first block.
+Total exit-state helper for the source-surface worked example. -/
+theorem const_ret_exit (v : Int) (spec : Tyu.IR.TargetSpec) (mem : ConcreteMem)
+    (σ₀ : State) (fuel' : Nat) :
+    Word.run [ { id := 0, ops := [Op.constInt v, Op.ret] } ] spec 0 (fuel' + 1) mem σ₀ =
+      (mem, some { stack := σ₀.stack ++ [v], locals := σ₀.locals }) := by
+  simp [Word.run, Block.runBlock, stepOp, State.push1, State.pop1]
+
+/-- `Word.run` with no fuel never terminates (the fuel-budget base case). -/
+theorem run_zero_fuel (blocks : List Block) (spec : Tyu.IR.TargetSpec) (entry : Nat)
+    (mem : ConcreteMem) (σ : State) :
+    Word.run blocks spec entry 0 mem σ = (mem, none) := by
+  rfl
+
 end Tyu.Src

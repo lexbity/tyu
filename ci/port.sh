@@ -288,5 +288,65 @@ PYEOF
 }
 msg 2 "  port.sh: P7.1 harvest gate green (certificate + E6419 + axiom-audit evidence + delete-theorem-open + mutate-gen-E6420 + deterministic golden)"
 
+# --- PLAN-VERIFY-3 P9 — the source-surface worked example (T-S) ---
+# The `Sum` fixture's obligation is PROVEN at the SOURCE surface — a
+# theorem of the generated `src_stmt_Sum_answer_subtype_range_0` over
+# `Tyu/Src.lean` — and the harvest must certify it with `surface: "source"`
+# and `proof.relies: ["T-S"]` (§Q2/§Q6/§6.3). This exercises the whole P9
+# slice end to end: the renderer's source statement forms, the
+# `Tyu.Sound.transcription` T-S registry theorem the reliance names, and the
+# harvest's source-surface binding. The repo-level test
+# `crates/tooling-tests/tests/source_surface_e2e.rs` drives the identical
+# flow; the gate here runs it through the port shell.
+msg 2 "  port.sh: P9.1/P9.2 source-surface certificate gate (Sum fixture)"
+SF="$ROOT/verification/ports/lean/tests/source-fixture"
+SF_TMP="$(mktemp -d)"
+(
+    cp "$SF/Sum.obl.json" "$SF_TMP/"
+    cp "$ROOT/verification/ports/lean/lean-toolchain" "$SF_TMP/lean-toolchain"
+    # 1. the port's gen renderer produces the source-surface statement.
+    .lake/build/bin/gen --render --obl "$SF_TMP/Sum.obl.json" --out "$SF_TMP/Gen" >/dev/null || exit 1
+    grep -q "def src_stmt_Sum_answer_subtype_range_0 : Prop" "$SF_TMP/Gen/Sum.lean" || exit 1
+    grep -q "Tyu.Src.outInRange" "$SF_TMP/Gen/Sum.lean" || exit 1
+    grep -q '"src_def": "src_stmt_Sum_answer_subtype_range_0"' "$SF_TMP/Gen/Sum.gen.json" || exit 1
+    # 2. assemble the package around the fixture proof + generated Gen.
+    cp "$SF/SumFix.lean" "$SF_TMP/"
+    cp "$SF/hvharvest.lean" "$SF_TMP/"
+    cat > "$SF_TMP/lakefile.toml" <<LAKEEOF
+name = "tyu-source-suite"
+version = "0.1.0"
+
+[[lean_lib]]
+name = "Tyu"
+srcDir = "$ROOT/verification/ports/lean"
+roots = ["Tyu"]
+
+[[lean_lib]]
+name = "Gen"
+srcDir = "."
+roots = ["Gen"]
+
+[[lean_lib]]
+name = "SumFix"
+srcDir = "."
+roots = ["SumFix"]
+LAKEEOF
+    # 3. build + harvest; the verdict MUST carry the source provenance.
+    ( cd "$SF_TMP" && lake build SumFix Tyu.Verdicts.Harvest >/dev/null 2>&1 ) || exit 1
+    TYU_HARVEST_GEN_DIR="$SF_TMP/Gen" TYU_HARVEST_OBL="$SF_TMP/Sum.obl.json" \
+      TYU_HARVEST_OUT="$SF_TMP/out.v2.json" \
+      lake env lean "$SF_TMP/hvharvest.lean" >/dev/null 2>&1 || exit 1
+    grep -q '"surface":"source"' "$SF_TMP/out.v2.json" || exit 1
+    grep -q '"relies":["T-S"]' "$SF_TMP/out.v2.json" || exit 1
+    grep -q '"trust":"proof"' "$SF_TMP/out.v2.json" || exit 1
+    grep -q '"status":"ok"' "$SF_TMP/out.v2.json.audit.json" || exit 1
+    rm -rf "$SF_TMP"
+) || {
+    rm -rf "$SF_TMP"
+    msg 1 "  port.sh: P9 source-surface gate FAILED (renderer source forms / T-S reliance / harvest binding)"
+    exit 1
+}
+msg 2 "  port.sh: P9 source-surface gate green (src_stmt rendering + surface:source + relies [T-S] + axiom audit)"
+
 echo ""
-msg 2 "  port.sh: PORT GATE GREEN (conformance + axiom audit + stackmeta + P5 gen drift + P6 pipeline + P7.1 harvest)"
+msg 2 "  port.sh: PORT GATE GREEN (conformance + axiom audit + stackmeta + P5 gen drift + P6 pipeline + P7.1 harvest + P9 source surface)"

@@ -400,7 +400,7 @@ impl VerifyReport {
             TcbEntry {
                 id: "T-S".into(),
                 what: "source→IR transcription (pure fragment)".into(),
-                status: "pending".into(),
+                status: "theorem".into(),
             },
             TcbEntry {
                 id: "T-CL".into(),

@@ -1,0 +1,24 @@
+# The P9.2 source-surface fixture: the `Sum` module's `subtype-range`
+# obligation is PROVED at the SOURCE surface (a theorem of the generated
+# `src_stmt_Sum_answer_subtype_range_0`, the pure-fragment statement over
+# `Tyu/Src.lean`), and the harvest binds it with `surface: "source"` and
+# `relies: ["T-S"]`. The `Gen/` directory is produced by the port's `gen`
+# renderer from `Sum.obl.json` (the P9.2 e2e test and ci/port.sh drive it);
+# `SumFix.lean` is the developer's VCS-tracked proof.
+name = "tyu-source-fixture"
+version = "0.1.0"
+
+[[lean_lib]]
+name = "Tyu"
+srcDir = "../.."
+roots = ["Tyu"]
+
+[[lean_lib]]
+name = "Gen"
+srcDir = "."
+roots = ["Gen"]
+
+[[lean_lib]]
+name = "SumFix"
+srcDir = "."
+roots = ["SumFix"]

@@ -668,6 +668,7 @@ pub fn emit_obj_driver(
                     theorem: None,
                     kernel_check: None,
                     file: None,
+                    relies: None,
                 }),
                 verifier::verdict::Trust::Proof => Some(verifier::verdict::ProofInfo {
                     kind: verifier::verdict::ProofKind::Certificate,
@@ -675,6 +676,7 @@ pub fn emit_obj_driver(
                     theorem: None,
                     kernel_check: None,
                     file: None,
+                    relies: None,
                 }),
                 _ => None,
             };

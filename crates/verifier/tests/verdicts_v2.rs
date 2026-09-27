@@ -39,6 +39,7 @@ fn full_record() -> VerdictRecord {
             theorem: Some("obl_Bank_withdraw_contract_post_0".to_string()),
             kernel_check: Some("lean-kernel+lean4checker".to_string()),
             file: Some("proofs/Bank.lean".to_string()),
+            relies: Some(vec!["T-S".to_string()]),
         }),
         claimed: None,
         justification: None,

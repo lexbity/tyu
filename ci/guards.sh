@@ -1391,6 +1391,62 @@ done
 [ "$g37_fail" -eq 0 ] && msg $GREEN "  G37: P8 assumption-closure surface (T-CL theorem + walker + report + goldens)"
 failures=$((failures + g37_fail))
 
+# --- G38: P9 source-fragment embedding + T-S transcription surface ---
+# The pure-fragment source semantics (Tyu/Src.lean) exists, the T-S registry
+# theorem is proven + axiom-audited, the TCB reports it `theorem`, the
+# renderer emits source-surface statements (src_stmt_*) with the src_def
+# metadata, the harvest binds them with surface/relies, the Rust
+# cross-surface interpreter + e2e fixture exist, and ci/port.sh runs the
+# source-surface gate.
+g38_fail=0
+for f in "$PORT_DIR/Tyu/Src.lean" \
+         crates/verifier/src/src_interp.rs \
+         crates/verifier/tests/cross_surface.rs \
+         crates/tooling-tests/tests/source_surface_e2e.rs \
+         "$PORT_DIR/tests/source-fixture/SumFix.lean" \
+         "$PORT_DIR/tests/source-fixture/Sum.obl.json"; do
+    if [ ! -f "$f" ]; then
+        msg $RED "  G38 FAIL: $f missing (P9 surface)"
+        g38_fail=1
+    fi
+done
+if ! grep -q "theorem transcription" "$PORT_DIR/Tyu/Src.lean"; then
+    msg $RED "  G38 FAIL: T-S theorem missing from Tyu/Src.lean"
+    g38_fail=1
+fi
+if ! grep -q "Tyu.Sound.transcription" "$PORT_DIR/AxiomAudit.lean"; then
+    msg $RED "  G38 FAIL: the T-S theorem is not axiom-audited"
+    g38_fail=1
+fi
+if ! grep -q 'id: "T-S"' crates/verifier/src/report.rs \
+   || ! grep -q 'status: "theorem"' crates/verifier/src/report.rs; then
+    msg $RED "  G38 FAIL: report TCB must carry T-S with status theorem (P9.1 exit)"
+    g38_fail=1
+fi
+if ! grep -q "src_stmt_" "$PORT_DIR/Tyu/Gen/Render.lean" \
+   || ! grep -q "srcClassify" "$PORT_DIR/Tyu/Gen/Render.lean" \
+   || ! grep -q "src_def" "$PORT_DIR/Tyu/Verdicts/Harvest.lean"; then
+    msg $RED "  G38 FAIL: the source-surface statement rendering or harvest binding is incomplete"
+    g38_fail=1
+fi
+if ! grep -q '"relies":\[' crates/verifier/src/verdict.rs; then
+    msg $RED "  G38 FAIL: the proof.relies surface is missing from the verdict codec"
+    g38_fail=1
+fi
+# fragment boundary honesty: no `sorry`/`Admitted`/`native_decide` in the
+# source embedding or the worked-example proof.
+if grep -rn "sorry\|Admitted\|native_decide" "$PORT_DIR/Tyu/Src.lean" \
+    "$PORT_DIR/tests/source-fixture/SumFix.lean" 2>/dev/null; then
+    msg $RED "  G38 FAIL: forbidden placeholder in the source embedding / fixture proof"
+    g38_fail=1
+fi
+if ! grep -q "P9 source-surface" ci/port.sh; then
+    msg $RED "  G38 FAIL: the P9 source-surface gate is not wired into ci/port.sh"
+    g38_fail=1
+fi
+[ "$g38_fail" -eq 0 ] && msg $GREEN "  G38: P9 source-fragment semantics (Tyu/Src), T-S theorem + audit, TCB status, source-surface renderer/harvest + cross-surface vectors + e2e + port gate"
+failures=$((failures + g38_fail))
+
 echo ""
 msg $GREEN "============================================"
 msg $GREEN "Per-package test counts:"

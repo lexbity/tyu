@@ -72,4 +72,8 @@ Or, from the repo root: `bash ci/port.sh` (blocking CI gate).
 | T-C: stack algebra (`Tyu/Sound.lean`, monoid + per-op + walk + net-zero loop) | P4.2 | done — axiom audit green (permitted set only) |
 | T-C empirical hook (`--level stackmeta`, `tyu.stackmeta/1` goldens) | P4.2 | done — 52 words, zero divergence |
 | Registry + trust documents rev 1 | P4.3 | done — `devdocs/plans/design-doc/formal-semantics-core.md`, `verification-trust.md`, `devdocs/plans/REVIEW.md` |
-| Gen renderer (`Tyu/Gen/`), harvest, axiom audit exe | P5/P7 | next |
+| T-CL: assumption closure (`Tyu/Sound.lean` §AssumptionClosure) | P8.1 | done — axiom audit green |
+| **T-S: source-fragment embedding (`Tyu/Src.lean`) + transcription** | P9.1 | done — `Tyu.Sound.transcription` + per-op/block/word theorems, axiom audit green |
+| Source-surface statements (`src_stmt_*`, `Tyu/Gen/Render.lean`) + harvest binding (`surface: "source"`, `relies: ["T-S"]`) | P9.1/P9.2 | done — rendered + harvested (Sum fixture) |
+| Cross-surface vectors (`crates/verifier/tests/cross_surface.rs`, `src_interp`) + source-surface e2e | P9.2 | done — zero divergence; worked example green |
+| Gen renderer (`Tyu/Gen/`), harvest, axiom audit exe | P5/P7 | done |

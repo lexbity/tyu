@@ -66,6 +66,7 @@ structure StmtMeta where
   reason : String
   defName : String
   statementHash : String
+  srcDef : String
   deriving Inhabited
 
 structure GenMeta where
@@ -78,7 +79,8 @@ partial def parseStmtMeta (j : Conformance.Json) : Option StmtMeta := do
   let reason := ((j.field "reason") >>= Json.asStr).getD ""
   let defName := ((j.field "def") >>= Json.asStr).getD ""
   let statementHash := ((j.field "statement_hash") >>= Json.asStr).getD ""
-  pure ⟨id, omitted, reason, defName, statementHash⟩
+  let srcDef := ((j.field "src_def") >>= Json.asStr).getD ""
+  pure ⟨id, omitted, reason, defName, statementHash, srcDef⟩
 
 def parseGenMeta (input : String) : Option GenMeta :=
   match parseJson input with
@@ -173,24 +175,31 @@ def jobjOf (kvs : List (String × String)) : String :=
 def jarrOf (xs : List String) : String :=
   "[" ++ String.intercalate "," xs ++ "]"
 
-/-- A discharged certificate record (§6.3). -/
-def certRecord (id : String) (idHash : String) (statementHash : String)
-    (thmName : String) (file : String) : String :=
+/-- A discharged certificate record (§6.3). `surface` is the proof surface
+(`"ir"` or `"source"`); `relies` names the registry theorems the surface
+rests on (`["T-S"]` for a source certificate, §Q2 — emitted only when
+nonempty). -/
+def certRecord (surface : String) (relies : List String) (id : String) (idHash : String)
+    (statementHash : String) (thmName : String) (file : String) : String :=
+  let proofKvs : List (String × String) :=
+    [ ("kind", Tyu.Gen.Render.jstr "certificate")
+    , ("statement", Tyu.Gen.Render.jstr "tyu.stmt/1.0")
+    , ("theorem", Tyu.Gen.Render.jstr thmName)
+    , ("kernel_check", Tyu.Gen.Render.jstr "lean-kernel+lean4checker")
+    , ("file", Tyu.Gen.Render.jstr file) ] ++
+    match relies with
+    | [] => []
+    | rs => [ ("relies", jarrOf (rs.map (fun r => Tyu.Gen.Render.jstr r))) ]
   jobjOf
     [ ("id", Tyu.Gen.Render.jstr id)
     , ("id_hash", Tyu.Gen.Render.jstr idHash)
     , ("status", Tyu.Gen.Render.jstr "discharged")
     , ("trust", Tyu.Gen.Render.jstr "proof")
     , ("method", Tyu.Gen.Render.jstr "certificate")
-    , ("surface", Tyu.Gen.Render.jstr "ir")
+    , ("surface", Tyu.Gen.Render.jstr surface)
     , ("statement_hash", Tyu.Gen.Render.jstr statementHash)
     , ("authored", Tyu.Gen.Render.jstr "developer")
-    , ("proof", jobjOf
-        [ ("kind", Tyu.Gen.Render.jstr "certificate")
-        , ("statement", Tyu.Gen.Render.jstr "tyu.stmt/1.0")
-        , ("theorem", Tyu.Gen.Render.jstr thmName)
-        , ("kernel_check", Tyu.Gen.Render.jstr "lean-kernel+lean4checker")
-        , ("file", Tyu.Gen.Render.jstr file) ]) ]
+    , ("proof", jobjOf proofKvs) ]
 
 /-- An open record (unproven is a state, not a fault). -/
 def openRecord (id : String) (idHash : String) (witness : String) : String :=
@@ -243,17 +252,38 @@ def harvestModule (inputs : Inputs) (document : String) :
           let has ← envHas full
           if ¬ has then
             return .error ("E6420: statement def missing from environment: " ++ full.toString)
-          let hits ← findTheorem full m.defName
-          match hits[0]? with
-          | none =>
-              records := (o.id, openRecord o.id o.idHash "unproven") :: records
+          let hitIr ← findTheorem full m.defName
+          match hitIr[0]? with
           | some thm =>
               if ¬ auditAxioms thm.axioms then
                 return .error ("E6419: axiom audit failed for " ++ thm.name
                   ++ " — axioms: " ++ toString thm.axioms)
               auditRows := (thm.name, sortBy (fun s => s) thm.axioms) :: auditRows
-              records := (o.id, certRecord o.id o.idHash m.statementHash thm.name
+              records := (o.id, certRecord "ir" [] o.id o.idHash m.statementHash thm.name
                            ("proofs/" ++ a.module ++ ".lean")) :: records
+          | none =>
+              -- P9: source-surface certificates — a theorem of `src_stmt_…`
+              -- (typed at the generated source-surface declaration) is bound
+              -- with surface "source" and relies ["T-S"] (§Q2: the source
+              -- claim discharges the IR obligation in composition with T-S).
+              if m.srcDef == "" then
+                records := (o.id, openRecord o.id o.idHash "unproven") :: records
+              else
+                let srcFull := fullStmtName a.module m.srcDef
+                let hasSrc ← envHas srcFull
+                if ¬ hasSrc then
+                  return .error ("E6420: source stmt def missing from environment: " ++ srcFull.toString)
+                let hitSrc ← findTheorem srcFull m.defName
+                match hitSrc[0]? with
+                | some thm =>
+                    if ¬ auditAxioms thm.axioms then
+                      return .error ("E6419: axiom audit failed for " ++ thm.name
+                        ++ " — axioms: " ++ toString thm.axioms)
+                    auditRows := (thm.name, sortBy (fun s => s) thm.axioms) :: auditRows
+                    records := (o.id, certRecord "source" ["T-S"] o.id o.idHash m.statementHash thm.name
+                                 ("proofs/" ++ a.module ++ ".lean")) :: records
+                | none =>
+                    records := (o.id, openRecord o.id o.idHash "unproven") :: records
   -- deterministic: sort by the obligation id (the record keys)
   let ids := records.map Prod.fst
   let sorted := sortBy (fun s => s) ids

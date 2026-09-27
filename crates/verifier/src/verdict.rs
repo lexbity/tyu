@@ -320,6 +320,12 @@ pub struct ProofInfo {
     pub kernel_check: Option<String>,
     /// `certificate`: the developer proof file this theorem lives in.
     pub file: Option<String>,
+    /// `certificate`-only (P9, §Q2): the registry theorems a certificate's
+    /// surface rests on — `["T-S"]` for a `surface: "source"` certificate
+    /// (the source claim discharges the IR obligation in composition with
+    /// T-S), absent for `surface: "ir"`. Emitted by the harvest; consumed by
+    /// the report/package (the TCB renders the reliance).
+    pub relies: Option<Vec<String>>,
 }
 
 /// The `claimed` member (§Q6 downgrade rule): what an *unrecognized* producer
@@ -616,6 +622,16 @@ fn push_record_json(out: &mut Vec<u8>, r: &VerdictRecord) {
         if let Some(f) = &p.file {
             out.extend_from_slice(b",\"file\":");
             push_str_json(out, f);
+        }
+        if let Some(relies) = &p.relies {
+            out.extend_from_slice(b",\"relies\":[");
+            for (i, r) in relies.iter().enumerate() {
+                if i != 0 {
+                    out.push(b',');
+                }
+                push_str_json(out, r);
+            }
+            out.push(b']');
         }
         out.push(b'}');
     }
@@ -1199,6 +1215,7 @@ impl<'a> VReader<'a> {
         let mut theorem: Option<String> = None;
         let mut kernel_check: Option<String> = None;
         let mut file: Option<String> = None;
+        let mut relies: Option<Vec<String>> = None;
         loop {
             self.skip_ws();
             match self.peek() {
@@ -1229,6 +1246,7 @@ impl<'a> VReader<'a> {
                 "theorem" => theorem = Some(self.parse_string()?),
                 "kernel_check" => kernel_check = Some(self.parse_string()?),
                 "file" => file = Some(self.parse_string()?),
+                "relies" => relies = Some(self.parse_str_array()?),
                 _ => self.skip_value()?,
             }
         }
@@ -1241,6 +1259,7 @@ impl<'a> VReader<'a> {
             theorem,
             kernel_check,
             file,
+            relies,
         })
     }
 
@@ -1401,6 +1420,33 @@ impl<'a> VReader<'a> {
                 return self.err();
             };
             out.push(OpenReasonRecord { id, reason });
+        }
+        Ok(out)
+    }
+
+    /// A JSON array of strings (the `proof.relies` registry list; absent or
+    /// empty arrays both read as `Some([])`).
+    fn parse_str_array(&mut self) -> Result<Vec<String>, VerdictError> {
+        self.expect(b'[')?;
+        let mut out = Vec::new();
+        loop {
+            self.skip_ws();
+            match self.peek() {
+                Some(b']') => {
+                    self.i += 1;
+                    break;
+                }
+                Some(b',') => {
+                    self.i += 1;
+                }
+                _ => {}
+            }
+            self.skip_ws();
+            if self.peek() == Some(b']') {
+                self.i += 1;
+                break;
+            }
+            out.push(self.parse_string()?);
         }
         Ok(out)
     }
