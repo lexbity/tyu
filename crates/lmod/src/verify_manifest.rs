@@ -54,6 +54,23 @@ pub const VM_STATUS_OPEN: u8 = 0;
 pub const VM_STATUS_DISCHARGED: u8 = 1;
 pub const VM_STATUS_ASSUMED: u8 = 2;
 
+/// Does a module's *declared* policy satisfy a loader/deploy *requirement*?
+///
+/// `require` encoding mirrors `loader_core::platform::VerifyPolicy`:
+/// `0` = Off (no requirement), `1` = RequireNoOpen, `2` = RequireProven.
+/// Unknown requirements fail closed (never admit). This is the ONE policy
+/// comparison both enforcers use — the loader's `validate_verify_manifest`
+/// and the deploy gate's pairing check (the plan's §Q7 rule 3) — so the two
+/// cannot drift. `lmod` is dependency-free: the comparison is byte-level.
+pub fn satisfies(declared: u8, require: u8) -> bool {
+    match require {
+        0 => true,
+        1 => declared >= VM_POLICY_NO_OPEN,
+        2 => declared == VM_POLICY_PROVEN,
+        _ => false,
+    }
+}
+
 // Trust encodings (match `verifier::verdict::Trust` wire order).
 pub const VM_TRUST_OPEN: u8 = 0;
 pub const VM_TRUST_ASSUMED: u8 = 1;
@@ -136,7 +153,7 @@ fn parse_obligation<'a>(data: &'a [u8], off: usize) -> Option<ObligationRef<'a>>
     let id_start = off + 2;
     let id_end = id_start + id_len;
     let rest = id_end + 8 + 1 + 1 + 32; // id_hash + status + trust + statement_hash
-    if id_end + 8 > data.len() || id_end + 8 + 1 > data.len() || rest > data.len() {
+    if rest > data.len() {
         return None;
     }
     let id_hash = le_u64(data, id_end);
@@ -334,4 +351,36 @@ fn read_bytes<'a>(payload: &'a [u8], p: &mut usize, len: usize) -> Result<&'a [u
     let b = &payload[*p..*p + len];
     *p += len;
     Ok(b)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn satisfies_matches_off_no_open_proven() {
+        // Off (0): any declared policy satisfies.
+        assert!(satisfies(0, 0));
+        assert!(satisfies(3, 0));
+        // RequireNoOpen (1): declared ≥ no-open.
+        assert!(!satisfies(VM_POLICY_OPEN_OK, 1));
+        assert!(satisfies(VM_POLICY_NO_OPEN, 1));
+        assert!(satisfies(VM_POLICY_NO_OPEN_NO_ASSUMPTIONS, 1));
+        assert!(satisfies(VM_POLICY_PROVEN, 1));
+        // RequireProven (2): declared == proven.
+        assert!(!satisfies(VM_POLICY_NO_OPEN, 2));
+        assert!(!satisfies(VM_POLICY_NO_OPEN_NO_ASSUMPTIONS, 2));
+        assert!(satisfies(VM_POLICY_PROVEN, 2));
+        // Unknown requirements fail closed.
+        assert!(!satisfies(VM_POLICY_PROVEN, 99));
+    }
+
+    #[test]
+    fn satisfies_is_the_loader_deploy_shared_rule() {
+        // The two enforcers' encodings agree: loader VerifyPolicy
+        // Off=0 / RequireNoOpen=1 / RequireProven=2, and the deploy gate
+        // maps its DeployVerifyPolicy onto the same 0/1/2.
+        assert!(satisfies(VM_POLICY_NO_OPEN, 1));
+        assert!(satisfies(VM_POLICY_PROVEN, 2));
+    }
 }

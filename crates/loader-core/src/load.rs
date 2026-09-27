@@ -388,19 +388,10 @@ fn validate_verify_manifest(
         }
     }
 
-    // Policy requirement.
-    match policy {
-        VerifyPolicy::Off => {}
-        VerifyPolicy::RequireNoOpen => {
-            if vm.policy < lmod::verify_manifest::VM_POLICY_NO_OPEN {
-                return Err(LoadError::VerifyPolicyReject);
-            }
-        }
-        VerifyPolicy::RequireProven => {
-            if vm.policy != lmod::verify_manifest::VM_POLICY_PROVEN {
-                return Err(LoadError::VerifyPolicyReject);
-            }
-        }
+    // Policy requirement — the single shared comparison
+    // (`lmod::verify_manifest::satisfies`, used by the deploy gate too).
+    if !lmod::verify_manifest::satisfies(vm.policy, policy as u8) {
+        return Err(LoadError::VerifyPolicyReject);
     }
     Ok(())
 }

@@ -5,7 +5,7 @@
 use crate::{c, mem};
 use core::ffi::c_void;
 use lmod::board_table::BoardAperture;
-use loader_core::platform::{LoaderPlatform, Region, Rw, Rx, TrustLevel};
+use loader_core::platform::{LoaderPlatform, Region, Rw, Rx, TrustLevel, VerifyPolicy};
 
 /// Load error codes.
 const E_MMAP_FAILED: u32 = 1;
@@ -28,6 +28,12 @@ pub struct HostedLoaderPlatform {
     /// When `Some`, all `alloc_*` calls carve from this block instead
     /// of calling `mmap`.  This guarantees PC-relative proximity.
     block: Option<Block>,
+    /// The `verify_policy()` the loader enforces (E6502). The default
+    /// (`new`) is `Off` — legacy loads carry no manifest requirement; the
+    /// hosted *reference* configuration (`reference()`) is `RequireNoOpen`
+    /// (P11.2: "hosted reference policy (RequireNoOpen for the test
+    /// profile)").
+    verify_policy: VerifyPolicy,
 }
 
 struct Block {
@@ -53,7 +59,22 @@ impl HostedLoaderPlatform {
             }; 8],
             aperture_count: 0,
             block: None,
+            verify_policy: VerifyPolicy::Off,
         }
+    }
+
+    /// The hosted reference configuration (P11.2): `RequireNoOpen` — the
+    /// reference policy the verification harness/CI exercises. Loading a
+    /// module without a ≥ no-open `verify_manifest` under this policy is
+    /// rejected (E6502).
+    pub fn reference() -> Self {
+        Self::new(0).with_verify_policy(VerifyPolicy::RequireNoOpen)
+    }
+
+    /// Set the loader-visible verify policy (E6502 enforcement surface).
+    pub fn with_verify_policy(mut self, policy: VerifyPolicy) -> Self {
+        self.verify_policy = policy;
+        self
     }
 
     /// Bind this host to a board's compiled-descriptor identity (P6, D-5).
@@ -131,6 +152,10 @@ impl HostedLoaderPlatform {
 }
 
 impl LoaderPlatform for HostedLoaderPlatform {
+    fn verify_policy(&self) -> VerifyPolicy {
+        self.verify_policy
+    }
+
     fn alloc_exec(&mut self, len: usize) -> Result<Region<Rw>, u32> {
         if let Some(ref mut b) = self.block {
             let used = align_up(b.used, PAGE_ALIGN).ok_or(E_MMAP_FAILED)?;
@@ -263,6 +288,31 @@ mod tests {
         let region = plat.make_exec(region).unwrap();
         let func: FnReturningI64 = unsafe { core::mem::transmute(region.as_ptr()) };
         assert_eq!(unsafe { func() }, 42);
+    }
+
+    /// P11.2: the hosted reference policy — `reference()` is `RequireNoOpen`
+    /// (E6502 enforcement surface), the default `new` keeps the loader's
+    /// `Off` default (legacy loads without a manifest), and the builder can
+    /// set either.
+    #[test]
+    fn reference_policy_is_require_no_open() {
+        use loader_core::platform::VerifyPolicy;
+        assert_eq!(
+            HostedLoaderPlatform::reference().verify_policy(),
+            VerifyPolicy::RequireNoOpen,
+            "the hosted reference policy (P11.2) must be RequireNoOpen"
+        );
+        assert_eq!(
+            HostedLoaderPlatform::new(0).verify_policy(),
+            VerifyPolicy::Off,
+            "the legacy default stays Off"
+        );
+        assert_eq!(
+            HostedLoaderPlatform::new(0)
+                .with_verify_policy(VerifyPolicy::RequireProven)
+                .verify_policy(),
+            VerifyPolicy::RequireProven
+        );
     }
 
     #[test]

@@ -149,7 +149,10 @@ pub fn compose_and_write_report(
         let cand_total: u32 = report.proof.statements.iter().map(|s| s.candidates).sum();
         if cand_total > 0 {
             return Err(TyuError::Build(format!(
-                "E6416: --proven-no-candidates: {cand_total} candidate-authored                  certificate(s) in the image — review the candidates under                  proofs/candidates/ (remove the `-- tyu:candidate` markers to                  acknowledge review) or drop the flag"
+                "E6416: --proven-no-candidates: {cand_total} candidate-authored \
+                 certificate(s) in the image — review the candidates under \
+                 proofs/candidates/ (remove the `-- tyu:candidate` markers to \
+                 acknowledge review) or drop the flag"
             )));
         }
     }

@@ -17,16 +17,20 @@ module Main;\nimport platform/testio { testio.write-byte };\n\
 : main ( -- i64 ) 83 testio.write-byte 10 testio.write-byte 0 ;\nexport { main };\nend;\n";
 
 fn proven_summary(model: &str, policy: &str) -> String {
+    proven_summary_ratio(model, policy, 0)
+}
+
+fn proven_summary_ratio(model: &str, policy: &str, candidate_ratio: u16) -> String {
     format!(
         r#"{{"schema":"tyu.vm/1","semantics":"tyu.ir-sem/1.0","stmt":"tyu.stmt/1.0",
            "target":"x86_64-unknown-none","model":"{}","policy":"{}",
            "certifier":{{"class":"port","name":"lean","recognition":"tyu-port/lean/1"}},
-           "candidate_ratio":0,
+           "candidate_ratio":{},
            "counts":{{"proof":1,"checked":0,"assumed":0,"open":0}},
            "obligations":[{{"id":"Main::main::subtype-range::0","id_hash":7,
              "status":"discharged","trust":"proof",
              "statement_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}]}}"#,
-        model, policy
+        model, policy, candidate_ratio
     )
 }
 
@@ -51,6 +55,15 @@ fn ensure_tools() {
 }
 
 fn deploy_with(dir: &std::path::Path, verify_policy: Option<&str>, summary: Option<&str>) -> bool {
+    deploy_with_extra(dir, verify_policy, summary, None)
+}
+
+fn deploy_with_extra(
+    dir: &std::path::Path,
+    verify_policy: Option<&str>,
+    summary: Option<&str>,
+    extra_flag: Option<&str>,
+) -> bool {
     if !require_tools(&["langc", "fasm", "ld", "lmod-pack", "lmod-sign"]) {
         // Tools absent in this environment — skip (same convention as the
         // other deploy suites).
@@ -76,6 +89,9 @@ fn deploy_with(dir: &std::path::Path, verify_policy: Option<&str>, summary: Opti
         let sum = dir.join("summary.json");
         std::fs::write(&sum, s).unwrap();
         args.insert(1, format!("--verify-manifest={}", sum.display()));
+    }
+    if let Some(f) = extra_flag {
+        args.insert(1, f.to_string());
     }
 
     let output = Command::new(tyu_exe())
@@ -269,4 +285,40 @@ fn loader_policy_agrees_with_deploy_gate() {
         .expect("present");
     assert_eq!(vm.policy, lmod::verify_manifest::VM_POLICY_OPEN_OK);
     assert!(vm.policy != lmod::verify_manifest::VM_POLICY_PROVEN);
+}
+
+#[test]
+fn proven_no_candidates_knob_gates_the_ratio() {
+    // §Q10: by default a proven deploy ADMITS candidate-authored
+    // certificates (kernel-checked); with --proven-no-candidates any
+    // nonzero shipped ratio fails (E6510).
+    let ratio_summary = proven_summary_ratio("tyu.model/x86_64-unknown-none/1", "proven", 5000);
+
+    let dir = temp_dir("vm_ratio_default");
+    assert!(
+        deploy_with(&dir, Some("proven"), Some(&ratio_summary)),
+        "default proven deploy must admit a candidate-authored ratio"
+    );
+
+    let dir2 = temp_dir("vm_ratio_knob");
+    let ok = deploy_with_extra(
+        &dir2,
+        Some("proven"),
+        Some(&ratio_summary),
+        Some("--proven-no-candidates"),
+    );
+    assert!(
+        !ok,
+        "--proven-no-candidates must fail a proven deploy with a nonzero ratio"
+    );
+
+    // A zero ratio deploys under the knob too (nothing to object to).
+    let dir3 = temp_dir("vm_ratio_knob_zero");
+    let ok3 = deploy_with_extra(
+        &dir3,
+        Some("proven"),
+        Some(&proven_summary("tyu.model/x86_64-unknown-none/1", "proven")),
+        Some("--proven-no-candidates"),
+    );
+    assert!(ok3, "--proven-no-candidates must admit a zero ratio");
 }

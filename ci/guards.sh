@@ -1525,30 +1525,42 @@ fi
 [ "$g39_fail" -eq 0 ] && msg $GREEN "  G39: P9.3 fragment-vector corpus (tyu.fragvec/1): Rust generator + cross_surface execution + port runner + port gate — the Lean↔Rust fragment pin"
 failures=$((failures + g39_fail))
 
-# G40: PLAN-VERIFY-3 P10 — the automation surface (tactic library, candidate
+# G44: PLAN-VERIFY-3 P10 — the automation surface (tactic library, candidate
 # pipeline, attribution, deploy knob) with the §P0 discipline gates.
-g40_fail=0
-[ -d "$PORT_DIR/Tyu/Automation" ] || { msg $RED "  G40 FAIL: missing Tyu/Automation library"; g40_fail=1; }
-grep -q 'elab "tyu_auto"' "$PORT_DIR/Tyu/Automation/Auto.lean" || { msg $RED "  G40 FAIL: tyu_auto dispatcher missing"; g40_fail=1; }
-grep -q 'elab "auto_cycle"' "$PORT_DIR/Tyu/Automation/Cycle.lean" || { msg $RED "  G40 FAIL: auto_cycle missing"; g40_fail=1; }
-grep -q "via_cycles_sound" "$PORT_DIR/Tyu/Automation/Auto.lean" || { msg $RED "  G40 FAIL: via_cycles_sound missing (the composition theorem)"; g40_fail=1; }
-grep -q "automation_rate" "$PORT_DIR/lakefile.toml" || { msg $RED "  G40 FAIL: automation_rate exe not registered"; g40_fail=1; }
-grep -q "name = \"fill\"" "$PORT_DIR/lakefile.toml" || { msg $RED "  G40 FAIL: fill exe not registered"; g40_fail=1; }
-grep -q "tyu:candidate obligation" crates/tyu/src/proof.rs || { msg $RED "  G40 FAIL: candidate markers not implemented in tyu proof fill"; g40_fail=1; }
-grep -q "TYU_HARVEST_CANDIDATES" crates/tyu/src/proof.rs || { msg $RED "  G40 FAIL: harvest candidate attribution env missing"; g40_fail=1; }
-grep -q 'authoredOf' "$PORT_DIR/Tyu/Verdicts/Harvest.lean" || { msg $RED "  G40 FAIL: harvest authoredOf missing"; g40_fail=1; }
-grep -q "proven_no_candidates" crates/tyu/src/args.rs || { msg $RED "  G40 FAIL: --proven-no-candidates knob missing"; g40_fail=1; }
-grep -q "candidates" crates/verifier/src/report.rs || { msg $RED "  G40 FAIL: report candidate field missing"; g40_fail=1; }
-# FR-15: no serde anywhere new (P10 touches proof.rs).
-grep -rn "serde" crates/tyu/src/proof.rs && { msg $RED "  G40 FAIL: serde in proof.rs (FR-15)"; g40_fail=1; } || true
+g44_fail=0
+[ -d "$PORT_DIR/Tyu/Automation" ] || { msg $RED "  G44 FAIL: missing Tyu/Automation library"; g44_fail=1; }
+grep -q 'elab "tyu_auto"' "$PORT_DIR/Tyu/Automation/Auto.lean" || { msg $RED "  G44 FAIL: tyu_auto dispatcher missing"; g44_fail=1; }
+grep -q 'elab "auto_cycle"' "$PORT_DIR/Tyu/Automation/Cycle.lean" || { msg $RED "  G44 FAIL: auto_cycle missing"; g44_fail=1; }
+grep -q "via_cycles_sound" "$PORT_DIR/Tyu/Automation/Auto.lean" || { msg $RED "  G44 FAIL: via_cycles_sound missing (the composition theorem)"; g44_fail=1; }
+grep -q "automation_rate" "$PORT_DIR/lakefile.toml" || { msg $RED "  G44 FAIL: automation_rate exe not registered"; g44_fail=1; }
+grep -q "name = \"fill\"" "$PORT_DIR/lakefile.toml" || { msg $RED "  G44 FAIL: fill exe not registered"; g44_fail=1; }
+grep -q "tyu:candidate obligation" crates/tyu/src/proof.rs || { msg $RED "  G44 FAIL: candidate markers not implemented in tyu proof fill"; g44_fail=1; }
+grep -q "TYU_HARVEST_CANDIDATES" crates/tyu/src/proof.rs || { msg $RED "  G44 FAIL: harvest candidate attribution env missing"; g44_fail=1; }
+grep -q 'authoredOf' "$PORT_DIR/Tyu/Verdicts/Harvest.lean" || { msg $RED "  G44 FAIL: harvest authoredOf missing"; g44_fail=1; }
+grep -q "proven_no_candidates" crates/tyu/src/args.rs || { msg $RED "  G44 FAIL: --proven-no-candidates knob missing"; g44_fail=1; }
+grep -q "render_candidate_ratios" crates/tyu/src/deploy.rs || { msg $RED "  G44 FAIL: deploy candidate-ratio rendering missing (§Q10)"; g44_fail=1; }
+grep -q "candidates" crates/verifier/src/report.rs || { msg $RED "  G44 FAIL: report candidate field missing"; g44_fail=1; }
+# FR-15: no JSON-crate codec in proof.rs (the gen-metadata reader is
+# hand-rolled; `parse_gen_meta` + the attribution paths are all scanner code).
+if grep -rn "serde" crates/tyu/src/proof.rs >/dev/null 2>&1; then
+    msg $RED "  G44 FAIL: serde in proof.rs (FR-15)"
+    grep -rn "serde" crates/tyu/src/proof.rs | head -3
+    g44_fail=1
+fi
 # FR-14: the new codecs' digests are SHA-256 (candidates.json has no digests;
-# the statement_hash already uses sha256). Guard the fnv boundary: candidate
-# ids are NOT integrity digests anywhere (they travel as ids only).
-grep -rn "fnv" crates/tyu/src/proof.rs && { msg $RED "  G40 FAIL: fnv used in the P10 attribution path (FR-14 boundary)"; g40_fail=1; } || true
-grep -q "P10 automation" ci/port.sh || { msg $RED "  G40 FAIL: the P10 gate is not wired into ci/port.sh"; g40_fail=1; }
-grep -q "Tyu.Automation.via_cycles_sound" "$PORT_DIR/AxiomAudit.lean" || { msg $RED "  G40 FAIL: via_cycles_sound not axiom-audited"; g40_fail=1; }
-[ "$g40_fail" -eq 0 ] && msg $GREEN "  G40: PLAN-VERIFY-3 P10 automation (Tyu.Automation library + exes + tyu proof fill + harvest attribution + --proven-no-candidates + axiom audit + port gate)"
-failures=$((failures + g40_fail))
+# the statement_hash already uses sha256). Guard the fnv boundary: the ONLY
+# permitted fnv use in proof.rs is the pre-existing `cache::fnv1a_u64`
+# cache-key helper (identity-key domain) — any other fnv reference in the
+# attribution path fails.
+if grep -rn "fnv" crates/tyu/src/proof.rs | grep -v "cache::fnv1a_u64" >/dev/null 2>&1; then
+    msg $RED "  G44 FAIL: fnv outside the cache-key helper in proof.rs (FR-14 boundary)"
+    grep -rn "fnv" crates/tyu/src/proof.rs | grep -v "cache::fnv1a_u64" | head -3
+    g44_fail=1
+fi
+grep -q "P10 automation" ci/port.sh || { msg $RED "  G44 FAIL: the P10 gate is not wired into ci/port.sh"; g44_fail=1; }
+grep -q "Tyu.Automation.via_cycles_sound" "$PORT_DIR/AxiomAudit.lean" || { msg $RED "  G44 FAIL: via_cycles_sound not axiom-audited"; g44_fail=1; }
+[ "$g44_fail" -eq 0 ] && msg $GREEN "  G44: PLAN-VERIFY-3 P10 automation (Tyu.Automation library + exes + tyu proof fill + harvest attribution + --proven-no-candidates + axiom audit + port gate)"
+failures=$((failures + g44_fail))
 
 # G41: PLAN-VERIFY-3 P11.1/P11.3 — the automatic verify_manifest + the
 # image-level deploy pairing (FR-8): the `tyu.vm/1` producer emits real
@@ -1566,6 +1578,33 @@ grep -q "proven_deploy_walks_the_import_graph" crates/tyu/tests/deploy_verify_po
 [ "$g41_fail" -eq 0 ] && msg $GREEN "  G41: P11.1/P11.3 — automatic tyu.vm/1 producer + image-level deploy pairing (FR-8, compositional rule)"
 failures=$((failures + g41_fail))
 
+# G42: P10.2/P11 — the dead-CLI-form removal + the P11.1/P11.2 adjudications.
+g42_fail=0
+grep -q 'fn extract_artifacts_for_fill' crates/tyu/src/proof.rs || { msg $RED "  G42 FAIL: proof-fill standalone extraction missing"; g42_fail=1; }
+grep -q '"--emit=obligations"' crates/tyu/src/proof.rs || { msg $RED "  G42 FAIL: the fill extraction must run langc --emit=obligations"; g42_fail=1; }
+grep -q 'ProofArgs::Fill.*target' crates/tyu/src/args.rs || grep -q 'target,' crates/tyu/src/args.rs || { msg $RED "  G42 FAIL: proof fill --target not threaded"; g42_fail=1; }
+grep -q 'RUNTIME_ABI_VERSION: u64 = 1' crates/lmod/src/abi_hash.rs || { msg $RED "  G42 FAIL: RUNTIME_ABI_VERSION drifted from 1"; g42_fail=1; }
+grep -q 'PLAN-VERIFY-3 §13 adjudication' crates/lmod/src/abi_hash.rs || { msg $RED "  G42 FAIL: the ABI-bump adjudication record missing"; g42_fail=1; }
+grep -q 'pub fn reference()' crates/hosted/src/loader.rs || { msg $RED "  G42 FAIL: the hosted reference policy (RequireNoOpen) missing"; g42_fail=1; }
+grep -q 'fn verify_policy' crates/hosted/src/loader.rs || { msg $RED "  G42 FAIL: the hosted platform does not expose verify_policy"; g42_fail=1; }
+[ -f crates/tyu/tests/proof_fill_e2e.rs ] || { msg $RED "  G42 FAIL: missing the standalone proof-fill e2e"; g42_fail=1; }
+[ "$g42_fail" -eq 0 ] && msg $GREEN "  G42: P10.2/P11 — proof-fill standalone extraction live, RUNTIME_ABI adjudication recorded, hosted RequireNoOpen reference policy"
+failures=$((failures + g42_fail))
+
+# G43: cleanup — no drift between the two verify_manifest enforcers and no
+# per-consumer copies of the summary→record pipeline; `--proven-no-candidates`
+# must not be silently dropped by run/deploy.
+g43_fail=0
+grep -q "fn satisfies" crates/lmod/src/verify_manifest.rs || { msg $RED "  G43 FAIL: missing the shared satisfies()"; g43_fail=1; }
+grep -q "satisfies" crates/loader-core/src/load.rs || { msg $RED "  G43 FAIL: the loader must use the shared satisfies()"; g43_fail=1; }
+grep -q "satisfies" crates/tyu/src/deploy.rs || { msg $RED "  G43 FAIL: the deploy gate must use the shared satisfies()"; g43_fail=1; }
+grep -q "fn encode_from_json_text" crates/lmod-pack/src/verify.rs || { msg $RED "  G43 FAIL: missing encode_from_json_text"; g43_fail=1; }
+[ "$(grep -c 'encode_from_json_text' crates/tyu/src/build.rs crates/tyu/src/deploy.rs crates/lmod-pack/src/main.rs 2>/dev/null | awk -F: '{s+=$2} END{print s}')" -ge 3 ] || { msg $RED "  G43 FAIL: encode_from_json_text must be the single consumer path (build/deploy/lmod-pack)"; g43_fail=1; }
+grep -q "proven_no_candidates: self.proven_no_candidates" crates/tyu/src/args.rs || { msg $RED "  G43 FAIL: deploy/run must forward --proven-no-candidates"; g43_fail=1; }
+grep -q "fn render_candidate_ratios" crates/tyu/src/deploy.rs || { msg $RED "  G43 FAIL: missing the deploy candidate-ratio rendering (§Q10)"; g43_fail=1; }
+[ "$g43_fail" -eq 0 ] && msg $GREEN "  G43: cleanup — shared satisfies() (loader+deploy), single encode_from_json_text path, --proven-no-candidates not dropped, §Q10 ratio rendered"
+failures=$((failures + g43_fail))
+
 echo ""
 msg $GREEN "============================================"
 msg $GREEN "Per-package test counts:"
@@ -1580,7 +1619,7 @@ echo ""
 msg $GREEN "Total workspace tests (default features): $total_tests"
 
 if [ "$failures" -gt 0 ]; then
-    msg $RED "FAILED: $failures package(s) have test-delivery issues"
+    msg $RED "FAILED: $failures gate(s) failed — see the FAIL lines above"
     exit 1
 fi
 msg $GREEN "All guard checks passed."

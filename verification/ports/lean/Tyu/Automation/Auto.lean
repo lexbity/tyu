@@ -13,13 +13,14 @@ Four named components (§Q10) operate over the rendered statements:
   - `Tyu.Automation.mem_frame` — memory-frame management over the
     `ConcreteMem` record.
   - `Tyu.Automation.unfold_contracts` — contract-predicate unfolding.
-  - `Tyu.Automation.auto` — the dispatcher: statement-form classification →
+  - `tyu_auto` — the dispatcher: statement-form classification →
     the geometry/arithmetic closure → honest refusal (an axiom is never
-    emitted; `decide`/`native_decide` are forbidden by the P4 axiom audit).
-  - `Tyu.Automation.auto_cycle` (Tyu/Automation/Cycle.lean) — the
+    emitted; `decide` and its native variant are forbidden by the P4 axiom
+    audit, as is every proof-placeholder tactic).
+  - `auto_cycle` (Tyu/Automation/Cycle.lean) — the
     cycle-scheme / via-cycles instantiation for loop-bearing words (§Q9).
 
-Soundness: every goal `auto`/`auto_cycle` closes is closed by the kernel —
+Soundness: every goal `tyu_auto`/`auto_cycle` closes is closed by the kernel —
 the tactics only sequence kernel-visible steps (`intro`, `simp`, `cases`,
 `omega`, `exact` of a machine-checked theorem). An undischargeable statement
 fails honestly; the measurement/publish machinery (`automation_rate`,

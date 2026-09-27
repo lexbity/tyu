@@ -44,28 +44,17 @@ def candidateText (module defName id tactic budget : String) : String :=
   "theorem obl_" ++ short ++ " : (Tyu.Gen.Corpus." ++ module ++ "." ++ defName ++ ") := by\n" ++
   "  " ++ tactic ++ "\n"
 
-def sanitize (s : String) : String :=
-  String.ofList (s.toList.map (fun c => if c.isAlphanum then c else '_'))
-
 def main (args : List String) : IO UInt32 := do
   match args with
   | "--selfcheck" :: _ => IO.println "PASS: fill selfcheck"; pure 0
   | _ =>
-      let oblArgs : List String := args.filter (fun a => a.startsWith "--obl=")
-        |>.filterMap (fun a => (a.dropPrefix? "--obl=").map (fun x => x.toString))
-      let metaArgs : List String := args.filter (fun a => a.startsWith "--meta=")
-        |>.filterMap (fun a => (a.dropPrefix? "--meta=").map (fun x => x.toString))
-      let out0 := match args.filter (fun a => a.startsWith "--out=") with
-        | o :: _ => ((o.dropPrefix? "--out=").map (fun x => x.toString)).getD "."
-        | _ => "."
-      let out : String := out0
-      let budget : String := match args.filter (fun a => a.startsWith "--fill-budget=") with
-        | o :: _ => ((o.dropPrefix? "--fill-budget=").map (fun x => x.toString)).getD "10"
-        | _ => "10"
+      let (oblArgs, metaArgs) := oblMetaArgs args
+      let out := stringArg args "out" "."
+      let budget := stringArg args "fill-budget" "10"
       if oblArgs.isEmpty || metaArgs.length != oblArgs.length then
         IO.println "usage: fill --obl=<M>.obl.json ... --meta=<M>.gen.json ... --out=<dir> [--fill-budget=<secs>] | --selfcheck"
         return 2
-      IO.FS.createDirAll (System.FilePath.mk out)
+      IO.FS.createDirAll (fp out)
       let mut written := 0
       for (a, m) in oblArgs.zip metaArgs do
         let doc ← IO.FS.readFile a
@@ -73,7 +62,7 @@ def main (args : List String) : IO UInt32 := do
         -- ground statements: `tyu_auto` candidates.
         for (id, _kind, module, defName) in renderableRows doc gen do
           let path := out ++ "/" ++ sanitize id ++ ".lean"
-          IO.FS.writeFile (System.FilePath.mk path) (candidateText module defName id "tyu_auto" budget)
+          IO.FS.writeFile (fp path) (candidateText module defName id "tyu_auto" budget)
           written := written + 1
         -- via-cycles compositions of loop-bearing words: `auto_cycle`
         -- candidates (the import surface is already in place).
@@ -83,7 +72,7 @@ def main (args : List String) : IO UInt32 := do
             | _ => ""
           let defName := match istmt.splitOn "." |>.getLast? with | some d => d | none => ""
           let path := out ++ "/" ++ sanitize id ++ ".lean"
-          IO.FS.writeFile (System.FilePath.mk path) (candidateText module defName id "auto_cycle" budget)
+          IO.FS.writeFile (fp path) (candidateText module defName id "auto_cycle" budget)
           written := written + 1
       IO.println s!"fill: {written} candidate file(s) written to {out}"
       pure 0

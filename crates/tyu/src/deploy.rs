@@ -67,13 +67,15 @@ pub fn run(args: &DeployArgs) -> Result<(), TyuError> {
     // (a proven caller with an unproven callee is rejected by name). The
     // loader's per-module hook (E6502) is a device-side backstop that
     // defaults to Off — the deploy gate is the compositional enforcement.
-    check_deploy_policy(&packed_bytes, args.verify_policy)?;
+    check_deploy_policy(&packed_bytes, args.verify_policy, args.proven_no_candidates)?;
+    render_candidate_ratios(&resolved_out_dir, &packed_bytes, args.verify_policy);
     check_image_pairing(
         &resolved_out_dir,
         &args.input,
         &args.include_dirs,
         args.sysroot.as_deref(),
         args.verify_policy,
+        args.proven_no_candidates,
     )?;
     write_atomic(&packed_path, &packed_bytes).map_err(TyuError::Io)?;
 
@@ -449,10 +451,8 @@ fn pack_static_with_manifest(
     let record = match verify_manifest {
         Some(path) => {
             let text = fs::read_to_string(path).map_err(TyuError::Io)?;
-            let spec = lmod_pack::verify::verify_manifest_from_json(&text)
-                .map_err(|e| TyuError::Deploy(format!("verify-manifest: {e}")))?;
-            lmod_pack::verify::encode_verify_manifest(&spec)
-                .map_err(|e| TyuError::Deploy(format!("verify-manifest encode: {e}")))?
+            lmod_pack::verify::encode_from_json_text(&text)
+                .map_err(|e| TyuError::Deploy(format!("verify-manifest: {e}")))?
         }
         None => Vec::new(),
     };
@@ -468,14 +468,17 @@ fn pack_static_with_manifest(
 /// - `NoOpen`: policy ≥ `no-open`;
 /// - `Proven`: policy == `proven` AND a modeled bundle (`model != "unmodeled"`).
 ///
+/// `no_candidates` is the §Q10 `--proven-no-candidates` knob: under `proven`,
+/// a nonzero `candidate_ratio` fails the deploy.
+///
 /// A missing or malformed manifest under any requiring policy is rejected
 /// (E6510) — fail-closed, never a silent pair.
 fn check_deploy_policy(
     packed: &[u8],
     policy: crate::args::DeployVerifyPolicy,
+    no_candidates: bool,
 ) -> Result<(), TyuError> {
     use crate::args::DeployVerifyPolicy;
-    use lmod::verify_manifest::{VM_POLICY_NO_OPEN, VM_POLICY_PROVEN};
 
     if policy == DeployVerifyPolicy::OpenOk {
         return Ok(());
@@ -496,31 +499,93 @@ fn check_deploy_policy(
         }
         Err(_) => return Err(einterr("verify_manifest malformed".to_string())),
     };
-    match policy {
-        DeployVerifyPolicy::NoOpen => {
-            if vm.policy < VM_POLICY_NO_OPEN {
-                return Err(einterr(format!(
-                    "declared policy ({}) below the no-open requirement",
-                    vm.policy
-                )));
-            }
-        }
-        DeployVerifyPolicy::Proven => {
-            if vm.policy != VM_POLICY_PROVEN {
-                return Err(einterr(format!(
-                    "declared policy ({}) is not proven",
-                    vm.policy
-                )));
-            }
-            if vm.model == b"unmodeled" {
-                return Err(einterr(
-                    "proven pairing against an unmodeled bundle (E_MODEL_UNMODELED)".to_string(),
-                ));
-            }
-        }
-        DeployVerifyPolicy::OpenOk => {}
+    // The shared policy comparison (`lmod::verify_manifest::satisfies` —
+    // the same byte-level rule the loader enforces for RequireNoOpen/
+    // RequireProven, so the two enforcers cannot drift).
+    let require = match policy {
+        DeployVerifyPolicy::OpenOk => 0,
+        DeployVerifyPolicy::NoOpen => 1,
+        DeployVerifyPolicy::Proven => 2,
+    };
+    if require != 0 && !lmod::verify_manifest::satisfies(vm.policy, require) {
+        return Err(einterr(format!(
+            "declared policy ({}) does not satisfy the requirement ({})",
+            vm.policy, require
+        )));
+    }
+    // The deploy-side-only bundle-model rule (§Q15): a proven pairing must
+    // target a modeled bundle.
+    if policy == DeployVerifyPolicy::Proven && vm.model == b"unmodeled" {
+        return Err(einterr(
+            "proven pairing against an unmodeled bundle (E_MODEL_UNMODELED)".to_string(),
+        ));
+    }
+    // §Q10 `--proven-no-candidates`: a proven deploy that must carry no
+    // candidate-authored certificates rejects a nonzero shipped ratio
+    // (default: candidates admissible — kernel-checked; refusing them is
+    // process preference, not soundness).
+    if policy == DeployVerifyPolicy::Proven && no_candidates && vm.candidate_ratio > 0 {
+        return Err(einterr(format!(
+            "--proven-no-candidates: the shipped manifest carries candidate-authored \
+             certificates (ratio {} basis 10000) — review proofs/candidates/ and \
+             re-verify, or drop the flag",
+            vm.candidate_ratio
+        )));
     }
     Ok(())
+}
+
+/// §Q10 rendering: under a proven-required deploy, print the candidate ratio
+/// (basis 10000) the shipped manifest carries, plus the per-module ratios
+/// from the derived summaries — the operator-facing surface the plan names
+/// ("deploy under `proven` prints the candidate ratio").
+fn render_candidate_ratios(out_dir: &Path, packed: &[u8], policy: crate::args::DeployVerifyPolicy) {
+    if policy != crate::args::DeployVerifyPolicy::Proven {
+        return;
+    }
+    // The shipped root manifest's ratio.
+    let root_ratio = lmod::validate::Container::parse(packed).ok().and_then(|c| {
+        match lmod::verify_manifest::scan_verify_manifest(c.modinfo()) {
+            Ok(Some(vm)) => Some(vm.candidate_ratio),
+            _ => None,
+        }
+    });
+    eprintln!(
+        "tyu: deploy (proven): candidate ratio {} (basis 10000; candidate-authored \
+         certificates in the shipped manifest)",
+        root_ratio.unwrap_or(0)
+    );
+    // Per-module ratios from the derived `tyu.vm/1` summaries (best-effort).
+    let state_dir = crate::vm_summary::verify_state_dir(out_dir);
+    if let Ok(rd) = fs::read_dir(&state_dir) {
+        let mut rows: Vec<(String, u16)> = Vec::new();
+        for e in rd.flatten() {
+            let p = e.path();
+            if !p
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.ends_with(".vm.json"))
+            {
+                continue;
+            }
+            let Ok(text) = fs::read_to_string(&p) else {
+                continue;
+            };
+            if let Ok(spec) = lmod_pack::verify::verify_manifest_from_json(&text) {
+                let module = p
+                    .file_stem()
+                    .and_then(|n| n.to_str())
+                    .map(String::from)
+                    .unwrap_or_default();
+                let module = module.strip_suffix(".vm").unwrap_or(&module).to_string();
+                rows.push((module, spec.candidate_ratio));
+            }
+        }
+        rows.sort();
+        for (module, ratio) in rows {
+            eprintln!("tyu:   {module}: candidate ratio {ratio}");
+        }
+    }
 }
 
 /// The ROOT module's derived `tyu.vm/1` summary in the out dir: the module
@@ -558,9 +623,9 @@ fn check_image_pairing(
     include_dirs: &[PathBuf],
     sysroot: Option<&Path>,
     policy: crate::args::DeployVerifyPolicy,
+    no_candidates: bool,
 ) -> Result<(), TyuError> {
     use crate::args::DeployVerifyPolicy;
-    use lmod::verify_manifest::{VM_POLICY_NO_OPEN, VM_POLICY_PROVEN};
 
     if policy == DeployVerifyPolicy::OpenOk {
         return Ok(());
@@ -570,6 +635,11 @@ fn check_image_pairing(
         code: E6510,
         detail,
     };
+    let require = match policy {
+        DeployVerifyPolicy::OpenOk => 0,
+        DeployVerifyPolicy::NoOpen => 1,
+        DeployVerifyPolicy::Proven => 2,
+    };
     // The resolved import graph (dependencies first, root last) IS the
     // image's closure; platform-sysroot imports are excluded (they are not
     // application modules).
@@ -578,13 +648,17 @@ fn check_image_pairing(
             "resolving the image's module graph for pairing: {e}"
         ))
     })?;
+    if graph.is_empty() {
+        return Err(einterr(
+            "image pairing found an empty module graph to check (malformed)".to_string(),
+        ));
+    }
     // Walk every module in the image EXCEPT the root (the caller): the root's
     // packaged `verify_manifest` is vetted by [`check_deploy_policy`]; the
     // callees' summaries are the image-level closure a proven/no-open deploy
     // must accept. A missing callee summary under a requiring policy is a
     // fail-closed "callee has no verify state".
     let root = graph.last().map(|n| n.name.as_str());
-    let mut checked = 0usize;
     for node in &graph {
         if Some(node.name.as_str()) == root {
             continue;
@@ -601,38 +675,35 @@ fn check_image_pairing(
         let text = fs::read_to_string(&sum_path).map_err(TyuError::Io)?;
         let spec = lmod_pack::verify::verify_manifest_from_json(&text)
             .map_err(|e| einterr(format!("callee '{}' summary malformed: {e}", node.name)))?;
-        match policy {
-            DeployVerifyPolicy::NoOpen => {
-                if spec.policy < VM_POLICY_NO_OPEN {
-                    return Err(einterr(format!(
-                        "callee '{}' declares policy below the no-open requirement",
-                        node.name
-                    )));
+        // The shared policy comparison (`lmod::verify_manifest::satisfies`).
+        if require != 0 && !lmod::verify_manifest::satisfies(spec.policy, require) {
+            return Err(einterr(format!(
+                "unproven callee '{}' in a {} image (the callee was not built \
+                 under the required policy)",
+                node.name,
+                if policy == DeployVerifyPolicy::Proven {
+                    "proven"
+                } else {
+                    "no-open"
                 }
-            }
-            DeployVerifyPolicy::Proven => {
-                if spec.policy != VM_POLICY_PROVEN {
-                    return Err(einterr(format!(
-                        "unproven callee '{}' in a proven image (the callee was \
-                         not built under --verify-policy=proven)",
-                        node.name
-                    )));
-                }
-                if spec.model == "unmodeled" {
-                    return Err(einterr(format!(
-                        "unmodeled callee '{}' in a proven image (E_MODEL_UNMODELED)",
-                        node.name
-                    )));
-                }
-            }
-            DeployVerifyPolicy::OpenOk => {}
+            )));
         }
-        checked += 1;
-    }
-    if graph.is_empty() {
-        return Err(einterr(
-            "image pairing found an empty module graph to check (malformed)".to_string(),
-        ));
+        if policy == DeployVerifyPolicy::Proven && spec.model == "unmodeled" {
+            return Err(einterr(format!(
+                "unmodeled callee '{}' in a proven image (E_MODEL_UNMODELED)",
+                node.name
+            )));
+        }
+        // §Q10 `--proven-no-candidates`: the image-level closure covers the
+        // knob too — a proven deploy that admits no candidates rejects a
+        // candidate-authored callee summary.
+        if policy == DeployVerifyPolicy::Proven && no_candidates && spec.candidate_ratio > 0 {
+            return Err(einterr(format!(
+                "--proven-no-candidates: callee '{}' carries candidate-authored \
+                 certificates (ratio {} basis 10000)",
+                node.name, spec.candidate_ratio
+            )));
+        }
     }
     Ok(())
 }
@@ -653,7 +724,7 @@ mod tests {
         // body on a 64 MiB stack.
         let h = std::thread::Builder::new()
             .stack_size(64 * 1024 * 1024)
-            .spawn(|| image_pairing_rejects_unproven_callee_body())
+            .spawn(image_pairing_rejects_unproven_callee_body)
             .expect("spawn big-stack pairing thread");
         h.join().expect("pairing thread");
     }
@@ -673,10 +744,11 @@ mod tests {
             "module Main;\nimport Cal { cal };\n: main ( -- i64 ) cal 0 ;\nexport { main };\nend;\n",
         )
         .unwrap();
+        let includes = [dir.clone()];
 
-        let vm_doc = |policy: &str, model: &str| -> String {
+        let vm_doc = |policy: &str, model: &str, ratio: u16| -> String {
             format!(
-                r#"{{"schema":"tyu.vm/1","semantics":"tyu.ir-sem/1.0","stmt":"tyu.stmt/1.0","target":"x86_64-unknown-none","model":"{model}","policy":"{policy}","certifier":{{"class":"none","name":"","recognition":""}},"candidate_ratio":0,"counts":{{"proof":0,"checked":0,"assumed":0,"open":0}},"obligations":[]}}"#
+                r#"{{"schema":"tyu.vm/1","semantics":"tyu.ir-sem/1.0","stmt":"tyu.stmt/1.0","target":"x86_64-unknown-none","model":"{model}","policy":"{policy}","certifier":{{"class":"none","name":"","recognition":""}},"candidate_ratio":{ratio},"counts":{{"proof":0,"checked":0,"assumed":0,"open":0}},"obligations":[]}}"#
             )
         };
         // The ROOT caller's summary only (the root is vetted by its packed
@@ -684,7 +756,7 @@ mod tests {
         fs::create_dir_all(dir.join("out/.tyu-verify")).unwrap();
         fs::write(
             dir.join("out/.tyu-verify/Main.vm.json"),
-            vm_doc("proven", "tyu.model/x86_64-unknown-none/1"),
+            vm_doc("proven", "tyu.model/x86_64-unknown-none/1", 0),
         )
         .unwrap();
         let prove_config = crate::args::DeployVerifyPolicy::Proven;
@@ -692,15 +764,16 @@ mod tests {
         // 1. Unproven callee ⇒ E6510 naming the callee.
         fs::write(
             dir.join("out/.tyu-verify/Cal.vm.json"),
-            vm_doc("open-ok", "tyu.model/x86_64-unknown-none/1"),
+            vm_doc("open-ok", "tyu.model/x86_64-unknown-none/1", 0),
         )
         .unwrap();
         let err = check_image_pairing(
             &dir.join("out"),
             &dir.join("Main.mod"),
-            &[dir.clone()],
+            &includes,
             None,
             prove_config,
+            false,
         )
         .unwrap_err();
         let msg = err.to_string();
@@ -713,30 +786,32 @@ mod tests {
         // 2. Proven + modeled callee ⇒ OK.
         fs::write(
             dir.join("out/.tyu-verify/Cal.vm.json"),
-            vm_doc("proven", "tyu.model/x86_64-unknown-none/1"),
+            vm_doc("proven", "tyu.model/x86_64-unknown-none/1", 0),
         )
         .unwrap();
         check_image_pairing(
             &dir.join("out"),
             &dir.join("Main.mod"),
-            &[dir.clone()],
+            &includes,
             None,
             prove_config,
+            false,
         )
         .expect("proven+modeled callee must pair");
 
         // 3. Proven but unmodeled callee ⇒ E6510 (E_MODEL_UNMODELED).
         fs::write(
             dir.join("out/.tyu-verify/Cal.vm.json"),
-            vm_doc("proven", "unmodeled"),
+            vm_doc("proven", "unmodeled", 0),
         )
         .unwrap();
         let err2 = check_image_pairing(
             &dir.join("out"),
             &dir.join("Main.mod"),
-            &[dir.clone()],
+            &includes,
             None,
             prove_config,
+            false,
         )
         .unwrap_err();
         assert!(
@@ -749,14 +824,45 @@ mod tests {
         let err3 = check_image_pairing(
             &dir.join("out"),
             &dir.join("Main.mod"),
-            &[dir.clone()],
+            &includes,
             None,
             prove_config,
+            false,
         )
         .unwrap_err();
         assert!(
             err3.to_string().contains("has no verify_manifest summary"),
             "err3: {err3}"
+        );
+
+        // 5. §Q10 `--proven-no-candidates`: a candidate-authored callee is
+        // rejected only when the knob is set (default admits candidates).
+        fs::write(
+            dir.join("out/.tyu-verify/Cal.vm.json"),
+            vm_doc("proven", "tyu.model/x86_64-unknown-none/1", 5000),
+        )
+        .unwrap();
+        check_image_pairing(
+            &dir.join("out"),
+            &dir.join("Main.mod"),
+            &includes,
+            None,
+            prove_config,
+            false,
+        )
+        .expect("candidate callee pairs when the knob is off");
+        let err4 = check_image_pairing(
+            &dir.join("out"),
+            &dir.join("Main.mod"),
+            &includes,
+            None,
+            prove_config,
+            true,
+        )
+        .unwrap_err();
+        assert!(
+            err4.to_string().contains("--proven-no-candidates") && err4.to_string().contains("Cal"),
+            "knob must reject the candidate-authored callee: {err4}"
         );
 
         let _ = fs::remove_dir_all(&dir);

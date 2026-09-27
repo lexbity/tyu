@@ -145,10 +145,20 @@ fn parse_hex32(s: &str) -> Option<[u8; 32]> {
     Some(out)
 }
 
-/// A tiny JSON parser over the `tyu.vm/1` erform; returns the object's
+/// The single "read a `tyu.vm/1` JSON summary → wire record" entry point —
+/// the one path build (manifest_record), deploy (static pack), and the
+/// `lmod-pack` CLI all use, so the summary reader never drifts from the
+/// encoder.
+pub fn encode_from_json_text(json: &str) -> Result<Vec<u8>, String> {
+    let spec = verify_manifest_from_json(json)?;
+    encode_verify_manifest(&spec)
+}
+
+/// A tiny JSON parser over the `tyu.vm/1` wire form; returns the object's
 /// key → value pairs for string/number/bool leaves (arrays are joined for
-/// the obligations list below). Production code uses the port/tyu path;
-/// this parser serves the CLI path.
+/// the obligations list below). Producers are the build's derived summaries
+/// (`tyu::vm_summary`) and the port tooling; this parser serves the CLI
+/// path (`lmod-pack --verify-manifest`).
 ///
 /// The summary shape:
 /// ```json
@@ -400,5 +410,3 @@ fn parse_obligation_obj(s: &str) -> Result<ObligationSpec, String> {
         statement_hash,
     })
 }
-
-// Silence an otherwise-unused import diagnostic under some feature sets.

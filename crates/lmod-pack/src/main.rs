@@ -59,17 +59,12 @@ fn main() {
                     process::exit(2);
                 }
             };
-            let spec = match lmod_pack::verify::verify_manifest_from_json(&text) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("error: --verify-manifest: {e}");
-                    process::exit(2);
-                }
-            };
-            match lmod_pack::verify::encode_verify_manifest(&spec) {
+            // The single summary→record path (the same one build and deploy
+            // use), so the CLI can never drift from the packed artifacts.
+            match lmod_pack::verify::encode_from_json_text(&text) {
                 Ok(r) => r,
                 Err(e) => {
-                    eprintln!("error: --verify-manifest encode: {e}");
+                    eprintln!("error: --verify-manifest: {e}");
                     process::exit(2);
                 }
             }

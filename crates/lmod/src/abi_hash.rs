@@ -40,6 +40,25 @@ pub const ARCH_TAG_RISCV: u8 = 3; // RISC-V ILP32
 ///
 /// A bump changes `abi_hash` for every module, so a mismatched runtime/module
 /// pair is rejected at load (abi-contract §5 loader rule).
+///
+/// ## PLAN-VERIFY-3 §13 adjudication (P11.1, recorded)
+///
+/// The plan rows "RUNTIME_ABI_VERSION 1 → 2" for the modinfo-v4 /
+/// `verify_manifest` work. That bump is **NOT taken here**, for two reasons:
+/// 1. `MODINFO_VER` is already 4 (a prior slice landed the v4 modinfo +
+///    `verify_manifest`), and `compute_abi_hash` already folds `modinfo_ver`
+///    — so the plan's own stated consequence of the bump ("modinfo layout
+///    feeds `abi_hash`; all modules recompile") was realized by the v4
+///    change itself.
+/// 2. Per abi-contract §4.4.3, `RUNTIME_ABI_VERSION` guards the `__lang_*`
+///    runtime symbol contract ONLY. The `verify_manifest` is a trailing,
+///    length-prefixed modinfo metadata record — it does not add, remove, or
+///    rename a runtime symbol, change a data-stack register, or alter a
+///    calling convention. Bumping would reject every existing runtime/module
+///    pair and force a full fleet recompile against an unchanged ABI.
+///
+/// A bump remains the correct action when a genuine `__lang_*` contract
+/// change lands.
 pub const RUNTIME_ABI_VERSION: u64 = 1;
 
 // ---------------------------------------------------------------------------

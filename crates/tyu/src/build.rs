@@ -862,10 +862,8 @@ pub fn manifest_record(summary: Option<&Path>) -> Result<Vec<u8>, TyuError> {
         None => Ok(Vec::new()),
         Some(path) => {
             let text = std::fs::read_to_string(path).map_err(TyuError::Io)?;
-            let spec = lmod_pack::verify::verify_manifest_from_json(&text)
-                .map_err(|e| TyuError::Build(format!("verify-manifest: {e}")))?;
-            lmod_pack::verify::encode_verify_manifest(&spec)
-                .map_err(|e| TyuError::Build(format!("verify-manifest encode: {e}")))
+            lmod_pack::verify::encode_from_json_text(&text)
+                .map_err(|e| TyuError::Build(format!("verify-manifest: {e}")))
         }
     }
 }

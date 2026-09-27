@@ -17,6 +17,32 @@ structure Row where
   omitted : Bool
   deriving Inhabited
 
+/-! ## Shared executable plumbing (the rate/fill mains) -/
+
+/-- `String → FilePath` (the `Std` coe is not applied at IO call sites). -/
+def fp (s : String) : System.FilePath := System.FilePath.mk s
+
+/-- The filesystem-safe directory/file name for an obligation id. -/
+def sanitize (s : String) : String :=
+  String.ofList (s.toList.map (fun c => if c.isAlphanum then c else '_'))
+
+/-- The paired `--obl=`/`--meta=` file lists (both mains; the callers
+require the two lists to have equal length). -/
+def oblMetaArgs (args : List String) : List String × List String :=
+  (args.filter (fun a => a.startsWith "--obl=")
+        |>.filterMap (fun a => (a.dropPrefix? "--obl=").map (fun s => s.toString)),
+   args.filter (fun a => a.startsWith "--meta=")
+        |>.filterMap (fun a => (a.dropPrefix? "--meta=").map (fun s => s.toString)))
+
+/-- The value of a `--<name>=` flag (first occurrence), or `default`. -/
+def stringArg (args : List String) (name default : String) : String :=
+  match args.filter (fun a => a.startsWith s!"--{name}=") with
+  | o :: _ =>
+      match o.dropPrefix? s!"--{name}=" with
+      | some v => v.toString
+      | none => default
+  | _ => default
+
 /-- Parse a `tyu.gen/1` document into its statement rows (hand-rolled over
 `Tyu.Conformance.Json`; unknown keys skipped). -/
 def parseGenMetaRows (input : String) : Option (String × List Row) :=

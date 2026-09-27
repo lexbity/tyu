@@ -51,6 +51,9 @@ pub enum ProofArgs {
         /// P10.2: per-obligation automation budget in seconds (default 10;
         /// recorded in the candidates and honored by the measurement).
         fill_budget: Option<u32>,
+        /// The target the standalone extraction compiles for (default
+        /// `x86_64-unknown-none`; a prior build's artifacts carry their own).
+        target: codegen_core::Target,
     },
 }
 
@@ -153,6 +156,11 @@ pub struct DeployArgs {
     /// assembled from at pack time (P11.3; the build emits it when its
     /// verdict set satisfies the policy).
     pub verify_manifest: Option<PathBuf>,
+    /// P10.2 (§Q10): `--proven-no-candidates` — a proven-required deploy must
+    /// fail when any discharged certificate is candidate-authored (default:
+    /// candidates admissible — kernel-checked; refusing them is process
+    /// preference).
+    pub proven_no_candidates: bool,
 }
 
 impl DeployArgs {
@@ -185,7 +193,7 @@ impl DeployArgs {
             metal_encrypt_mode: None,
             verbose: false,
             verify: VerifyMode::On,
-            proven_no_candidates: false,
+            proven_no_candidates: self.proven_no_candidates,
             verify_policy: self.build_policy(),
             verify_manifest: self.verify_manifest.clone(),
             elide_stack_guards: false,
@@ -469,7 +477,7 @@ fn print_usage() {
         "  --verify-tool=lean    P6: run the developer-proof pipeline (generated\n                      statements + lake package; harvest in P7)"
     );
     eprintln!(
-        "  --proven-no-candidates  P10: under --verify-policy=proven, fail when any\n                      discharged certificate is candidate-authored (default off)"
+        "  --proven-no-candidates  P10: under --verify-policy=proven (build and\n                      deploy), fail when any discharged certificate is\n                      candidate-authored (default off)"
     );
     eprintln!(
         "  --elide-stack-guards  Slice P7: two-pass elision of the x86 data-stack\n                      overflow guards, legal only when the image-level\n                      stack-budget(main) verdict is discharged (report:\n                      contexts.stack.guards = elided). Requires --verify=on"
@@ -1056,6 +1064,7 @@ fn parse_deploy(args: &[String]) -> Command {
         verify_policy,
         verify_manifest,
         feature_set: FeatureSet::default(),
+        proven_no_candidates: common.proven_no_candidates,
     })
 }
 
@@ -1193,6 +1202,7 @@ fn parse_proof(args: &[String]) -> Command {
             let mut dir: Option<PathBuf> = None;
             let mut input: Option<PathBuf> = None;
             let mut fill_budget: Option<u32> = None;
+            let mut target = codegen_core::Target::X86_64UnknownNone;
             let mut i = 1;
             while i < args.len() {
                 let a = &args[i];
@@ -1217,6 +1227,14 @@ fn parse_proof(args: &[String]) -> Command {
                             return Command::Usage;
                         }
                     };
+                } else if let Some(val) = a.strip_prefix("--target=") {
+                    target = match codegen_core::Target::parse(val.as_bytes()) {
+                        Some(t) => t,
+                        None => {
+                            eprintln!("tyu: unknown target '{}'", val);
+                            return Command::Usage;
+                        }
+                    };
                 } else if a.starts_with('-') {
                     eprintln!("tyu: unknown option '{}'", a);
                     return Command::Usage;
@@ -1229,6 +1247,7 @@ fn parse_proof(args: &[String]) -> Command {
                 dir,
                 input,
                 fill_budget,
+                target,
             })
         }
         other => {
@@ -1523,7 +1542,8 @@ mod tests {
                 dir: None,
                 input: None,
                 fill_budget: None,
-            }) => {}
+                target,
+            }) => assert_eq!(target, codegen_core::Target::X86_64UnknownNone),
             other => panic!("unexpected command: {:?}", other),
         }
         match parse_proof(&strings(&[
@@ -1531,15 +1551,18 @@ mod tests {
             "--dir=/tmp/p",
             "Main.mod",
             "--fill-budget=30",
+            "--target=armv7m-unknown-none",
         ])) {
             Command::Proof(ProofArgs::Fill {
                 dir,
                 input,
                 fill_budget,
+                target,
             }) => {
                 assert_eq!(dir.as_deref(), Some(std::path::Path::new("/tmp/p")));
                 assert_eq!(input.as_deref(), Some(std::path::Path::new("Main.mod")));
                 assert_eq!(fill_budget, Some(30));
+                assert_eq!(target, codegen_core::Target::ArmV7MUnknownNone);
             }
             other => panic!("unexpected command: {:?}", other),
         }

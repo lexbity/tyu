@@ -418,6 +418,7 @@ pub fn proof_fill(
     include_dirs: &[PathBuf],
     sysroot: Option<&Path>,
     fill_budget: Option<u32>,
+    target: codegen_core::Target,
 ) -> Result<u32, TyuError> {
     let port_dir = crate::platform::workspace_root().join(PORT_DIR_REL);
     if !port_dir.join("lean-toolchain").is_file() {
@@ -429,8 +430,9 @@ pub fn proof_fill(
     }
 
     // Prefer the latest build's extracted artifacts (`.tyu-oblig/` under the
-    // project out dir); otherwise extract fresh from the given input.
-    let artifacts = find_extracted_artifacts(root)?;
+    // project out dir, for THIS target); otherwise extract fresh from the
+    // given input.
+    let artifacts = find_extracted_artifacts(root, target)?;
     let artifacts = if artifacts.is_empty() {
         let entry = input.ok_or_else(|| {
             TyuError::Build(
@@ -440,7 +442,7 @@ pub fn proof_fill(
                     .into(),
             )
         })?;
-        extract_artifacts_for_fill(root, &entry, include_dirs, sysroot)?
+        extract_artifacts_for_fill(root, entry, include_dirs, sysroot, target)?
     } else {
         artifacts
     };
@@ -514,22 +516,20 @@ pub fn proof_fill(
 }
 
 /// Artifacts already extracted by the last build: `<root>/target/tyu/<triple>/
-/// .tyu-oblig/*.obl.json` (the pass-1 extraction location).
-fn find_extracted_artifacts(root: &Path) -> Result<Vec<PathBuf>, TyuError> {
+/// .tyu-oblig/*.obl.json` (the pass-1 extraction location) — for the fill's
+/// target ONLY (statements are `(triple, model)`-relative, §Q3; mixing
+/// targets would fill a module twice).
+fn find_extracted_artifacts(
+    root: &Path,
+    target: codegen_core::Target,
+) -> Result<Vec<PathBuf>, TyuError> {
     let mut out = Vec::new();
-    let base = root.join("target").join("tyu");
+    let triple_name = String::from_utf8_lossy(target.triple()).into_owned();
+    let base = root.join("target").join("tyu").join(&triple_name);
     if let Ok(rd) = fs::read_dir(&base) {
-        for triple in rd.flatten() {
-            if !triple.path().is_dir() {
-                continue;
-            }
-            let oblig = triple.path().join(".tyu-oblig");
-            if oblig.is_dir() {
-                for e in fs::read_dir(&oblig).map_err(TyuError::Io)?.flatten() {
-                    if e.path().extension().and_then(|x| x.to_str()) == Some("obl.json") {
-                        out.push(e.path());
-                    }
-                }
+        for e in rd.flatten() {
+            if e.path().extension().and_then(|x| x.to_str()) == Some("obl.json") {
+                out.push(e.path());
             }
         }
     }
@@ -537,28 +537,79 @@ fn find_extracted_artifacts(root: &Path) -> Result<Vec<PathBuf>, TyuError> {
     Ok(out)
 }
 
-/// Extract the obligation artifact for a single entry `.mod` into a temp
-/// dir (`langc --emit=obligations`, like the build pass-1). Returns the
-/// artifact paths (one per module, sorted).
+/// Extract the obligation artifacts for an entry `.mod` into a temp dir
+/// (`langc --emit=obligations` over the resolved module graph — the same
+/// pass-1 invocation the build uses). Returns the artifact paths (one per
+/// module, sorted). This is the standalone fill source: `tyu proof fill
+/// entry.mod` works without a prior build.
 fn extract_artifacts_for_fill(
     root: &Path,
-    _input: &Path,
-    _include_dirs: &[PathBuf],
-    _sysroot: Option<&Path>,
+    input: &Path,
+    include_dirs: &[PathBuf],
+    sysroot: Option<&Path>,
+    target: codegen_core::Target,
 ) -> Result<Vec<PathBuf>, TyuError> {
-    // The `tyu build --verify-tool=lean` pass-1 artifacts are the preferred
-    // source; a standalone fill without a prior build needs a langc run. The
-    // langc invocation mirrors build.rs's `extract_module_artifacts`.
+    let langc = crate::toolchain::resolve_tool("langc")?;
+    let triple = std::str::from_utf8(target.triple())
+        .map_err(|_| TyuError::Build("non-UTF-8 target triple".into()))?;
+    let modules = crate::graph::resolve_graph(input, include_dirs, sysroot)?;
+    if modules.is_empty() {
+        return Err(TyuError::Build(
+            "E6416: `tyu proof fill` resolved no modules from the input".into(),
+        ));
+    }
+    let dir = std::env::temp_dir().join(format!("tyu-fill-extract-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).map_err(TyuError::Io)?;
+    for module in &modules {
+        let mut cmd = Command::new(&langc);
+        cmd.arg("--emit=obligations");
+        cmd.arg(format!("--out-dir={}", dir.display()));
+        cmd.arg(format!("--target={}", triple));
+        if let Some(sr) = sysroot {
+            cmd.arg(format!("--sysroot={}", sr.display()));
+        }
+        for inc in include_dirs {
+            cmd.arg("-I");
+            cmd.arg(inc);
+        }
+        cmd.arg(&module.path);
+        let out = cmd.output().map_err(|e| {
+            TyuError::Build(format!(
+                "E6416: running langc (`--emit=obligations`) for '{}': {e}",
+                module.path.display()
+            ))
+        })?;
+        if !out.status.success() {
+            let _ = fs::remove_dir_all(&dir);
+            return Err(TyuError::Build(format!(
+                "E6416: langc failed extracting obligations for '{}':\n{}",
+                module.path.display(),
+                String::from_utf8_lossy(&out.stderr)
+            )));
+        }
+    }
+    let mut artifacts: Vec<PathBuf> = Vec::new();
+    if let Ok(rd) = fs::read_dir(&dir) {
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.ends_with(".obl.json"))
+            {
+                artifacts.push(p);
+            }
+        }
+    }
+    artifacts.sort();
+    if artifacts.is_empty() {
+        let _ = fs::remove_dir_all(&dir);
+        return Err(TyuError::Build(
+            "E6416: langc emitted no obligation artifacts for the input".into(),
+        ));
+    }
     let _ = root;
-    let _ = _input;
-    let _ = _include_dirs;
-    let _ = _sysroot;
-    Err(TyuError::Build(
-        "E6416: `tyu proof fill` needs a prior `tyu build --verify-tool=lean` \
-         (the pass-1 `.tyu-oblig` artifacts are the fill source); pass the \
-         entry .mod after a build, or run the build first"
-            .into(),
-    ))
+    Ok(artifacts)
 }
 
 /// The `<Module>.gen.json` metadata files in a rendered Gen dir (sorted).
@@ -646,9 +697,10 @@ fn ensure_fill_exe(port_dir: &Path) -> Result<PathBuf, TyuError> {
         ));
     }
     if !bin.is_file() {
-        return Err(TyuError::Build(
-            "E6416: fill exe not produced in '{}'".into(),
-        ));
+        return Err(TyuError::Build(format!(
+            "E6416: fill exe not produced in '{}'",
+            port_dir.display()
+        )));
     }
     Ok(bin)
 }
@@ -795,7 +847,9 @@ pub fn run_lean_pipeline(
         )
         .map_err(TyuError::Io)?;
         verdict_files.push((module.clone(), path));
-        let (proven, candidates) = count_certificates(&v2);
+        // One parse serves both consumers: the statement accounting and the
+        // candidate-evidence ids (§Q10 attribution).
+        let (proven, candidates, cand_ids) = certificate_stats(&v2);
         for s in statements.iter_mut().filter(|s| s.module == module) {
             s.unproven = s.rendered.saturating_sub(proven);
             s.proven = proven;
@@ -806,7 +860,6 @@ pub fn run_lean_pipeline(
         // re-homed beside the verdicts for the report/package (§Q10
         // attribution; the certification package's `evidence/candidates.json`
         // assembles from these in P11).
-        let cand_ids = candidate_record_ids(&v2);
         let cand_doc = format!(
             "{{\"schema\":\"tyu.candidates/1\",\"module\":{},\"candidates\":[{}]}}\n",
             json_escape(&module),
@@ -845,45 +898,26 @@ pub fn run_lean_pipeline(
     ))
 }
 
-/// Count the `trust: proof` certificate records in a harvest v2 document, and
-/// how many of them are candidate-authored (§Q10).
-fn count_certificates(v2: &str) -> (u32, u32) {
-    use verifier::verdict::read_verdicts;
+/// The certificate accounting of a harvest v2 document, parsed ONCE:
+/// `(proof count, candidate-authored count, candidate-authored ids)`.
+/// A malformed document reads as all-open (the fail-closed direction —
+/// the pipeline re-validates verdicts elsewhere before trusting them).
+fn certificate_stats(v2: &str) -> (u32, u32, Vec<String>) {
+    use verifier::verdict::{read_verdicts, Authored, Trust};
     match read_verdicts(v2.as_bytes()) {
         Ok(v) => {
-            let proof = v
-                .records
-                .iter()
-                .filter(|r| r.trust == verifier::verdict::Trust::Proof)
-                .count() as u32;
-            let candidates = v
-                .records
-                .iter()
-                .filter(|r| {
-                    r.trust == verifier::verdict::Trust::Proof
-                        && r.authored == Some(verifier::verdict::Authored::Candidate)
-                })
-                .count() as u32;
-            (proof, candidates)
+            let proof = v.records.iter().filter(|r| r.trust == Trust::Proof).count() as u32;
+            let mut candidates = 0u32;
+            let mut cand_ids = Vec::new();
+            for r in &v.records {
+                if r.trust == Trust::Proof && r.authored == Some(Authored::Candidate) {
+                    candidates += 1;
+                    cand_ids.push(r.id.clone());
+                }
+            }
+            (proof, candidates, cand_ids)
         }
-        Err(_) => (0, 0),
-    }
-}
-
-/// The candidate-authored certificate ids of a harvest v2 document (sorted).
-fn candidate_record_ids(v2: &str) -> Vec<String> {
-    use verifier::verdict::read_verdicts;
-    match read_verdicts(v2.as_bytes()) {
-        Ok(v) => v
-            .records
-            .iter()
-            .filter(|r| {
-                r.trust == verifier::verdict::Trust::Proof
-                    && r.authored == Some(verifier::verdict::Authored::Candidate)
-            })
-            .map(|r| r.id.clone())
-            .collect(),
-        Err(_) => Vec::new(),
+        Err(_) => (0, 0, Vec::new()),
     }
 }
 
@@ -1765,42 +1799,127 @@ fn verify_gen_digests(
 }
 
 /// The `statements` array of a `<Module>.gen.json` metadata file.
+/// A string-keyed scan over a JSON-object substring: the value of `"key"`
+/// (string form, unescaped conservatively). `None` = the key is absent.
+/// The gen metadata is toolchain-produced (the port's `gen` renderer), so
+/// the reader only needs the producer's own shape — hand-rolled per the
+/// FR-15 codec discipline, mirroring the port's
+/// `Tyu.Automation.Corpus.parseGenMetaRows`.
+fn json_string_field(obj: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{key}\"");
+    let mut from = 0usize;
+    while let Some(k) = obj[from..].find(&needle) {
+        let after = &obj[from + k + needle.len()..];
+        let after = after.trim_start();
+        let after = after.strip_prefix(':')?.trim_start();
+        if !after.starts_with('"') {
+            // Not a string value (a different row's similar key) — skip.
+            from += k + needle.len();
+            continue;
+        }
+        let mut out = String::new();
+        let mut chars = after[1..].chars();
+        while let Some(c) = chars.next() {
+            match c {
+                '"' => return Some(out),
+                '\\' => match chars.next() {
+                    Some('n') => out.push('\n'),
+                    Some('t') => out.push('\t'),
+                    Some('r') => out.push('\r'),
+                    Some('"') => out.push('"'),
+                    Some('\\') => out.push('\\'),
+                    Some(other) => out.push(other),
+                    None => return None,
+                },
+                c => out.push(c),
+            }
+        }
+        return None; // Unterminated string (malformed) — treat as absent.
+    }
+    None
+}
+
+/// The boolean value of `"key"` in a JSON-object substring.
+fn json_bool_field(obj: &str, key: &str) -> Option<bool> {
+    let needle = format!("\"{key}\"");
+    let k = obj.find(&needle)?;
+    let after = obj[k + needle.len()..].trim_start();
+    let after = after.strip_prefix(':')?.trim_start();
+    if after.starts_with("true") {
+        Some(true)
+    } else if after.starts_with("false") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+/// The `{ ... }` spans of a JSON array substring (string-aware brace
+/// matching; the producer never nests braces inside strings). A `}` with
+/// no open object (the document's root close, trailing the array) is
+/// ignored.
+fn json_object_spans(arr: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    let mut in_str = false;
+    let mut escaped = false;
+    for (i, c) in arr.char_indices() {
+        if in_str {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_str = false;
+            }
+            continue;
+        }
+        match c {
+            '"' => in_str = true,
+            '{' => {
+                if depth == 0 {
+                    start = i;
+                }
+                depth += 1;
+            }
+            '}' if depth > 0 => {
+                depth -= 1;
+                if depth == 0 {
+                    out.push(&arr[start..=i]);
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// The `statements` array of a `<Module>.gen.json` metadata document
+/// (`tyu.gen/1`, written by the port's `gen` renderer).
 fn parse_gen_meta(bytes: &[u8]) -> Result<GenMeta, TyuError> {
-    let value: serde_json::Value = serde_json::from_slice(bytes)
-        .map_err(|e| TyuError::Build(format!("E6418: unparseable Gen metadata: {e}")))?;
-    let schema = value
-        .get("schema")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
+    let text = std::str::from_utf8(bytes)
+        .map_err(|_| TyuError::Build("E6418: unparseable Gen metadata: not UTF-8".into()))?;
+    let schema = json_string_field(text, "schema").unwrap_or_default();
     if schema != "tyu.gen/1" {
         return Err(TyuError::Build(format!(
-            "E6418: unknown Gen metadata schema '{}' (expected tyu.gen/1)",
-            schema
+            "E6418: unknown Gen metadata schema '{schema}' (expected tyu.gen/1)"
         )));
     }
     let mut statements = Vec::new();
-    if let Some(arr) = value.get("statements").and_then(|v| v.as_array()) {
-        for row in arr {
-            let id = row
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string();
-            let omitted = row
-                .get("omitted")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            let statement_hash = row
-                .get("statement_hash")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string();
-            statements.push(GenStatementRow {
-                id,
-                omitted,
-                statement_hash,
-            });
+    if let Some(arr_start) = text.find("\"statements\"") {
+        let rest = text[arr_start..].trim_start();
+        if let Some(bracket) = rest.find('[') {
+            for row in json_object_spans(&rest[bracket..]) {
+                let id = json_string_field(row, "id").unwrap_or_default();
+                let omitted = json_bool_field(row, "omitted").unwrap_or(false);
+                let statement_hash = json_string_field(row, "statement_hash").unwrap_or_default();
+                statements.push(GenStatementRow {
+                    id,
+                    omitted,
+                    statement_hash,
+                });
+            }
         }
     }
     Ok(GenMeta { statements })
@@ -2142,7 +2261,8 @@ mod tests {
     #[test]
     fn candidate_markers_are_scanned_and_attributed() {
         // `candidate_ids` parses the `-- tyu:candidate obligation=<id>`
-        // markers (sorted, deduped); `count_certificates`/`candidate_record_ids`
+        // markers (sorted, deduped); `certificate_stats` reads the
+        // attribution from a harvest v2 document.
         // read the attribution from a harvest v2 document.
         let dir = temp_dir("cand");
         fs::create_dir_all(dir.join("proofs").join("candidates")).unwrap();
@@ -2182,13 +2302,36 @@ mod tests {
           {"id":"A::w::subtype-range::0","id_hash":"h1","status":"discharged","trust":"proof","method":"certificate","surface":"ir","statement_hash":"hh","authored":"developer","proof":{"kind":"certificate","statement":"tyu.stmt/1.0"}},
           {"id":"B::w::contract-post::1","id_hash":"h2","status":"discharged","trust":"proof","method":"certificate","surface":"ir","statement_hash":"hh","authored":"candidate","proof":{"kind":"certificate","statement":"tyu.stmt/1.0"}}
         ]}"#;
-        let (proven, candidates) = count_certificates(v2);
+        let (proven, candidates, cand_ids) = certificate_stats(v2);
         assert_eq!(proven, 2);
         assert_eq!(candidates, 1);
-        assert_eq!(
-            candidate_record_ids(v2),
-            vec!["B::w::contract-post::1".to_string()]
-        );
+        assert_eq!(cand_ids, vec!["B::w::contract-post::1".to_string()]);
+    }
+
+    #[test]
+    fn gen_meta_reader_is_hand_rolled_and_strict() {
+        // FR-15: the `tyu.gen/1` reader is hand-rolled (no JSON crate) and
+        // keeps the producer's contract: schema gate, per-row fields,
+        // `omitted` defaulting false, unknown keys skipped.
+        let doc = br#"{
+  "schema": "tyu.gen/1",
+  "module": "Bank",
+  "statements": [
+  { "id": "Bank::clamp::subtype-range::0", "id_hash": "cd26", "omitted": true, "reason": "opaque-site", "statement_hash": "" },
+  { "id": "Bank::clamp::subtype-range::1", "id_hash": "cd27", "def": "stmt_Bank_clamp_subtype_range_1", "omitted": false, "statement_hash": "1fe4" },
+  { "id": "Bank::bounded_inc::subtype-range::0", "def": "stmt_Bank_bounded_inc_subtype_range_0", "statement_hash": "beef" }
+  ]}"#;
+        let meta = parse_gen_meta(doc).expect("parse");
+        assert_eq!(meta.statements.len(), 3);
+        assert_eq!(meta.statements[0].id, "Bank::clamp::subtype-range::0");
+        assert!(meta.statements[0].omitted);
+        assert!(!meta.statements[1].omitted);
+        assert_eq!(meta.statements[1].statement_hash, "1fe4");
+        // `omitted` absent ⇒ false (the default).
+        assert!(!meta.statements[2].omitted);
+        // A wrong schema is the E6418 class.
+        let err = parse_gen_meta(b"{\"schema\": \"tyu.gen/9\", \"statements\": []}").unwrap_err();
+        assert!(err.to_string().contains("E6418"), "err: {err}");
     }
     // A hermetic root: either the port is absent (repo without the
     // verification tree) or the pass-1 artifacts are missing — both are
@@ -2197,7 +2340,15 @@ mod tests {
     fn proof_fill_requires_a_port_and_artifacts() {
         let dir = temp_dir("fill");
         fs::create_dir_all(dir.join("proofs")).unwrap();
-        let err = proof_fill(&dir, None, &[], None, None).unwrap_err();
+        let err = proof_fill(
+            &dir,
+            None,
+            &[],
+            None,
+            None,
+            codegen_core::Target::X86_64UnknownNone,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("E6416"), "err: {err}");
         let msg = err.to_string();
         assert!(

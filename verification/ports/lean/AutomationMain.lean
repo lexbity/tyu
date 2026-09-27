@@ -95,9 +95,6 @@ def rateDoc (rows : List Measured) : String :=
        , ("by_kind", jarr (perKindDoc rows false))
        , ("by_loopfree_kind", jarr (perKindDoc rows true)), ("rows", perRow) ]
 
-def sanitize (s : String) : String :=
-  String.ofList (s.toList.map (fun c => if c.isAlphanum then c else '_'))
-
 /-- The word of an obligation id (the `site.word`), for the shape split. -/
 def wordOf (oblDoc : String) (id : String) : String :=
   match parseArtifact oblDoc with
@@ -110,18 +107,9 @@ def main (args : List String) : IO UInt32 := do
   match args with
   | "--selfcheck" :: _ => IO.println "PASS: automation-rate selfcheck"; pure 0
   | _ =>
-      let oblArgs := args.filter (fun a => a.startsWith "--obl=")
-        |>.filterMap (fun a => (a.dropPrefix? "--obl=").map (fun x => x.toString))
-      let metaArgs := args.filter (fun a => a.startsWith "--meta=")
-        |>.filterMap (fun a => (a.dropPrefix? "--meta=").map (fun x => x.toString))
-      let out : String := match args.filter (fun a => a.startsWith "--out=") with
-        | o :: _ => ((o.dropPrefix? "--out=").map (fun x => x.toString)).getD ""
-        | _ => ""
-      let budget := match args.filter (fun a => a.startsWith "--budget=") with
-        | o :: _ => match (o.dropPrefix? "--budget=") with
-            | some s => (s.toString).toNat?.getD 10
-            | none => 10
-        | _ => 10
+      let (oblArgs, metaArgs) := oblMetaArgs args
+      let out := stringArg args "out" ""
+      let budget := stringArg args "budget" "10" |>.toNat?.getD 10
       if oblArgs.isEmpty || metaArgs.length != oblArgs.length then
         IO.println "usage: automation_rate --obl=<M>.obl.json ... --meta=<M>.gen.json ... [--out=<rate.json>] [--budget=<secs>] | --selfcheck"
         return 2
@@ -134,8 +122,8 @@ def main (args : List String) : IO UInt32 := do
           attempts := (id, kind, sh, Tyu.Automation.Corpus.stmtFullName module defName) :: attempts
         for (id, kind, istmt) in viaRows doc do
           let w := (wordOf doc (id.dropRight 4)) -- `id` = `<obl-id>.via`
-          let sh := if shapeOfWord doc w == "loops" then "loops" else "loops"
-          attempts := (id, kind, sh, istmt) :: attempts
+          -- A via-cycles composition is loop-bearing by construction.
+          attempts := (id, kind, "loops", istmt) :: attempts
       let tmpDirE ← IO.getEnv "TMPDIR"
       let tmp := (tmpDirE.getD "/tmp") ++ "/tyu-rate"
       let mut measured : List Measured := []
