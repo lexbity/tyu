@@ -147,14 +147,8 @@ pub fn transcribe(op: &SrcOp) -> OpKind {
             atomic_max: 64,
             barrier: ir::BarrierKind::None,
         },
-        SrcOp::LocalGet(slot) => OpKind::LocalGet {
-            slot: *slot,
-            ty: t,
-        },
-        SrcOp::LocalSet(slot) => OpKind::LocalSet {
-            slot: *slot,
-            ty: t,
-        },
+        SrcOp::LocalGet(slot) => OpKind::LocalGet { slot: *slot, ty: t },
+        SrcOp::LocalSet(slot) => OpKind::LocalSet { slot: *slot, ty: t },
         SrcOp::Br(target) => OpKind::Br {
             target: BlockId(*target as u16),
         },
@@ -306,8 +300,7 @@ fn step_data(mem: &mut Mem, op: &SrcOp, st: &mut State) -> bool {
             let a = st.pop();
             st.push(mul(a, b));
         }
-        SrcOp::CmpLt | SrcOp::CmpLe | SrcOp::CmpGt | SrcOp::CmpGe | SrcOp::CmpEq
-        | SrcOp::CmpNe => {
+        SrcOp::CmpLt | SrcOp::CmpLe | SrcOp::CmpGt | SrcOp::CmpGe | SrcOp::CmpEq | SrcOp::CmpNe => {
             let b = st.pop();
             let a = st.pop();
             st.push(if cmp(op, a, b) { 1 } else { 0 });
@@ -388,7 +381,13 @@ pub fn run_block(mem: &Mem, ops: &[SrcOp], st: &State) -> (Mem, End) {
 /// Run a word's CFG from block `entry` for `fuel` block-steps (source
 /// semantics). `none` = the run didn't terminate within the budget (or
 /// trapped).
-pub fn run_word(blocks: &[Vec<SrcOp>], entry: usize, fuel: usize, mem: &Mem, st: &State) -> Option<State> {
+pub fn run_word(
+    blocks: &[Vec<SrcOp>],
+    entry: usize,
+    fuel: usize,
+    mem: &Mem,
+    st: &State,
+) -> Option<State> {
     fn go(
         blocks: &[Vec<SrcOp>],
         entry: usize,

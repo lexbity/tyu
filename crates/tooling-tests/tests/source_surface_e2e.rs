@@ -54,9 +54,7 @@ fn fresh_dir() -> PathBuf {
 
 /// Produce the generated statements via the port's `gen` renderer.
 fn render_fixture(root: &Path, dir: &Path) {
-    let gen_exe = root
-        .join(PORT)
-        .join(".lake/build/bin/gen");
+    let gen_exe = root.join(PORT).join(".lake/build/bin/gen");
     let status = if gen_exe.is_file() {
         Command::new(&gen_exe)
             .current_dir(dir)
@@ -180,8 +178,7 @@ fn source_surface_worked_example_harvests_with_source_provenance() {
         "proof must carry relies [\"T-S\"]:\n{verdicts}"
     );
     assert!(
-        verdicts.contains("\"trust\":\"proof\"")
-            && verdicts.contains("\"method\":\"certificate\""),
+        verdicts.contains("\"trust\":\"proof\"") && verdicts.contains("\"method\":\"certificate\""),
         "the source certificate remains proof-class (kernel + statement binding):\n{verdicts}"
     );
     // The same obligation's IR statement (stmt_Sum_…) is generated but NOT

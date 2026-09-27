@@ -17,7 +17,7 @@
 //! execute identically under both surfaces for every tested entry state and
 //! budget (fail-closed: divergence is a transcription bug).
 
-use verifier::src_interp::{trace_agrees, Mem, SrcOp, State, ir_run_word, run_word};
+use verifier::src_interp::{ir_run_word, run_word, trace_agrees, Mem, SrcOp, State};
 
 /// `Clean.main` from the corpus artifact (all ops fragment).
 fn clean_main() -> Vec<Vec<SrcOp>> {
@@ -233,7 +233,7 @@ fn arithmetic_cmp_bool_word_agrees() {
         SrcOp::ConstInt(3),
         SrcOp::Mul, // 6
         SrcOp::ConstInt(1),
-        SrcOp::Add, // 7
+        SrcOp::Add,   // 7
         SrcOp::CmpLt, // 0 < 7 → 1
         SrcOp::ConstInt(1),
         SrcOp::AndB, // 1 ∧ 1 → 1

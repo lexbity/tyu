@@ -15,8 +15,7 @@ SOURCE-level certificate: the harvest binds it with `surface: "source"` and
 `relies: ["T-S"]` (§Q2 — the claim discharges the IR obligation in
 composition with the transcription theorem).
 
-No `sorry`/`Admitted`/`native_decide`: the axiom audit gates it.
--/
+No proof placeholders: the axiom audit gates the theorem's axiom closure. -/
 
 namespace Tyu.Gen.Corpus.Sum
 

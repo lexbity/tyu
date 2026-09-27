@@ -333,11 +333,11 @@ roots = ["SumFix"]
 LAKEEOF
     # 3. build + harvest; the verdict MUST carry the source provenance.
     ( cd "$SF_TMP" && lake build SumFix Tyu.Verdicts.Harvest >/dev/null 2>&1 ) || exit 1
-    TYU_HARVEST_GEN_DIR="$SF_TMP/Gen" TYU_HARVEST_OBL="$SF_TMP/Sum.obl.json" \
+    ( cd "$SF_TMP" && TYU_HARVEST_GEN_DIR="$SF_TMP/Gen" TYU_HARVEST_OBL="$SF_TMP/Sum.obl.json" \
       TYU_HARVEST_OUT="$SF_TMP/out.v2.json" \
-      lake env lean "$SF_TMP/hvharvest.lean" >/dev/null 2>&1 || exit 1
+      lake env lean "$SF_TMP/hvharvest.lean" >/dev/null 2>&1 ) || exit 1
     grep -q '"surface":"source"' "$SF_TMP/out.v2.json" || exit 1
-    grep -q '"relies":["T-S"]' "$SF_TMP/out.v2.json" || exit 1
+    grep -Fq '"relies":["T-S"]' "$SF_TMP/out.v2.json" || exit 1
     grep -q '"trust":"proof"' "$SF_TMP/out.v2.json" || exit 1
     grep -q '"status":"ok"' "$SF_TMP/out.v2.json.audit.json" || exit 1
     rm -rf "$SF_TMP"

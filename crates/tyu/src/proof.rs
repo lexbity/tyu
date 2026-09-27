@@ -916,6 +916,7 @@ const fn vendored_port_files() -> &'static [&'static str] {
         "Tyu/IR/Semantics.lean",
         "Tyu/IR/Target.lean",
         "Tyu/Mem.lean",
+        "Tyu/Src.lean",
         "Tyu/Step.lean",
         "Tyu/Sound.lean",
         "Tyu/Stackmeta.lean",

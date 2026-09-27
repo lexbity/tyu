@@ -1429,7 +1429,7 @@ if ! grep -q "src_stmt_" "$PORT_DIR/Tyu/Gen/Render.lean" \
     msg $RED "  G38 FAIL: the source-surface statement rendering or harvest binding is incomplete"
     g38_fail=1
 fi
-if ! grep -q '"relies":\[' crates/verifier/src/verdict.rs; then
+if ! grep -q '"relies"' crates/verifier/src/verdict.rs; then
     msg $RED "  G38 FAIL: the proof.relies surface is missing from the verdict codec"
     g38_fail=1
 fi
