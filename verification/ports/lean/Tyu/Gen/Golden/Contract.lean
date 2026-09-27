@@ -3,6 +3,7 @@
 -- the renderer↔encoder drift lock (crates/tooling-tests).
 
 import Tyu.Gen.Stmt
+import Tyu.Src
 
 namespace Tyu.Gen.Corpus.Contract
 

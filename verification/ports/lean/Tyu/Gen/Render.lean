@@ -1,5 +1,6 @@
 import Tyu.Gen.Stmt
 import Tyu.Gen.Sha256
+import Tyu.Src
 import Tyu.Conformance.Json
 import Tyu.Conformance.Parse
 
@@ -343,6 +344,118 @@ def renderOp : String → Option String
           | "ret" => some (opMk "ret")
           | _ => none
 
+/-! ### The source-surface statement forms (PLAN-VERIFY-3 P9.1)
+
+A renderable obligation MAY additionally be stated over the pure-fragment
+*source* semantics (`Tyu/Src.lean`), when its word's canonical op text is
+entirely fragment ops (the op-locality test: every line parses via
+`parseSrcOp`). The statement is `def src_stmt_<name> : Prop := …` — the same
+claim evaluated under `Tyu.Src`; a theorem of it is harvested with
+`surface: "source"` and `relies: ["T-S"]` (§Q2, §6.3). Words with casts,
+trap sequences, calls, or address ops fail the test and stay IR-surface
+(honest refusal — the fragment boundary of `Tyu/Src.lean`). -/
+
+/-- Parse a fragment op line into a `Tyu.Src.Op` (`none` = not a fragment op
+— the op-locality detector). -/
+def parseSrcOp (line : String) : Option Tyu.Src.Op :=
+  let toks := (splitOnStr ' ' (trim line)).filter (fun t => t ≠ "")
+  match toks with
+  | [] => none
+  | m :: rest =>
+      match m with
+      | "const_i64" => (match rest with | [v] => (parseInt v).map (fun n => Tyu.Src.Op.constInt n) | _ => none)
+      | "const_bool" => (match rest with | [b] => (if b == "true" then some (Tyu.Src.Op.constBool true) else some (Tyu.Src.Op.constBool false)) | _ => none)
+      | "dup" => some Tyu.Src.Op.dup
+      | "drop" => some Tyu.Src.Op.drop
+      | "swap" => some Tyu.Src.Op.swap
+      | "add_i64" => some Tyu.Src.Op.add
+      | "sub_i64" => some Tyu.Src.Op.sub
+      | "mul_i64" => some Tyu.Src.Op.mul
+      | "cmp_lt" => some Tyu.Src.Op.cmpLT
+      | "cmp_le" => some Tyu.Src.Op.cmpLE
+      | "cmp_gt" => some Tyu.Src.Op.cmpGT
+      | "cmp_ge" => some Tyu.Src.Op.cmpGE
+      | "cmp_eq" => some Tyu.Src.Op.cmpEQ
+      | "cmp_ne" => some Tyu.Src.Op.cmpNE
+      | "and_bool" => some Tyu.Src.Op.andB
+      | "or_bool" => some Tyu.Src.Op.orB
+      | "not_bool" => some Tyu.Src.Op.notB
+      | "load" => some Tyu.Src.Op.load
+      | "store" => some Tyu.Src.Op.store
+      | "vol_load" => some Tyu.Src.Op.volLoad
+      | "vol_store" => some Tyu.Src.Op.volStore
+      | "local_get" => (match rest with | [n] => (parseNat n).map (fun i => Tyu.Src.Op.localGet i) | _ => none)
+      | "local_set" => (match rest with | [n] => (parseNat n).map (fun i => Tyu.Src.Op.localSet i) | _ => none)
+      | "br" => (match rest with | [t] => ((dropPrefixStr "b" t).bind parseNat).map (fun i => Tyu.Src.Op.br i) | _ => none)
+      | "br_if" => (match rest with
+          | [t, e] => match (dropPrefixStr "b" t).bind parseNat, (dropPrefixStr "b" e).bind parseNat with
+              | some a, some b => some (Tyu.Src.Op.brIf a b)
+              | _, _ => none
+          | _ => none)
+      | "ret" => some Tyu.Src.Op.ret
+      | _ => none
+
+/-- Parse a word's canonical op text into source-fragment blocks (`none`
+when any op is outside the fragment — the op-locality detector). -/
+def parseSrcBlocks (ir : String) : Option (List Tyu.Src.Block) :=
+  let lines := (splitOnStr '\n' ir).map trim |>.filter (fun l => l ≠ "")
+  let rec go (rest : List String) (blocks : List Tyu.Src.Block) (cid : Option Nat) (ops : List Tyu.Src.Op) : Option (List Tyu.Src.Block) :=
+    match rest with
+    | [] =>
+        match cid with
+        | some c => some (({ id := c, ops := ops.reverse } : Tyu.Src.Block) :: blocks).reverse
+        | none => some blocks.reverse
+    | line :: rest =>
+        match (dropPrefixStr "block b" line).bind parseNat with
+        | some i =>
+            let blocks' := match cid with
+              | some c => { id := c, ops := ops.reverse } :: blocks
+              | none => blocks
+            go rest blocks' (some i) []
+        | none =>
+            match parseSrcOp line with
+            | some o => go rest blocks cid (o :: ops)
+            | none => none
+  go lines [] none []
+
+/-- Render a source-fragment block list as a Lean literal. -/
+def renderSrcBlocks (blocks : List Tyu.Src.Block) : String :=
+  "[ " ++ String.intercalate ", " (blocks.map (fun b =>
+    "{ id := " ++ toString b.id ++ ", ops := [ " ++ String.intercalate ", " (b.ops.map renderSrcOp) ++ " ] }")) ++ " ]"
+where
+  renderSrcOp (o : Tyu.Src.Op) : String :=
+    match o with
+    | Tyu.Src.Op.constInt v => "(Tyu.Src.Op.constInt " ++ toString v ++ ")"
+    | Tyu.Src.Op.constBool b => "(Tyu.Src.Op.constBool " ++ (if b then "true" else "false") ++ ")"
+    | Tyu.Src.Op.dup => "Tyu.Src.Op.dup"
+    | Tyu.Src.Op.drop => "Tyu.Src.Op.drop"
+    | Tyu.Src.Op.swap => "Tyu.Src.Op.swap"
+    | Tyu.Src.Op.add => "Tyu.Src.Op.add"
+    | Tyu.Src.Op.sub => "Tyu.Src.Op.sub"
+    | Tyu.Src.Op.mul => "Tyu.Src.Op.mul"
+    | Tyu.Src.Op.cmpLT => "Tyu.Src.Op.cmpLT"
+    | Tyu.Src.Op.cmpLE => "Tyu.Src.Op.cmpLE"
+    | Tyu.Src.Op.cmpGT => "Tyu.Src.Op.cmpGT"
+    | Tyu.Src.Op.cmpGE => "Tyu.Src.Op.cmpGE"
+    | Tyu.Src.Op.cmpEQ => "Tyu.Src.Op.cmpEQ"
+    | Tyu.Src.Op.cmpNE => "Tyu.Src.Op.cmpNE"
+    | Tyu.Src.Op.andB => "Tyu.Src.Op.andB"
+    | Tyu.Src.Op.orB => "Tyu.Src.Op.orB"
+    | Tyu.Src.Op.notB => "Tyu.Src.Op.notB"
+    | Tyu.Src.Op.load => "Tyu.Src.Op.load"
+    | Tyu.Src.Op.store => "Tyu.Src.Op.store"
+    | Tyu.Src.Op.volLoad => "Tyu.Src.Op.volLoad"
+    | Tyu.Src.Op.volStore => "Tyu.Src.Op.volStore"
+    | Tyu.Src.Op.localGet n => "(Tyu.Src.Op.localGet " ++ toString n ++ ")"
+    | Tyu.Src.Op.localSet n => "(Tyu.Src.Op.localSet " ++ toString n ++ ")"
+    | Tyu.Src.Op.br t => "(Tyu.Src.Op.br " ++ toString t ++ ")"
+    | Tyu.Src.Op.brIf t e => "(Tyu.Src.Op.brIf " ++ toString t ++ " " ++ toString e ++ ")"
+    | Tyu.Src.Op.ret => "Tyu.Src.Op.ret"
+
+/-- The source name of a statement: `src_stmt_<module>_<word>_<kind>_<occ>`. -/
+def srcStmtName (module word kind : String) (occ : Nat) : String :=
+  "src_" ++ stmtName module word kind occ
+
 /-- Whether a word's IR contains a `call` op (unfaithful in the concrete
 step's default-sig approximation — such words are `calls-unmodeled`). -/
 def wordHasCall (ir : String) : Bool :=
@@ -505,6 +618,58 @@ def renderVia (a : Artifact) (o : Obl) (cyc : Nat × List Nat) (i : Nat) (lo hi 
   "Tyu.Gen.Stmt.ViaCycles " ++ wordRef a.module o.word ++ " (" ++ cycTex ++ ") " ++ toString i ++
   " (" ++ toString lo ++ ") (" ++ toString hi ++ ")"
 
+/-- The word IR text of an obligation's word. -/
+def wordIrOf (a : Artifact) (o : Obl) : String :=
+  match a.words.find? (fun w => w.name == o.word) with
+  | some w => w.ir
+  | none => ""
+/-! ### Source-surface statements (P9.1) -/
+
+/-- Is an obligation renderable at the SOURCE surface? `none` = yes (the
+word's IR is entirely fragment ops AND the IR statement itself renders);
+`some reason` = refused (non-fragment word, opaque site, contract predicates
+— each honest, the fragment boundary of `Tyu/Src.lean`). -/
+def srcClassify (a : Artifact) (o : Obl) : Option String :=
+  match classify a o with
+  | some r => some r
+  | none =>
+      if o.formulaOp == "PredicateHolds" then some "predicate-source-unavailable"
+      else
+        let ir := wordIrOf a o
+        if wordHasCall ir then some "calls-unmodeled"
+        else match parseSrcBlocks ir with
+          | some _ => none
+          | none => some "non-fragment-ops"
+
+/-- The `def src_stmt_… : Prop := …` text for a source-renderable
+obligation (the same claim over the `Tyu.Src` run). -/
+def renderSrcStatement (a : Artifact) (o : Obl) : String :=
+  let name := srcStmtName a.module o.word o.kind o.occurrence
+  let blocks := (parseSrcBlocks (wordIrOf a o)).getD []
+  let blocksTex := renderSrcBlocks blocks
+  let prop : String := match o.formulaOp with
+    | "InRange" =>
+        match oelRoot o.oel with
+        | some ("in", i) =>
+            "Tyu.Src.inInputRange " ++ toString i ++ " (" ++ toString o.lo ++ ") (" ++ toString o.hi ++ ")"
+        | some ("out", i) =>
+            "Tyu.Src.outInRange (" ++ blocksTex ++ ") 0 " ++ toString i ++ " (" ++ toString o.lo ++ ") (" ++ toString o.hi ++ ")"
+        | _ => "True"
+    | "OffsetLE" =>
+        "Tyu.Src.offsetWithin (" ++ blocksTex ++ ") 0 " ++ toString (o.off.getD 0) ++
+          " (" ++ toString o.width ++ ") (" ++ toString o.size ++ ")"
+    | _ => "True"
+  "/-- source-surface statement (P9.1, §Q2): " ++ o.id ++ "\n    the same claim over the pure-fragment source semantics; a theorem of this\n    statement is harvested with `surface: \"source\"` and `relies: [\"T-S\"]`. -/\n" ++
+  "def " ++ name ++ " : Prop :=\n  " ++ prop
+
+/-- The module's source-surface statements (concatenated; empty when no
+obligation is source-renderable). -/
+def renderSourceStatements (a : Artifact) : String :=
+  String.intercalate "\n" (a.obligations.filterMap (fun o =>
+    match srcClassify a o with
+    | none => some (renderSrcStatement a o)
+    | some _ => none))
+
 
 -- ---------------------------------------------------------------------
 -- Per-module assembly: the Gen file text + the Gen metadata json
@@ -569,7 +734,7 @@ def renderModuleLean (a : Artifact) : String :=
   let header := "-- Generated by the Lean port's `gen` renderer (PLAN-VERIFY-3 P5).\n" ++
                 "-- DO NOT EDIT — regenerated from `tyu.obl/v2`; statement hashes are\n" ++
                 "-- the renderer↔encoder drift lock (crates/tooling-tests).\n\n" ++
-                "import Tyu.Gen.Stmt\n\n" ++
+                "import Tyu.Gen.Stmt\nimport Tyu.Src\n\n" ++
                 "namespace Tyu.Gen.Corpus." ++ ident a.module ++ "\n\n"
   let words := renderWordDefs a
   let wordNames := a.obligations.filterMap (fun o =>
@@ -579,17 +744,15 @@ def renderModuleLean (a : Artifact) : String :=
   let preds := renderPredicateDefs a wordNames
   let stmts := renderAllStatements a
   let cycs := renderCycles a
+  let srcStmts := renderSourceStatements a
   let tail := "\n\nend Tyu.Gen.Corpus." ++ ident a.module ++ "\n"
   header ++ words ++ (if words == "" then "" else "\n\n")
     ++ preds ++ (if preds == "" then "" else "\n\n")
     ++ stmts ++ (if stmts == "" then "" else "\n\n")
-    ++ cycs ++ tail
+    ++ cycs ++ (if srcStmts == "" then "" else "\n\n")
+    ++ srcStmts ++ tail
 
-/-- The word IR text of an obligation's word. -/
-def wordIrOf (a : Artifact) (o : Obl) : String :=
-  match a.words.find? (fun w => w.name == o.word) with
-  | some w => w.ir
-  | none => ""
+
 
 /-- The `<Module>.gen.json` metadata: statements (name+hash) and the
 omitted set (id + reason). -/
@@ -604,7 +767,10 @@ def renderModuleMeta (a : Artifact) : String :=
     let omitField := match classify a o with
       | none => "\"def\": \"" ++ stmtName a.module o.word o.kind o.occurrence ++ "\", \"omitted\": false"
       | some reason => "\"omitted\": true, \"reason\": \"" ++ jesc reason ++ "\""
-    some ("  { \"id\": \"" ++ jesc id ++ "\", \"id_hash\": \"" ++ jesc o.idHash ++ "\", " ++ omitField ++ ", \"statement_hash\": \"" ++ hash ++ "\" }"))
+    let srcField := match srcClassify a o with
+      | none => ", \"src_def\": \"" ++ srcStmtName a.module o.word o.kind o.occurrence ++ "\""
+      | some _ => ""
+    some ("  { \"id\": \"" ++ jesc id ++ "\", \"id_hash\": \"" ++ jesc o.idHash ++ "\", " ++ omitField ++ ", \"statement_hash\": \"" ++ hash ++ "\"" ++ srcField ++ " }"))
   let usedWords := a.obligations.filterMap (fun o => match classify a o with
     | none => a.words.find? (fun w => w.name == o.word)
     | some _ => none) |>.eraseDups
