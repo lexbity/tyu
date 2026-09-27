@@ -1,4 +1,5 @@
 import Tyu.Step
+import Tyu.Src
 import Tyu.Conformance.Parse
 import Tyu.Conformance.VectorRun
 
@@ -75,8 +76,9 @@ terminating (ret) exit state. This is the *statement-side* concrete run:
 structurally recursive (and therefore plain-`match`-reducing, so rendered
 statements and the composition proofs rewrite it directly). The correspondence
 with the port's authoritative run (`Tyu.Step.runWord`, used by the conformance
-harness) is the theorem [`Word.runFrom_is_runWord`] below — the T-F2 review
-record pins it. -/
+harness) is THEOREM [`Word.runFrom_is_runWord`] below — machine-checked,
+budget for budget (upgraded from a review-recorded T-F2 correspondence when
+the fuel-induction landed). -/
 def Word.runFrom (w : Word) (id : Nat) (spec : Tyu.IR.TargetSpec) (fuel : Nat)
     (mem : ConcreteMem) (σ : State) : Option State :=
   match fuel with
@@ -90,17 +92,79 @@ def Word.runFrom (w : Word) (id : Nat) (spec : Tyu.IR.TargetSpec) (fuel : Nat)
 
 /- The correspondence of `Word.runFrom` with the port-authoritative
    `Tyu.Step.runWord` (of which it is a budget-for-budget re-derivation, brecOn
-   eliminated so statements and proofs rewrite directly) is a review-recorded
-   correspondence (T-F2): the two recursions are case-identical — the
-   `Word.runFrom_*` contract lemmas below pin the routing, and a full
-   `runFrom` = `runWord` theorem is a follow-on slice item (it needs
-   `Tyu.Step.runWord`'s brecOn-cased unfolding, which this slice does not
-   tamper with). -/
+   eliminated so statements and proofs rewrite directly) is THEOREM
+   [`Word.runFrom_is_runWord`] below — the two recursions are case-identical,
+   and the fuel induction discharges the correspondence exactly (upgraded
+   from a review-recorded T-F2 correspondence; the `Word.runFrom_*` contract
+   lemmas below remain the developer-facing reduction surface). -/
 
 /-- The word run from its entry. -/
 def Word.run (w : Word) (spec : Tyu.IR.TargetSpec) (fuel : Nat)
     (mem : ConcreteMem) (σ : State) : Option State :=
   Word.runFrom w w.entry spec fuel mem σ
+
+-- ---------------------------------------------------------------------
+-- The statement-side run IS the authoritative run (machine-checked, was
+-- review-recorded T-F2): the copies exist so statement computations and
+-- developer proofs reduce directly; the theorems below pin them to the
+-- port-authoritative `Tyu.Step` runs, budget for budget, memory for
+-- memory.
+-- ---------------------------------------------------------------------
+
+/-- The statement-side op loop is the authoritative block run
+(`Tyu.Step.Block.runBlock`), case for case. -/
+theorem Word.runBlockOps_eq (spec : Tyu.IR.TargetSpec) (ops : List ConcreteOp)
+    (mem : ConcreteMem) (σ : State) :
+    Word.runBlockSt.runBlockOps spec ops mem σ =
+      Tyu.Step.Block.runBlock spec mem ops σ := by
+  induction ops generalizing mem σ with
+  | nil => rfl
+  | cons o rest ih =>
+      unfold Word.runBlockSt.runBlockOps Tyu.Step.Block.runBlock
+      cases hf : o.form with
+      | ret => rfl
+      | br => rfl
+      | br_if => rfl
+      | _ =>
+          cases hstep : Tyu.Step.stepOp spec mem o σ with
+          | mk m1 out =>
+              cases out with
+              | trap => rfl
+              | ok s1 => simp only [ih m1 s1]
+
+/-- The block-runner equality, lifted to the word's selected block. -/
+theorem Word.runBlockSt_eq (w : Word) (id : Nat) (spec : Tyu.IR.TargetSpec)
+    (mem : ConcreteMem) (σ : State) :
+    Word.runBlockSt w id spec mem σ =
+      Tyu.Step.Block.runBlock spec mem (w.blocks.getD id Block.empty).ops σ :=
+  Word.runBlockOps_eq spec (w.blocks.getD id Block.empty).ops mem σ
+
+/-- **The statement-side run is the authoritative run** (T-F2, promoted from
+review-recorded correspondence to theorem): `Word.runFrom` is
+`Tyu.Step.runWord`'s result projection — same routing, same memory
+threading, same fuel budget — so every statement proved against the
+statement-side copy is a statement about the port-authoritative semantics. -/
+theorem Word.runFrom_is_runWord (w : Word) (spec : Tyu.IR.TargetSpec) (fuel : Nat) :
+    ∀ (id : Nat) (mem : ConcreteMem) (σ : State),
+      Word.runFrom w id spec fuel mem σ =
+        (Tyu.Step.runWord w.blocks spec id fuel mem σ).2 := by
+  induction fuel with
+  | zero => intro id mem σ; rfl
+  | succ f ih =>
+      intro id mem σ
+      unfold Word.runFrom Tyu.Step.runWord
+      simp only [Word.runBlockSt_eq]
+      cases hd : Tyu.Step.Block.runBlock spec mem (w.blocks.getD id Block.empty).ops σ with
+      | mk m1 e1 =>
+          cases e1 with
+          | ret σ1 => rfl
+          | go t σ1 => simp only [ih]
+          | brIf t e c σ1 =>
+              simp only [ih]
+              by_cases hc : c ≠ 0
+              · simp [hc]
+              · simp [hc]
+          | trap => rfl
 
 -- ---------------------------------------------------------------------
 -- Routing contract lemmas: the statement-side run and the cycle-entrance
@@ -281,6 +345,15 @@ Total: an index past the stack top reads 0; `stack.length - 1 - i` saturates
 at 0 so the projection never underflows. -/
 def outputAt (σ : State) (i : Nat) : Int :=
   σ.stack.getD (σ.stack.length - 1 - i) 0
+
+/-- The state projections are the source-surface projections, definition for
+definition (T-F2, machine-checked): the source claims of `Tyu/Src.lean` and
+the rendered statements read the same stack positions. -/
+theorem inputAt_eq_src (σ : State) (i : Nat) :
+    inputAt σ i = Tyu.Src.inputAt σ i := rfl
+
+theorem outputAt_eq_src (σ : State) (i : Nat) :
+    outputAt σ i = Tyu.Src.outputAt σ i := rfl
 
 /-- `lo ≤ v ≤ hi` on a concrete value. -/
 def inRange (v : Int) (lo hi : Int) : Prop := lo ≤ v ∧ v ≤ hi

@@ -275,6 +275,37 @@ pub fn proof_init(root: &Path, input: Option<&Path>) -> Result<(), TyuError> {
                     with a theorem of the statement's type in the matching\n\
                     `proofs/<Module>.lean` file.\n\
                     \n\
+                    ## Two proof surfaces\n\
+                    \n\
+                    Every obligation has ONE theorem name (`obl_…`) and one\n\
+                    theorem type per build, rendered on one of two surfaces:\n\
+                    \n\
+                    - **IR surface** (default): `stmt_…` forms over\n\
+                      `Tyu.Gen.Stmt`, the concrete IR semantics — meaningful for\n\
+                      every word the renderer can express, casts and calls\n\
+                      included.\n\
+                    - **Source surface**: `src_stmt_…` forms over\n\
+                      `Tyu/Src.lean`, the pure-fragment embedding — rendered\n\
+                      INSTEAD when the word qualifies. A word qualifies iff\n\
+                      its `--emit=ir` text parses entirely as fragment ops\n\
+                      (`Tyu.Src.Op`): `const`/`dup`/`drop`/`swap`;\n\
+                      `add`/`sub`/`mul`/`cmp_*`/`and`/`or`/`not`;\n\
+                      `load`/`store`/`vol_load`/`vol_store`;\n\
+                      `local_get`/`local_set`; `br`/`br_if`/`ret`.\n\
+                      Casts (`1 as Percent`), calls, and address ops are NOT\n\
+                      fragment ops — a word containing any of them stays on\n\
+                      the IR surface (the honest §Q2 shrink). Check by\n\
+                      reading the word's `--emit=ir` text; the renderer\n\
+                      chooses the source surface automatically when every op\n\
+                      is in the fragment list above.\n\
+                    \n\
+                    Because an obligation has one theorem name, you cannot\n\
+                    hold an IR-surface and a source-surface proof of the same\n\
+                    obligation at once; migrating surfaces means renaming the\n\
+                    theorem (the rendered surface is per-build and hash-bound,\n\
+                    so a source certificate discharges the IR obligation only\n\
+                    through the T-S theorem, and only for a fragment word).\n\
+                    \n\
                     Run `tyu proof init` again to re-scaffold — it is idempotent\n\
                     and never overwrites your files. `tyu proof fill` (P10) writes\n\
                     unreviewed candidate proofs to `proofs/candidates/`.\n";

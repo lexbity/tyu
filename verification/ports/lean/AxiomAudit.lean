@@ -42,3 +42,7 @@ to appear in this audit. Keep the two lists in the same commit. -/
 #print axioms Tyu.Src.transcription_block
 #print axioms Tyu.Src.transcription_run
 #print axioms Tyu.Src.transcription_run_iff
+#print axioms Tyu.Gen.Stmt.Word.runBlockOps_eq
+#print axioms Tyu.Gen.Stmt.Word.runFrom_is_runWord
+#print axioms Tyu.Gen.Stmt.inputAt_eq_src
+#print axioms Tyu.Gen.Stmt.outputAt_eq_src

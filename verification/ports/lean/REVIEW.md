@@ -45,7 +45,8 @@ Helper lemmas (not registry entries, reviewed definitions): `id_wf`,
 | `Tyu.Sound.AssumptionClosure.VerdictSet` (abstract verdict-set structure) | `Tyu/Sound.lean` | P8: the T-CL substrate — `closed`/`runtime`/`assumptions`, the closed-path reachability `closedPathTo`, `wellClosed` (acyclic ∧ edge-sound). Reviewed against §Q7 rule 2; the image walker (`tyu::closure`) executes it on concrete artifacts. |
 | `Tyu.Stackmeta` parser + checker | `Tyu/Stackmeta.lean` | consumes `tyu.stackmeta/1` (schema-checked); unresolved calls skip a word — the gate FAILS on any skip (`ci/port.sh`) |
 | `Tyu.Conformance.*` (abstract transfer oracle) | `Tyu/Conformance/` | mirrors `verifier::interp`/`interval`; zero-divergence pinned by 236 `tyu.vec/1` vectors |
-| `Tyu.Gen.Stmt` (statement semantics + the invariant composition) | `Tyu/Gen/Stmt.lean` | P5: the rendered statements live here. The composition theorem `Tyu.Gen.Stmt.via_cycle_sound` is axiom-audited data among the §3 block below (proved by fuel induction). `Word.runFrom`/`runBlockSt` are structural statement-side copies of the port run semantics — a **review-recorded correspondence** (T-F2); a full `runFrom ≡ runWord` equality theorem is a follow-on item (requires `runWord`'s brecOn-cased unfolding). |
+| `Tyu.Conformance.Fragment` (fragment-corpus runner, `--level fragment`) | `Tyu/Conformance/Fragment.lean` | P9.3: consumes `tyu.fragvec/1` (program → trace) — parses the SAME canonical `--emit=ir` block text as the Rust side (`parseSrcBlocks`), runs `Tyu.Src.Word.run` (the source semantics), compares the committed observable traces. **The fragment's Lean↔Rust mechanical pin**: a mnemonic↔op or step drift on either side diverges here. This corpus caught the `swap` step bug (§4). |
+| `Tyu.Gen.Stmt` (statement semantics + the invariant composition) | `Tyu/Gen/Stmt.lean` | P5: the rendered statements live here. The composition theorem `Tyu.Gen.Stmt.via_cycle_sound` is axiom-audited data among the §3 block below (proved by fuel induction). `Word.runFrom`/`runBlockSt` are structural statement-side copies of the port run semantics — the correspondence is **machine-checked**: `Word.runBlockOps_eq`, `Word.runBlockSt_eq`, and `Word.runFrom_is_runWord` (axiom-audited, §3) pin the copies to `Tyu.Step.Block.runBlock`/`Tyu.Step.runWord` budget for budget, and `inputAt_eq_src`/`outputAt_eq_src` pin the state projections to `Tyu.Src`'s. |
 | `Tyu.Gen.Render` (statement renderer) | `Tyu/Gen/Render.lean` | P5: renders `Gen/<Module>.lean` from `tyu.obl/v2`; re-derives canonical statements + `statement_hash` in Lean (own SHA-256) — the renderer↔encoder drift lock, verified byte-exact against `crates/verifier/src/stmt.rs` over the corpus (`crates/tooling-tests/tests/gen_render_drift.rs`). The canonical dispatches on the formula op (`InRange` / `OffsetLE` / `PredicateHolds` — `stmt.rs::push_formula` byte-for-byte, incl. `{"name":"$top","op":"Var"}` opaque args). Omission classification (opaque `$top`, `call`-unmodeled words, dynamic MMIO, `stack-budget`) is part of the normative rendering rules (§Q4 item 4). **Contract statements (P8.2 scope):** `contract-post` renders `∀ σ₀ σf, run w … = some σf → predicateHolds wpred … [exit outputs]`; `contract-pre` renders the ∀-scheme over the argument tuple (a sound over-claim); both evaluate the predicate via `Tyu.Gen.Stmt.predicateHolds` (the predicate word run over the argument values). A named-predicate contract word contains the predicate `call` op — the statement-side step approximates `call` (representative sig), so such words stay `calls-unmodeled` (omitted honestly, never hashed to a wrong statement): the faithful statement-side mechanism for predicate calls (splicing the predicate's blocks inline at render time — the only calls in contract words) is a committed follow-on (`crates/tooling-tests/tests/renderer_scope.rs` pins the classification + the mmio/encoder hash lock). Inline (`unnamed`) clauses carry no artifact IR (`facts.predicates` records named words only) — the recording of inline clause IR is the second named follow-on. |
 | `Tyu.Src` (fragment semantics + statement forms + transcription) + `Tyu.Src.transcription*` | `Tyu/Src.lean` | **P9 (T-S):** the pure-fragment *source-level* embedding (PLAN-VERIFY-3 §Q8): `Src.Op` (values, typed-stack ops, arithmetic/comparison/bool logic, memory over the oracles, the return-slot local-cell ops, CFG control), `Src.stepOp` (written directly — *not* the IR step), `Src.Block.runBlock`/`Src.Word.run` (mirrors of the IR runs), the source statement forms (`outInRange`, `offsetWithin`, `inInputRange`, `predHolds(path)`), the op-local **transcription** (`transcribeOp`/`transcribeBlock`, one IR op per source construct), and the per-op/block/word simulation theorems (T-S). The op-locality detector is the transcription being total: casts/traps/calls/address ops are EXCLUDED from the fragment (their lowering is not op-local — §Q2's shrink), and the renderer refuses source-surface statements for words containing them. Reviewed against `Tyu.Step`, `ir-op-semantics.md`, and §Q13 (memory oracles are parameters, never fixed values). |
 | `Tyu.Gen.Sha256` (port SHA-256) | `Tyu/Gen/Sha256.lean` | FIPS 180-4, known-answer vectors pinned in `gen --selfcheck`; FR-14 (the only digest). |
@@ -90,10 +91,23 @@ Tyu.Src.transcription_op
 Tyu.Src.transcription_block
 Tyu.Src.transcription_run
 Tyu.Src.transcription_run_iff
+Tyu.Gen.Stmt.Word.runBlockOps_eq
+Tyu.Gen.Stmt.Word.runFrom_is_runWord
+Tyu.Gen.Stmt.inputAt_eq_src
+Tyu.Gen.Stmt.outputAt_eq_src
 ```
 
 Permitted axiom set: `{propext, Quot.sound, Classical.choice}` — anything
 else (`sorryAx`, `Lean.ofReduceBool`, a declared axiom) fails the gate.
+
+> **Form deviation (documented, consistent with P4/P8):** the plan's per-slice
+> gate `lake exe axiom_audit -- --theorem <name>` does not exist. The audit
+> is `AxiomAudit.lean`'s `#print axioms` traversal over the entire §3 block,
+> run by `ci/port.sh`: every REVIEW.md §3 theorem MUST appear in the audit
+> output with the permitted set only, and an audit that silently drops a
+> theorem fails the gate (fail-closed against audit erosion). There is no
+> per-theorem exe invocation; adding a registry theorem means adding its
+> `#print axioms` line to `AxiomAudit.lean` in the same commit.
 
 ## 3b. P5-composition soundness (axiom-audited)
 
@@ -106,6 +120,17 @@ it: tyu/Gen carries no placeholders.
 ## 4. Empirical anchors
 
 - `tyu.vec/1` — 236 vectors, four triples, zero divergence (`ci/port.sh`).
+- `tyu.fragvec/1` — 17 fragment programs (program → trace), zero divergence
+  (`conformance --level fragment`, `ci/port.sh`). **Bug found by this
+  corpus:** the port's `swap` step (`Tyu.Step.stepOp` and `Tyu.Src.stepOp`)
+  was the identity — `pushMany s2 [a, b]` instead of `[b, a]` — while the
+  normative row says `( a b → b a )` and the Rust engine swaps; the
+  `data-ops` vector (swap observable via `swap; sub`) diverged the corpus.
+  Fixed in both step definitions; `transcription_op` still closes by `cases`
+  per-op (the two surfaces changed identically), and the whole `tyu.vec/1` +
+  stackmeta + fragment + axiom surfaces re-ran green. The corpus is the
+  fragment's mechanical Lean↔Rust pin, exactly as `tyu.vec/1` is for the IR
+  transfer.
 - `tyu.stackmeta/1` — 52 corpus words, net exact + peak within declared,
   **zero unresolved-skip allowed** (`ci/port.sh` fails on any skip).
 - Statement goldens — the Rust encoder's canonical statements are the

@@ -1,4 +1,5 @@
 import Tyu.Conformance.Runner
+import Tyu.Conformance.Fragment
 import Tyu.Conformance.IntervalLaws
 import Tyu.Stackmeta
 import Tyu.IR.Semantics
@@ -88,6 +89,41 @@ def stackmetaMain (jsons : List String) : IO UInt32 := do
 
 def main (args : List String) : IO UInt32 := do
   match args with
+  | "--level" :: "fragment" :: rest =>
+      -- The shared `tyu.fragvec/1` corpus (P9.3): the fragment surface's
+      -- mechanical Lean↔Rust pin. Reads `<dir>/index.json` per corpus dir.
+      let dirs := rest.filter fun a => a ≠ "--corpus" && a ≠ "--"
+      if dirs.isEmpty then
+        IO.println "usage: conformance --level fragment --corpus <dir>..."
+        return 1
+      let mut total := 0
+      let mut failures := 0
+      for dir in dirs do
+        let path := dir ++ "/index.json"
+        let content ←
+          try
+            IO.FS.readFile path
+          catch _ =>
+            pure ""
+        if content == "" then
+          IO.println s!"FAIL: {path}: unreadable or empty (not a tyu.fragvec/1 corpus)"
+          failures := failures + 1
+          continue
+        match parseFragFile content with
+        | none =>
+            IO.println s!"FAIL: {path}: not a valid tyu.fragvec/1 document (schema/malformed)"
+            failures := failures + 1
+        | some f =>
+            let mismatches := runFragFile f
+            total := total + f.programs.length
+            if mismatches.isEmpty then
+              IO.println s!"PASS: {path} ({f.triple}): {f.programs.length} fragment programs, zero divergence"
+            else
+              for m in mismatches do
+                IO.println s!"FRAG-DIVERGE: {f.triple} [{m.id}]: got {m.got}; want {m.want}"
+              failures := failures + mismatches.length
+      IO.println s!"RESULT: fragment={total} mismatches={failures}"
+      if failures == 0 then return 0 else return 1
   | "--level" :: "stackmeta" :: rest =>
       let files := rest.filter (fun a => a ≠ "--stackmeta")
       if files.isEmpty then

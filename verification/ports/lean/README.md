@@ -67,7 +67,7 @@ Or, from the repo root: `bash ci/port.sh` (blocking CI gate).
 | `SEMANTICS_total` completeness | P3.1 | done (axiom-free, `by decide`) |
 | Drift lock (`TYU_EXPORT_PORTS=1` + byte-compare) | P3.1 | done |
 | Conformance runner over `tyu.vec/1` (236 vectors × 4 triples) | P3.2 | done — zero divergence |
-| `ci/port.sh` port gate | P3.2 | done (conformance + axiom audit + stackmeta) |
+| `ci/port.sh` port gate | P3.2 | done (conformance + axiom audit + stackmeta + fragment corpus) |
 | Concrete `Tyu/Step.lean` semantics + `Terminates` | P4.1 | done |
 | T-C: stack algebra (`Tyu/Sound.lean`, monoid + per-op + walk + net-zero loop) | P4.2 | done — axiom audit green (permitted set only) |
 | T-C empirical hook (`--level stackmeta`, `tyu.stackmeta/1` goldens) | P4.2 | done — 52 words, zero divergence |
@@ -76,4 +76,19 @@ Or, from the repo root: `bash ci/port.sh` (blocking CI gate).
 | **T-S: source-fragment embedding (`Tyu/Src.lean`) + transcription** | P9.1 | done — `Tyu.Sound.transcription` + per-op/block/word theorems, axiom audit green |
 | Source-surface statements (`src_stmt_*`, `Tyu/Gen/Render.lean`) + harvest binding (`surface: "source"`, `relies: ["T-S"]`) | P9.1/P9.2 | done — rendered + harvested (Sum fixture) |
 | Cross-surface vectors (`crates/verifier/tests/cross_surface.rs`, `src_interp`) + source-surface e2e | P9.2 | done — zero divergence; worked example green |
+| **Fragment-vector corpus (`tyu.fragvec/1`, `conformance --level fragment`)** | P9.3 | done — 17 programs, zero divergence; the Lean↔Rust mechanical pin. **Caught and fixed the `swap` step bug** (Lean `swap` was the identity; the authoritative `( a b → b a )` row and Rust agree now) |
+| `Word.runFrom` ≡ `Tyu.Step.runWord` correspondence | P5 follow-on | done — **`Tyu.Gen.Stmt.Word.runFrom_is_runWord`** (machine-checked, axiom-audited; promoted from review-recorded T-F2) |
 | Gen renderer (`Tyu/Gen/`), harvest, axiom audit exe | P5/P7 | done |
+
+## The source surface, precisely
+
+A developer's word renders a source-surface statement (`src_stmt_…`) iff its
+`--emit=ir` text parses entirely as fragment ops (`Tyu.Gen.Render.parseSrcOp`):
+`const` / `dup` / `drop` / `swap`, `add` / `sub` / `mul` / `cmp_*` /
+`and` / `or` / `not`, `load` / `store` / `vol_load` / `vol_store`,
+`local_get` / `local_set`, `br` / `br_if` / `ret`. Casts (`1 as Percent`),
+calls, and address/effect ops are NOT fragment ops — such words stay on the
+IR surface (the §Q2 shrink, stated rather than discovered). An obligation has
+ONE theorem name (`obl_…`) per build, so an IR-surface and a source-surface
+proof of the same obligation cannot coexist; migrating surfaces means
+renaming the theorem.

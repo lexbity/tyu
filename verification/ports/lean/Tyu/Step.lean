@@ -312,7 +312,7 @@ def stepOp (_spec : Tyu.IR.TargetSpec) (mem : ConcreteMem) (o : ConcreteOp) (st 
   | .swap =>
       let (s1, b) := State.pop1 st
       let (s2, a) := State.pop1 s1
-      (mem, .ok (State.pushMany s2 [a, b]))
+      (mem, .ok (State.pushMany s2 [b, a]))
   | .add_i64 =>
       let (s2, a, b) := State.pop2 st
       (mem, .ok (State.push1 s2 (wrapI64 (a + b))))

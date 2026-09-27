@@ -152,6 +152,28 @@ if [ "${skipped:-0}" -ne 0 ]; then
     exit 1
 fi
 msg 2 "  port.sh: stackmeta replay green (0 divergences, 0 skipped)"
+# --- PLAN-VERIFY-3 P9.3 — the fragment-vector conformance corpus ---
+# The shared `tyu.fragvec/1` corpus (program → trace) is the fragment
+# surface's mechanical Lean↔Rust pin: the port parses the SAME canonical
+# `--emit=ir` block text the Rust generator emits
+# (`crates/verifier/tests/fragment_vectors.rs`, `blocks_to_text`) and must
+# reproduce the committed observable traces byte-for-byte
+# (`Tyu/Conformance/Fragment.lean` + `src_interp.blocks_from_text` on the
+# Rust side). A fragment-op drift on EITHER side — a misparsed mnemonic or a
+# wrong step (the `swap` bug this corpus caught) — diverges here.
+FRAG_CORPUS=("$ROOT/crates/verifier/test-vectors/fragment")
+msg 2 "  port.sh: P9.3 fragment-vector conformance corpus ($(/usr/bin/env wc -l < "$FRAG_CORPUS/index.json" | tr -d ' ') lines)"
+FRAG_OUT="$(.lake/build/bin/conformance --level fragment --corpus "${FRAG_CORPUS[@]}")" || {
+    printf '%s\n' "$FRAG_OUT"
+    msg 1 "  port.sh: P9.3 fragment corpus DIVERGED (Lean↔Rust fragment drift)"
+    exit 1
+}
+printf '%s\n' "$FRAG_OUT"
+echo "$FRAG_OUT" | grep -q "RESULT: fragment=.*mismatches=0" || {
+    msg 1 "  port.sh: P9.3 fragment corpus failed (nonzero mismatches)"
+    exit 1
+}
+msg 2 "  port.sh: P9.3 fragment corpus green (zero divergence, Lean↔Rust pin OK)"
 # --- PLAN-VERIFY-3 P5 — the statement renderer + Gen goldens (the drift lock) ---
 # The `gen` renderer (a pure function of the `tyu.obl/v2` artifacts → the
 # generated statements) must (1) pass its SHA-256 self-check, (2) regenerate
@@ -349,4 +371,4 @@ LAKEEOF
 msg 2 "  port.sh: P9 source-surface gate green (src_stmt rendering + surface:source + relies [T-S] + axiom audit)"
 
 echo ""
-msg 2 "  port.sh: PORT GATE GREEN (conformance + axiom audit + stackmeta + P5 gen drift + P6 pipeline + P7.1 harvest + P9 source surface)"
+msg 2 "  port.sh: PORT GATE GREEN (conformance + axiom audit + stackmeta + P9.3 fragment corpus + P5 gen drift + P6 pipeline + P7.1 harvest + P9 source surface)"

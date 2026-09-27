@@ -15,10 +15,24 @@
 //! sequences, calls, and address materialization are NOT fragment ops (their
 //! lowering is not op-local; §Q2's shrink).
 //!
+//! **The fragment text surface** ([`SrcOp::from_text`], [`SrcOp::to_text`],
+//! [`blocks_from_text`], [`blocks_to_text`]): the canonical `--emit=ir`
+//! text is the *interface* between the surfaces. The committed
+//! `test-vectors/fragment/index.json` (`tyu.fragvec/1`) corpus — program →
+//! trace — is generated from [`blocks_to_text`] output, parsed back by
+//! [`blocks_from_text`] on this side, and parsed independently by the port
+//! (`Tyu.Gen.Render.parseSrcBlocks` + the fragment conformance runner in
+//! `Tyu/Conformance/Fragment.lean`). A drift in the mnemonic↔op mapping on
+//! either side diverges the corpus trace (the mechanical Lean↔Rust pin, the
+//! fragment analogue of the `tyu.vec/1` conformance vectors).
+//!
 //! This module is a documented test-only surface (like `testutil`): it is
 //! compiled into the crate so integration tests can reach it, but nothing in
 //! the production pipeline consumes it.
 
+use alloc::format;
+use alloc::string::String;
+use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -88,6 +102,101 @@ impl SrcOp {
             SrcOp::Ret => "ret",
         }
     }
+
+    /// Parse one canonical op line into a fragment op (`None` = not a
+    /// fragment op line — the op-locality detector, mirror of
+    /// `Tyu.Gen.Render.parseSrcOp`).
+    pub fn from_text(line: &str) -> Option<SrcOp> {
+        let line = line.trim();
+        if line.is_empty() {
+            return None;
+        }
+        let mut toks = line.split(' ');
+        let m = toks.next()?;
+        let rest: Vec<&str> = toks.collect();
+        match m {
+            "const_i64" => {
+                let [v] = rest.as_slice() else {
+                    return None;
+                };
+                v.parse::<i64>().ok().map(SrcOp::ConstInt)
+            }
+            "const_bool" => match rest.as_slice() {
+                ["true"] => Some(SrcOp::ConstBool(true)),
+                ["false"] => Some(SrcOp::ConstBool(false)),
+                _ => None,
+            },
+            "dup" => Some(SrcOp::Dup),
+            "drop" => Some(SrcOp::Drop),
+            "swap" => Some(SrcOp::Swap),
+            "add_i64" => Some(SrcOp::Add),
+            "sub_i64" => Some(SrcOp::Sub),
+            "mul_i64" => Some(SrcOp::Mul),
+            "cmp_lt" => Some(SrcOp::CmpLt),
+            "cmp_le" => Some(SrcOp::CmpLe),
+            "cmp_gt" => Some(SrcOp::CmpGt),
+            "cmp_ge" => Some(SrcOp::CmpGe),
+            "cmp_eq" => Some(SrcOp::CmpEq),
+            "cmp_ne" => Some(SrcOp::CmpNe),
+            "and_bool" => Some(SrcOp::AndB),
+            "or_bool" => Some(SrcOp::OrB),
+            "not_bool" => Some(SrcOp::NotB),
+            "load" => Some(SrcOp::Load),
+            "store" => Some(SrcOp::Store),
+            "vol_load" => Some(SrcOp::VolLoad),
+            "vol_store" => Some(SrcOp::VolStore),
+            "local_get" => {
+                let [n] = rest.as_slice() else {
+                    return None;
+                };
+                n.parse::<u16>().ok().map(SrcOp::LocalGet)
+            }
+            "local_set" => {
+                let [n] = rest.as_slice() else {
+                    return None;
+                };
+                n.parse::<u16>().ok().map(SrcOp::LocalSet)
+            }
+            "br" => {
+                let [t] = rest.as_slice() else {
+                    return None;
+                };
+                block_id(t).map(SrcOp::Br)
+            }
+            "br_if" => {
+                let [t, e] = rest.as_slice() else {
+                    return None;
+                };
+                match (block_id(t), block_id(e)) {
+                    (Some(t), Some(e)) => Some(SrcOp::BrIf(t, e)),
+                    _ => None,
+                }
+            }
+            "ret" => Some(SrcOp::Ret),
+            _ => None,
+        }
+    }
+
+    /// The canonical op line (mnemonic + payload, the inverse of
+    /// [`SrcOp::from_text`]): one line of the `--emit=ir` text the corpus
+    /// and the port's parser both consume.
+    pub fn to_text(&self) -> String {
+        match self {
+            SrcOp::ConstInt(v) => format!("const_i64 {v}"),
+            SrcOp::ConstBool(b) => format!("const_bool {}", if *b { "true" } else { "false" }),
+            SrcOp::LocalGet(slot) => format!("local_get {slot}"),
+            SrcOp::LocalSet(slot) => format!("local_set {slot}"),
+            SrcOp::Br(t) => format!("br b{t}"),
+            SrcOp::BrIf(t, e) => format!("br_if b{t} b{e}"),
+            other => other.mnemonic().to_string(),
+        }
+    }
+}
+
+/// Parse a block-id token (`"b3"` or `"3"` — the `b`-prefix form is the
+/// canonical one, mirroring `Tyu.Conformance.parseBlockId`).
+fn block_id(t: &str) -> Option<usize> {
+    t.strip_prefix('b').unwrap_or(t).parse::<usize>().ok()
 }
 
 /// The op-local transcription: one IR op per fragment construct (mirror of
@@ -582,6 +691,76 @@ pub fn trace_agrees(
     }
 }
 
+// ---------------------------------------------------------------------------
+// The fragment text surface (the corpus interface): canonical `--emit=ir`
+// block text <-> program. The committed `tyu.fragvec/1` corpus
+// (`crates/verifier/test-vectors/fragment/index.json`) is generated from
+// [`blocks_to_text`], re-parsed here with [`blocks_from_text`], and parsed
+// independently by the port (`Tyu.Gen.Render.parseSrcBlocks`) — a
+// mnemonic↔op drift on either side diverges the committed traces (the
+// Lean↔Rust mechanical pin, the fragment analogue of the `tyu.vec/1`
+// conformance vectors).
+// ---------------------------------------------------------------------------
+
+/// Parse canonical block text (`block bN` headers + op lines) into the
+/// per-block op lists of a fragment word. `None` when any line is not a
+/// fragment op (the op-locality detector; mirror of
+/// `Tyu.Gen.Render.parseSrcBlocks`). Block ids must be consecutive from 0.
+pub fn blocks_from_text(text: &str) -> Option<Vec<Vec<SrcOp>>> {
+    let mut blocks: Vec<Vec<SrcOp>> = Vec::new();
+    let mut cur: Vec<SrcOp> = Vec::new();
+    let mut saw_block = false;
+    let mut next_id: usize = 0;
+    for raw in text.lines() {
+        let line = raw.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("block b") {
+            let id: usize = rest.parse().ok()?;
+            if id != next_id {
+                // Consecutive ids from 0 only (the corpus generator emits
+                // them in order; anything else is not our canonical form).
+                return None;
+            }
+            if saw_block {
+                blocks.push(cur);
+                cur = Vec::new();
+            }
+            saw_block = true;
+            next_id += 1;
+        } else {
+            if !saw_block {
+                return None;
+            }
+            cur.push(SrcOp::from_text(line)?);
+        }
+    }
+    if !saw_block {
+        return None;
+    }
+    blocks.push(cur);
+    Some(blocks)
+}
+
+/// Render a fragment word as canonical block text (`block bN` headers + one
+/// op line per op) — the exact text [`blocks_from_text`] parses back and the
+/// port's `parseSrcBlocks` parses independently.
+pub fn blocks_to_text(blocks: &[Vec<SrcOp>]) -> String {
+    let mut out = String::new();
+    for (i, ops) in blocks.iter().enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        out.push_str(&format!("block b{i}"));
+        for op in ops {
+            out.push('\n');
+            out.push_str(&op.to_text());
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -619,5 +798,69 @@ mod tests {
         assert!(trace_agrees(&blocks, 0, 8, &mem, &st));
         let r = run_word(&blocks, 0, 8, &mem, &st).unwrap();
         assert_eq!(r.stack, vec![42]);
+    }
+
+    #[test]
+    fn text_round_trip_preserves_the_program() {
+        // The canonical text is the corpus interface: rendering and
+        // re-parsing must be the identity on every fragment program (the
+        // property the shared `tyu.fragvec/1` corpus depends on — the port
+        // parses the SAME text with its own parser).
+        let blocks = vec![
+            vec![SrcOp::LocalSet(1), SrcOp::Br(1)],
+            vec![
+                SrcOp::LocalGet(1),
+                SrcOp::ConstInt(3),
+                SrcOp::CmpLt,
+                SrcOp::BrIf(2, 3),
+            ],
+            vec![
+                SrcOp::LocalGet(1),
+                SrcOp::ConstInt(1),
+                SrcOp::Add,
+                SrcOp::LocalSet(1),
+                SrcOp::Br(1),
+            ],
+            vec![SrcOp::LocalGet(1), SrcOp::Ret],
+        ];
+        let text = blocks_to_text(&blocks);
+        assert_eq!(
+            text,
+            "block b0\n\
+             local_set 1\n\
+             br b1\n\
+             block b1\n\
+             local_get 1\n\
+             const_i64 3\n\
+             cmp_lt\n\
+             br_if b2 b3\n\
+             block b2\n\
+             local_get 1\n\
+             const_i64 1\n\
+             add_i64\n\
+             local_set 1\n\
+             br b1\n\
+             block b3\n\
+             local_get 1\n\
+             ret"
+        );
+        assert_eq!(blocks_from_text(&text), Some(blocks.clone()));
+        // Deterministic round-trips even after a semantic whitespace change.
+        assert_eq!(blocks_from_text(&text.replace('\n', "\n  ")), Some(blocks));
+    }
+
+    #[test]
+    fn text_parsing_rejects_non_fragment_ops() {
+        // The op-locality detector: casts, calls, address ops are NOT
+        // fragment ops (`None` — the source surface does not claim them).
+        assert_eq!(SrcOp::from_text("cast percent"), None);
+        assert_eq!(SrcOp::from_text("call foo"), None);
+        assert_eq!(SrcOp::from_text("addr_of x"), None);
+        assert_eq!(SrcOp::from_text("const_str"), None);
+        assert_eq!(blocks_from_text("block b0\ncast percent\nret"), None);
+        // And payload malformations fail closed.
+        assert_eq!(SrcOp::from_text("const_i64"), None);
+        assert_eq!(SrcOp::from_text("br_if b1"), None);
+        assert_eq!(SrcOp::from_text("local_get x"), None);
     }
 }

@@ -188,7 +188,7 @@ def stepOp (_spec : Tyu.IR.TargetSpec) (mem : ConcreteMem) (o : Op) (st : State)
   | .swap =>
       let (s1, b) := State.pop1 st
       let (s2, a) := State.pop1 s1
-      (mem, .ok (State.pushMany s2 [a, b]))
+      (mem, .ok (State.pushMany s2 [b, a]))
   | .add =>
       let (s2, a, b) := State.pop2 st
       (mem, .ok (State.push1 s2 (wrapI64 (a + b))))
@@ -340,16 +340,24 @@ def offsetWithin (blocks : List Block) (entry : Nat) (off width size : Nat) : Pr
     (∃ σf, Word.run blocks spec entry fuel mem σ₀ = (mem, some σf)) → off + width ≤ size
 
 /-- Evaluate a contract-predicate fragment word over a concrete argument
-stack: the predicate runs terminate and their top-of-stack is nonzero. -/
+stack: the predicate runs terminate and their top-of-stack is nonzero.
+
+**RESERVED — not a harvestable surface.** The renderer refuses
+`PredicateHolds` obligations at the source surface
+(`predicate-source-unavailable`, `Tyu.Gen.Render.srcClassify`) because T-S
+covers only `outInRange`/`offsetWithin`: there is NO proven bridge from a
+source contract claim to the IR `PredicateHolds` claim, so certifying one
+"through T-S" would be unsound. These forms are hand-authored material
+until a contract-transcription theorem exists (a P10 candidate). -/
 def predHolds (pred : List Block) (spec : Tyu.IR.TargetSpec) (fuel : Nat)
     (mem : ConcreteMem) (args : List Int) : Prop :=
   ∃ σf, Word.run pred spec 0 fuel mem { stack := args, locals := [] } = (mem, some σf) ∧
     σf.stack.getLastD 0 ≠ 0
 
 /-- The source-side `contract-post` claim: the word's `ensures` predicate
-holds over the direct `out.i` arguments at every terminating source run. -/
-def predHoldsOnOuts (w pred : List Block) (wEntry : Nat) (_i : Nat) (_lo _hi : Int)
-    (args : List Int) : Prop :=
+holds over the direct argument values at every terminating source run.
+RESERVED with [`predHolds`] — see its note. -/
+def predHoldsOnOuts (w pred : List Block) (wEntry : Nat) (args : List Int) : Prop :=
   ∀ (spec : Tyu.IR.TargetSpec) (mem : ConcreteMem) (fuel : Nat) (σ₀ σf : State),
     Word.run w spec wEntry fuel mem σ₀ = (mem, some σf) →
     predHolds pred spec fuel mem args
