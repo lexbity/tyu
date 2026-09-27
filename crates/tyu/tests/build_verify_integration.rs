@@ -139,6 +139,51 @@ fn toolchain_available() -> bool {
 }
 
 #[test]
+fn proven_policy_fails_closed_without_proof_class_discharges() {
+    // `--verify-policy=proven` (§Q12): interval-legacy `checked` discharges
+    // are NOT admitted — the langc trust gate forces them open, the report
+    // sees only opens, and the build fails E6410. Runs without the Lean
+    // toolchain (the in-tree pipeline alone exercises the gate).
+    let dir = fresh_dir("proven");
+    fs::write(dir.join("Bank.mod"), BANK_MOD).unwrap();
+    let out_dir = dir.join("out");
+    fs::create_dir_all(&out_dir).unwrap();
+    let out = Command::new(tyu_exe())
+        .current_dir(&dir)
+        .arg("build")
+        .arg("--target=x86_64-unknown-linux-gnu")
+        .arg("--verify-policy=proven")
+        .arg(format!("--out-dir={}", out_dir.display()))
+        .arg("Bank.mod")
+        .output()
+        .expect("tyu build");
+    assert!(
+        !out.status.success(),
+        "proven must fail when nothing is proven"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("E6410"), "stderr: {stderr}");
+    // The report is still written with policy: proven and the opens listed.
+    let report = serde_json::from_slice::<serde_json::Value>(
+        &fs::read(out_dir.join("verify-report.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(report["policy"], "proven");
+    assert!(!report["open"].as_array().unwrap().is_empty());
+    // The langc trust gate records the not-admitted reason per open site.
+    let reasons: Vec<&str> = report["open"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|o| o["reason"].as_str())
+        .collect();
+    assert!(
+        reasons.iter().any(|r| r.contains("policy-proven")),
+        "interval-only checked must be forced open under proven: {reasons:?}"
+    );
+}
+
+#[test]
 fn tier_a_full_pipeline_builds_and_lists_unproven_statements_per_module() {
     if std::env::var("TYU_PROOF_E2E")
         .map(|v| v != "1")
@@ -156,7 +201,8 @@ fn tier_a_full_pipeline_builds_and_lists_unproven_statements_per_module() {
     assert!(ok, "the full pipeline must build:\n{stderr}");
     let proof = &report["proof"];
     assert_eq!(proof["tool"], "lean");
-    assert_eq!(proof["harvest"], "not-built");
+    // P7: the harvest consumed the kernel environment (the two-pass flow).
+    assert_eq!(proof["harvest"], "ok");
     assert_eq!(proof["gen_digest"], "verified");
     let statements = proof["statements"].as_array().unwrap();
     assert!(
@@ -168,10 +214,12 @@ fn tier_a_full_pipeline_builds_and_lists_unproven_statements_per_module() {
         .find(|s| s["module"] == "Bank")
         .expect("Bank accounting present");
     assert!(bank["rendered"].as_u64().unwrap() >= 1);
-    // The P6 honesty rule: nothing is proven before harvest exists.
-    assert_eq!(bank["unproven"], bank["rendered"]);
-    assert!(
-        stderr.contains("unproven (harvest in P7)"),
-        "stderr: {stderr}"
+    // P7.1: `proven` counts come from the harvested v2 verdicts; the rest of
+    // the rendered statements stay `unproven` (a state, not a fault).
+    assert!(bank["proven"].as_u64().is_some());
+    assert_eq!(
+        bank["unproven"].as_u64().unwrap() + bank["proven"].as_u64().unwrap(),
+        bank["rendered"].as_u64().unwrap()
     );
+    assert!(stderr.contains("unproven"), "stderr: {stderr}");
 }

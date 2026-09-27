@@ -385,14 +385,17 @@ pub fn proof_fill() -> Result<(), TyuError> {
 // ---------------------------------------------------------------------------
 
 /// Run the developer-proof pipeline for a build: package generation (P6.1) →
-/// Gen-digest verification (E6418) → the elaborating `lake build` → an honest
-/// per-module statement accounting. Before the P7 harvest exists, every
-/// rendered statement is unproven by construction — the returned
-/// [`ProofStatus`] says so explicitly.
+/// Gen-digest verification (E6418) → the elaborating `lake build` → the
+/// harvest (P7.1: kernel-checked theorems become `tyu.verdicts/v2`) → an
+/// honest per-module statement accounting. A theorem is worth exactly what
+/// the kernel and the axiom audit say it is.
+///
+/// Returns the [`ProofStatus`] AND the per-module harvest v2 verdict files
+/// (absolute paths) the caller feeds to pass-2 codegen (FR-3).
 pub fn run_lean_pipeline(
     tool: VerifyTool,
-    module_obl: &[(String, Option<PathBuf>)],
-) -> Result<ProofStatus, TyuError> {
+    module_obligations: &[(String, PathBuf)],
+) -> Result<(ProofStatus, Vec<(String, PathBuf)>), TyuError> {
     debug_assert_eq!(tool, VerifyTool::Lean);
     // P6 test tier: without a Lean toolchain (CI), the port build can be
     // skipped explicitly — the report then records `lean-skipped` and every
@@ -402,7 +405,7 @@ pub fn run_lean_pipeline(
             "tyu: --verify-tool=lean: port build skipped ({}), every statement remains unproven",
             SKIP_PORT_BUILD_ENV
         );
-        return Ok(ProofStatus::skipped());
+        return Ok((ProofStatus::skipped(), Vec::new()));
     }
 
     let project_root = project_root_for(None)?;
@@ -423,13 +426,13 @@ pub fn run_lean_pipeline(
     ensure_lean_toolchain(&pin)?;
 
     // Group the re-homed obligation artifacts into absolute paths.
-    let artifacts: Vec<PathBuf> = module_obl
+    let artifacts: Vec<PathBuf> = module_obligations
         .iter()
-        .filter_map(|(_, path)| path.clone())
+        .map(|(_, path)| path.clone())
         .collect();
     if artifacts.is_empty() {
         eprintln!("tyu: --verify-tool=lean: no obligation artifacts to render");
-        return Ok(ProofStatus::lean("skipped", "", Vec::new()));
+        return Ok((ProofStatus::lean("skipped", "", Vec::new()), Vec::new()));
     }
 
     let package = generate_package(&project_root, &port_dir, &artifacts)?;
@@ -442,21 +445,143 @@ pub fn run_lean_pipeline(
 
     // E6418 pre-lake gate: recompute canonical statement hashes and compare
     // against the rendered Gen surface.
-    let statements = verify_gen_digests(&package, &artifacts)?;
+    let mut statements = verify_gen_digests(&package, &artifacts)?;
 
-    // The elaborating build (the developer-visible gate: their proofs must
-    // compile against the generated statements).
+    // The elaborating build (late the developer-visible gate: their proofs
+    // must compile against the generated statements; then the harvest's env
+    // is the built package).
     run_lake_build(&package)?;
 
-    // Observability (P6.2): the per-module unproven listing.
-    for s in &statements {
-        eprintln!(
-            "tyu: proof statements {}: {} rendered, {} omitted, {} unproven (harvest in P7)",
-            s.module, s.rendered, s.omitted, s.unproven
-        );
+    // P7.1: the harvest — kernel-checked theorems become v2 verdicts.
+    let harvest = run_harvest(&package, &artifacts)?;
+    let harvest_out = project_root.join(VERIFY_DIR).join("harvest");
+    fs::create_dir_all(&harvest_out).map_err(TyuError::Io)?;
+    let mut verdict_files: Vec<(String, PathBuf)> = Vec::new();
+    for (module, v2) in harvest {
+        let path = harvest_out.join(format!("{module}.verdicts.v2.json"));
+        fs::create_dir_all(harvest_out.parent().unwrap_or(&harvest_out)).ok();
+        fs::write(&path, &v2).map_err(TyuError::Io)?;
+        verdict_files.push((module.clone(), path));
+        let proven = count_certificates(&v2);
+        for s in statements.iter_mut().filter(|s| s.module == module) {
+            s.unproven = s.rendered.saturating_sub(proven);
+            s.proven = proven;
+        }
     }
 
-    Ok(ProofStatus::lean("verified", &vendor_digest, statements))
+    // Observability (P7.1): the per-module listing — harvested proofs now
+    // shrink the `unproven` count.
+    for s in &statements {
+        if s.proven > 0 {
+            eprintln!(
+                "tyu: proof statements {}: {} rendered, {} proven, {} omitted, {} unproven",
+                s.module, s.rendered, s.proven, s.omitted, s.unproven
+            );
+        } else {
+            eprintln!(
+                "tyu: proof statements {}: {} rendered, {} omitted, {} unproven",
+                s.module, s.rendered, s.omitted, s.unproven
+            );
+        }
+    }
+
+    Ok((
+        ProofStatus::lean("verified", &vendor_digest, statements),
+        verdict_files,
+    ))
+}
+
+/// Count the `trust: proof` certificate records in a harvest v2 document.
+fn count_certificates(v2: &str) -> u32 {
+    use verifier::verdict::read_verdicts;
+    match read_verdicts(v2.as_bytes()) {
+        Ok(v) => v
+            .records
+            .iter()
+            .filter(|r| r.trust == verifier::verdict::Trust::Proof)
+            .count() as u32,
+        Err(_) => 0,
+    }
+}
+
+/// The harvest hub: run the generated package's `Harvest.lean` (the
+/// `#eval!`d interpreter action) once per module with the environment
+/// variables the Lean reader expects, and return the emitted v2 documents.
+/// Any non-zero exit (E6419 axiom violation, E6420 missing statement,
+/// malformed metadata) is E6416 — fail-closed: a tampered proof environment
+/// aborts before any check is elided for it.
+fn run_harvest(
+    package: &LeanPackage,
+    module_artifacts: &[PathBuf],
+) -> Result<Vec<(String, String)>, TyuError> {
+    // Harvest input env var names (the Lean reader's contract).
+    let gen_var = "TYU_HARVEST_GEN_DIR";
+    let obl_var = "TYU_HARVEST_OBL";
+    let out_var = "TYU_HARVEST_OUT";
+    let mut out = Vec::new();
+    for ob in module_artifacts {
+        let bytes = fs::read(ob).map_err(TyuError::Io)?;
+        let set = verifier::codec::read_obl(&bytes).map_err(|e| {
+            TyuError::Build(format!(
+                "obligation artifact '{}' invalid (E{}): {e:?}",
+                ob.display(),
+                e.code()
+            ))
+        })?;
+        let module = set.module.clone();
+        let out_path = std::env::temp_dir().join(format!(
+            "tyu-harvest-{}-{}.v2.json",
+            module,
+            std::process::id()
+        ));
+        let run = Command::new("lake")
+            .current_dir(&package.root)
+            .arg("env")
+            .arg("lean")
+            .arg(package.root.join("Harvest.lean"))
+            .env(gen_var, &package.gen_dir)
+            .env(obl_var, ob)
+            .env(out_var, &out_path)
+            .output()
+            .map_err(|e| {
+                TyuError::Build(format!(
+                    "E6416: spawning the harvest in '{}': {e}",
+                    package.root.display()
+                ))
+            })?;
+        // The `#eval!` harness writes the document at the exit path; a
+        // nonzero exit is the fail-closed signal (E6419/E6420/…). The
+        // harness records the diagnosable reason in the out file
+        // (`tyu.harvest-error/1`), which this E6416 surfaces.
+        if !run.status.success() {
+            let reason = fs::read_to_string(&out_path)
+                .ok()
+                .filter(|s| s.contains("tyu.harvest-error/1"))
+                .unwrap_or_default();
+            return Err(TyuError::Build(format!(
+                "E6416: harvest failed for module {}{}",
+                module,
+                if reason.is_empty() {
+                    String::new()
+                } else {
+                    format!(":\n{}", reason.trim_end())
+                }
+            )));
+        }
+        let v2 = fs::read(&out_path).map_err(|e| {
+            TyuError::Build(format!(
+                "E6416: harvest produced no verdicts for {} ({e})",
+                module
+            ))
+        })?;
+        let _ = fs::remove_file(&out_path);
+        out.push((
+            module,
+            String::from_utf8(v2)
+                .map_err(|_| TyuError::Build("E6416: harvest verdicts not UTF-8".into()))?,
+        ));
+    }
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -466,6 +591,7 @@ pub fn run_lean_pipeline(
 struct LeanPackage {
     root: PathBuf,
     gen_dir: PathBuf,
+    project_root: PathBuf,
 }
 
 /// Generate (or fast-path) the `.tyu-verify/lean/` package: vendored port
@@ -487,7 +613,11 @@ fn generate_package(
     let fingerprint = package_fingerprint(project_root, port_dir, artifacts, &root)?;
     if let Ok(state) = fs::read_to_string(root.join(".tyu-gen.json")) {
         if state.trim() == state_text(&fingerprint).trim() && gen_dir.is_dir() {
-            return Ok(LeanPackage { root, gen_dir });
+            return Ok(LeanPackage {
+                root,
+                gen_dir,
+                project_root: project_root.to_path_buf(),
+            });
         }
     }
 
@@ -509,11 +639,19 @@ fn generate_package(
     let lakefile = render_lakefile(project_root)?;
     write_if_changed(&root.join("lakefile.toml"), lakefile.as_bytes())?;
 
-    // 5. The harvest exe stub (P6; the real harvest lands in P7).
+    // 5. P7.1: the harvest entry — the generated package's kernel environment
+    //    runs the vendored harvest (`#eval!`d CommandElabM action via
+    //    `lake env lean`), and the `Gen.lean` aggregator makes the statements
+    //    reachable in it even without developer proofs.
+    let gen_modules = gen_modules(gen_dir.as_path())?;
     let has_proofs = project_root.join(PROOFS_DIR).join("proofs.lean").is_file();
     write_if_changed(
+        &root.join("Gen.lean"),
+        gen_aggregator(&gen_modules).as_bytes(),
+    )?;
+    write_if_changed(
         &root.join("Harvest.lean"),
-        harvest_stub(has_proofs).as_bytes(),
+        harvest_entry(&gen_modules, has_proofs).as_bytes(),
     )?;
 
     // 6. The generation state — LAST, so a crash mid-regeneration leaves a
@@ -523,7 +661,65 @@ fn generate_package(
         state_text(&fingerprint).as_bytes(),
     )?;
 
-    Ok(LeanPackage { root, gen_dir })
+    Ok(LeanPackage {
+        root,
+        gen_dir,
+        project_root: project_root.to_path_buf(),
+    })
+}
+
+/// The rendered statement modules currently in `gen_dir` (each
+/// `Gen/<Module>.lean`), sorted.
+fn gen_modules(gen_dir: &Path) -> Result<Vec<String>, TyuError> {
+    let mut out: Vec<String> = Vec::new();
+    for entry in fs::read_dir(gen_dir).map_err(TyuError::Io)?.flatten() {
+        let p = entry.path();
+        if p.extension().and_then(|e| e.to_str()) == Some("lean") {
+            if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                out.push(stem.to_string());
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    Ok(out)
+}
+
+/// The `Gen.lean` aggregator: `import Gen.<M>` per rendered module, so the
+/// package's lake environment (the harvest's) contains every statement even
+/// when no developer proofs exist yet.
+fn gen_aggregator(modules: &[String]) -> String {
+    let mut s =
+        String::from("-- Generated by tyu (PLAN-VERIFY-3 P7.1) — the statement aggregator.\n");
+    for m in modules {
+        s.push_str("import Gen.");
+        s.push_str(m);
+        s.push('\n');
+    }
+    s
+}
+
+/// The P7 harvest entry: imports the statements (`Gen`) + the developer's
+/// proofs (when present) + the vendored harvest, and runs it. The `#eval!`d
+/// action reads its inputs from the `TYU_HARVEST_*` environment variables and
+/// writes `tyu.verdicts/v2`.
+fn harvest_entry(modules: &[String], has_proofs: bool) -> String {
+    let mut s = String::new();
+    s.push_str("import Tyu.Verdicts.Harvest\n");
+    for m in modules {
+        s.push_str("import Gen.");
+        s.push_str(m);
+        s.push('\n');
+    }
+    if has_proofs {
+        s.push_str("import proofs\n");
+    }
+    s.push('\n');
+    s.push_str("-- The harvest (PLAN-VERIFY-3 P7.1): this environment — the\n");
+    s.push_str("-- generated statements + the developer's kernel-checked theorems —\n");
+    s.push_str("-- is what the harvest audits. Deterministic `tyu.verdicts/v2` out.\n");
+    s.push_str("#eval! Tyu.Verdicts.Harvest.run\n");
+    s
 }
 
 /// The regeneration fingerprint: hashes of (vendored port files, toolchain
@@ -585,7 +781,11 @@ fn package_fingerprint(
 }
 
 /// The port files the generated package vendors (deterministic list; the
-/// renderer + golden corpus are port-exe material and stay out).
+/// golden corpus is port-exe/fixture material and stays out). P7.1 adds the
+/// renderer itself + the harvest library (the generated statements import
+/// `Tyu.Gen.Render`'s canonical-encoding helpers transitively through
+/// `Tyu.Gen.Stmt`, and the harvest reuses the SAME canonical surface — one
+/// source of truth across encoder/renderer/harvest).
 const fn vendored_port_files() -> &'static [&'static str] {
     &[
         "Tyu.lean",
@@ -606,6 +806,8 @@ const fn vendored_port_files() -> &'static [&'static str] {
         "Tyu/Conformance/VectorRun.lean",
         "Tyu/Gen/Sha256.lean",
         "Tyu/Gen/Stmt.lean",
+        "Tyu/Gen/Render.lean",
+        "Tyu/Verdicts/Harvest.lean",
     ]
 }
 
@@ -808,11 +1010,6 @@ fn render_lakefile(project_root: &Path) -> Result<String, TyuError> {
         }
         text.push_str("]\n");
     }
-
-    text.push_str("\n[[lean_exe]]\n");
-    text.push_str("name = \"harvest\"\n");
-    text.push_str("srcDir = \".\"\n");
-    text.push_str("root = \"Harvest\"\n");
     Ok(text)
 }
 
@@ -833,24 +1030,6 @@ fn toml_escape(s: &str) -> String {
         }
     }
     out
-}
-
-/// The P6 harvest exe stub: importing the proofs root (when present) makes
-/// `lake build harvest` the developer-visible elaboration gate. The real
-/// harvest — statement binding, axiom audit, T-CL closure, verdicts v2 — is
-/// P7's deliverable; this stub states so honestly.
-fn harvest_stub(has_proofs: bool) -> String {
-    let mut text = String::new();
-    if has_proofs {
-        text.push_str("import proofs\n\n");
-    }
-    text.push_str("-- The P6 harvest stub (PLAN-VERIFY-3 P6.2). The real harvest —\n");
-    text.push_str("-- statement binding, axiom audit, assumption closure, verdicts v2 —\n");
-    text.push_str("-- lands in P7. Importing the proofs root keeps this the \n");
-    text.push_str("-- elaboration gate for the developer's theorems.\n\n");
-    text.push_str("def main : IO Unit :=\n");
-    text.push_str("  IO.println \"harvest: not-built (PLAN-VERIFY-3 P7)\"\n");
-    text
 }
 
 // ---------------------------------------------------------------------------
@@ -1074,7 +1253,8 @@ fn verify_gen_digests(
             module: module.clone(),
             rendered,
             omitted,
-            unproven: rendered, // P6: harvest is P7 — nothing is proven yet.
+            proven: 0, // filled by the P7 harvest (certificate counts).
+            unproven: rendered,
         });
     }
     out.sort_by(|a, b| a.module.cmp(&b.module));
@@ -1353,18 +1533,34 @@ fn same_version(got: &str, want: &str) -> bool {
     !w.is_empty() && g.len() >= w.len() && g.iter().zip(w.iter()).all(|(a, b)| a == b)
 }
 
-/// The elaborating lake build of the generated package. Any failure — a
-/// developer proof that does not elaborate, a vendored-file breakage, a lake
-/// crash — is E6416 with the output captured (fail-closed: the build stops
-/// before any check is elided for an unproven statement).
+/// The elaborating lake build of the generated package: the `Gen` aggregator
+/// (every generated statement) and, when the developer has proofs, the
+/// `proofs` root. Any failure — a developer proof that does not elaborate, a
+/// vendored-file breakage, a lake crash — is E6416 with the output captured
+/// (fail-closed: the build stops before any check is elided for an unproven
+/// statement).
 fn run_lake_build(package: &LeanPackage) -> Result<(), TyuError> {
+    let mut targets = vec![
+        "build".to_string(),
+        "Gen".to_string(),
+        "Tyu.Verdicts.Harvest".to_string(),
+    ];
+    // `proofs` is a TyuProofs root module — a lake target only when present.
+    if package
+        .project_root
+        .join(PROOFS_DIR)
+        .join("proofs.lean")
+        .is_file()
+    {
+        targets.push("proofs".to_string());
+    }
     let out = Command::new("lake")
         .current_dir(&package.root)
-        .args(["build", "harvest"])
+        .args(&targets)
         .output()
         .map_err(|e| {
             TyuError::Build(format!(
-                "E6416: spawning `lake build harvest` in '{}': {e}",
+                "E6416: spawning `lake build` in '{}': {e}",
                 package.root.display()
             ))
         })?;
@@ -1384,7 +1580,7 @@ fn run_lake_build(package: &LeanPackage) -> Result<(), TyuError> {
             .collect::<Vec<_>>()
             .join("\n");
         return Err(TyuError::Build(format!(
-            "E6416: `lake build harvest` failed in '{}' — the generated \
+            "E6416: `lake build` failed in '{}' — the generated \
              statements and/or the developer proofs did not elaborate:\n{}",
             package.root.display(),
             tail
@@ -1397,21 +1593,10 @@ fn run_lake_build(package: &LeanPackage) -> Result<(), TyuError> {
 // Harvest boundary (P6.2: wired, honest, tested — P7 replaces the error)
 // ---------------------------------------------------------------------------
 
-/// The harvest call boundary. In P6 the port's harvest executable does not
-/// exist (P7's deliverable), so reaching this point is an explicit
-/// fail-closed error — no build may claim a proof verdict it cannot harvest.
-/// P6 wires the boundary and proves it fail-closes (unit test); the P6 build
-/// path never reaches it (the report records `harvest: "not-built"` instead),
-/// which is why the lib build sees it as unused until P7 plugs it in.
-#[allow(dead_code)]
-pub(crate) fn invoke_harvest() -> Result<(), TyuError> {
-    Err(TyuError::Build(
-        "E6416 harvest-not-built: the port's harvest executable is a \
-         PLAN-VERIFY-3 P7 deliverable; before it lands, no kernel-checked \
-         proof can be consumed and every statement stays unproven"
-            .into(),
-    ))
-}
+// ---------------------------------------------------------------------------
+// ℹ The P6 harvest *boundary* (E6416 harvest-not-built) was superseded in P7:
+// the real harvest (`run_harvest`) consumes the kernel environment now.
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -1441,16 +1626,6 @@ mod tests {
         let h4 = proof_files_hash(&proofs);
         assert_ne!(h1, h4, "file-set change must change the hash");
         let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn invoke_harvest_fails_closed_with_harvest_not_built() {
-        let err = invoke_harvest().unwrap_err();
-        assert!(err.to_string().contains("E6416"), "err: {err}");
-        assert!(
-            err.to_string().contains("harvest-not-built"),
-            "must name the state: {err}"
-        );
     }
 
     #[test]
@@ -1587,6 +1762,7 @@ mod tests {
         let pkg = LeanPackage {
             root: dir.clone(),
             gen_dir: gen_dir.clone(),
+            project_root: dir.clone(),
         };
         let statements = verify_gen_digests(&pkg, std::slice::from_ref(&artifact)).unwrap();
         // The Bank corpus: ≥ 1 rendered statement and ≥ 1 omitted one (the

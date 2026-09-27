@@ -1700,6 +1700,8 @@ fn write_report_bytes(r: &crate::report::VerifyReport) -> Vec<u8> {
         write_str(&mut out, &s.module);
         out.extend_from_slice(b",\"rendered\":");
         write_i64(&mut out, s.rendered as i64);
+        out.extend_from_slice(b",\"proven\":");
+        write_i64(&mut out, s.proven as i64);
         out.extend_from_slice(b",\"omitted\":");
         write_i64(&mut out, s.omitted as i64);
         out.extend_from_slice(b",\"unproven\":");
@@ -1816,7 +1818,21 @@ fn write_report_bytes(r: &crate::report::VerifyReport) -> Vec<u8> {
     } else {
         b"false"
     });
-    out.extend_from_slice(b"}}");
+    // P7.3: the shipped TCB boundary (§6.8).
+    out.extend_from_slice(b"},\"tcb\":[");
+    for (i, t) in r.tcb.iter().enumerate() {
+        if i != 0 {
+            out.push(b',');
+        }
+        out.extend_from_slice(b"{\"id\":");
+        write_str(&mut out, &t.id);
+        out.extend_from_slice(b",\"what\":");
+        write_str(&mut out, &t.what);
+        out.extend_from_slice(b",\"status\":");
+        write_str(&mut out, &t.status);
+        out.push(b'}');
+    }
+    out.extend_from_slice(b"]}");
     out
 }
 
@@ -1844,6 +1860,29 @@ fn write_report_modules(out: &mut Vec<u8>, modules: &[crate::report::ModuleAccou
             write_i64(out, c.open as i64);
             out.push(b'}');
         }
+        // P7.3: the v2 trust×method×surface split.
+        out.extend_from_slice(b"},\"trust\":{\"proof\":");
+        write_i64(out, m.trust.proof as i64);
+        out.extend_from_slice(b",\"checked\":");
+        write_i64(out, m.trust.checked as i64);
+        out.extend_from_slice(b",\"assumed\":");
+        write_i64(out, m.trust.assumed as i64);
+        out.extend_from_slice(b",\"open\":");
+        write_i64(out, m.trust.open as i64);
+        out.extend_from_slice(b"},\"methods\":{\"certificate\":");
+        write_i64(out, m.methods.certificate as i64);
+        out.extend_from_slice(b",\"rederive\":");
+        write_i64(out, m.methods.rederive as i64);
+        out.extend_from_slice(b",\"descriptor\":");
+        write_i64(out, m.methods.descriptor as i64);
+        out.extend_from_slice(b",\"stack_exact\":");
+        write_i64(out, m.methods.stack_exact as i64);
+        out.extend_from_slice(b",\"interval\":");
+        write_i64(out, m.methods.interval as i64);
+        out.extend_from_slice(b"},\"surfaces\":{\"source\":");
+        write_i64(out, m.surfaces.source as i64);
+        out.extend_from_slice(b",\"ir\":");
+        write_i64(out, m.surfaces.ir as i64);
         out.extend_from_slice(b"}}");
     }
     out.extend_from_slice(b"]");

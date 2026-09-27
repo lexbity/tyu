@@ -1,0 +1,9 @@
+{"plugins": [],
+ "package": "tyu-harvest-fixture",
+ "options": {},
+ "name": "Tyu.IR.Semantics",
+ "isModule": false,
+ "importArts":
+ {"Tyu.IR.Op":
+  ["/home/lex/Public/tyu_lang/verification/ports/lean/tests/harvest-fixture/.lake/build/lib/lean/Tyu/IR/Op.olean"]},
+ "dynlibs": []}

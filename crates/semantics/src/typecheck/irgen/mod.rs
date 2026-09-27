@@ -149,6 +149,17 @@ struct IrWordGen<'a, 'r> {
     /// contract record sites resolve Open (the check is emitted) regardless
     /// of any discharge.
     keep_contract_checks: bool,
+    /// P7.3 (§Q12): the `proven` trust gate. When set, only `proof`-class
+    /// records and exact-method `checked` (descriptor/stack-exact) close a
+    /// site; interval-alone and assumed stay open (checks retained).
+    proven_gate: bool,
+    /// P7.3 (FR-5): the pass-1 obligation artifact the statement binding
+    /// recomputes against. The live lowering's word IR is verdict-dependent
+    /// (elided checks change `write_word_ops` text), so pass-2 codegen must
+    /// bind certificates against the *certified* (pass-1) artifact — the one
+    /// the Gen statements were rendered from — or every record stale-evals
+    /// (E6421) and nothing ever elides. `None` ⇒ live context (single-pass).
+    bind_obl: Option<&'a verifier::model::OblSet>,
 
     locals: [TypeAtom; 64],
     local_tys: [TypeAtom; 64],
@@ -197,6 +208,8 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         extraction: Option<&'a mut ExtractionCtx>,
         verdicts: Option<&'a Verdicts>,
         keep_contract_checks: bool,
+        proven_gate: bool,
+        bind_obl: Option<&'a verifier::model::OblSet>,
         arena: &mut arena::ArenaAllocator,
         sig: WordSig,
         name: lir::Atom,
@@ -346,6 +359,8 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             extraction,
             verdicts,
             keep_contract_checks,
+            proven_gate,
+            bind_obl,
             interp: Linear::new(target_spec, sig.in_len as usize, 64),
             mem_model: verifier::interp::FlatMem,
             target_spec,
@@ -714,7 +729,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
     /// obligation resolves Open, so the emitted code is byte-identical to
     /// `--checks=all`.
     fn resolve_site(
-        &self,
+        &mut self,
         kind: OblKind,
         id: &str,
         id_hash: &str,
@@ -732,8 +747,10 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 id_hash: id_hash.to_string(),
                 kind,
                 status: VerdictStatus::Open,
+                trust: verifier::verdict::Trust::Open,
                 method: None,
                 justification: None,
+                statement_hash: None,
                 provably_failing: false,
                 reason: None,
                 source: VerdictSource::InTree,
@@ -742,38 +759,155 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         if self.checks == ChecksMode::Undischarged {
             if let Some(v) = self.verdicts {
                 if let Some(rec) = v.lookup(id, id_hash) {
+                    // An explicitly-open record (harvest: "unproven" /
+                    // omission) closes NOTHING — fall through to the in-tree
+                    // automation, which may still discharge the site as
+                    // `checked` (Q12: the engine is the automation layer).
+                    if rec.status.is_open() {
+                        // fall through below
+                    } else {
+                        // The record resolves the site — but only while it
+                        // binds the CURRENT statement (FR-5): a
+                        // `certificate`/`rederive` record must carry a
+                        // `statement_hash` equal to the one this build
+                        // computes, and the file's `(target, model)` identity
+                        // must equal the build's. Any mismatch is stale ⇒
+                        // open with the check retained (E6421 count).
+                        let binds_statement =
+                            rec.method.map(|m| m.binds_statement()).unwrap_or(false);
+                        let identity_mismatch = v.target
+                            != self
+                                .extraction
+                                .as_ref()
+                                .map(|ctx| ctx.set().target.clone())
+                                .unwrap_or_default()
+                            || v.model_semantics
+                                != self
+                                    .extraction
+                                    .as_ref()
+                                    .map(|ctx| ctx.set().model_semantics.clone())
+                                    .unwrap_or_default();
+                        let mut bind_hash: Option<String> = None;
+                        // P7.3 (FR-5): the hash THIS build recomputes for a
+                        // certificate/rederive record (against the certified
+                        // pass-1 artifact when one is bound) — the echoed
+                        // record carries it so the echo round-trips as a valid
+                        // verdicts input (§6.3 REQUIRED for statement-binding
+                        // methods). Recomputed once here so the emission
+                        // decision and the echo cannot diverge.
+                        if binds_statement {
+                            bind_hash = self.recompute_bind_hash(id);
+                        }
+                        let bind_ok = if binds_statement {
+                            match &bind_hash {
+                                Some(h) => rec.statement_hash.as_deref() == Some(h.as_str()),
+                                None => false,
+                            }
+                        } else {
+                            true
+                        };
+                        // §Q12 proven gate: `assumed` and interval-only
+                        // `checked` are not admitted — the site stays open
+                        // (check kept) until P14's rederive or a developer
+                        // certificate upgrades it.
+                        let proven_admitted = !self.proven_gate
+                            || matches!(rec.trust, verifier::verdict::Trust::Proof)
+                            || (rec.trust == verifier::verdict::Trust::Checked
+                                && rec
+                                    .method
+                                    .map(|m| m.proven_admissible_checked())
+                                    .unwrap_or(false));
+                        if !identity_mismatch && bind_ok && proven_admitted {
+                            return ResolvedVerdict {
+                                id: id.to_string(),
+                                id_hash: id_hash.to_string(),
+                                kind,
+                                status: rec.status,
+                                trust: rec.trust,
+                                method: rec.method,
+                                justification: rec.justification.clone(),
+                                statement_hash: bind_hash,
+                                provably_failing: false,
+                                reason: rec.witness_reason.clone(),
+                                source: VerdictSource::File,
+                            };
+                        }
+                        // FR-5 stale / policy-not-admitted — fail closed to
+                        // open.
+                        if let Some(ctx) = self.extraction.as_mut() {
+                            if identity_mismatch || !bind_ok {
+                                ctx.note_statement_stale();
+                            }
+                        }
+                        return ResolvedVerdict {
+                            id: id.to_string(),
+                            id_hash: id_hash.to_string(),
+                            kind,
+                            status: VerdictStatus::Open,
+                            trust: verifier::verdict::Trust::Open,
+                            method: None,
+                            justification: None,
+                            statement_hash: None,
+                            provably_failing: false,
+                            reason: Some(if self.proven_gate && !proven_admitted {
+                                "policy-proven: trust not admitted".to_string()
+                            } else {
+                                "statement-stale".to_string()
+                            }),
+                            source: VerdictSource::File,
+                        };
+                    }
+                }
+            }
+            if let Some(t) = in_tree {
+                let (method, trust) = if t.status == VerdictStatus::Discharged {
+                    if kind == OblKind::MmioBounds {
+                        (
+                            Some(verifier::verdict::Method::Descriptor),
+                            verifier::verdict::Trust::Checked,
+                        )
+                    } else {
+                        (
+                            Some(verifier::verdict::Method::Interval),
+                            verifier::verdict::Trust::Checked,
+                        )
+                    }
+                } else {
+                    (None, verifier::verdict::Trust::Open)
+                };
+                // §Q12: under `proven` the in-tree interval discharge is not
+                // admitted — the site stays open (checks retained) until P14
+                // re-derives it. Descriptor exact stays admitted.
+                let admitted = !self.proven_gate
+                    || method
+                        .map(|m| m.proven_admissible_checked())
+                        .unwrap_or(false);
+                if admitted || t.status != VerdictStatus::Discharged {
                     return ResolvedVerdict {
                         id: id.to_string(),
                         id_hash: id_hash.to_string(),
                         kind,
-                        status: rec.status,
-                        method: rec.method.clone(),
-                        justification: rec.justification.clone(),
-                        provably_failing: false,
-                        reason: None,
-                        source: VerdictSource::File,
+                        status: t.status,
+                        trust,
+                        method,
+                        justification: None,
+                        statement_hash: None,
+                        provably_failing: t.provably_failing,
+                        reason: t.reason.clone(),
+                        source: VerdictSource::InTree,
                     };
                 }
-            }
-            if let Some(t) = in_tree {
-                let method = if t.status == VerdictStatus::Discharged {
-                    if kind == OblKind::MmioBounds {
-                        Some("descriptor".to_string())
-                    } else {
-                        Some("interval".to_string())
-                    }
-                } else {
-                    None
-                };
                 return ResolvedVerdict {
                     id: id.to_string(),
                     id_hash: id_hash.to_string(),
                     kind,
-                    status: t.status,
-                    method,
+                    status: VerdictStatus::Open,
+                    trust: verifier::verdict::Trust::Open,
+                    method: None,
                     justification: None,
-                    provably_failing: t.provably_failing,
-                    reason: t.reason.clone(),
+                    statement_hash: None,
+                    provably_failing: false,
+                    reason: Some("policy-proven: interval not admitted".to_string()),
                     source: VerdictSource::InTree,
                 };
             }
@@ -783,12 +917,66 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             id_hash: id_hash.to_string(),
             kind,
             status: VerdictStatus::Open,
+            trust: verifier::verdict::Trust::Open,
             method: None,
             justification: None,
+            statement_hash: None,
             provably_failing: false,
             reason: None,
             source: VerdictSource::InTree,
         }
+    }
+
+    /// FR-5: the canonical `statement_hash` this build computes for the
+    /// obligation `id` (P1.1 encoder over the recorded obligation + the
+    /// current word's IR hash + the artifact's `(target, model_semantics)`
+    /// identity). `None` when the obligation/word is not resolvable — a
+    /// fails-closed "cannot bind" state.
+    ///
+    /// P7.3 (two-pass flow): when a [`Self::bind_obl`] artifact is present
+    /// (the pass-1 `--emit=obligations` artifact the Gen statements and the
+    /// proofs were certified against), the recompute uses ITS word IR and
+    /// formula — the verdict-dependent elision of the live lowering must not
+    /// stale-eval certificates (E6421). The identity fields (module, target,
+    /// model) come from the certified artifact (identical to the live build's
+    /// — same build, same bundle).
+    fn recompute_bind_hash(&mut self, id: &str) -> Option<String> {
+        if let Some(bind) = self.bind_obl {
+            let o = bind.obligations.iter().find(|o| o.id == id)?;
+            let word_ir_hash = bind
+                .facts
+                .words
+                .iter()
+                .find(|w| w.name == o.site.word)
+                .map(|w| verifier::stmt::sha256_hex16(w.ir.as_bytes()))
+                .unwrap_or_default();
+            let stmt = verifier::stmt::StatementContext::for_obligation(
+                &bind.module,
+                &bind.target,
+                &bind.model_semantics,
+                &word_ir_hash,
+                o,
+            );
+            return Some(stmt.statement_hash_hex(&o.formula));
+        }
+        let ctx = self.extraction.as_ref()?;
+        let o = ctx.set().obligations.iter().find(|o| o.id == id)?;
+        let word_ir_hash = ctx
+            .set()
+            .facts
+            .words
+            .iter()
+            .find(|w| w.name == o.site.word)
+            .map(|w| verifier::stmt::sha256_hex16(w.ir.as_bytes()))
+            .unwrap_or_default();
+        let stmt = verifier::stmt::StatementContext::for_obligation(
+            &ctx.set().module,
+            &ctx.set().target,
+            &ctx.set().model_semantics,
+            &word_ir_hash,
+            o,
+        );
+        Some(stmt.statement_hash_hex(&o.formula))
     }
 
     /// The emission decision for a subtype-range site (C1/C2/C3), slice P4:
@@ -1429,6 +1617,8 @@ pub fn build_ir_word<'r>(
     extraction: Option<&mut ExtractionCtx>,
     verdicts: Option<&Verdicts>,
     keep_contract_checks: bool,
+    proven_gate: bool,
+    bind_obl: Option<&verifier::model::OblSet>,
     observer: &mut dyn TypecheckObserver,
 ) -> Result<IrWordOutput<'r>, TcError> {
     let name = lir_atom(slice_span(src, decl.name))?;
@@ -1447,6 +1637,8 @@ pub fn build_ir_word<'r>(
         extraction,
         verdicts,
         keep_contract_checks,
+        proven_gate,
+        bind_obl,
         arena,
         *sig,
         name,

@@ -258,6 +258,38 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
     // Compile each module in dependency order.
     let mut module_objs: Vec<PathBuf> = Vec::new();
     let mut module_obl: Vec<(String, Option<PathBuf>)> = Vec::new();
+
+    // P7.3 (FR-3): under `--verify-tool=lean` the build is TWO-PASS — the
+    // proof pipeline (package gen → E6418 → lake build → harvest) needs the
+    // obligation artifacts BEFORE codegen, and pass-2 codegen consumes the
+    // harvested `tyu.verdicts/v2` files (`proof`-class discharges now elide
+    // checks). Pass 1 extracts every module's artifact (`--emit=obligations`,
+    // no codegen) into `<out>/.tyu-oblig/`; the harvest verdict files then
+    // drive pass 2. Everything below stays single-pass otherwise.
+    type ProofPipeline = (
+        crate::proof::VerifyEnvKey,
+        verifier::report::ProofStatus,
+        Vec<(String, PathBuf)>,
+        Vec<(String, PathBuf)>,
+    );
+    let proof_pipeline: Option<ProofPipeline> = match args.verify_tool {
+        Some(tool) => {
+            let artifacts = extract_module_artifacts(
+                &langc,
+                &modules,
+                &args.include_dirs,
+                args.sysroot.as_deref(),
+                &out_dir,
+                platform_selection.as_ref().map(|s| s.pack.pack_root()),
+                feature_set,
+                triple,
+            )?;
+            let (status, verdict_files) = crate::proof::run_lean_pipeline(tool, &artifacts)?;
+            Some((verify_env.clone(), status, verdict_files, artifacts))
+        }
+        None => None,
+    };
+
     for module in &modules {
         let inputs_fp = {
             let own_hash = path_to_hash.get(&module.path).copied().unwrap_or(0);
@@ -269,6 +301,19 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
             .entry(module.name.clone())
             .or_default()
             .push(inputs_fp);
+
+        // P7.3: pass-2 feeds the harvested v2 verdicts as `--verdicts`, and
+        // binds statement hashes against the pass-1 artifact as `--bind-obl`
+        // (FR-5: the certified artifact, not the verdict-dependent live
+        // lowering — see proof.rs run_lean_pipeline + langc --bind-obl).
+        let harvest_verdicts = proof_pipeline
+            .as_ref()
+            .and_then(|(_, _, files, _)| files.iter().find(|(m, _)| m == &module.name))
+            .map(|(_, p)| p.clone());
+        let bind_obl = proof_pipeline
+            .as_ref()
+            .and_then(|(_, _, _, arts)| arts.iter().find(|(m, _)| m == &module.name))
+            .map(|(_, p)| p.clone());
 
         let compiled = compile_module(
             &langc,
@@ -288,6 +333,9 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
             elide_ds,
             args.verify_tool,
             &verify_env,
+            args.verify_policy,
+            harvest_verdicts.as_deref(),
+            bind_obl.as_deref(),
         )?;
         module_objs.push(compiled.object_path);
         module_obl.push((module.name.clone(), compiled.obl_path));
@@ -344,14 +392,11 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
     prune_out_dir(&out_dir, &mut cache, &built_fps, build_started, &verify_env)?;
     cache.save()?;
 
-    // P6.2 (FR-3): `--verify-tool=lean` — the developer-proof pipeline:
-    // package generation (`.tyu-verify/lean/`), Gen-digest verification
-    // (E6418), and the elaborating lake build. Runs only for a produced
-    // image; a pipeline failure is E6416 fail-closed (no verdicts, no
-    // report). Before the P7 harvest exists every rendered statement is
-    // unproven, and the report says so — no path claims a proof verdict.
-    let proof_status = match args.verify_tool {
-        Some(tool) => crate::proof::run_lean_pipeline(tool, &module_obl)?,
+    // P7.3 (FR-3): the proof pipeline ran in pass 1 (before codegen) for
+    // `--verify-tool=lean` — its status carries the harvest's per-module
+    // statement accounting; a plain build carries the inert `none` status.
+    let proof_status = match &proof_pipeline {
+        Some((_, status, _, _)) => status.clone(),
         None => verifier::report::ProofStatus::none(),
     };
 
@@ -1042,6 +1087,9 @@ fn compile_module(
     elide_ds_guards: bool,
     verify_tool: Option<crate::args::VerifyTool>,
     verify_env: &crate::proof::VerifyEnvKey,
+    verify_policy: crate::args::VerifyPolicy,
+    verdicts_override: Option<&Path>,
+    bind_obl: Option<&Path>,
 ) -> Result<CompiledModule, TyuError> {
     let features = feature_set.bits();
     // Check cache first. The obligation artifact rides beside the object under
@@ -1101,7 +1149,12 @@ fn compile_module(
             verify_env,
         ));
     if verify == crate::args::VerifyMode::On {
-        let path = ensure_verdicts_cache_file(&verdicts_slot)?;
+        // P7.3: pass-2 feeds the harvest's v2 verdicts (`proof`-class
+        // discharges elide checks); the echo still re-homes over the slot.
+        let path = match verdicts_override {
+            Some(v) => v.to_path_buf(),
+            None => ensure_verdicts_cache_file(&verdicts_slot)?,
+        };
         cmd.arg("--checks=undischarged");
         cmd.arg(format!("--verdicts={}", path.display()));
     }
@@ -1110,6 +1163,21 @@ fn compile_module(
     // report's provenance names it.
     if let Some(tool) = verify_tool {
         cmd.arg(format!("--verify-tool={}", tool.as_str()));
+    }
+    // P7.3: `proven` — the langc-side trust gate (§Q12): interval-only
+    // `checked` and unrecognized trust stay open so only exact-method checked
+    // and proof certificates discharge.
+    if verify_policy.is_proven() {
+        cmd.arg("--verify-policy=proven");
+    }
+    // P7.3 (FR-5): under the two-pass proof pipeline, langc recomputes the
+    // statement binding against the pass-1 (`--emit=obligations`) artifact —
+    // the one the Gen statements and the proofs were certified against. The
+    // live lowering's word IR is verdict-dependent (elided checks), so
+    // without this every harvested certificate stale-evals (E6421) and
+    // nothing ever elides.
+    if let Some(bind) = bind_obl {
+        cmd.arg(format!("--bind-obl={}", bind.display()));
     }
     // Slice P7 (Q5/FR-11): the *image-level* decision — all modules or none
     // (per-image atomicity). A dedicated codegen input, never derived from
@@ -1323,6 +1391,71 @@ fn extract_obligations_for_elision(
     Ok(sets)
 }
 
+/// P7.3 pass-1 (FR-3): extract every module's obligation artifact
+/// (`langc --emit=obligations`, no codegen) into `<out_dir>/.tyu-oblig/`
+/// (`<Module>.obl.json`), read each back (fail-closed E6400/E6401), and
+/// return `(module, artifact_path)`. The artifacts feed the proof pipeline
+/// (gen → digest → harvest) whose verdicts drive pass-2 codegen.
+// 8 positional parameters mirror langc's pass-1 invocation surface; a struct
+// would just relocate the same fields.
+#[allow(clippy::too_many_arguments)]
+fn extract_module_artifacts(
+    langc: &Path,
+    modules: &[ModuleNode],
+    include_dirs: &[PathBuf],
+    sysroot: Option<&Path>,
+    out_dir: &Path,
+    platform_dir: Option<&Path>,
+    feature_set: FeatureSet,
+    triple: &str,
+) -> Result<Vec<(String, PathBuf)>, TyuError> {
+    let dir = out_dir.join(".tyu-oblig");
+    fs::create_dir_all(&dir).map_err(TyuError::Io)?;
+    let mut out = Vec::with_capacity(modules.len());
+    for module in modules {
+        let mut cmd = Command::new(langc);
+        cmd.arg("--emit=obligations");
+        cmd.arg(format!("--out-dir={}", dir.display()));
+        cmd.arg(format!("--target={}", triple));
+        if let Some(sr) = sysroot {
+            cmd.arg(format!("--sysroot={}", sr.display()));
+        }
+        if let Some(p) = platform_dir {
+            cmd.arg(format!("--platform={}", p.display()));
+        }
+        for inc in include_dirs {
+            cmd.arg("-I");
+            cmd.arg(inc);
+        }
+        let mut flag_buf = [""; 8];
+        let n = feature_set.write_flags(&mut flag_buf);
+        if n > 0 {
+            cmd.arg(format!("--features={}", flag_buf[..n].join(",")));
+        }
+        if module.is_lib {
+            cmd.arg("--lib");
+        }
+        cmd.arg(&module.path);
+        let status = cmd.status().map_err(|e| {
+            TyuError::Build(format!(
+                "pass-1 extraction for '{}': {e}",
+                module.path.display()
+            ))
+        })?;
+        if !status.success() {
+            return Err(TyuError::Build(format!(
+                "pass-1 (obligations) failed on '{}'",
+                module.path.display()
+            )));
+        }
+        let obl_path = dir.join(format!("{}.obl.json", module.name));
+        if obl_path.exists() {
+            out.push((module.name.clone(), obl_path));
+        }
+    }
+    Ok(out)
+}
+
 /// Write the image-verdicts record (`.tyu-verify/image-verdicts.json`) —
 /// the durable, schema-validated evidence of the two-pass guard-elision
 /// decision. Written via temp file + rename (the scratch+rehome discipline,
@@ -1461,6 +1594,9 @@ fn ensure_verdicts_cache_file(slot: &Path) -> Result<PathBuf, TyuError> {
     let bytes = verifier::verdict::encode_verdicts(
         "tyu",
         env!("CARGO_PKG_VERSION"),
+        None,
+        "",
+        "",
         &[],
         0,
         &verifier::verdict::EmittedChecksData::default(),

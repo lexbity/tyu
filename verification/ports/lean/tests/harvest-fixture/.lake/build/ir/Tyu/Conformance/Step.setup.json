@@ -1,0 +1,11 @@
+{"plugins": [],
+ "package": "tyu-harvest-fixture",
+ "options": {},
+ "name": "Tyu.Conformance.Step",
+ "isModule": false,
+ "importArts":
+ {"Tyu.IR.Op":
+  ["/home/lex/Public/tyu_lang/verification/ports/lean/tests/harvest-fixture/.lake/build/lib/lean/Tyu/IR/Op.olean"],
+  "Tyu.Conformance.Interval":
+  ["/home/lex/Public/tyu_lang/verification/ports/lean/tests/harvest-fixture/.lake/build/lib/lean/Tyu/Conformance/Interval.olean"]},
+ "dynlibs": []}

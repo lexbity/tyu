@@ -81,6 +81,8 @@ fn compile_with_apertures(apertures: &[MmioApertureSpec]) -> String {
         None,
         false,
         None,
+        false, // verify_policy_proven
+        None,  // bind_obl (no pass-1 artifact in direct-driver tests)
     );
     assert_eq!(status, 0, "object emission failed with {apertures:?}");
 

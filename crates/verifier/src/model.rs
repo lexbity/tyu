@@ -320,17 +320,29 @@ pub enum VerdictSource {
 /// the emission decision record behind the verdicts echo and the report's
 /// per-class accounting. Appended to [`ExtractionCtx`] in the exact order of
 /// `OblSet::obligations` — one entry per record, same ordinals.
+///
+/// P7.2: carries the v2 `trust` class + closed `method` registry so the echo
+/// (and the report's trust×method×surface accounting) is honest about *what
+/// kind of evidence* discharged the site (§Q6).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedVerdict {
     pub id: String,
     pub id_hash: String,
     pub kind: Kind,
     pub status: crate::verdict::VerdictStatus,
-    /// Discharged: the discharge method (`"descriptor"` in-tree, `"interval"`
-    /// engine, or the verdicts file's own `method`).
-    pub method: Option<String>,
+    /// The v2 trust class of the discharge (§Q6).
+    pub trust: crate::verdict::Trust,
+    /// Discharged: the closed-registry discharge method (`descriptor`,
+    /// `interval`, or a verdicts-file method).
+    pub method: Option<crate::verdict::Method>,
     /// Assumed: the human justification recorded in the verdicts file.
     pub justification: Option<String>,
+    /// P7.3 (FR-5): the recomputed `statement_hash` a `certificate`/`rederive`
+    /// discharge bound against — the echo carries it so the record round-trips
+    /// as a valid verdicts input (§6.3 REQUIRED for statement-binding methods,
+    /// §7.4). `None` for non-binding methods, in-tree discharges, and open
+    /// sites.
+    pub statement_hash: Option<String>,
     /// Slice P5: the interval engine proved the site's value is *always*
     /// out of range — the check is retained and the site is reported
     /// `provably_failing` (never a discharge).
@@ -340,6 +352,14 @@ pub struct ResolvedVerdict {
     pub reason: Option<String>,
     /// Slice P5: the discharge source for the `verdict_sources` accounting.
     pub source: VerdictSource,
+}
+
+impl ResolvedVerdict {
+    /// The diagnostic method string (`method: "interval"` etc.) for report
+    /// rendering.
+    pub fn method_str(&self) -> Option<&'static str> {
+        self.method.map(|m| m.as_str())
+    }
 }
 
 /// A declared word's computed facts (Q7, §6.1 `facts.words`): the stack-bound
@@ -503,6 +523,11 @@ pub struct ExtractionCtx {
     /// P4: contract traps (needs/ensures) actually emitted — the honesty
     /// count behind the report's `emitted.contract` field (FR-15).
     contract_emitted: u32,
+    /// P7.3 (FR-5): verdicts whose `statement_hash`/`(target, model)` no
+    /// longer matches the current build — every such site is resolved open
+    /// (check retained) and counted, surfaced as the E6421 staleness number
+    /// in the echo's `stale_verdicts`.
+    statement_stale: u32,
 }
 
 impl ExtractionCtx {
@@ -545,6 +570,7 @@ impl ExtractionCtx {
             resolved: Vec::new(),
             word_mmio_open: false,
             contract_emitted: 0,
+            statement_stale: 0,
         }
     }
 
@@ -774,6 +800,19 @@ impl ExtractionCtx {
     /// Contract checks that made it into the object (`emitted.contract`).
     pub fn contract_emitted(&self) -> u32 {
         self.contract_emitted
+    }
+
+    /// Note one FR-5 statement-stale verdict (P7.3): a consumed record whose
+    /// `statement_hash`/`(target, model)` disagrees with the current build —
+    /// the site stays open and counts toward the echo's `stale_verdicts`.
+    pub fn note_statement_stale(&mut self) {
+        self.statement_stale = self.statement_stale.saturating_add(1);
+    }
+
+    /// The FR-5 statement-stale count for this module (folded into the echo's
+    /// `stale_verdicts` at driver time).
+    pub fn statement_stale(&self) -> u32 {
+        self.statement_stale
     }
 
     /// Borrow the completed set (for writing the artifact).

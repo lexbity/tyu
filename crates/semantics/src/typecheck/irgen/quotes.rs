@@ -195,6 +195,8 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 // caller (P4 keeps quote checks, conservative).
                 None,
                 false,
+                self.proven_gate,
+                self.bind_obl,
                 arena,
                 sig,
                 name,

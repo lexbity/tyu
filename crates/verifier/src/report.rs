@@ -7,6 +7,7 @@
 //! (FR-17): fixed key order, no maps anywhere, no timestamps.
 
 use alloc::string::{String, ToString};
+use alloc::vec;
 use alloc::vec::Vec;
 
 /// Schema identifier of `verify-report.json` artifacts.
@@ -54,12 +55,48 @@ impl ClassAccounting {
     }
 }
 
+/// The v2 trust-class split for one module (§Q6, P7.3): *what kind of
+/// evidence* discharged each closed obligation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
+pub struct TrustAccounting {
+    pub proof: u32,
+    pub checked: u32,
+    pub assumed: u32,
+    pub open: u32,
+}
+
+/// The v2 closed-method accounting (§Q6): which discharge method closed each
+/// obligation (the `rederive` count tells an auditor how much automation
+/// trust the module rests on).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
+pub struct MethodAccounting {
+    pub certificate: u32,
+    pub rederive: u32,
+    pub descriptor: u32,
+    pub stack_exact: u32,
+    pub interval: u32,
+}
+
+/// The proof-surface accounting (§Q2, P7.3): certificates resting on the
+/// source-level semantics (composition with T-S) vs the IR semantics.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
+pub struct SurfaceAccounting {
+    pub source: u32,
+    pub ir: u32,
+}
+
 /// One module's class accounting (P3 uses the five obligation kinds in fixed
 /// order; zeroed kinds are emitted for a stable schema).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ModuleAccounting {
     pub name: String,
     pub classes: Vec<ClassAccounting>,
+    /// P7.3: the v2 trust split across this module's obligations.
+    pub trust: TrustAccounting,
+    /// P7.3: the closed-method split.
+    pub methods: MethodAccounting,
+    /// P7.3: the certificate surface split (source/ir).
+    pub surfaces: SurfaceAccounting,
 }
 
 /// The `contexts.stack` section (P3): per-context budget verdicts.
@@ -179,17 +216,18 @@ pub struct TrustedAssumption {
 
 /// Per-module statement accounting of the proof pipeline (P6.2, §Q5/§7.3):
 /// what the port's statement renderer generated for a module's obligations.
-/// The rendered count is the number of `def stmt_… : Prop` statements
-/// generated; `omitted` counts the obligations the renderer refused (with a
-/// reason, `model-unavailable`/`opaque-site`/…); `unproven` is how many
-/// rendered statements have no kernel-checked theorem yet — before the P7
-/// harvest step exists this equals `rendered` by construction, and the report
-/// is explicit about it (`harvest: "not-built"`).
+/// `rendered` = `def stmt_… : Prop` statements generated; `omitted` counts
+/// the obligations the renderer refused (with a reason); `proven` (P7.1) is
+/// how many rendered statements the harvest found kernel-checked theorems
+/// for; `unproven` = `rendered − proven`. Before the P7 harvest, `proven`
+/// was 0 by construction and the report was explicit about it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ModuleStatements {
     pub module: String,
     pub rendered: u32,
     pub omitted: u32,
+    /// P7.1: kernel-checked certificate counts from the harvest.
+    pub proven: u32,
     pub unproven: u32,
 }
 
@@ -253,7 +291,9 @@ impl ProofStatus {
     pub fn lean(gen_digest: &str, vendor_digest: &str, statements: Vec<ModuleStatements>) -> Self {
         Self {
             tool: "lean".to_string(),
-            harvest: "not-built".to_string(),
+            // P7: the harvest consumed the kernel environment (statements
+            // without a kernel-checked theorem stay `unproven` — a state).
+            harvest: "ok".to_string(),
             gen_digest: gen_digest.to_string(),
             vendor_digest: vendor_digest.to_string(),
             statements,
@@ -261,9 +301,21 @@ impl ProofStatus {
     }
 }
 
+/// The shipped TCB boundary (§6.8, P7.3): what each trust-bearing component
+/// of the pipeline is, and what status it holds (`assumed`, `reviewed+vectors`,
+/// `drift-locked`, `theorem`, `structural`, `structural+modeled`,
+/// `empirical`). Every `structural` entry is a named theorem the next cycle
+/// must earn (formal-semantics-core).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TcbEntry {
+    pub id: String,
+    pub what: String,
+    pub status: String,
+}
+
 /// The complete report document (§6.5; P3 v1 fields plus the P4 honesty
-/// fields `assumed`, `stale_verdicts`, `emitted_checks`, and the P6 `proof`
-/// section).
+/// fields `assumed`, `stale_verdicts`, `emitted_checks`, the P6 `proof`
+/// section, and the P7.3 trust×method×surface accounting + TCB).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VerifyReport {
     pub schema: String,
@@ -292,9 +344,78 @@ pub struct VerifyReport {
     /// trust/method/surface fields land in P7). `"none"` when the build ran
     /// without `--verify-tool`.
     pub proof: ProofStatus,
+    /// P7.3: the shipped TCB boundary (§6.8), in fixed order.
+    pub tcb: Vec<TcbEntry>,
 }
 
 impl VerifyReport {
+    /// The default TCB (§6.8): structural entries now, theorem statuses
+    /// filled as phases land (T-C/T-S/T-CL proof → `theorem`).
+    pub fn default_tcb() -> Vec<TcbEntry> {
+        vec![
+            TcbEntry {
+                id: "T-F1(lean)".into(),
+                what: "lean4 kernel + pinned toolchain + lean4checker".into(),
+                status: "assumed".into(),
+            },
+            TcbEntry {
+                id: "T-F2(lean)".into(),
+                what: "authored port definitions (Step/Mem/Src/Abs)".into(),
+                status: "reviewed+vectors".into(),
+            },
+            TcbEntry {
+                id: "T-F3".into(),
+                what: "Rust→port generators (export renderers)".into(),
+                status: "drift-locked".into(),
+            },
+            TcbEntry {
+                id: "T-S".into(),
+                what: "source→IR transcription (pure fragment)".into(),
+                status: "pending".into(),
+            },
+            TcbEntry {
+                id: "T-CL".into(),
+                what: "assumption closure".into(),
+                status: "pending".into(),
+            },
+            TcbEntry {
+                id: "T-C".into(),
+                what: "stack algebra".into(),
+                status: "theorem".into(),
+            },
+            TcbEntry {
+                id: "STRUCT-borrow".into(),
+                what: "borrow exclusivity/escape — checker alias analysis".into(),
+                status: "structural".into(),
+            },
+            TcbEntry {
+                id: "STRUCT-effects".into(),
+                what: "context×effect matrix — ContextStack checker".into(),
+                status: "structural".into(),
+            },
+            TcbEntry {
+                id: "STRUCT-lock".into(),
+                what: "lock lowering + ISR isolation + cross-context rule".into(),
+                status: "structural".into(),
+            },
+            TcbEntry {
+                id: "STRUCT-iso".into(),
+                what: "iso linearity — checker".into(),
+                status: "structural".into(),
+            },
+            TcbEntry {
+                id: "STRUCT-sched".into(),
+                what: "scheduler/runtime asm — abstract-atomic model".into(),
+                status: "structural+modeled".into(),
+            },
+            TcbEntry {
+                id: "T-F4'".into(),
+                what: "IR→machine code (codegen) — conformance + QEMU".into(),
+                status: "empirical".into(),
+            },
+        ]
+    }
+
     /// A fresh report skeleton with the fixed top-level fields; slices fill
     /// the per-build data.
     pub fn new(tool: ToolInfo, policy: &str) -> Self {
@@ -328,6 +449,7 @@ impl VerifyReport {
             stale_verdicts: 0,
             emitted_checks: EmittedChecks::default(),
             proof: ProofStatus::none(),
+            tcb: VerifyReport::default_tcb(),
         }
     }
 }

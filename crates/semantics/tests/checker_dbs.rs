@@ -92,6 +92,8 @@ fn subtype_value_returned_as_base_passes_ir_verification() {
                 None,
                 None,
                 false,
+                false, // proven_gate (tests: off)
+                None,  // bind_obl (tests: off)
                 &mut obs,
             )
             .expect("typecheck should accept subtype flowing to base");
@@ -160,6 +162,8 @@ fn subtype_argument_to_base_param_passes_ir_verification() {
                 None,
                 None,
                 false,
+                false, // proven_gate (tests: off)
+                None,  // bind_obl (tests: off)
                 &mut obs,
             )
             .expect("typecheck should accept subtype argument to base param");

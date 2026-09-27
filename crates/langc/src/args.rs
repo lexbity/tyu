@@ -2,9 +2,13 @@ use codegen_core::{EmitMode, FeatureSet, Target};
 use hosted::{args::RawArgs, cstr, io};
 use semantics::typecheck::ChecksMode;
 
-pub const HELP: &[u8] = b"langc (tyu_lang) v0.1.0\n\nUSAGE:\n  langc [options] <file.mod|file.def>\n\nOPTIONS:\n  --help, -h                  Print help\n  --emit=ast                  Parse and dump AST (inspection)\n  --emit=ir                   Typecheck and dump IR (inspection)\n  --emit=tc                   Stack-trace typecheck dump (inspection)\n  --emit=asm                  Emit assembly text (inspection only, not assemblable standalone)\n  --emit=obligations          Extract verification obligations and write <Module>.obl.json\n                              (requires --out-dir; no codegen)\n  --emit=obj                  Emit relocatable object file (production output)\n  --write-obl                 Also write <Module>.obl.json beside the object (with --emit=obj)\n  --lib                       Compile as a library (no main required, --emit=obj only)\n  -g                          Enable trap-with-location stubs\n  -I <path>                   Add include path\n  --checks=off|contracts|all|undischarged\n                              Checks insertion mode (default all). 'undischarged'\n                              emits a runtime check only at obligation sites whose\n                              verdict is not discharged/assumed, and requires\n                              --verdicts (else E6402)\n  --verdicts=<path>           Verdicts file (tyu.verdicts/v1) for --checks=undischarged
+pub const HELP: &[u8] = b"langc (tyu_lang) v0.1.0\n\nUSAGE:\n  langc [options] <file.mod|file.def>\n\nOPTIONS:\n  --help, -h                  Print help\n  --emit=ast                  Parse and dump AST (inspection)\n  --emit=ir                   Typecheck and dump IR (inspection)\n  --emit=tc                   Stack-trace typecheck dump (inspection)\n  --emit=asm                  Emit assembly text (inspection only, not assemblable standalone)\n  --emit=obligations          Extract verification obligations and write <Module>.obl.json\n                              (requires --out-dir; no codegen)\n  --emit=obj                  Emit relocatable object file (production output)\n  --write-obl                 Also write <Module>.obl.json beside the object (with --emit=obj)\n  --lib                       Compile as a library (no main required, --emit=obj only)\n  -g                          Enable trap-with-location stubs\n  -I <path>                   Add include path\n  --checks=off|contracts|all|undischarged\n                              Checks insertion mode (default all). 'undischarged'\n                              emits a runtime check only at obligation sites whose\n                              verdict is not discharged/assumed, and requires\n                              --verdicts (else E6402)\n  --verdicts=<path>           Verdicts file (tyu.verdicts/v2) for --checks=undischarged
   --verify-tool=<name>       P6 pass-through: the developer-proof tool requested
-                              (lean); recorded in the verdicts echo, not interpreted here\n  --elide-ds-guards           Slice P7: omit the per-push x86 data-stack overflow\n                              guards (C8). A per-image codegen input - tyu forwards\n                              it only when the image-level stack-budget verdict is\n                              discharged (two-pass, --elide-stack-guards); the\n                              __lang_ds_high observability update is kept\n  --allow-raw-casts           Enable raw pointer casts\n  --features=<csv>            Image features to enable (default: all) [concurrency, module-loading]\n  --no-default-features       Start from empty feature set\n  --sysroot=<path>            Sysroot root directory\n  --out-dir=<path>            Output directory (--emit=obj / --emit=obligations)\n  --platform=<dir>            Platform pack directory; the compiled descriptor\n                              at <dir>/platform.desc sources MMIO aperture facts\n  --target=<triple>           Target triple, required for --emit=obj\n                              Supported: x86_64-unknown-linux-gnu\n                                         x86_64-unknown-none\n                                         armv7m-unknown-none\n                                         riscv32-unknown-none\n\n";
+                              (lean); recorded in the verdicts echo, not interpreted here
+  --verify-policy=proven      P7.3 trust gate (default open-ok): only proof-class or
+                              exact-method checked discharges close a site\n  --bind-obl=<path>           P7.3: bind statement hashes against this pre-computed
+                              tyu.obl/v2 artifact (the artifact the proofs were
+                              certified against) instead of the live lowering\n  --elide-ds-guards           Slice P7: omit the per-push x86 data-stack overflow\n                              guards (C8). A per-image codegen input - tyu forwards\n                              it only when the image-level stack-budget verdict is\n                              discharged (two-pass, --elide-stack-guards); the\n                              __lang_ds_high observability update is kept\n  --allow-raw-casts           Enable raw pointer casts\n  --features=<csv>            Image features to enable (default: all) [concurrency, module-loading]\n  --no-default-features       Start from empty feature set\n  --sysroot=<path>            Sysroot root directory\n  --out-dir=<path>            Output directory (--emit=obj / --emit=obligations)\n  --platform=<dir>            Platform pack directory; the compiled descriptor\n                              at <dir>/platform.desc sources MMIO aperture facts\n  --target=<triple>           Target triple, required for --emit=obj\n                              Supported: x86_64-unknown-linux-gnu\n                                         x86_64-unknown-none\n                                         armv7m-unknown-none\n                                         riscv32-unknown-none\n\n";
 
 /// Validated compiler configuration.
 pub struct Config<'a> {
@@ -27,7 +31,7 @@ pub struct Config<'a> {
     /// Platform pack directory (advisory in P3; arms in P4). langc reads the
     /// compiled descriptor `<dir>/platform.desc` to source MMIO aperture facts.
     pub platform_dir: Option<&'a [u8]>,
-    /// P4: `--verdicts=<path>` — a `tyu.verdicts/v1` file consumed under
+    /// P4: `--verdicts=<path>` — a `tyu.verdicts/v2` file consumed under
     /// `--checks=undischarged` (E6402 when that mode lacks one).
     pub verdicts: Option<&'a [u8]>,
     /// Slice P7: `--elide-ds-guards` — a per-image codegen input that omits
@@ -42,6 +46,20 @@ pub struct Config<'a> {
     /// the report's provenance names the requested tool. Never validated
     /// against a closed set here (the driver owns that surface).
     pub verify_tool: Option<&'a [u8]>,
+    /// PLAN-VERIFY-3 P7.3: `--verify-policy=proven` — the trust gate over
+    /// verdict consumption (§Q12): under `proven`, only `proof`-class or
+    /// exact-method `checked` discharges close a site; interval-alone and
+    /// assumed stay open (checks retained). `None`/absent ⇒ legacy open-ok
+    /// consumption.
+    pub verify_policy_proven: bool,
+    /// PLAN-VERIFY-3 P7.3 (FR-5): `--bind-obl=<path>` — a pre-computed
+    /// `tyu.obl/v2` artifact the statement binding recomputes against instead
+    /// of the live lowering. In the developer-proof pipeline the proofs are
+    /// certified against the pass-1 (`--emit=obligations`) artifacts; pass-2
+    /// codegen's live word IR is verdict-dependent (elided checks) and would
+    /// stale-everything otherwise (E6421). `None` ⇒ bind against the live
+    /// context (single-pass behavior, unchanged).
+    pub bind_obl: Option<&'a [u8]>,
 }
 
 // `large_enum_variant`: `Ok(Config)` dwarfs `Help`/`Error(i32)`, but boxing the
@@ -103,6 +121,8 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]], emit_diagnostics: bool) -> (Parse
     let mut verdicts: Option<&[u8]> = None;
     let mut elide_ds_guards = false;
     let mut verify_tool: Option<&[u8]> = None;
+    let mut verify_policy_proven = false;
+    let mut bind_obl: Option<&[u8]> = None;
     let mut features = FeatureSet::all();
     let mut no_default_features = false;
 
@@ -170,6 +190,25 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]], emit_diagnostics: bool) -> (Parse
         }
         if a.starts_with(b"--verify-tool=") {
             verify_tool = Some(&a[b"--verify-tool=".len()..]);
+            i += 1;
+            continue;
+        }
+        if a.starts_with(b"--verify-policy=") {
+            let v = &a[b"--verify-policy=".len()..];
+            verify_policy_proven = v == b"proven";
+            if v != b"open-ok" && v != b"proven" {
+                maybe_emit_error(
+                    emit_diagnostics,
+                    1006,
+                    b"invalid --verify-policy value (open-ok|proven)",
+                );
+                return (ParseResult::Error(2), true);
+            }
+            i += 1;
+            continue;
+        }
+        if a.starts_with(b"--bind-obl=") {
+            bind_obl = Some(&a[b"--bind-obl=".len()..]);
             i += 1;
             continue;
         }
@@ -382,6 +421,8 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]], emit_diagnostics: bool) -> (Parse
             verdicts,
             elide_ds_guards,
             verify_tool,
+            verify_policy_proven,
+            bind_obl,
         }),
         false,
     )

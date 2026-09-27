@@ -1,0 +1,30 @@
+{"synthetic": false,
+ "schemaVersion": "2025-09-10",
+ "outputs":
+ {"o": ["8001a962f32682ca.olean"],
+  "i": "e6184e8fee2fab28.ilean",
+  "c": "51caca169b2cae39.c"},
+ "log":
+ [{"message":
+   ".> LEAN_PATH=/home/lex/Public/tyu_lang/verification/ports/lean/tests/harvest-fixture/.lake/build/lib/lean /usr/bin/lean /home/lex/Public/tyu_lang/verification/ports/lean/tests/harvest-fixture/../../Tyu/IR/Semantics.lean -o /home/lex/Public/tyu_lang/verification/ports/lean/tests/harvest-fixture/.lake/build/lib/lean/Tyu/IR/Semantics.olean -i /home/lex/Public/tyu_lang/verification/ports/lean/tests/harvest-fixture/.lake/build/lib/lean/Tyu/IR/Semantics.ilean -c /home/lex/Public/tyu_lang/verification/ports/lean/tests/harvest-fixture/.lake/build/ir/Tyu/IR/Semantics.c --setup /home/lex/Public/tyu_lang/verification/ports/lean/tests/harvest-fixture/.lake/build/ir/Tyu/IR/Semantics.setup.json --json",
+   "level": "trace"}],
+ "inputs":
+ [["Tyu.IR.Semantics:deps",
+   [["deps",
+     [["«tyu-harvest-fixture»/Tyu:extraDep",
+       [["@«tyu-harvest-fixture»:extraDep", "00000000000006bb"]]],
+      ["imports",
+       [["Tyu.IR.Op transitive imports (legacy)", "00000000000006bb"],
+        ["Tyu.IR.Op:importAllArts", "0cae8cf9eb0113b8"]]]]],
+    ["libs",
+     [["import dynlibs", "00000000000006bb"],
+      ["package external libraries", "00000000000006bb"],
+      ["module dynlibs", "00000000000006bb"],
+      ["module plugins", "00000000000006bb"]]]]],
+  ["Lean 4.27.0, commit 4cb1b2466ded03701c4a349ed1debdfe54946daa",
+   "7b39e63d772bc043"],
+  ["/home/lex/Public/tyu_lang/verification/ports/lean/tests/harvest-fixture/../../Tyu/IR/Semantics.lean",
+   "9bdafa8479b1933e"],
+  ["options", "00000000000006bb"],
+  ["Module.leanArgs: #[]", "00000000000006bb"]],
+ "depHash": "b709386d91e38336"}

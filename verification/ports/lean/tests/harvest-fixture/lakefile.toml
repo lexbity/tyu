@@ -1,0 +1,19 @@
+# The P7.1 harvest fixture: a tiny package whose kernel environment holds two
+# fabricated statements — one proven by `trivial` (clean axiom audit), one
+# proven by `sorry` (E6419). The harvest gate in ci/port.sh builds this
+# package and drives the harvest against the clean and the sorry variants,
+# proving: statement binding (E6420), the type-level theorem binding, the
+# axiom audit (E6419), and deterministic v2 emission.
+name = "tyu-harvest-fixture"
+version = "0.1.0"
+
+# The in-tree Lean port's library, resolved relative to this package dir.
+[[lean_lib]]
+name = "Tyu"
+srcDir = "../.."
+roots = ["Tyu"]
+
+[[lean_lib]]
+name = "TinyFix"
+srcDir = "."
+roots = ["TinyFix"]

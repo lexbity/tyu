@@ -688,6 +688,7 @@ name = "verifier"
 version = "0.1.0"
 dependencies = [
  "ir",
+ "sha2",
 ]
 
 [[package]]

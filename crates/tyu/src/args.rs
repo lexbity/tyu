@@ -288,6 +288,14 @@ pub enum VerifyPolicy {
     NoOpen,
     /// E6410: fail on open obligations AND on assumed verdicts.
     NoOpenNoAssumptions,
+    /// P7.3 (§Q12): `proven` — every obligation discharged, trust ∈
+    /// {proof, checked}, `checked` restricted to the exact-method registry
+    /// {descriptor, stack-exact} (an interval drop in tree is NOT admitted:
+    /// the site stays open until P14's rederive or a developer certificate),
+    /// no assumed, no open. Enforced both at langc consumption (the trust
+    /// gate) and at report composition (E6410-like failure). Single-module
+    /// scope in P7 (cross-module assumption refs open until P8).
+    Proven,
 }
 
 impl VerifyPolicy {
@@ -296,6 +304,7 @@ impl VerifyPolicy {
             "open-ok" => Some(VerifyPolicy::OpenOk),
             "no-open" => Some(VerifyPolicy::NoOpen),
             "no-open-no-assumptions" => Some(VerifyPolicy::NoOpenNoAssumptions),
+            "proven" => Some(VerifyPolicy::Proven),
             _ => None,
         }
     }
@@ -305,7 +314,13 @@ impl VerifyPolicy {
             VerifyPolicy::OpenOk => "open-ok",
             VerifyPolicy::NoOpen => "no-open",
             VerifyPolicy::NoOpenNoAssumptions => "no-open-no-assumptions",
+            VerifyPolicy::Proven => "proven",
         }
+    }
+
+    /// Whether the policy is `proven` (the langc trust gate is enabled).
+    pub const fn is_proven(self) -> bool {
+        matches!(self, VerifyPolicy::Proven)
     }
 }
 
@@ -314,7 +329,7 @@ impl std::str::FromStr for VerifyPolicy {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         VerifyPolicy::parse(s).ok_or_else(|| {
             format!(
-                "unknown verify_policy '{}': expected 'open-ok', 'no-open', or 'no-open-no-assumptions'",
+                "unknown verify_policy '{}': expected 'open-ok', 'no-open', 'no-open-no-assumptions', or 'proven'",
                 s
             )
         })
@@ -389,7 +404,7 @@ fn print_usage() {
     eprintln!("  -I <dir>            Add include directory");
     eprintln!("  --verify=on|off     Verdict-driven checks (default on; off = legacy path)");
     eprintln!(
-        "  --verify-policy=open-ok|no-open|no-open-no-assumptions\n                      Open/assumed policy (default open-ok)"
+        "  --verify-policy=open-ok|no-open|no-open-no-assumptions|proven\n                      Open/assumed/proven policy (default open-ok)"
     );
     eprintln!(
         "  --verify-tool=lean    P6: run the developer-proof pipeline (generated\n                      statements + lake package; harvest in P7)"
@@ -533,7 +548,7 @@ fn parse_common(args: &[String], extra_known: &[&str]) -> Result<CommonArgs, ()>
                 Some(p) => p,
                 None => {
                     eprintln!(
-                        "tyu: invalid --verify-policy '{}' (expected open-ok|no-open|no-open-no-assumptions)",
+                        "tyu: invalid --verify-policy '{}' (expected open-ok|no-open|no-open-no-assumptions|proven)",
                         val
                     );
                     return Err(());
@@ -1416,6 +1431,18 @@ mod tests {
             parse_build(&strings(&["--verify-tool=coq", "Main.mod"])),
             Command::Usage
         ));
+    }
+
+    #[test]
+    fn verify_policy_parses_proven() {
+        assert_eq!(VerifyPolicy::parse("proven"), Some(VerifyPolicy::Proven));
+        assert!(VerifyPolicy::Proven.is_proven());
+        assert!(!VerifyPolicy::OpenOk.is_proven());
+        assert!(matches!(
+            parse_build(&strings(&["--verify-policy=proven", "Main.mod"])),
+            Command::Build(args) if args.verify_policy == VerifyPolicy::Proven
+        ));
+        assert_eq!(VerifyPolicy::Proven.as_str(), "proven");
     }
 
     #[test]

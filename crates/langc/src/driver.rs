@@ -179,6 +179,7 @@ pub fn emit_asm_driver(
     feature_set: FeatureSet,
     descriptor: Option<&CompiledDescriptor>,
     mmio_apertures: &[MmioApertureSpec],
+    verify_policy_proven: bool,
     out: &mut Stdout,
 ) -> i32 {
     let es = match init_env(module, src, search_dirs, target) {
@@ -227,6 +228,8 @@ pub fn emit_asm_driver(
         None, // --emit=asm: no obligation extraction (P2 scope is obl/obj)
         None,
         feature_set.contains(codegen_core::Feature::ModuleLoading),
+        verify_policy_proven,
+        None, // --emit=asm: no bind artifact (inspection surface only)
         |w, _ctx| {
             // Feature gate check — reject gated ops before codegen.
             if check_word_for_gate(w, feature_set, input_path, src) {
@@ -317,6 +320,8 @@ pub fn emit_obj_driver(
     verdicts: Option<&verifier::verdict::Verdicts>,
     elide_ds_guards: bool,
     verify_tool: Option<&[u8]>,
+    verify_policy_proven: bool,
+    bind_obl: Option<&verifier::model::OblSet>,
 ) -> i32 {
     let module_name = slice_span(src, module.name);
     // P2/P4: extract obligations alongside the object and write
@@ -479,6 +484,8 @@ pub fn emit_obj_driver(
         extract_ctx.as_mut(),
         verdicts,
         feature_set.contains(codegen_core::Feature::ModuleLoading),
+        verify_policy_proven,
+        bind_obl,
         |w, ctx| {
             if check_word_for_gate(w, feature_set, input_path, src) {
                 gate_hit = true;
@@ -646,19 +653,60 @@ pub fn emit_obj_driver(
             if r.status.is_open() {
                 continue;
             }
+            // v2 echo: the trust class + closed-registry method ride the
+            // record (§Q6); the `proof` object records the in-tree exact
+            // character of a checked discharge (the report's TCB leg) and —
+            // P7.3 — the certificate character of a harvested `proof`
+            // discharge. The echo is itself a valid `--verdicts` input
+            // (§7.4), so the §6.3 REQUIRED members ride it too: `proof`
+            // iff `trust = proof`, and `statement_hash` for
+            // certificate/rederive records.
+            let proof = match r.trust {
+                verifier::verdict::Trust::Checked => Some(verifier::verdict::ProofInfo {
+                    kind: verifier::verdict::ProofKind::Exact,
+                    statement: "in-tree".to_string(),
+                    theorem: None,
+                    kernel_check: None,
+                    file: None,
+                }),
+                verifier::verdict::Trust::Proof => Some(verifier::verdict::ProofInfo {
+                    kind: verifier::verdict::ProofKind::Certificate,
+                    statement: verifier::stmt::STMT_SCHEMA.to_string(),
+                    theorem: None,
+                    kernel_check: None,
+                    file: None,
+                }),
+                _ => None,
+            };
             records.push(verifier::verdict::VerdictRecord {
                 id: r.id.clone(),
                 id_hash: r.id_hash.clone(),
                 status: r.status,
-                method: r.method.clone(),
-                proof_ref: None,
+                trust: r.trust,
+                method: r.method,
+                surface: None,
+                statement_hash: r.statement_hash.clone(),
+                authored: None,
+                proof,
+                claimed: None,
                 justification: r.justification.clone(),
+                witness_reason: None,
+                note: None,
             });
         }
         let stale = match verdicts {
-            Some(v) => v.stale_count(&ctx.set().obligations),
-            None => 0,
+            Some(v) => v.stale_count(&ctx.set().obligations) + ctx.statement_stale(),
+            None => ctx.statement_stale(),
         };
+        // FR-5 (P7.3): a statement-stale verdict (the consumed proof no longer
+        // binds the current statement/identity) keeps the check AND gets the
+        // E6421 diagnostic — the report's `stale_verdicts` catches the count.
+        if ctx.statement_stale() > 0 {
+            let _ = diag::error_simple(
+                6421,
+                b"statement-stale: proof verdicts no longer bind the current build - checks retained",
+            );
+        }
         let subtype_emitted = resolved
             .iter()
             .filter(|r| r.kind == verifier::model::Kind::SubtypeRange && r.status.is_open())
@@ -699,6 +747,8 @@ pub fn emit_obj_driver(
         let echo = match verifier::verdict::encode_echo(
             "langc",
             "0.1.0",
+            &ctx.set().target,
+            &ctx.set().model_semantics,
             &records,
             stale,
             &emitted,
@@ -795,6 +845,8 @@ pub fn emit_obl_driver(
         Some(&mut ctx),
         None,
         false,
+        false,
+        None, // --emit=obligations: bind against the live extraction itself
         |_w, _ctx| Ok::<(), ()>(()),
     ) {
         Ok(()) => {}

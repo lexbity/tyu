@@ -62,6 +62,8 @@ fn compile_with_isr_grant(source: Vec<u8>, isr_stack_slots: u32) -> Result<(), u
                 None,
                 None,
                 false,
+                false, // proven_gate (tests: off)
+                None,  // bind_obl (tests: off)
                 |_w, _ctx| Ok::<(), ()>(()),
             ) {
                 Ok(()) => Ok(()),

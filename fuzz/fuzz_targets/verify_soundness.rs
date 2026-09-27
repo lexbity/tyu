@@ -205,7 +205,12 @@ fuzz_target!(|data: &[u8]| {
         });
     }
     for op in &ops {
-        st.step(op, sr());
+        st.step(
+            op,
+            sr(),
+            verifier::target::TargetSpec::X86_64,
+            &mut verifier::interp::FlatMem,
+        );
     }
     let tri = eval_in_range(st.top_interval(), SUB_LO, SUB_HI);
     if tri != Tri::DefTrue {

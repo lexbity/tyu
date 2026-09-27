@@ -111,8 +111,11 @@ pub unsafe fn run(argc: isize, argv: *const *const hosted::c::c_char) -> i32 {
 
     // P4: `--verdicts=<file>` — load and schema-validate the verdicts file
     // before any codegen. Fail-closed (§7.5): a malformed, wrong-schema, or
-    // wrong-semantics file is E6402 and aborts the compile (never a silent
-    // best-effort read — a bad file can only cause *more* checking).
+    // wrong-semantics file is E6402 (a closed-registry violation E6417) and
+    // aborts the compile (never a silent best-effort read — a bad file can
+    // only cause *more* checking). The producer-recognition gate (§Q6) runs
+    // here: an unrecognized certifier's `proof`/`checked` labels downgrade to
+    // `assumed` (with `claimed` preserved) before any site resolution.
     let verdicts: Option<verifier::verdict::Verdicts> = match cfg.verdicts {
         Some(path) => {
             let bytes = match fs::read_file(path) {
@@ -123,9 +126,35 @@ pub unsafe fn run(argc: isize, argv: *const *const hosted::c::c_char) -> i32 {
                 }
             };
             match verifier::verdict::read_verdicts(bytes.as_slice()) {
-                Ok(v) => Some(v),
+                Ok(v) => Some(v.restrict_to_recognized()),
+                Err(e) => {
+                    let _ = diag::error_simple(e.code(), b"invalid --verdicts file");
+                    return 2;
+                }
+            }
+        }
+        None => None,
+    };
+
+    // PLAN-VERIFY-3 P7.3 (FR-5): `--bind-obl=<file>` — the pass-1 obligation
+    // artifact the statement binding recomputes against (the artifact the
+    // proofs were certified against; its word IR is verdict-independent,
+    // unlike the live lowering's). Fail-closed: a missing or schema-invalid
+    // artifact aborts before codegen (a bad binding surface can only cause
+    // more checking — every certificate record then fails to bind).
+    let bind_obl: Option<verifier::model::OblSet> = match cfg.bind_obl {
+        Some(path) => {
+            let bytes = match fs::read_file(path) {
+                Ok(b) => b,
                 Err(_) => {
-                    let _ = diag::error_simple(6402, b"invalid --verdicts file (E6402)");
+                    let _ = diag::error_simple(6401, b"cannot read --bind-obl artifact");
+                    return 2;
+                }
+            };
+            match verifier::codec::read_obl(bytes.as_slice()) {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    let _ = diag::error_simple(e.code(), b"invalid --bind-obl artifact");
                     return 2;
                 }
             }
@@ -174,6 +203,7 @@ pub unsafe fn run(argc: isize, argv: *const *const hosted::c::c_char) -> i32 {
             cfg.features,
             descriptor,
             mmio_apertures,
+            cfg.verify_policy_proven,
             &mut out,
         ),
         EmitMode::Obj => {
@@ -196,6 +226,8 @@ pub unsafe fn run(argc: isize, argv: *const *const hosted::c::c_char) -> i32 {
                 verdicts.as_ref(),
                 cfg.elide_ds_guards,
                 cfg.verify_tool,
+                cfg.verify_policy_proven,
+                bind_obl.as_ref(),
             )
         }
         EmitMode::Obligations => {

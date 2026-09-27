@@ -1220,6 +1220,82 @@ fi
 [ "$g35_fail" -eq 0 ] && msg $GREEN "  G35: P6 hardening (§7.2 slot key + toolchain E6416 tests + tier-A wiring)"
 failures=$((failures + g35_fail))
 
+# --- G36: PLAN-VERIFY-3 P7 — harvest, verdicts v2, proven policy ---
+# The kernel-checked path: the Lean harvest library (vendored into generated
+# packages), the v2 verdicts codec (closed registries, E6417, producer
+# downgrade, proof_ref retired), the two-pass build consuming harvested
+# verdicts, the `proven` policy (Q12 trust gate through langc + report
+# failure), the report trust×method×surface + TCB sections, and the harvest
+# fixture/golden wired into the port gate.
+g36_fail=0
+for f in Tyu/Verdicts/Harvest.lean Tyu/Gen/Render.lean; do
+    if [ ! -f "verification/ports/lean/$f" ]; then
+        msg $RED "  G36 FAIL: port file $f missing (P7 harvest surface)"
+        g36_fail=1
+    fi
+done
+if grep -rnE 'sorry|Admitted|native_decide' verification/ports/lean/Tyu/Verdicts/Harvest.lean >/dev/null 2>&1; then
+    msg $RED "  G36 FAIL: sorry/Admitted/native_decide in the harvest library"
+    g36_fail=1
+fi
+for tok in 'tyu.verdicts/v2' 'Trust' 'Method' 'proof_ref' 'restrict_to_recognized' 'UnknownMethod'; do
+    if ! grep -q "$tok" crates/verifier/src/verdict.rs; then
+        msg $RED "  G36 FAIL: verdicts v2 codec lacks $tok"
+        g36_fail=1
+    fi
+done
+for tok in 'run_harvest' 'harvest_entry' 'VerifyEnvKey' 'verdicts_override'; do
+    if ! grep -q "$tok" crates/tyu/src/proof.rs crates/tyu/src/build.rs 2>/dev/null; then
+        msg $RED "  G36 FAIL: two-pass harvest wiring lacks $tok"
+        g36_fail=1
+    fi
+done
+if ! grep -q 'VerifyPolicy::Proven\|"proven"' crates/tyu/src/args.rs; then
+    msg $RED "  G36 FAIL: proven policy unparsed"
+    g36_fail=1
+fi
+if ! grep -q 'proven_gate' crates/semantics/src/typecheck/irgen/mod.rs; then
+    msg $RED "  G36 FAIL: langc proven trust gate missing"
+    g36_fail=1
+fi
+if ! grep -q 'trust' crates/verifier/src/report.rs || ! grep -q 'tcb' crates/verifier/src/report.rs; then
+    msg $RED "  G36 FAIL: report trust/TCB sections missing"
+    g36_fail=1
+fi
+if [ ! -f verification/ports/lean/tests/harvest-fixture/hvharvest.lean ] \
+   || [ ! -f test-goldens/harvest/Tiny.verdicts.v2.json ]; then
+    msg $RED "  G36 FAIL: harvest fixture/golden missing"
+    g36_fail=1
+fi
+if ! grep -q 'P7.1 harvest gate' ci/port.sh; then
+    msg $RED "  G36 FAIL: the harvest gate is not wired into ci/port.sh"
+    g36_fail=1
+fi
+# P7.3 gates (the tooling-tests suites + the port tamper negatives + the
+# error-registry rows): the consumption-side tamper matrix and the proven
+# trust gate are material deliverables with their own gates.
+for t in crates/tooling-tests/tests/policy_proven.rs crates/tooling-tests/tests/tamper_matrix.rs; do
+    if [ ! -f "$t" ]; then
+        msg $RED "  G36 FAIL: $t missing (P7.3 consumption gates)"
+        g36_fail=1
+    fi
+done
+for s in verification/ports/lean/tests/tamper/run-delete-theorem.sh \
+         verification/ports/lean/tests/tamper/run-mutate-gen.sh; do
+    if [ ! -x "$s" ]; then
+        msg $RED "  G36 FAIL: $s missing or not executable (P7.1 tamper negatives)"
+        g36_fail=1
+    fi
+done
+for code in 6416 6417 6418 6419 6420 6421; do
+    if ! grep -q "E$code" devdocs/book_v3/appendix-b-error-registry.md; then
+        msg $RED "  G36 FAIL: appendix-b error registry missing E$code (P6/P7 allocation, §6.9)"
+        g36_fail=1
+    fi
+done
+[ "$g36_fail" -eq 0 ] && msg $GREEN "  G36: P7 harvest + verdicts v2 + proven policy surface"
+failures=$((failures + g36_fail))
+
 echo ""
 msg $GREEN "============================================"
 msg $GREEN "Per-package test counts:"

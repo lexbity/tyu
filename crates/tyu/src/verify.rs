@@ -222,10 +222,13 @@ pub(crate) fn compose(
     };
     for (i, (name, set)) in sets.iter().enumerate() {
         let echo = echoes[i].1.as_ref();
-        let classes = classes_for(set.as_ref(), echo);
+        let (classes, trust, methods, surfaces) = classes_for(set.as_ref(), echo);
         report.modules.push(ModuleAccounting {
             name: name.clone(),
             classes,
+            trust,
+            methods,
+            surfaces,
         });
         if let Some(set) = set {
             collect_open(set, echo, name, &mut report.open);
@@ -534,13 +537,28 @@ fn resolved_status(o: &Obligation, echo: Option<&Echo>) -> VerdictStatus {
 }
 
 /// Per-module class accounting over all five kinds, in fixed order, from the
-/// resolved verdicts. A module without an artifact yields zeros.
-fn classes_for(set: Option<&OblSet>, echo: Option<&Echo>) -> Vec<ClassAccounting> {
+/// resolved verdicts, PLUS the v2 trust×method×surface splits (P7.3, §Q6)
+/// counted from the echo's records (or the P3 fallback defaults when no echo).
+/// A module without an artifact yields zeros.
+fn classes_for(
+    set: Option<&OblSet>,
+    echo: Option<&Echo>,
+) -> (
+    Vec<ClassAccounting>,
+    verifier::report::TrustAccounting,
+    verifier::report::MethodAccounting,
+    verifier::report::SurfaceAccounting,
+) {
     let mut classes: Vec<ClassAccounting> = KIND_ORDER
         .iter()
         .map(|k| ClassAccounting::zero(k))
         .collect();
-    let Some(set) = set else { return classes };
+    let mut trust = verifier::report::TrustAccounting::default();
+    let mut methods = verifier::report::MethodAccounting::default();
+    let mut surfaces = verifier::report::SurfaceAccounting::default();
+    let Some(set) = set else {
+        return (classes, trust, methods, surfaces);
+    };
     for o in &set.obligations {
         let idx = o.kind.idx();
         if idx >= classes.len() {
@@ -553,8 +571,60 @@ fn classes_for(set: Option<&OblSet>, echo: Option<&Echo>) -> Vec<ClassAccounting
             VerdictStatus::Assumed => slot.assumed += 1,
             VerdictStatus::Open => slot.open += 1,
         }
+        // P7.3: trust×method×surface split from the resolved record.
+        match resolved_record(o, echo) {
+            Some(rec) => {
+                let t = match rec.trust {
+                    verifier::verdict::Trust::Proof => &mut trust.proof,
+                    verifier::verdict::Trust::Checked => &mut trust.checked,
+                    verifier::verdict::Trust::Assumed => &mut trust.assumed,
+                    verifier::verdict::Trust::Open => &mut trust.open,
+                };
+                *t += 1;
+                if let Some(m) = rec.method {
+                    let slot = match m {
+                        verifier::verdict::Method::Certificate => &mut methods.certificate,
+                        verifier::verdict::Method::Rederive => &mut methods.rederive,
+                        verifier::verdict::Method::Descriptor => &mut methods.descriptor,
+                        verifier::verdict::Method::StackExact => &mut methods.stack_exact,
+                        verifier::verdict::Method::Interval => &mut methods.interval,
+                    };
+                    *slot = slot.saturating_add(1);
+                }
+                match rec.surface {
+                    Some(verifier::verdict::ProofSurface::Source) => {
+                        surfaces.source = surfaces.source.saturating_add(1)
+                    }
+                    Some(verifier::verdict::ProofSurface::Ir) => {
+                        surfaces.ir = surfaces.ir.saturating_add(1)
+                    }
+                    None => {}
+                }
+            }
+            None => {
+                // No echo record: the open-by-absence sites are trust=open;
+                // the P3 descriptor fallback discharged these mmio-bounds
+                // sites with the in-tree exact method (trust=checked,
+                // method=descriptor).
+                if verdict_is_discharged(o) {
+                    trust.checked += 1;
+                    methods.descriptor += 1;
+                } else {
+                    trust.open = trust.open.saturating_add(1);
+                }
+            }
+        }
     }
-    classes
+    (classes, trust, methods, surfaces)
+}
+
+/// The echo's resolved record for an obligation, when present and matched.
+fn resolved_record<'a>(
+    o: &Obligation,
+    echo: Option<&'a Echo>,
+) -> Option<&'a verifier::verdict::VerdictRecord> {
+    let e = echo?;
+    e.verdicts.lookup(&o.id, &o.id_hash)
 }
 
 /// The descriptor discharge rule fallback (P3): `mmio-bounds` with a constant
@@ -685,14 +755,19 @@ fn report_totals(r: &VerifyReport) -> (u32, u32, u32, u32) {
 
 /// Slice P4 policy enforcement (FR-18): `no-open` fails the build with E6410
 /// listing every open obligation (module/word/site/line); `no-open-no-
-/// assumptions` additionally fails on assumed verdicts. `--verify=off` is
-/// exempt — it is the legacy all-checks mode, not a policy decision.
+/// assumptions` additionally fails on assumed verdicts; `proven` (P7.3,
+/// §Q12) fails on any open or assumed obligation — the langc trust gate
+/// already forced interval-only `checked` and unrecognized-trust sites open,
+/// so the report's opens are exactly the not-`proof`-closed remainder.
+/// `--verify=off` is exempt — it is the legacy all-checks mode, not a policy
+/// decision.
 fn enforce_policy(report: &VerifyReport, policy: VerifyPolicy) -> Result<(), TyuError> {
     match policy {
         VerifyPolicy::OpenOk => Ok(()),
-        VerifyPolicy::NoOpen | VerifyPolicy::NoOpenNoAssumptions => {
-            let fails_assumed =
-                policy == VerifyPolicy::NoOpenNoAssumptions && !report.assumed.is_empty();
+        VerifyPolicy::Proven | VerifyPolicy::NoOpen | VerifyPolicy::NoOpenNoAssumptions => {
+            let fails_assumed = (policy == VerifyPolicy::NoOpenNoAssumptions
+                || policy == VerifyPolicy::Proven)
+                && !report.assumed.is_empty();
             if report.open.is_empty() && !fails_assumed {
                 return Ok(());
             }
@@ -845,14 +920,24 @@ mod tests {
             id: obligation.id.clone(),
             id_hash: obligation.id_hash.clone(),
             status: VerdictStatus::Assumed,
+            trust: verifier::verdict::Trust::Assumed,
             method: None,
-            proof_ref: None,
+            surface: None,
+            statement_hash: None,
+            authored: None,
+            proof: None,
+            claimed: None,
             justification: Some("reviewed".to_string()),
+            witness_reason: None,
+            note: None,
         };
         // Build a minimal echo by encoding + reading back.
         let bytes = verifier::verdict::encode_verdicts(
             "test",
             "0",
+            None,
+            "",
+            "",
             &[rec],
             0,
             &verifier::verdict::EmittedChecksData::default(),
@@ -868,13 +953,23 @@ mod tests {
             id: obligation.id.clone(),
             id_hash: "0000000000000000".to_string(),
             status: VerdictStatus::Discharged,
-            method: Some("interval".to_string()),
-            proof_ref: None,
+            trust: verifier::verdict::Trust::Checked,
+            method: Some(verifier::verdict::Method::Interval),
+            surface: None,
+            statement_hash: None,
+            authored: None,
+            proof: None,
+            claimed: None,
             justification: None,
+            witness_reason: None,
+            note: None,
         };
         let bytes = verifier::verdict::encode_verdicts(
             "test",
             "0",
+            None,
+            "",
+            "",
             &[tampered],
             0,
             &verifier::verdict::EmittedChecksData::default(),

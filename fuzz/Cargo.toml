@@ -38,3 +38,15 @@ name = "verify_soundness"
 path = "fuzz_targets/verify_soundness.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "verdicts_v2_decode"
+path = "fuzz_targets/verdicts_v2_decode.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "obl_v2_decode"
+path = "fuzz_targets/obl_v2_decode.rs"
+test = false
+doc = false

@@ -23,7 +23,7 @@ use std::process::Command;
 
 use verifier::codec::read_obl;
 use verifier::verdict::{
-    encode_verdicts, read_echo, EmittedChecksData, VerdictRecord, VerdictStatus,
+    encode_verdicts, read_echo, EmittedChecksData, Method, Trust, VerdictRecord, VerdictStatus,
 };
 
 fn langc_exe() -> PathBuf {
@@ -128,12 +128,23 @@ fn site_of(word: &str, occurrence: u32) -> (String, String) {
     (o.id.clone(), o.id_hash.clone())
 }
 
-/// Write a verdicts file with a single record and return its path.
+/// Write a verdicts file with a single record and return its path. The file
+/// carries the build identity (`target`/`model_semantics`) — v2 REQUIRES
+/// them, and a mismatched pair is FR-5-stale.
 fn write_verdicts(tag: &str, records: &[VerdictRecord]) -> PathBuf {
     let dir = fresh_dir(tag);
     let path = dir.join("v.json");
-    let bytes =
-        encode_verdicts("test", "0.1.0", records, 0, &EmittedChecksData::default()).unwrap();
+    let bytes = encode_verdicts(
+        "test",
+        "0.1.0",
+        None,
+        "x86_64-unknown-linux-gnu",
+        verifier::model::MODEL_UNMODELED,
+        records,
+        0,
+        &EmittedChecksData::default(),
+    )
+    .unwrap();
     fs::write(&path, &bytes).unwrap();
     path
 }
@@ -157,15 +168,15 @@ fn discharged_param_site_removes_its_trap_pair() {
     // after the engine runs, the only OPEN subtype site is bounded_inc's C3
     // cast (operand ⊤ — 1 + on an unknown caller value).
     let (id, id_hash) = site_of("bounded_inc", 0);
-    let rec = VerdictRecord {
-        id: id.clone(),
-        id_hash,
-        status: VerdictStatus::Discharged,
-        method: Some("interval".to_string()),
-        proof_ref: None,
-        justification: None,
-    };
-    let vf = write_verdicts("disch", &[rec]);
+    let vf = write_verdicts(
+        "disch",
+        &[VerdictRecord::discharged(
+            id,
+            id_hash,
+            Trust::Checked,
+            Method::Interval,
+        )],
+    );
     let (asm_all, _) = compile_bank("base", false, None);
     let (asm_und, out_dir) = compile_bank("und", true, Some(&vf));
     let base = trap_count(&asm_all);
@@ -189,7 +200,10 @@ fn discharged_param_site_removes_its_trap_pair() {
         "file C1 + in-tree C2 + main C3"
     );
     assert_eq!(echo.verdicts.records[0].status, VerdictStatus::Discharged);
-    assert_eq!(echo.verdicts.records[0].method.as_deref(), Some("interval"));
+    assert_eq!(
+        echo.verdicts.records[0].method.map(Method::as_str),
+        Some("interval")
+    );
     assert_eq!(echo.emitted.subtype_range, 1, "emitted == open sites");
     assert_eq!(echo.in_tree_verdicts, 2, "engine closed two sites");
     assert_eq!(echo.stale_verdicts, 0);
@@ -229,15 +243,15 @@ fn hash_mismatched_record_fails_closed_and_counts_stale() {
     // interval engine still discharges what it can (bounded_inc's C2 return +
     // main's C3 cast), and the echo counts the mismatched record as stale.
     let (id, _real_hash) = site_of("bounded_inc", 0);
-    let rec = VerdictRecord {
-        id,
-        id_hash: "0000000000000000".to_string(),
-        status: VerdictStatus::Discharged,
-        method: Some("interval".to_string()),
-        proof_ref: None,
-        justification: None,
-    };
-    let vf = write_verdicts("stale", &[rec]);
+    let vf = write_verdicts(
+        "stale",
+        &[VerdictRecord::discharged(
+            id,
+            "0000000000000000".to_string(),
+            Trust::Checked,
+            Method::Interval,
+        )],
+    );
     let (asm_all, _) = compile_bank("base2", false, None);
     let (asm_und, out_dir) = compile_bank("und2", true, Some(&vf));
     // The stale record fails closed: bounded_inc's C1 stays open; the engine
@@ -256,15 +270,15 @@ fn hash_mismatched_record_fails_closed_and_counts_stale() {
 
 #[test]
 fn unknown_site_record_is_ignored_as_stale() {
-    let rec = VerdictRecord {
-        id: "Bank::nope::subtype-range::0".to_string(),
-        id_hash: "1234567890abcdef".to_string(),
-        status: VerdictStatus::Discharged,
-        method: Some("interval".to_string()),
-        proof_ref: None,
-        justification: None,
-    };
-    let vf = write_verdicts("unknown", &[rec]);
+    let vf = write_verdicts(
+        "unknown",
+        &[VerdictRecord::discharged(
+            "Bank::nope::subtype-range::0".to_string(),
+            "1234567890abcdef".to_string(),
+            Trust::Checked,
+            Method::Interval,
+        )],
+    );
     let (asm_und, out_dir) = compile_bank("und3", true, Some(&vf));
     let (asm_all, _) = compile_bank("base3", false, None);
     assert_eq!(trap_count(&asm_und), trap_count(&asm_all) - 4);

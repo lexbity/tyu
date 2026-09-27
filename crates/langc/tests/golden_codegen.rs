@@ -82,6 +82,8 @@ fn compile_fixture(fixture: &str, target: Target) -> String {
         None,
         false,
         None,
+        false, // verify_policy_proven
+        None,  // bind_obl (no pass-1 artifact in direct-driver tests)
     );
 
     let asm_path = out_dir.join("Main.asm");

@@ -79,7 +79,7 @@ fn constant_ensures_is_discharged_under_undischarged() {
     let vfile = dir.join("empty.json");
     std::fs::write(
         &vfile,
-        r#"{"schema":"tyu.verdicts/v1","tool":{"name":"t","version":"0"},"semantics":"tyu.ir-sem/1.0","verdicts":[]}"#,
+        r#"{"schema":"tyu.verdicts/v2","certifier":null,"semantics":"tyu.ir-sem/1.0","stmt":"tyu.stmt/1.0","target":"x86_64-unknown-linux-gnu","model_semantics":"unmodeled","verdicts":[]}"#,
     )
     .unwrap();
     let (ok, asm) = compile_with(

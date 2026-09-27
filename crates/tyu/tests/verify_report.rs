@@ -84,6 +84,14 @@ fn metal_platform_build_reports_discharged_main_context() {
     let v: serde_json::Value = serde_json::from_str(&report).unwrap();
     assert_eq!(v["schema"], "tyu.verify-report/v2");
     assert_eq!(v["policy"], "open-ok");
+    // P7.3: the report carries the trust×method×surface split and the TCB.
+    assert_eq!(v["modules"][0]["trust"]["checked"], 2);
+    assert_eq!(v["modules"][0]["methods"]["interval"], 2);
+    assert_eq!(v["modules"][0]["surfaces"]["source"], 0);
+    assert!(
+        v["tcb"].as_array().unwrap().len() >= 12,
+        "the shipped TCB boundary must be present"
+    );
     let main = &v["contexts"]["stack"]["main"];
     assert_eq!(main["verdict"], "discharged");
     assert_eq!(main["budget"], 16384);

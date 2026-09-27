@@ -1,0 +1,37 @@
+{"synthetic": false,
+ "schemaVersion": "2025-09-10",
+ "outputs":
+ {"o": ["3e159919a1b9db5a.olean"],
+  "i": "ebce580195d2331a.ilean",
+  "c": "2db9afa3c5fc7a62.c"},
+ "log":
+ [{"message":
+   ".> LEAN_PATH=/home/lex/Public/tyu_lang/verification/ports/lean/tests/harvest-fixture/.lake/build/lib/lean /usr/bin/lean /home/lex/Public/tyu_lang/verification/ports/lean/tests/harvest-fixture/../../Tyu/Step.lean -o /home/lex/Public/tyu_lang/verification/ports/lean/tests/harvest-fixture/.lake/build/lib/lean/Tyu/Step.olean -i /home/lex/Public/tyu_lang/verification/ports/lean/tests/harvest-fixture/.lake/build/lib/lean/Tyu/Step.ilean -c /home/lex/Public/tyu_lang/verification/ports/lean/tests/harvest-fixture/.lake/build/ir/Tyu/Step.c --setup /home/lex/Public/tyu_lang/verification/ports/lean/tests/harvest-fixture/.lake/build/ir/Tyu/Step.setup.json --json",
+   "level": "trace"},
+  {"message":
+   "../../Tyu/Step.lean:178:74: try 'simp' instead of 'simpa'\n\nNote: This linter can be disabled with `set_option linter.unnecessarySimpa false`",
+   "level": "warning"}],
+ "inputs":
+ [["Tyu.Step:deps",
+   [["deps",
+     [["«tyu-harvest-fixture»/Tyu:extraDep",
+       [["@«tyu-harvest-fixture»:extraDep", "00000000000006bb"]]],
+      ["imports",
+       [["Tyu.IR.Op transitive imports (legacy)", "00000000000006bb"],
+        ["Tyu.IR.Op:importAllArts", "0cae8cf9eb0113b8"],
+        ["Tyu.IR.Semantics transitive imports (legacy)", "da86e90227996da5"],
+        ["Tyu.IR.Semantics:importAllArts", "cc50ec00186a57a1"],
+        ["Tyu.IR.Target transitive imports (legacy)", "00000000000006bb"],
+        ["Tyu.IR.Target:importAllArts", "9c40c35404e7b991"]]]]],
+    ["libs",
+     [["import dynlibs", "00000000000006bb"],
+      ["package external libraries", "00000000000006bb"],
+      ["module dynlibs", "00000000000006bb"],
+      ["module plugins", "00000000000006bb"]]]]],
+  ["Lean 4.27.0, commit 4cb1b2466ded03701c4a349ed1debdfe54946daa",
+   "7b39e63d772bc043"],
+  ["/home/lex/Public/tyu_lang/verification/ports/lean/tests/harvest-fixture/../../Tyu/Step.lean",
+   "530cd6eb2933e007"],
+  ["options", "00000000000006bb"],
+  ["Module.leanArgs: #[]", "00000000000006bb"]],
+ "depHash": "541603a4392c57d5"}

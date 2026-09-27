@@ -126,7 +126,9 @@ fn provable_cast_chain_discharges_without_verdicts_file() {
     let echo = verifier::verdict::read_echo(&fs::read(&echo_file).unwrap()).unwrap();
     assert_eq!(echo.verdicts.records.len(), 1);
     assert_eq!(
-        echo.verdicts.records[0].method.as_deref(),
+        echo.verdicts.records[0]
+            .method
+            .map(verifier::verdict::Method::as_str),
         Some("interval"),
         "the engine (not a file) discharged the site"
     );

@@ -48,6 +48,8 @@ fn compile_with_extraction(
                 Some(&mut ctx),
                 None,
                 false,
+                false, // proven_gate (tests: off)
+                None,  // bind_obl (tests: off)
                 |_w, _ctx| Ok::<(), ()>(()),
             ) {
                 Ok(()) => (Ok(()), ctx.resolved().to_vec()),

@@ -1445,6 +1445,9 @@ fn compile_mod_pipeline(
     let empty = verifier::verdict::encode_verdicts(
         "tyu",
         env!("CARGO_PKG_VERSION"),
+        None,
+        "",
+        "",
         &[],
         0,
         &verifier::verdict::EmittedChecksData::default(),

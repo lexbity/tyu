@@ -1,0 +1,31 @@
+{"synthetic": false,
+ "schemaVersion": "2025-09-10",
+ "outputs":
+ {"o": ["99807ef941892e87.olean"],
+  "i": "77684965c9ffbcac.ilean",
+  "c": "77ee5ea49dbdfc01.c"},
+ "log":
+ [{"message":
+   ".> LEAN_PATH=/home/lex/Public/tyu_lang/verification/ports/lean/tests/harvest-fixture/.lake/build/lib/lean /usr/bin/lean /home/lex/Public/tyu_lang/verification/ports/lean/tests/harvest-fixture/../../Tyu/Conformance/Cfg.lean -o /home/lex/Public/tyu_lang/verification/ports/lean/tests/harvest-fixture/.lake/build/lib/lean/Tyu/Conformance/Cfg.olean -i /home/lex/Public/tyu_lang/verification/ports/lean/tests/harvest-fixture/.lake/build/lib/lean/Tyu/Conformance/Cfg.ilean -c /home/lex/Public/tyu_lang/verification/ports/lean/tests/harvest-fixture/.lake/build/ir/Tyu/Conformance/Cfg.c --setup /home/lex/Public/tyu_lang/verification/ports/lean/tests/harvest-fixture/.lake/build/ir/Tyu/Conformance/Cfg.setup.json --json",
+   "level": "trace"}],
+ "inputs":
+ [["Tyu.Conformance.Cfg:deps",
+   [["deps",
+     [["«tyu-harvest-fixture»/Tyu:extraDep",
+       [["@«tyu-harvest-fixture»:extraDep", "00000000000006bb"]]],
+      ["imports",
+       [["Tyu.Conformance.Step transitive imports (legacy)",
+         "60ee4473b55476d5"],
+        ["Tyu.Conformance.Step:importAllArts", "2193bfa1fbb4ea75"]]]]],
+    ["libs",
+     [["import dynlibs", "00000000000006bb"],
+      ["package external libraries", "00000000000006bb"],
+      ["module dynlibs", "00000000000006bb"],
+      ["module plugins", "00000000000006bb"]]]]],
+  ["Lean 4.27.0, commit 4cb1b2466ded03701c4a349ed1debdfe54946daa",
+   "7b39e63d772bc043"],
+  ["/home/lex/Public/tyu_lang/verification/ports/lean/tests/harvest-fixture/../../Tyu/Conformance/Cfg.lean",
+   "59857d86e1901265"],
+  ["options", "00000000000006bb"],
+  ["Module.leanArgs: #[]", "00000000000006bb"]],
+ "depHash": "ca6577eca057267e"}

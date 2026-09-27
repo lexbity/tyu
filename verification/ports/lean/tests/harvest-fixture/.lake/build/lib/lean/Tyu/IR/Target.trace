@@ -1,0 +1,28 @@
+{"synthetic": false,
+ "schemaVersion": "2025-09-10",
+ "outputs":
+ {"o": ["2119954077ad9561.olean"],
+  "i": "df60244f342cf7ff.ilean",
+  "c": "8bde0269c9224675.c"},
+ "log":
+ [{"message":
+   ".> LEAN_PATH=/home/lex/Public/tyu_lang/verification/ports/lean/tests/harvest-fixture/.lake/build/lib/lean /usr/bin/lean /home/lex/Public/tyu_lang/verification/ports/lean/tests/harvest-fixture/../../Tyu/IR/Target.lean -o /home/lex/Public/tyu_lang/verification/ports/lean/tests/harvest-fixture/.lake/build/lib/lean/Tyu/IR/Target.olean -i /home/lex/Public/tyu_lang/verification/ports/lean/tests/harvest-fixture/.lake/build/lib/lean/Tyu/IR/Target.ilean -c /home/lex/Public/tyu_lang/verification/ports/lean/tests/harvest-fixture/.lake/build/ir/Tyu/IR/Target.c --setup /home/lex/Public/tyu_lang/verification/ports/lean/tests/harvest-fixture/.lake/build/ir/Tyu/IR/Target.setup.json --json",
+   "level": "trace"}],
+ "inputs":
+ [["Tyu.IR.Target:deps",
+   [["deps",
+     [["«tyu-harvest-fixture»/Tyu:extraDep",
+       [["@«tyu-harvest-fixture»:extraDep", "00000000000006bb"]]],
+      ["imports", "00000000000006bb"]]],
+    ["libs",
+     [["import dynlibs", "00000000000006bb"],
+      ["package external libraries", "00000000000006bb"],
+      ["module dynlibs", "00000000000006bb"],
+      ["module plugins", "00000000000006bb"]]]]],
+  ["Lean 4.27.0, commit 4cb1b2466ded03701c4a349ed1debdfe54946daa",
+   "7b39e63d772bc043"],
+  ["/home/lex/Public/tyu_lang/verification/ports/lean/tests/harvest-fixture/../../Tyu/IR/Target.lean",
+   "8beeef17989e7a30"],
+  ["options", "00000000000006bb"],
+  ["Module.leanArgs: #[]", "00000000000006bb"]],
+ "depHash": "96a4e8ff97354122"}
