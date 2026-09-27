@@ -1,4 +1,5 @@
 import Tyu.Step
+import Tyu.Src
 
 /-! T-C: the stack algebra (PLAN-VERIFY-3 P4.2) — the first registry
 theorem, proved against the concrete step semantics of `Tyu.Step` and over
@@ -1119,5 +1120,47 @@ theorem no_edges_terminal {V : VerdictSet} {i : V.Id} {j : V.Id}
   simp at hmem
 
 end AssumptionClosure
+
+/-! ## T-S: the source→IR transcription (PLAN-VERIFY-3 P9.1, §Q2)
+
+The registry statement for the source-fragment embedding (`Tyu/Src.lean`):
+for a pure-fragment word, the source-level semantics and the IR-level
+semantics of its transcription are the same relation on concrete states and
+memories, parameterized over every `(TargetSpec, MemModel-instance)` (§Q3).
+The per-op simulation lemmas (`Tyu.Src.transcription_op`), their composition
+over blocks (`Tyu.Src.transcription_block`) and over the word CFG walk
+(`Tyu.Src.transcription_run`) are the machinery; this alias is what the
+registry names. -/
+section T_Server
+
+-- The aggregated registry entries (proofs live in `Tyu.Src`; aliased here
+-- so the axiomit audit and REVIEW.md name one home per registry entry).
+theorem transcription_forward {blocks : List Tyu.Src.Block} {entry : Nat} {i : Nat}
+    {lo hi : Int} :
+    Tyu.Src.outInRange blocks entry i lo hi → Tyu.Src.irOutInRange blocks entry i lo hi :=
+  (Tyu.Src.transcription blocks entry i lo hi).1
+
+theorem transcription_backward {blocks : List Tyu.Src.Block} {entry : Nat} {i : Nat}
+    {lo hi : Int} :
+    Tyu.Src.irOutInRange blocks entry i lo hi → Tyu.Src.outInRange blocks entry i lo hi :=
+  (Tyu.Src.transcription blocks entry i lo hi).2
+
+/-- T-S (the registry statement, §Q2/§Q16): the source out-range claim is
+equivalent to the transcribed IR out-range claim — a source-level
+certificate discharges the IR obligation *in composition with this
+theorem*. -/
+theorem transcription {blocks : List Tyu.Src.Block} {entry : Nat} {i : Nat}
+    {lo hi : Int} :
+    Tyu.Src.outInRange blocks entry i lo hi ↔ Tyu.Src.irOutInRange blocks entry i lo hi :=
+  Tyu.Src.transcription blocks entry i lo hi
+
+/-- T-S, offset (mmio-bounds) form. -/
+theorem transcription_offset {blocks : List Tyu.Src.Block} {entry : Nat}
+    {off width size : Nat} :
+    Tyu.Src.offsetWithin blocks entry off width size ↔
+      Tyu.Src.irOffsetWithin blocks entry off width size :=
+  Tyu.Src.transcription_offset blocks entry off width size
+
+end T_Server
 
 end Tyu.Sound

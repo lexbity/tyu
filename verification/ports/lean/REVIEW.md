@@ -25,6 +25,10 @@
 | T-CL (cycle) | a closed obligation reachable from itself — a cycle — contradicts well-closedness (cycles are E6419-malformed) | `Tyu.Sound.AssumptionClosure.cyclic_not_well_closed` | proven, axiom-audited |
 | T-CL (open edge) | an assumption edge leaving a closed obligation to an open obligation contradicts well-closedness (the dependent resolves `assumption-unresolved`) | `Tyu.Sound.AssumptionClosure.open_edge_not_well_closed` | proven, axiom-audited |
 | T-CL (base cases) | `runtime-check` obligations are terminals; an edge-less obligation is its own base case | `Tyu.Sound.AssumptionClosure.runtime_terminal`, `Tyu.Sound.AssumptionClosure.no_edges_terminal` | proven, axiom-audited |
+| T-S (empty) | the source→IR transcription registry statement (§Q2, §Q16): a pure-fragment word's `Source-semantics(TargetSpec, MemModel)` equals the IR-semantics of its transcription | `Tyu.Sound.transcription` (↔ `Tyu.Src.transcription`), the forward/backward projections `Tyu.Sound.transcription_forward/backward`, and the offset form `Tyu.Sound.transcription_offset` | proven, axiom-audited |
+| T-S (per-op) | per-op simulation: each fragment op's source step equals the concrete step of its transcription (the op-locality claim, case-by-case) | `Tyu.Src.transcription_op` | proven, axiom-audited |
+| T-S (block) | the per-op lemmas composed over a block body (structural induction on the op list) | `Tyu.Src.transcription_block` | proven, axiom-audited |
+| T-S (word) | the block lemmas composed over the word CFG walk (well-founded induction on the fuel budget; parameterized over `(TargetSpec, MemModel)`, §Q3) + the run-level iff | `Tyu.Src.transcription_run`, `Tyu.Src.transcription_run_iff` | proven, axiom-audited |
 
 Helper lemmas (not registry entries, reviewed definitions): `id_wf`,
 `compose_wf` (as `Bound.compose_wf`), `branch_max_wf`, `compose_high_ge_*`,
@@ -43,6 +47,7 @@ Helper lemmas (not registry entries, reviewed definitions): `id_wf`,
 | `Tyu.Conformance.*` (abstract transfer oracle) | `Tyu/Conformance/` | mirrors `verifier::interp`/`interval`; zero-divergence pinned by 236 `tyu.vec/1` vectors |
 | `Tyu.Gen.Stmt` (statement semantics + the invariant composition) | `Tyu/Gen/Stmt.lean` | P5: the rendered statements live here. The composition theorem `Tyu.Gen.Stmt.via_cycle_sound` is axiom-audited data among the §3 block below (proved by fuel induction). `Word.runFrom`/`runBlockSt` are structural statement-side copies of the port run semantics — a **review-recorded correspondence** (T-F2); a full `runFrom ≡ runWord` equality theorem is a follow-on item (requires `runWord`'s brecOn-cased unfolding). |
 | `Tyu.Gen.Render` (statement renderer) | `Tyu/Gen/Render.lean` | P5: renders `Gen/<Module>.lean` from `tyu.obl/v2`; re-derives canonical statements + `statement_hash` in Lean (own SHA-256) — the renderer↔encoder drift lock, verified byte-exact against `crates/verifier/src/stmt.rs` over the corpus (`crates/tooling-tests/tests/gen_render_drift.rs`). The canonical dispatches on the formula op (`InRange` / `OffsetLE` / `PredicateHolds` — `stmt.rs::push_formula` byte-for-byte, incl. `{"name":"$top","op":"Var"}` opaque args). Omission classification (opaque `$top`, `call`-unmodeled words, dynamic MMIO, `stack-budget`) is part of the normative rendering rules (§Q4 item 4). **Contract statements (P8.2 scope):** `contract-post` renders `∀ σ₀ σf, run w … = some σf → predicateHolds wpred … [exit outputs]`; `contract-pre` renders the ∀-scheme over the argument tuple (a sound over-claim); both evaluate the predicate via `Tyu.Gen.Stmt.predicateHolds` (the predicate word run over the argument values). A named-predicate contract word contains the predicate `call` op — the statement-side step approximates `call` (representative sig), so such words stay `calls-unmodeled` (omitted honestly, never hashed to a wrong statement): the faithful statement-side mechanism for predicate calls (splicing the predicate's blocks inline at render time — the only calls in contract words) is a committed follow-on (`crates/tooling-tests/tests/renderer_scope.rs` pins the classification + the mmio/encoder hash lock). Inline (`unnamed`) clauses carry no artifact IR (`facts.predicates` records named words only) — the recording of inline clause IR is the second named follow-on. |
+| `Tyu.Src` (fragment semantics + statement forms + transcription) + `Tyu.Src.transcription*` | `Tyu/Src.lean` | **P9 (T-S):** the pure-fragment *source-level* embedding (PLAN-VERIFY-3 §Q8): `Src.Op` (values, typed-stack ops, arithmetic/comparison/bool logic, memory over the oracles, the return-slot local-cell ops, CFG control), `Src.stepOp` (written directly — *not* the IR step), `Src.Block.runBlock`/`Src.Word.run` (mirrors of the IR runs), the source statement forms (`outInRange`, `offsetWithin`, `inInputRange`, `predHolds(path)`), the op-local **transcription** (`transcribeOp`/`transcribeBlock`, one IR op per source construct), and the per-op/block/word simulation theorems (T-S). The op-locality detector is the transcription being total: casts/traps/calls/address ops are EXCLUDED from the fragment (their lowering is not op-local — §Q2's shrink), and the renderer refuses source-surface statements for words containing them. Reviewed against `Tyu.Step`, `ir-op-semantics.md`, and §Q13 (memory oracles are parameters, never fixed values). |
 | `Tyu.Gen.Sha256` (port SHA-256) | `Tyu/Gen/Sha256.lean` | FIPS 180-4, known-answer vectors pinned in `gen --selfcheck`; FR-14 (the only digest). |
 | `Tyu.Gen.Golden` / `goldens/` (statement goldens) | `Tyu/Gen/Golden/*.lean`, `goldens/gen/*.gen.json`, `goldens/obl/*.obl.json` | P5: the committed generated statements, elaborated by the port gate; byte-stable; `ci/port.sh` rediffs them against the live `gen` output. |
 
@@ -77,6 +82,14 @@ Tyu.Sound.AssumptionClosure.cyclic_not_well_closed
 Tyu.Sound.AssumptionClosure.open_edge_not_well_closed
 Tyu.Sound.AssumptionClosure.runtime_terminal
 Tyu.Sound.AssumptionClosure.no_edges_terminal
+Tyu.Sound.transcription
+Tyu.Sound.transcription_forward
+Tyu.Sound.transcription_backward
+Tyu.Sound.transcription_offset
+Tyu.Src.transcription_op
+Tyu.Src.transcription_block
+Tyu.Src.transcription_run
+Tyu.Src.transcription_run_iff
 ```
 
 Permitted axiom set: `{propext, Quot.sound, Classical.choice}` — anything

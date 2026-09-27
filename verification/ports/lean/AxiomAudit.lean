@@ -34,3 +34,11 @@ to appear in this audit. Keep the two lists in the same commit. -/
 #print axioms Tyu.Sound.AssumptionClosure.open_edge_not_well_closed
 #print axioms Tyu.Sound.AssumptionClosure.runtime_terminal
 #print axioms Tyu.Sound.AssumptionClosure.no_edges_terminal
+#print axioms Tyu.Sound.transcription
+#print axioms Tyu.Sound.transcription_forward
+#print axioms Tyu.Sound.transcription_backward
+#print axioms Tyu.Sound.transcription_offset
+#print axioms Tyu.Src.transcription_op
+#print axioms Tyu.Src.transcription_block
+#print axioms Tyu.Src.transcription_run
+#print axioms Tyu.Src.transcription_run_iff
