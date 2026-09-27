@@ -310,6 +310,17 @@ def offsetWithin (w : Word) (off width size : Nat) : Prop :=
   ∀ (spec : Tyu.IR.TargetSpec) (mem : ConcreteMem) (fuel : Nat) (σ₀ : State),
     Terminates w spec fuel mem σ₀ → off + width ≤ size
 
+/-- The contract predicate holds on the argument values (P8.2/P5 contract
+statements): running the predicate word over them — pushed bottom-to-top,
+the call-site convention — terminates and leaves `1` (truthy) on the
+stack. This is the statement-side evaluation of a `PredicateHolds` formula
+(the predicate is itself a pure word whose canonical op text the renderer
+transduces into a `Word` literal). -/
+def predicateHolds (w : Word) (spec : Tyu.IR.TargetSpec) (mem : ConcreteMem)
+    (fuel : Nat) (args : List Int) : Prop :=
+  ∃ σf, Word.run w spec fuel mem (State.pushMany (State.fresh 64) args) = some σf ∧
+    outputAt σf 0 = 1
+
 /-- The OEL value expression of an obligation's formula (§6.3): a word-input
 (`in.i`, evaluated at entry), a word-output (`out.i`, evaluated at the exit
 state `σf`), or a value-preserving cast chain (casts are identity at the

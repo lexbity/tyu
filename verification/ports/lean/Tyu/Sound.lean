@@ -1006,4 +1006,118 @@ theorem stack_algebra_walk {w : WordW} {ids : List Nat} (_hwalk : IsWalk w w.ent
   · exact runOk_length h
   · exact runOkPeak_bound h
 
+/-! T-CL: the assumption-closure registry statement (PLAN-VERIFY-3 §Q7 rule 2,
+P8.1) — image-level closure over the *abstract verdict-set structure*.
+
+A verdict set is **well-closed** when
+
+  1. the assumption graph is acyclic (cycles are malformed — E6419); and
+  2. every closed obligation's assumption edges leave to obligations that
+     are themselves *closed* (`proof`/`checked`) or marked `runtime-check`
+     (the emitted check IS the discharge — §Q7 rule 2).
+
+T-CL proves the transitive form of (2): on a well-closed set, every closed
+obligation's *entire* assumption graph — walked through closed nodes — lands
+inside `closed ∪ runtime`. That is the principle the image-level closure
+walker (`tyu::closure`, P8.2) executes on the concrete artifacts: a
+`proof`-discharged contract-pre in the caller is valid only relative to the
+callee module that was itself proven; an unresolved edge forces the
+dependent open (`assumption-unresolved`), a cycle is E6419-malformed. -/
+namespace AssumptionClosure
+
+open Tyu.Sound
+
+/-- An abstract verdict set (§Q7 rule 2): obligations identified by `Id`,
+the closed classification (`discharged` with `trust ∈ {proof, checked}`),
+the `runtime-check` terminals (the emitted check IS the discharge), and the
+assumption edges. -/
+structure VerdictSet where
+  Id : Type
+  closed : Id → Prop
+  runtime : Id → Prop
+  assumptions : Id → List Id
+
+namespace VerdictSet
+
+/-- An obligation that is discharged (closed) or is a `runtime-check`
+terminal — the only leaves a closed obligation's assumption graph may
+reach. -/
+def closedOrRuntime (V : VerdictSet) (i : V.Id) : Prop :=
+  V.closed i ∨ V.runtime i
+
+/-- Reachability along assumption edges that flow through CLOSED obligations:
+a `runtime` node is a terminal (it carries no obligations), so paths stop at
+it — `step` IS the edge into a terminal. -/
+inductive closedPathTo (V : VerdictSet) : V.Id → V.Id → Prop
+  | step (i j : V.Id) : V.closed i → j ∈ V.assumptions i → closedPathTo V i j
+  | extend (i j k : V.Id) :
+      closedPathTo V i j → V.closed j → closedPathTo V j k →
+      closedPathTo V i k
+
+/-- Acyclicity of the closed-assumption graph: no closed obligation reaches
+itself through a nonempty closed path. Cycles are malformed (E6419). -/
+def acyclic (V : VerdictSet) : Prop :=
+  ∀ i, V.closed i → ¬ closedPathTo V i i
+
+/-- Local edge soundness: every closed obligation's DIRECT assumption edges
+leave to obligations that are closed or `runtime-check` terminals. -/
+def edgeSound (V : VerdictSet) : Prop :=
+  ∀ i, V.closed i → ∀ j, j ∈ V.assumptions i → closedOrRuntime V j
+
+/-- Well-closedness (§Q7 rule 2): acyclic AND locally edge-sound. -/
+def wellClosed (V : VerdictSet) : Prop :=
+  acyclic V ∧ edgeSound V
+
+end VerdictSet
+
+open VerdictSet
+
+/-- T-CL (the registry statement): on a well-closed verdict set, every
+closed obligation's entire assumption graph (walked through closed nodes)
+terminates on obligations that are closed or `runtime-check` terminals.
+This is the transitive closure of `edgeSound` along the acyclic graph — the
+mathematical content the P8.2 image walker executes. -/
+theorem transitive_closure_sound {V : VerdictSet} (hw : V.wellClosed)
+    {i j : V.Id} (hci : V.closed i) (hp : V.closedPathTo i j) :
+    V.closedOrRuntime j := by
+  induction hp with
+  | step i' j' hc hmem =>
+      exact hw.2 i' hc j' hmem
+  | extend i' j' k' _hp1 hcj _hp2 _ih1 ih2 =>
+      exact ih2 hcj
+
+/-- A closed obligation reachable from itself — a cycle — contradicts
+well-closedness: cycles are malformed (E6419). -/
+theorem cyclic_not_well_closed {V : VerdictSet} {i : V.Id}
+    (hc : V.closed i) (hp : V.closedPathTo i i) : ¬ V.wellClosed := by
+  intro hw
+  exact hw.1 i hc hp
+
+/-- An assumption edge that leaves a closed obligation to an OPEN obligation
+contradicts well-closedness: an unresolved dependency means the dependent's
+closure fails (the image report must resolve it open with witness
+`assumption-unresolved`). -/
+theorem open_edge_not_well_closed {V : VerdictSet} {i j : V.Id}
+    (hci : V.closed i) (hmem : j ∈ V.assumptions i)
+    (hj_closed : ¬ V.closed j) (hj_runtime : ¬ V.runtime j) : ¬ V.wellClosed := by
+  intro hw
+  have h : V.closedOrRuntime j := hw.2 i hci j hmem
+  exact h.elim hj_closed hj_runtime
+
+/-- Base case (terminal): a `runtime-check` obligation is a terminal — the
+emitted check IS the discharge, so its closure is itself. -/
+theorem runtime_terminal {V : VerdictSet} {i : V.Id} (hr : V.runtime i) :
+    V.closedOrRuntime i := by
+  exact Or.inr hr
+
+/-- Base case (isolated): a closed obligation with no assumption edges is
+its own base case — with nothing to walk, its closure is trivially sound. -/
+theorem no_edges_terminal {V : VerdictSet} {i : V.Id} {j : V.Id}
+    (hne : V.assumptions i = []) (hmem : j ∈ V.assumptions i) :
+    V.closedOrRuntime j := by
+  rw [hne] at hmem
+  simp at hmem
+
+end AssumptionClosure
+
 end Tyu.Sound

@@ -261,6 +261,51 @@ pub(crate) fn compose(
             emitted.mmio_bounds += mmio;
         }
     }
+    // P8.2 (§Q7 rule 2): the image-level assumption closure — the T-CL
+    // walker over the merged verdict sets. Closed dependents whose
+    // assumption graphs cannot terminate on closed/runtime-check
+    // obligations are forced open (witness `assumption-unresolved`); a
+    // cycle in the closed-assumption graph is E6419-malformed (fail-closed
+    // — the build must never resolve a cycle). Structural pairing: each
+    // module's (artifact, echo) travels as one tuple — the two lists here
+    // are index-aligned by construction, and the tuple form makes a
+    // mispair impossible downstream.
+    let closure_modules: Vec<(String, Option<OblSet>, Option<Echo>)> = sets
+        .iter()
+        .zip(echoes.iter())
+        .map(|((name, set), (_, echo))| (name.clone(), set.clone(), echo.clone()))
+        .collect();
+    match crate::closure::check_image_closure(&closure_modules) {
+        Ok(closure) => {
+            report.closure = verifier::report::ClosureStatus {
+                well_closed: closure.well_closed,
+                checked: closure.checked,
+                unresolved: closure.unresolved.len() as u32,
+            };
+            for u in &closure.unresolved {
+                report.open.push(OpenObligation {
+                    id: u.id.clone(),
+                    kind: u.kind.clone(),
+                    module: u.module.clone(),
+                    word: u.word.clone(),
+                    site: format!("{}.{}", u.word, u.occurrence),
+                    line: u.line,
+                    reason: Some(crate::closure::unresolved_witness(&u.dependency)),
+                });
+            }
+        }
+        Err(cycle) => {
+            let loop_text = cycle
+                .path
+                .iter()
+                .map(|(m, id)| format!("{m}::{id}"))
+                .collect::<Vec<_>>()
+                .join(" -> ");
+            return Err(TyuError::Build(format!(
+                "E6419: assumption-closure cycle (malformed): {loop_text}"
+            )));
+        }
+    }
     report
         .open
         .sort_by(|a, b| a.module.cmp(&b.module).then_with(|| a.id.cmp(&b.id)));

@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2021"
 description = "Static verification subsystem: IR op semantics table, obligation model, interval discharge."
 
+[features]
+# Test fixture builders used by the closure test surfaces across crates
+# (tyu lib/integration tests, tooling-tests). Enabled only in
+# dev-dependencies — never in production builds.
+test-util = []
+
 [lib]
 
 [dependencies]

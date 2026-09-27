@@ -1,8 +1,8 @@
 {"synthetic": false,
  "schemaVersion": "2025-09-10",
  "outputs":
- {"o": ["bb377728f8efc2b3.olean"],
-  "i": "308c68270939bfe0.ilean",
+ {"o": ["4433ca6416b87ace.olean"],
+  "i": "f41307e6ab69c571.ilean",
   "c": "e06a88f942beb882.c"},
  "log":
  [{"message":
@@ -21,31 +21,31 @@
    "../../Tyu/Gen/Stmt.lean:292:32: unused variable `mem`\n\nNote: This linter can be disabled with `set_option linter.unusedVariables false`",
    "level": "warning"},
   {"message":
-   "../../Tyu/Gen/Stmt.lean:356:37: unused variable `i`\n\nNote: This linter can be disabled with `set_option linter.unusedVariables false`",
+   "../../Tyu/Gen/Stmt.lean:367:37: unused variable `i`\n\nNote: This linter can be disabled with `set_option linter.unusedVariables false`",
    "level": "warning"},
   {"message":
-   "../../Tyu/Gen/Stmt.lean:356:47: unused variable `lo`\n\nNote: This linter can be disabled with `set_option linter.unusedVariables false`",
+   "../../Tyu/Gen/Stmt.lean:367:47: unused variable `lo`\n\nNote: This linter can be disabled with `set_option linter.unusedVariables false`",
    "level": "warning"},
   {"message":
-   "../../Tyu/Gen/Stmt.lean:356:50: unused variable `hi`\n\nNote: This linter can be disabled with `set_option linter.unusedVariables false`",
+   "../../Tyu/Gen/Stmt.lean:367:50: unused variable `hi`\n\nNote: This linter can be disabled with `set_option linter.unusedVariables false`",
    "level": "warning"},
   {"message":
-   "../../Tyu/Gen/Stmt.lean:396:11: unused variable `mem2`\n\nNote: This linter can be disabled with `set_option linter.unusedVariables false`",
+   "../../Tyu/Gen/Stmt.lean:407:11: unused variable `mem2`\n\nNote: This linter can be disabled with `set_option linter.unusedVariables false`",
    "level": "warning"},
   {"message":
-   "../../Tyu/Gen/Stmt.lean:396:22: unused variable `σ1`\n\nNote: This linter can be disabled with `set_option linter.unusedVariables false`",
+   "../../Tyu/Gen/Stmt.lean:407:22: unused variable `σ1`\n\nNote: This linter can be disabled with `set_option linter.unusedVariables false`",
    "level": "warning"},
   {"message":
-   "../../Tyu/Gen/Stmt.lean:399:11: unused variable `mem2`\n\nNote: This linter can be disabled with `set_option linter.unusedVariables false`",
+   "../../Tyu/Gen/Stmt.lean:410:11: unused variable `mem2`\n\nNote: This linter can be disabled with `set_option linter.unusedVariables false`",
    "level": "warning"},
   {"message":
-   "../../Tyu/Gen/Stmt.lean:507:21: This simp argument is unused:\n  hu\n\nHint: Omit it from the simp argument list.\n  simp [hut, hu̵,̵ ̵h̵s]\n\nNote: This linter can be disabled with `set_option linter.unusedSimpArgs false`",
+   "../../Tyu/Gen/Stmt.lean:518:21: This simp argument is unused:\n  hu\n\nHint: Omit it from the simp argument list.\n  simp [hut, hu̵,̵ ̵h̵s]\n\nNote: This linter can be disabled with `set_option linter.unusedSimpArgs false`",
    "level": "warning"},
   {"message":
-   "../../Tyu/Gen/Stmt.lean:507:25: This simp argument is unused:\n  hs\n\nHint: Omit it from the simp argument list.\n  simp [hut, hu,̵ ̵h̵s̵]\n\nNote: This linter can be disabled with `set_option linter.unusedSimpArgs false`",
+   "../../Tyu/Gen/Stmt.lean:518:25: This simp argument is unused:\n  hs\n\nHint: Omit it from the simp argument list.\n  simp [hut, hu,̵ ̵h̵s̵]\n\nNote: This linter can be disabled with `set_option linter.unusedSimpArgs false`",
    "level": "warning"},
   {"message":
-   "../../Tyu/Gen/Stmt.lean:666:18: unused variable `fuel`\n\nNote: This linter can be disabled with `set_option linter.unusedVariables false`",
+   "../../Tyu/Gen/Stmt.lean:677:18: unused variable `fuel`\n\nNote: This linter can be disabled with `set_option linter.unusedVariables false`",
    "level": "warning"}],
  "inputs":
  [["Tyu.Gen.Stmt:deps",
@@ -69,7 +69,7 @@
   ["Lean 4.27.0, commit 4cb1b2466ded03701c4a349ed1debdfe54946daa",
    "7b39e63d772bc043"],
   ["/home/lex/Public/tyu_lang/verification/ports/lean/tests/harvest-fixture/../../Tyu/Gen/Stmt.lean",
-   "72159cc93b44e3f5"],
+   "f602d54b21cf33ca"],
   ["options", "00000000000006bb"],
   ["Module.leanArgs: #[]", "00000000000006bb"]],
- "depHash": "32881c2c4ac15e51"}
+ "depHash": "d9f53f7d34ef81ae"}

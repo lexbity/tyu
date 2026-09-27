@@ -1709,6 +1709,20 @@ fn write_report_bytes(r: &crate::report::VerifyReport) -> Vec<u8> {
         out.push(b'}');
     }
     out.extend_from_slice(b"]}");
+    // P8.2: the per-image assumption-closure status (§Q7 rule 2) — the T-CL
+    // walker's outcome. Additive report member (the in-tree writer owns the
+    // fixed key order).
+    out.extend_from_slice(b",\"closure\":{\"well_closed\":");
+    out.extend_from_slice(if r.closure.well_closed {
+        b"true"
+    } else {
+        b"false"
+    });
+    out.extend_from_slice(b",\"checked\":");
+    write_i64(&mut out, r.closure.checked as i64);
+    out.extend_from_slice(b",\"unresolved\":");
+    write_i64(&mut out, r.closure.unresolved as i64);
+    out.extend_from_slice(b"}");
     write_report_modules(&mut out, &r.modules);
     write_report_contexts(&mut out, &r.contexts);
     out.extend_from_slice(b",\"open\":[");

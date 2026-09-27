@@ -12,5 +12,9 @@ target
 verification/ports/*/.lake/
 verification/ports/*/lake-manifest.json
 
-# Gen golden build artifacts (generated; regen via the gen exe + port.sh)
-verification/ports/lean/.lake/
+# Harvest-fixture build artifacts (the P7.1 gate regenerates everything
+# fresh each run — committed artifacts are a stale trap when the port's
+# Harvest.lean/Sound.lean/etc. change)
+verification/ports/*/tests/*/.lake/
+verification/ports/*/tests/*/lake-manifest.json
+verification/ports/*/tests/*/lean-toolchain

@@ -1,0 +1,1 @@
+{"schema":"tyu.assumptions/1","module":"App","target":"x86_64-unknown-linux-gnu","scenario":"edge-present","obligations":[{"id":"App::main::contract-pre::0","kind":"contract-pre","assumptions":[{"obligation":"Bank::withdraw::contract-pre::0","module":"Bank"}]},{"id":"App::main::subtype-range::0","kind":"subtype-range","assumptions":[]}]}

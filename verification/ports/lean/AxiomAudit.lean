@@ -29,3 +29,8 @@ to appear in this audit. Keep the two lists in the same commit. -/
 #print axioms Tyu.Sound.seq_net_exact
 #print axioms Tyu.Sound.seq_peak_envelope
 #print axioms Tyu.Gen.Stmt.via_cycle_sound
+#print axioms Tyu.Sound.AssumptionClosure.transitive_closure_sound
+#print axioms Tyu.Sound.AssumptionClosure.cyclic_not_well_closed
+#print axioms Tyu.Sound.AssumptionClosure.open_edge_not_well_closed
+#print axioms Tyu.Sound.AssumptionClosure.runtime_terminal
+#print axioms Tyu.Sound.AssumptionClosure.no_edges_terminal

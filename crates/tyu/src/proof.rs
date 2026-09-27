@@ -454,10 +454,51 @@ pub fn run_lean_pipeline(
 
     // P7.1: the harvest — kernel-checked theorems become v2 verdicts.
     let harvest = run_harvest(&package, &artifacts)?;
+
+    // P8.2: the image-level assumption closure runs BETWEEN the harvest and
+    // pass-2 codegen (the plan's shape — §Q7 rule 3). A caller-side
+    // `contract-pre` certificate is valid only relative to the callee module
+    // that was itself proven; a dependent whose closure fails is flipped to
+    // `open` with witness `assumption-unresolved` in its document, so
+    // pass-2 langc consumes it open and RETAINS the check — never an elided
+    // check with an open report row. A cycle is E6419-malformed (fail-closed).
+    let mut closure_sets: Vec<(String, Option<verifier::model::OblSet>)> = Vec::new();
+    for ob in &artifacts {
+        let bytes = fs::read(ob).map_err(TyuError::Io)?;
+        match verifier::codec::read_obl(&bytes) {
+            Ok(set) => closure_sets.push((set.module.clone(), Some(set))),
+            Err(e) => {
+                return Err(TyuError::Build(format!(
+                    "E6419: obligation artifact '{}' invalid for closure (E{}): {e:?}",
+                    ob.display(),
+                    e.code()
+                )));
+            }
+        }
+    }
+    let adjusted = match crate::closure::apply_harvest_closure(&closure_sets, &harvest) {
+        Ok(docs) => docs,
+        Err(crate::closure::HarvestClosureError::Cycle(cycle)) => {
+            let loop_text = cycle
+                .path
+                .iter()
+                .map(|(m, id)| format!("{m}::{id}"))
+                .collect::<Vec<_>>()
+                .join(" -> ");
+            return Err(TyuError::Build(format!(
+                "E6419: assumption-closure cycle (malformed) in harvested verdicts: {loop_text}"
+            )));
+        }
+        Err(crate::closure::HarvestClosureError::Malformed(detail)) => {
+            return Err(TyuError::Build(format!(
+                "E6416: harvest closure input malformed: {detail}"
+            )));
+        }
+    };
     let harvest_out = project_root.join(VERIFY_DIR).join("harvest");
     fs::create_dir_all(&harvest_out).map_err(TyuError::Io)?;
     let mut verdict_files: Vec<(String, PathBuf)> = Vec::new();
-    for (module, v2) in harvest {
+    for (module, v2) in adjusted {
         let path = harvest_out.join(format!("{module}.verdicts.v2.json"));
         fs::create_dir_all(harvest_out.parent().unwrap_or(&harvest_out)).ok();
         fs::write(&path, &v2).map_err(TyuError::Io)?;

@@ -756,6 +756,11 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 source: VerdictSource::InTree,
             };
         }
+        // P8.2: an explicitly-open FILE record's witness survives to the
+        // final open resolution (e.g. the harvest-closure flip
+        // `assumption-unresolved: <dep>`) — the echo's open reason then
+        // tells the report WHY the site is open, not just that it is.
+        let mut file_open_witness: Option<alloc::string::String> = None;
         if self.checks == ChecksMode::Undischarged {
             if let Some(v) = self.verdicts {
                 if let Some(rec) = v.lookup(id, id_hash) {
@@ -764,6 +769,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                     // automation, which may still discharge the site as
                     // `checked` (Q12: the engine is the automation layer).
                     if rec.status.is_open() {
+                        file_open_witness = rec.witness_reason.clone();
                         // fall through below
                     } else {
                         // The record resolves the site — but only while it
@@ -883,6 +889,14 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                         .map(|m| m.proven_admissible_checked())
                         .unwrap_or(false);
                 if admitted || t.status != VerdictStatus::Discharged {
+                    // P8.2: when the file explicitly opened the site with a
+                    // witness (the harvest-closure `assumption-unresolved`
+                    // flip), that reason names the decision — the in-tree
+                    // automation's own open reason would be misleading.
+                    let reason = match &file_open_witness {
+                        Some(w) => Some(w.clone()),
+                        None => t.reason.clone(),
+                    };
                     return ResolvedVerdict {
                         id: id.to_string(),
                         id_hash: id_hash.to_string(),
@@ -893,7 +907,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                         justification: None,
                         statement_hash: None,
                         provably_failing: t.provably_failing,
-                        reason: t.reason.clone(),
+                        reason,
                         source: VerdictSource::InTree,
                     };
                 }
@@ -922,7 +936,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             justification: None,
             statement_hash: None,
             provably_failing: false,
-            reason: None,
+            reason: file_open_witness,
             source: VerdictSource::InTree,
         }
     }

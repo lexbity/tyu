@@ -288,3 +288,66 @@ fn unrecognized_producer_downgrades_proof_to_assumed() {
         2,
     );
 }
+
+/// P8.2: an explicitly-`open` file record's `witness.reason` (the harvest
+/// closure's `assumption-unresolved: <dep>` flip) survives consumption —
+/// the site stays open (checks retained, fail-closed) AND the echo's
+/// `open_reasons` carries the witness, so the report row says WHY.
+#[test]
+fn open_record_witness_survives_to_the_echo() {
+    let dir = fresh_dir("open-witness");
+    let mod_path = dir.join("Bank.mod");
+    fs::write(&mod_path, MOD).unwrap();
+    // The site's real `(id, id_hash)` (a mismatched hash is fail-closed
+    // stale — the record would never be consulted and the witness lost).
+    let obl_dir = dir.join("obl");
+    fs::create_dir_all(&obl_dir).unwrap();
+    let obl = Command::new(langc_exe())
+        .arg("--emit=obligations")
+        .arg(format!("--out-dir={}", obl_dir.display()))
+        .arg(mod_path.to_str().unwrap())
+        .output()
+        .expect("obl pass");
+    assert!(obl.status.success());
+    let set = verifier::codec::read_obl(&fs::read(obl_dir.join("Bank.obl.json")).unwrap()).unwrap();
+    let site = set
+        .obligations
+        .iter()
+        .find(|o| o.id == "Bank::f::subtype-range::0")
+        .expect("C1 site present");
+    let doc = format!(
+        "{{\"schema\":\"tyu.verdicts/v2\",\"certifier\":null,\"semantics\":\"tyu.ir-sem/1.0\",\"stmt\":\"tyu.stmt/1.0\",\"target\":\"x86_64-unknown-linux-gnu\",\"model_semantics\":\"unmodeled\",\"verdicts\":[{{\"id\":\"{}\",\"id_hash\":\"{}\",\"status\":\"open\",\"trust\":\"open\",\"witness\":{{\"reason\":\"assumption-unresolved: Math::op::contract-pre::0\"}}}}]}}",
+        site.id, site.id_hash
+    );
+    let out_dir = dir.join("out");
+    fs::create_dir_all(&out_dir).unwrap();
+    let vf = dir.join("v.json");
+    fs::write(&vf, doc).unwrap();
+    let output = Command::new(langc_exe())
+        .arg("--emit=obj")
+        .arg("--target=x86_64-unknown-linux-gnu")
+        .arg(format!("--out-dir={}", out_dir.display()))
+        .arg("--write-obl")
+        .arg("--checks=undischarged")
+        .arg(format!("--verdicts={}", vf.display()))
+        .arg(mod_path.to_str().unwrap())
+        .output()
+        .expect("langc invocation");
+    assert!(
+        output.status.success(),
+        "an open record must fail closed to more checking, not fail the build"
+    );
+    // The echo carries the witness in open_reasons (drives the report row).
+    let echo =
+        verifier::verdict::read_echo(&fs::read(out_dir.join("Bank.verdicts.inTree.json")).unwrap())
+            .unwrap();
+    assert!(
+        echo.open_reasons
+            .iter()
+            .any(|r| r.reason == "assumption-unresolved: Math::op::contract-pre::0"),
+        "the open-record witness must ride the echo's open_reasons: {:?}",
+        echo.open_reasons
+    );
+    // No record closes the site: the checks are retained.
+    assert!(echo.verdicts.records.is_empty());
+}

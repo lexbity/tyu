@@ -59,12 +59,18 @@ def jobj (kvs : List (String × String)) : String :=
   "{" ++ String.intercalate "," (kvs.map (fun (k, v) => jstr k ++ ":" ++ v)) ++ "}"
 def jarr (xs : List String) : String := "[" ++ String.intercalate "," xs ++ "]"
 
-/-- The canonical OEL value (mirrors `stmt.rs::canon_oel`). -/
+/-- The canonical OEL value (mirrors `stmt.rs::canon_oel`). `$top` is a
+plain `Var` in the canonical form (the formula's opaque args are carried as
+`{"name":"$top","op":"Var"}` — never a bare string). -/
 partial def oelCanon : Oel → String
   | .inVar i => jobj [ ("name", jstr ("in." ++ toString i)), ("op", jstr "Var") ]
   | .outVar i => jobj [ ("name", jstr ("out." ++ toString i)), ("op", jstr "Var") ]
   | .castArg src dst arg => jobj [ ("arg", oelCanon arg), ("from", jstr src), ("op", jstr "Cast"), ("to", jstr dst) ]
-  | .opaqueMk => jstr "$top"
+  | .opaqueMk => jobj [ ("name", jstr "$top"), ("op", jstr "Var") ]
+
+/-- `word_ir_hash` ($6.1). -/
+def wordIrHash (ir : String) : String :=
+  Tyu.Gen.Sha256.sha256Hex16 ir
 
 -- ---------------------------------------------------------------------
 -- Statement surface (parsed from the artifact) + canonical statements
@@ -80,25 +86,6 @@ structure Ctx where
   kind : String
   occurrence : Nat
   refinement : Option String
-
-/-- The canonical statement bytes for an obligation. -/
-def canonical (ctx : Ctx) (o : Oel) (lo hi : Int) : String :=
-  let cobj := jobj [ ("kind", jstr ctx.kind), ("model_semantics", jstr ctx.model)
-                   , ("module", jstr ctx.module), ("occurrence", jnum ctx.occurrence)
-                   , ("refinement", match ctx.refinement with | some r => jstr r | none => "null")
-                   , ("semantics", jstr "tyu.ir-sem/1.0"), ("stmt_ver", jstr "tyu.stmt/1.0")
-                   , ("target", jstr ctx.target), ("word", jstr ctx.word)
-                   , ("word_ir_hash", jstr ctx.wordIrHash) ]
-  let fobj := jobj [ ("hi", jnum hi), ("lo", jnum lo), ("op", jstr "InRange"), ("value", oelCanon o) ]
-  "{\"context\":" ++ cobj ++ ",\"formula\":" ++ fobj ++ "}"
-
-/-- `statement_hash` ($6.2). -/
-def statementHash (ctx : Ctx) (o : Oel) (lo hi : Int) : String :=
-  Tyu.Gen.Sha256.sha256Hex (canonical ctx o lo hi)
-
-/-- `word_ir_hash` ($6.1). -/
-def wordIrHash (ir : String) : String :=
-  Tyu.Gen.Sha256.sha256Hex16 ir
 
 /-- A Lean-safe identifier: non-Alphanumeric becomes `_`. -/
 def ident (s : String) : String :=
@@ -127,12 +114,18 @@ structure Obl where
   word : String
   occurrence : Nat
   cycles : List (Nat × List Nat)
+  formulaOp : String
   oel : Oel
   lo : Int
   hi : Int
   off : Option UInt32
   width : UInt32
   size : UInt32
+  predModule : String
+  predName : String
+  predIr : List String
+  predIrHash : String
+  args : List Oel
   deriving Inhabited
 
 structure WordFact where
@@ -146,7 +139,7 @@ structure Artifact where
   modelSemantics : String
   words : List WordFact
   obligations : List Obl
-  predicates : List (String × List String)
+  predicates : List (String × List String × String)
   deriving Inhabited
 
 /-- `$top`-rooted (opaque): the statement cannot be expressed truthfully. -/
@@ -213,7 +206,7 @@ def parseObligation (j : Json) : M Obl :=
           let lo := (fj.field "lo").bind Json.asInt |>.getD 0
           let hi := (fj.field "hi").bind Json.asInt |>.getD 0
           match (fj.field "value").bind (fun v => (parseOel v).toOption) with
-          | some o => pure (Obl.mk id idHash kind word occurrence cycleData o lo hi none 0 0)
+          | some o => pure (Obl.mk id idHash kind word occurrence cycleData "InRange" o lo hi none 0 0 "" "" [] "" [])
           | none => throw (.notOblDoc ("InRange without value: " ++ id))
       | some "OffsetLE" =>
           let width := (fj.field "width").bind Json.asInt |>.getD 0
@@ -221,9 +214,22 @@ def parseObligation (j : Json) : M Obl :=
           let off := match (fj.field "off") with
             | some n => (Json.asInt n).map (fun v => UInt32.ofNat v.toNat)
             | none => none
-          pure (Obl.mk id idHash kind word occurrence cycleData Oel.opaqueMk 0 1 off (UInt32.ofNat width.toNat) (UInt32.ofNat size.toNat))
+          pure (Obl.mk id idHash kind word occurrence cycleData "OffsetLE" Oel.opaqueMk 0 1 off (UInt32.ofNat width.toNat) (UInt32.ofNat size.toNat) "" "" [] "" [])
       | some "PredicateHolds" =>
-          pure (Obl.mk id idHash kind word occurrence cycleData Oel.opaqueMk 0 1 none 0 0)
+          let pred := (fj.field "predicate")
+          let predModule := pred.bind (fun p => (p.field "module").bind Json.asStr) |>.getD ""
+          let predName := pred.bind (fun p => (p.field "name").bind Json.asStr) |>.getD ""
+          let predIr := pred.bind (fun p => (p.field "ir").bind Json.asArr) |>.getD [] |>.filterMap Json.asStr
+          let predIrHash := pred.bind (fun p => (p.field "ir_hash").bind Json.asStr) |>.getD ""
+          let argVals := (fj.field "args").bind Json.asArr |>.getD []
+          let args := argVals.filterMap (fun v => (parseOel v).toOption)
+          -- fail closed when an arg is unparseable (the canonical must not
+          -- silently drop a member)
+          if ¬ argVals.all (fun v => (parseOel v).toOption.isSome)
+          then throw (.notOblDoc ("PredicateHolds arg unparseable: " ++ id))
+          else pure (Obl.mk id idHash kind word occurrence cycleData
+                       "PredicateHolds" Oel.opaqueMk 0 1 none 0 0
+                       predModule predName predIr predIrHash args)
       | _ => throw (.unknownForm ("obligation " ++ id ++ ": unknown formula op"))
   | none => throw (.notOblDoc ("obligation without formula: " ++ id))
 
@@ -245,11 +251,40 @@ def parseArtifact (input : String) : M Artifact :=
               WordFact.mk n ((w.field "ir").bind Json.asStr |>.getD "")))
         let predicates := predicatesList.filterMap (fun p =>
             (p.field "name").bind Json.asStr |>.map (fun n =>
-              (n, (p.field "ir").bind Json.asArr |>.getD [] |>.filterMap Json.asStr)))
+              (n, (p.field "ir").bind Json.asArr |>.getD [] |>.filterMap Json.asStr,
+               (p.field "ir_hash").bind Json.asStr |>.getD "")))
         let raw := (j.field "obligations").bind Json.asArr |>.getD []
         let obligations := raw.filterMap (fun o => (parseObligation o).toOption)
         if obligations.length ≠ raw.length then throw (.notOblDoc "an obligation failed to parse — fail closed")
         else pure (Artifact.mk module target model words obligations predicates)
+
+/-- The canonical statement bytes for an obligation (dispatches on the
+formula op — mirrors `stmt.rs::push_formula` byte-for-byte). Declared here
+(after the `Obl` structure) so field projection resolves. -/
+def canonical (ctx : Ctx) (o : Obl) : String :=
+  let cobj := jobj [ ("kind", jstr ctx.kind), ("model_semantics", jstr ctx.model)
+                   , ("module", jstr ctx.module), ("occurrence", jnum ctx.occurrence)
+                   , ("refinement", match ctx.refinement with | some r => jstr r | none => "null")
+                   , ("semantics", jstr "tyu.ir-sem/1.0"), ("stmt_ver", jstr "tyu.stmt/1.0")
+                   , ("target", jstr ctx.target), ("word", jstr ctx.word)
+                   , ("word_ir_hash", jstr ctx.wordIrHash) ]
+  let fobj : String := match o.formulaOp with
+    | "InRange" =>
+        jobj [ ("hi", jnum o.hi), ("lo", jnum o.lo), ("op", jstr "InRange"), ("value", oelCanon o.oel) ]
+    | "OffsetLE" =>
+        let off := match o.off with | some n => jnum (Int.ofNat n.toNat) | none => "null"
+        jobj [ ("off", off), ("op", jstr "OffsetLE"), ("size", jnum (Int.ofNat o.size.toNat)), ("width", jnum (Int.ofNat o.width.toNat)) ]
+    | "PredicateHolds" =>
+        let args := jarr (o.args.map oelCanon)
+        let pred := jobj [ ("ir", jarr (o.predIr.map jstr)), ("ir_hash", jstr o.predIrHash)
+                         , ("module", jstr o.predModule), ("name", jstr o.predName) ]
+        jobj [ ("args", args), ("op", jstr "PredicateHolds"), ("predicate", pred) ]
+    | _ => "null"
+  "{\"context\":" ++ cobj ++ ",\"formula\":" ++ fobj ++ "}"
+
+/-- `statement_hash` (§6.2). -/
+def statementHash (ctx : Ctx) (o : Obl) : String :=
+  Tyu.Gen.Sha256.sha256Hex (canonical ctx o)
 
 /-- Render one canonical op line as a Lean `ConcreteOp` literal. -/
 def renderOp : String → Option String
@@ -344,6 +379,36 @@ def renderBlocks (ir : String) : Option String :=
 -- Omission classification
 -- ---------------------------------------------------------------------
 
+/-- The predicate's canonical op-text: the transcluded `PredicateRef.ir`
+when present, else the module's own `facts.predicates` IR (the callee's own
+clause — its artifact was still being written during its own extraction, so
+the ref is empty but the facts carry it). -/
+def predIrOf (a : Artifact) (o : Obl) : List String :=
+  if o.predIr.isEmpty then
+    match a.predicates.find? (fun (n, _, _) => n == o.predName) with
+    | some (_, ir, _) => ir
+    | none => []
+  else o.predIr
+
+/-- Every `PredicateHolds` arg must be a plain `in.i`/`out.i` ref for the
+exit-state claim to be truthful (opaque and cast chains are refused). -/
+def argsPlain (o : Obl) : Bool :=
+  o.args.all (fun a => match a with | .inVar _ | .outVar _ => true | _ => false)
+
+/-- Contract obligations render truthfully when:
+  1. the predicate IR is resolvable (ref or the module's facts);
+  2. the predicate contains no `call` (unfaithful in the statement-side
+     step);
+  3. for `contract-post` the formula args are concrete `in/out` refs
+     (`contract-pre` args are the caller's `$top` values — the statement
+     is the ∀-scheme over them, a sound over-claim). -/
+def contractClassify (a : Artifact) (o : Obl) : Option String :=
+  let ir := predIrOf a o
+  if ir.isEmpty then some "predicate-unavailable"
+  else if wordHasCall (String.intercalate "\n" ir) then some "predicate-calls-unmodeled"
+  else if o.kind == "contract-post" && ¬ argsPlain o then some "opaque-args"
+  else none
+
 /-- The statement form of an obligation: which Prop renderer it uses, or
 `none` when it must be omitted (with a reason). -/
 def classify (a : Artifact) (o : Obl) : Option String :=
@@ -354,8 +419,9 @@ def classify (a : Artifact) (o : Obl) : Option String :=
   else if wcall then some "calls-unmodeled"
   else match o.kind with
     | "subtype-range" => if oelOpaque o.oel then some "opaque-site" else none
-    | "mmio-bounds" => if o.off.isNone then some "dynamic-offset" else none
-    | "contract-pre" | "contract-post" => some "opaque-args"
+    | "mmio-bounds" =>
+        if o.formulaOp ≠ "OffsetLE" || o.off.isNone then some "dynamic-offset" else none
+    | "contract-pre" | "contract-post" => contractClassify a o
     | _ => some "unknown-kind"
 
 -- ---------------------------------------------------------------------
@@ -366,20 +432,50 @@ def classify (a : Artifact) (o : Obl) : Option String :=
 def wordName (a : Artifact) (o : Obl) : String :=
   wordRef a.module o.word
 
+/-- The contract statements (PredicateHolds).
+
+- `contract-post`: every terminating run's exit outputs satisfy the
+  predicate — `∀ σ₀ σf, run w … σ₀ = some σf → predicateHolds wpred … [out args]`;
+- `contract-pre`: the predicate holds over the call-site argument tuple —
+  rendered as the ∀-scheme over the values (a sound over-claim; the
+  compiler records `$top` values for the caller's arguments). -/
+def renderPredicateHolds (a : Artifact) (o : Obl) (w : String) : String :=
+  let predW := wordRef a.module o.predName
+  let binders := " (spec : Tyu.IR.TargetSpec) (mem : Tyu.Step.ConcreteMem) (fuel : Nat)"
+  if o.kind == "contract-post" then
+    let args := o.args.filterMap (fun arg =>
+      match arg with
+      | .outVar i => some ("outputAt σf " ++ toString i)
+      | .inVar i => some ("inputAt σ₀ " ++ toString i)
+      | _ => none)
+    "∀" ++ binders ++ " (σ₀ σf : Tyu.Step.State),\n    " ++
+      "Tyu.Gen.Stmt.Word.run " ++ w ++ " spec fuel mem σ₀ = some σf →\n    " ++
+      "Tyu.Gen.Stmt.predicateHolds " ++ predW ++ " spec mem fuel [ " ++ String.intercalate ", " args ++ " ]"
+  else
+    let args := o.args.length
+    let names := (List.range args).map (fun i => "a_" ++ toString i)
+    let argBinders := names.map (fun n => " (" ++ n ++ " : Int)") |> String.intercalate ""
+    "∀" ++ binders ++ argBinders ++ ",\n    " ++
+      "Tyu.Gen.Stmt.predicateHolds " ++ predW ++ " spec mem fuel [ " ++ String.intercalate ", " names ++ " ]"
+
 /-- Render the `def … : Prop := …` statement text for a renderable
 obligation. -/
 def renderStatement (a : Artifact) (o : Obl) : String :=
   let ctx := Ctx.mk a.target a.modelSemantics a.module o.word (wordIrHash (tagList a o)) o.kind o.occurrence none
-  let hash := match o with
-    | { oel := e, lo := l, hi := h, .. } => statementHash ctx e l h
+  let hash := statementHash ctx o
   let name := stmtName a.module o.word o.kind o.occurrence
   let w := wordName a o
-  let prop : String := match o with
-    | { oel := e, lo := l, hi := h, .. } =>
-        match oelRoot e with
-        | some ("in", i) => "Tyu.Gen.Stmt.inInputRange " ++ toString i ++ " (" ++ toString l ++ ") (" ++ toString h ++ ")"
-        | some ("out", i) => "Tyu.Gen.Stmt.outInRange " ++ w ++ " " ++ toString i ++ " (" ++ toString l ++ ") (" ++ toString h ++ ")"
+  let prop : String := match o.formulaOp with
+    | "InRange" =>
+        match oelRoot o.oel with
+        | some ("in", i) => "Tyu.Gen.Stmt.inInputRange " ++ toString i ++ " (" ++ toString o.lo ++ ") (" ++ toString o.hi ++ ")"
+        | some ("out", i) => "Tyu.Gen.Stmt.outInRange " ++ w ++ " " ++ toString i ++ " (" ++ toString o.lo ++ ") (" ++ toString o.hi ++ ")"
         | _ => "True"
+    | "OffsetLE" =>
+        "Tyu.Gen.Stmt.offsetWithin " ++ w ++ " " ++ toString (o.off.getD 0) ++
+          " (" ++ toString o.width ++ ") (" ++ toString o.size ++ ")"
+    | "PredicateHolds" => renderPredicateHolds a o w
+    | _ => "True"
   "/-- statement: " ++ o.id ++ "\n    statement_hash: " ++ hash ++ " -/\n" ++ "def " ++ name ++ " : Prop :=\n  " ++ prop
 where
   tagList (a : Artifact) (o : Obl) : String :=
@@ -433,6 +529,23 @@ def renderWordDefs (a : Artifact) : String :=
     "def " ++ wordRef a.module w.name ++ " : Tyu.Gen.Stmt.Word := { blocks := " ++
     wordRef a.module w.name ++ "_blocks, entry := 0 }"))
 
+/-- The contract-predicate block defs referenced by renderable contract
+statements (resolved from the transcluded ref or the module's
+`facts.predicates`). -/
+def renderPredicateDefs (a : Artifact) : String :=
+  let used := a.obligations.filterMap (fun o =>
+    match classify a o with
+    | none => if o.formulaOp == "PredicateHolds"
+                then let ir := predIrOf a o; if ir.isEmpty then none else some (o.predName, ir)
+                else none
+    | some _ => none) |>.eraseDups
+  String.intercalate "\n" (used.map (fun (pn, ir) =>
+    "/-- the contract predicate's CFG blocks (facts.predicates / transcluded ref) -/\n" ++
+    "def " ++ wordRef a.module pn ++ "_blocks : List Tyu.Step.Block := " ++
+    (renderBlocks (String.intercalate "\n" ir)).getD "[]" ++ "\n" ++
+    "def " ++ wordRef a.module pn ++ " : Tyu.Gen.Stmt.Word := { blocks := " ++
+    wordRef a.module pn ++ "_blocks, entry := 0 }"))
+
 /-- The cycle schemes + via-cycles compositions (P5.2). -/
 def renderCycles (a : Artifact) : String :=
   let words := a.obligations.filterMap (fun o => a.words.find? (fun w => w.name == o.word)) |>.eraseDups
@@ -457,10 +570,14 @@ def renderModuleLean (a : Artifact) : String :=
                 "import Tyu.Gen.Stmt\n\n" ++
                 "namespace Tyu.Gen.Corpus." ++ ident a.module ++ "\n\n"
   let words := renderWordDefs a
+  let preds := renderPredicateDefs a
   let stmts := renderAllStatements a
   let cycs := renderCycles a
   let tail := "\n\nend Tyu.Gen.Corpus." ++ ident a.module ++ "\n"
-  header ++ words ++ (if words == "" then "" else "\n\n") ++ stmts ++ (if stmts == "" then "" else "\n\n") ++ cycs ++ tail
+  header ++ words ++ (if words == "" then "" else "\n\n")
+    ++ preds ++ (if preds == "" then "" else "\n\n")
+    ++ stmts ++ (if stmts == "" then "" else "\n\n")
+    ++ cycs ++ tail
 
 /-- The word IR text of an obligation's word. -/
 def wordIrOf (a : Artifact) (o : Obl) : String :=
@@ -476,7 +593,7 @@ def renderModuleMeta (a : Artifact) : String :=
     let hash := match classify a o with
       | none =>
           let ctx := Ctx.mk a.target a.modelSemantics a.module o.word (wordIrHash (wordIrOf a o)) o.kind o.occurrence none
-          statementHash ctx o.oel o.lo o.hi
+          statementHash ctx o
       | some _ => ""
     let omitField := match classify a o with
       | none => "\"def\": \"" ++ stmtName a.module o.word o.kind o.occurrence ++ "\", \"omitted\": false"

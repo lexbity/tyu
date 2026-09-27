@@ -1296,6 +1296,92 @@ done
 [ "$g36_fail" -eq 0 ] && msg $GREEN "  G36: P7 harvest + verdicts v2 + proven policy surface"
 failures=$((failures + g36_fail))
 
+# --- G37: PLAN-VERIFY-3 P8 — assumption closure (T-CL) surface ---
+# The T-CL registry statement must be *present as a theorem*, not a label:
+# the abstract verdict-set structure + the registry theorems in the port,
+# the axiom-audit + REVIEW.md §3 entries, the Rust image walker
+# (`tyu::closure`) wired into the report composition, the report's
+# per-image closure section, and the P8 test surfaces (assumption goldens,
+# closure fixtures, harvest-merge). Proving/executing are the blocking gates
+# (`ci/port.sh` axiom audit, the tooling suites under `cargo test
+# --workspace`); this gate pins the surface in the regular Rust CI.
+g37_fail=0
+PORT_DIR=verification/ports/lean
+if ! grep -q "namespace AssumptionClosure" "$PORT_DIR/Tyu/Sound.lean" \
+   || ! grep -q "theorem transitive_closure_sound" "$PORT_DIR/Tyu/Sound.lean" \
+   || ! grep -q "theorem cyclic_not_well_closed" "$PORT_DIR/Tyu/Sound.lean" \
+   || ! grep -q "theorem open_edge_not_well_closed" "$PORT_DIR/Tyu/Sound.lean"; then
+    msg $RED "  G37 FAIL: T-CL theorems missing from Tyu/Sound.lean (P8.1 surface)"
+    g37_fail=1
+fi
+for thm in transitive_closure_sound cyclic_not_well_closed open_edge_not_well_closed \
+           runtime_terminal no_edges_terminal; do
+    if ! grep -q "AssumptionClosure.$thm" "$PORT_DIR/AxiomAudit.lean"; then
+        msg $RED "  G37 FAIL: AxiomAudit.lean missing Tyu.Sound.AssumptionClosure.$thm"
+        g37_fail=1
+    fi
+    if ! grep -q "AssumptionClosure.$thm" "$PORT_DIR/REVIEW.md"; then
+        msg $RED "  G37 FAIL: REVIEW.md §3 missing Tyu.Sound.AssumptionClosure.$thm"
+        g37_fail=1
+    fi
+done
+if ! grep -q "### T-CL" devdocs/plans/design-doc/formal-semantics-core.md; then
+    msg $RED "  G37 FAIL: formal-semantics-core.md T-CL registry entry missing"
+    g37_fail=1
+fi
+if ! grep -q 'id: "T-CL"' crates/verifier/src/report.rs \
+   || ! grep -q 'status: "theorem"' crates/verifier/src/report.rs; then
+    msg $RED "  G37 FAIL: report TCB must carry T-CL with status theorem"
+    g37_fail=1
+fi
+if ! grep -q "pub struct ClosureStatus" crates/verifier/src/report.rs \
+   || ! grep -q '\\"closure\\":{' crates/verifier/src/codec.rs \
+   || ! grep -q "pub fn check_image_closure" crates/tyu/src/closure.rs \
+   || ! grep -q "check_image_closure" crates/tyu/src/verify.rs; then
+    msg $RED "  G37 FAIL: the closure walker/report/encode wiring incomplete"
+    g37_fail=1
+fi
+for t in crates/tooling-tests/tests/assumption_goldens.rs \
+         crates/tooling-tests/tests/closure_fixtures.rs \
+         crates/tyu/tests/harvest_merge.rs; do
+    if [ ! -f "$t" ]; then
+        msg $RED "  G37 FAIL: $t missing (P8 gates)"
+        g37_fail=1
+    fi
+done
+# P8.2 hardening: the closure runs BETWEEN harvest and pass-2 (the
+# pre-codegen resolution — never an elided check with an open report row),
+# and langc surfaces an open record's witness in the echo.
+if ! grep -q "apply_harvest_closure" crates/tyu/src/closure.rs \
+   || ! grep -q "apply_harvest_closure" crates/tyu/src/proof.rs; then
+    msg $RED "  G37 FAIL: the pre-pass-2 harvest-closure adjustment is not wired (proof.rs)"
+    g37_fail=1
+fi
+# P5 renderer scope: the canonical dispatches on the formula op (mmio
+# OffsetLE + contract PredicateHolds), the contract/fmmio statements have
+# semantics, and the renderer-scope regression test exists — the mmio
+# encoder-hash lock unblocks register-map modules (E6418).
+if ! grep -q '\"OffsetLE\"' "$PORT_DIR/Tyu/Gen/Render.lean" \
+   || ! grep -q '\"PredicateHolds\"' "$PORT_DIR/Tyu/Gen/Render.lean" \
+   || ! grep -q "def predicateHolds" "$PORT_DIR/Tyu/Gen/Stmt.lean" \
+   || ! grep -q "def offsetWithin" "$PORT_DIR/Tyu/Gen/Stmt.lean"; then
+    msg $RED "  G37 FAIL: the statement canonical/formula dispatch incomplete (mmio/contract statements)"
+    g37_fail=1
+fi
+if [ ! -f crates/tooling-tests/tests/renderer_scope.rs ]; then
+    msg $RED "  G37 FAIL: renderer-scope regression test missing (renderer_scope.rs)"
+    g37_fail=1
+fi
+for f in test-goldens/assumptions/Bank.json test-goldens/assumptions/App.json \
+         test-goldens/assumptions/App-degraded.json; do
+    if [ ! -f "$f" ] || ! grep -q '"tyu.assumptions/1"' "$f"; then
+        msg $RED "  G37 FAIL: $f missing or lacks the tyu.assumptions/1 tag"
+        g37_fail=1
+    fi
+done
+[ "$g37_fail" -eq 0 ] && msg $GREEN "  G37: P8 assumption-closure surface (T-CL theorem + walker + report + goldens)"
+failures=$((failures + g37_fail))
+
 echo ""
 msg $GREEN "============================================"
 msg $GREEN "Per-package test counts:"

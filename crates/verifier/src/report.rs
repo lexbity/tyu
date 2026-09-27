@@ -313,6 +313,32 @@ pub struct TcbEntry {
     pub status: String,
 }
 
+/// The per-image assumption-closure status (§Q7 rule 2, P8.2): the report
+/// face of the T-CL walker (`tyu::closure`). `well_closed` mirrors whether
+/// every closed obligation's assumption graph terminated on closed /
+/// `runtime-check` obligations; `unresolved` dependents were forced open
+/// with witness `assumption-unresolved` and appear in the report's `open`
+/// list.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClosureStatus {
+    /// The image's assumption graph is well-closed.
+    pub well_closed: bool,
+    /// Closed obligations whose assumption graphs were walked.
+    pub checked: u32,
+    /// Dependents forced open with witness `assumption-unresolved`.
+    pub unresolved: u32,
+}
+
+impl Default for ClosureStatus {
+    fn default() -> Self {
+        Self {
+            well_closed: true,
+            checked: 0,
+            unresolved: 0,
+        }
+    }
+}
+
 /// The complete report document (§6.5; P3 v1 fields plus the P4 honesty
 /// fields `assumed`, `stale_verdicts`, `emitted_checks`, the P6 `proof`
 /// section, and the P7.3 trust×method×surface accounting + TCB).
@@ -344,6 +370,9 @@ pub struct VerifyReport {
     /// trust/method/surface fields land in P7). `"none"` when the build ran
     /// without `--verify-tool`.
     pub proof: ProofStatus,
+    /// P8.2: the per-image assumption-closure status (§Q7 rule 2) — the
+    /// T-CL walker's outcome over the merged verdict sets.
+    pub closure: ClosureStatus,
     /// P7.3: the shipped TCB boundary (§6.8), in fixed order.
     pub tcb: Vec<TcbEntry>,
 }
@@ -376,7 +405,7 @@ impl VerifyReport {
             TcbEntry {
                 id: "T-CL".into(),
                 what: "assumption closure".into(),
-                status: "pending".into(),
+                status: "theorem".into(),
             },
             TcbEntry {
                 id: "T-C".into(),
@@ -449,6 +478,7 @@ impl VerifyReport {
             stale_verdicts: 0,
             emitted_checks: EmittedChecks::default(),
             proof: ProofStatus::none(),
+            closure: ClosureStatus::default(),
             tcb: VerifyReport::default_tcb(),
         }
     }

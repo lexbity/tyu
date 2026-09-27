@@ -34,3 +34,5 @@ hex = "0.4"
 hosted = { path = "../hosted", features = ["encryption"] }
 libc = "0.2"
 loader-core = { path = "../loader-core", features = ["encryption"] }
+# Fixture builders for the closure test surfaces (lib tests + harvest_merge).
+verifier = { path = "../verifier", features = ["test-util"] }

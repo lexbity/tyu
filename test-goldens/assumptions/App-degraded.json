@@ -1,0 +1,1 @@
+{"schema":"tyu.assumptions/1","module":"App-degraded","target":"x86_64-unknown-linux-gnu","scenario":"edge-degraded","obligations":[{"id":"App::main::contract-pre::0","kind":"contract-pre","assumptions":["runtime-check"]},{"id":"App::main::subtype-range::0","kind":"subtype-range","assumptions":[]}]}

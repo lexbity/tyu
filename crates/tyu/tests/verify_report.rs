@@ -88,6 +88,11 @@ fn metal_platform_build_reports_discharged_main_context() {
     assert_eq!(v["modules"][0]["trust"]["checked"], 2);
     assert_eq!(v["modules"][0]["methods"]["interval"], 2);
     assert_eq!(v["modules"][0]["surfaces"]["source"], 0);
+    // P8.2: the per-image assumption-closure status is present and, with
+    // nothing discharged resting on assumptions, trivially well-closed.
+    assert_eq!(v["closure"]["well_closed"], true);
+    assert_eq!(v["closure"]["checked"], 0);
+    assert_eq!(v["closure"]["unresolved"], 0);
     assert!(
         v["tcb"].as_array().unwrap().len() >= 12,
         "the shipped TCB boundary must be present"

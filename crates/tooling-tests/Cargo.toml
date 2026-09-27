@@ -14,7 +14,7 @@ hosted-rt = { path = "../hosted-rt" }
 loader-core = { path = "../loader-core" }
 lmod = { path = "../lmod" }
 tyu = { path = "../tyu" }
-verifier = { path = "../verifier" }
+verifier = { path = "../verifier", features = ["test-util"] }
 serde_json = "1"
 
 [features]
