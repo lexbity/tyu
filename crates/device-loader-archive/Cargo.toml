@@ -13,3 +13,19 @@ loader-core = { path = "../loader-core", features = ["device-loader"] }
 [features]
 signing = ["loader-core/signing"]
 encryption = ["loader-core/encryption"]
+
+# Size build for the firmware-resident loader. This crate is its own
+# workspace root (excluded from the parent workspace), so these profile rows
+# apply to every `--manifest-path` build tyu drives. The budget is the ARM
+# board's real 256 KiB flash (lm3s6965evb): the signing feature's HMAC/SHA-2
+# must fit alongside the runtime.
+#
+# `opt-level = 3` is deliberate: `opt-level = "z"` miscompiles the loader's
+# Thumb veneer path (measured 2026-09-27, nightly thumbv7m: every veneered
+# call from a loaded module silently no-ops — the image exits 0 with no
+# output), so size is won with fat LTO + a single codegen unit instead
+# (signing feature: +38,086 B raw .text before, +3,142 B after).
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

@@ -647,7 +647,8 @@ static ARM_V7M_NONE_QEMU: QemuSpec = QemuSpec {
     machine: b"lm3s6965evb",
     extra_args: &ARM_V7M_NONE_EXTRA_ARGS,
     exit_convention: QemuExitConvention::Semihosting,
-    // lm3s6965evb: 256 KB SRAM at 0x20000000-0x2003FFFF.
+    // lm3s6965evb: 64 KiB SRAM at 0x20000000-0x2000FFFF (the board's real
+    // geometry — link.ld's SRAM region matches).
     mmio_scratch: Some(MmioScratch {
         addr: 0x20000000,
         backed: ScratchBacking::Ram,

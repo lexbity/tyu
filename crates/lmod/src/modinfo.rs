@@ -25,10 +25,17 @@ pub const WORD_META_SIZE: u32 = 16; // u64 sym_hash + u16 effects + u16 requires
 pub const RES_META_SIZE: u32 = 16; // u64 res_hash + u8 sharing_class + u8[3] _pad + u32 lock_prim
 pub const APERTURE_USE_ENTRY_SIZE: u32 = 16; // u64 name_hash + u32 size + u16 aperture_id + u8 access_mask + u8 _pad
 
-/// Fused per-aperture access-mask bits (design doc §5.5). One source of truth:
-/// these are re-exported from `ir` so the module format, the compiler, and the
-/// loader all agree on the wire bits.
-pub use ir::{ACCESS_EFFECTFUL_READ, ACCESS_READ, ACCESS_W1C, ACCESS_W1S, ACCESS_WRITE};
+/// Fused per-aperture access-mask bits (design doc §5.5) — the modinfo
+/// access-field vocabulary. Single source of truth lives HERE, in the
+/// container-format crate: the module format, the compiler (`ir` re-exports
+/// these), and the loader all agree on the wire bits, and the loader's
+/// dependency chain stays parse-free (`lmod` depends on nothing).
+pub const ACCESS_READ: u8 = 1;
+pub const ACCESS_WRITE: u8 = 2;
+pub const ACCESS_W1S: u8 = 4;
+pub const ACCESS_W1C: u8 = 8;
+pub const ACCESS_EFFECTFUL_READ: u8 = 16;
+pub const ACCESS_XOR: u8 = 32;
 
 /// Fixed header field offsets (little-endian). v4 header = 48 bytes:
 /// `0 magic · 4 modinfo_ver · 6 flags · 8 abi_hash · 16 name_off · 20 name_len

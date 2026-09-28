@@ -122,21 +122,18 @@ fn two_module_dynamic_image_completes() {
     }
 }
 
-/// Targets where a SIGNED dynamic firmware fits the board's flash. The
-/// signing feature links HMAC/SHA-2 into the device loader, and the ARM
-/// lm3s6965evb's 256 KiB flash cannot hold the all-features runtime plus
-/// the signing loader (pre-existing: a single-module signed ARM image
-/// overflows by ~18 KiB today — the same reason `dynamic_signed` pins x86).
-static SIGNED_TARGETS: &[&str] = &["x86_64-unknown-none", "riscv32-unknown-none"];
-
+/// The signed variant runs on EVERY dynamic target. (It originally excluded
+/// ARM: the loader built without size discipline and a signed ARM image
+/// overflowed the lm3s6965evb's 256 KiB flash by ~18 KiB. Fixed by building
+/// the device loader with fat LTO + 1 CGU (`device-loader-archive`
+/// `[profile.release]`) and cutting `lmod → ir → frontend` out of the
+/// loader's dependency chain — the signed single-module ARM image is now
+/// ~27 KiB of flash, and the signing feature adds ~3 KiB of loader text.)
 #[test]
 fn two_module_signed_dynamic_image_completes() {
     // The build signs EVERY embedded module; the loader must verify each
     // and still compose the pair.
     for target in common::DYNAMIC_TARGETS {
-        if !SIGNED_TARGETS.contains(&target.triple) {
-            continue;
-        }
         assert_two_module_runs(*target, true);
     }
 }

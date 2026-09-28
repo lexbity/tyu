@@ -55,10 +55,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "frontend"
-version = "0.1.0"
-
-[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -78,13 +74,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ir"
-version = "0.1.0"
-dependencies = [
- "frontend",
-]
-
-[[package]]
 name = "libc"
 version = "0.2.186"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -93,9 +82,6 @@ checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 [[package]]
 name = "lmod"
 version = "0.1.0"
-dependencies = [
- "ir",
-]
 
 [[package]]
 name = "loader-core"

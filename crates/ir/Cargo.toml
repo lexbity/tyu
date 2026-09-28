@@ -8,6 +8,7 @@ description = "Intermediate representation and verifier types for Tyu."
 
 [dependencies]
 frontend = { path = "../frontend" }
+lmod = { path = "../lmod" }
 
 [dev-dependencies]
 proptest = "1"

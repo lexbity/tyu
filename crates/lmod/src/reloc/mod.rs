@@ -69,16 +69,6 @@ impl RelocKind {
         }
     }
 
-    /// The aperture-base relocation kind for a binding-time relocation ISA
-    /// (P6). Every reloc-capable ISA binds the base via `MmioApertureBase`.
-    pub fn kind_for_isa(isa: ir::RelocIsa) -> Self {
-        match isa {
-            ir::RelocIsa::ArmThumbLdrLiteral | ir::RelocIsa::RiscVHi20Lo12 => {
-                Self::MmioApertureBase
-            }
-        }
-    }
-
     /// The linker symbol a module's aperture-base site references before the
     /// pack binds it (P6): `__lang_aperture_{id}_base`. The firmware build
     /// defines these symbols from the descriptor; the loader re-derives the

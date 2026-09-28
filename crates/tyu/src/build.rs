@@ -2391,9 +2391,22 @@ fn build_device_loader_staticlib(
 ) -> Result<PathBuf, TyuError> {
     let triple = device_loader_rust_target(target)?;
     let profile = device_loader_profile(target)?;
+    // Per-feature-set target dir: concurrent builds (unsigned + signed test
+    // matrices, parallel fleet tooling) must not share one archive path —
+    // two cargo invocations with different feature sets otherwise overwrite
+    // each other's `libdevice_loader_archive.a`, and a signed firmware can
+    // link the unsigned loader (no key → trust Zero → E5202 at load).
+    let feature_tag = match (signing, encryption) {
+        (true, true) => "signing_encryption",
+        (true, false) => "signing",
+        (false, true) => "encryption",
+        (false, false) => "plain",
+    };
     let target_dir = std::env::var_os("CARGO_TARGET_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| platform::workspace_root().join("target"));
+        .unwrap_or_else(|| platform::workspace_root().join("target"))
+        .join("device-loader")
+        .join(feature_tag);
     let manifest = platform::workspace_root()
         .join("crates")
         .join("device-loader-archive")

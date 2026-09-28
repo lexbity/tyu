@@ -68,13 +68,13 @@ pub fn check_format_ver(artifact: &[u8]) -> Result<(), FormatVerMismatch> {
     }
 }
 
-/// Fused per-aperture access-mask bits (design doc §5.5).
-pub const ACCESS_READ: u8 = 1;
-pub const ACCESS_WRITE: u8 = 2;
-pub const ACCESS_W1S: u8 = 4;
-pub const ACCESS_W1C: u8 = 8;
-pub const ACCESS_EFFECTFUL_READ: u8 = 16;
-pub const ACCESS_XOR: u8 = 32;
+/// Fused per-aperture access-mask bits (design doc §5.5). Single source of
+/// truth is the container-format crate (`lmod::modinfo` — the modinfo
+/// access-field vocabulary travels in `.lmod` artifacts); re-exported here
+/// so the compiler surface keeps one name for the wire bits.
+pub use lmod::modinfo::{
+    ACCESS_EFFECTFUL_READ, ACCESS_READ, ACCESS_W1C, ACCESS_W1S, ACCESS_WRITE, ACCESS_XOR,
+};
 
 /// How a memory-mapped aperture is backed (design doc §5.2, D-7).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

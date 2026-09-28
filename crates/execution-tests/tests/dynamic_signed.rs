@@ -13,11 +13,11 @@ import platform/testio { testio.write-byte };\n\
 : main ( -- i64 ) 83 testio.write-byte 10 testio.write-byte 0 ;\n\
 export { main };\nend;\n";
 
-const SIGNED_TARGETS: &[common::DynamicTarget] = &[common::DynamicTarget {
-    target: codegen_core::Target::X86_64UnknownNone,
-    triple: "x86_64-unknown-none",
-    tools: common::X86_DYNAMIC_TOOLS,
-}];
+/// All dynamic targets: the device loader builds with fat LTO + 1 CGU
+/// (`device-loader-archive [profile.release]`), so a signed image fits the
+/// 256 KiB lm3s6965evb flash with room to spare (~27 KiB .text; it used to
+/// overflow by ~18 KiB before the size build).
+const SIGNED_TARGETS: &[common::DynamicTarget] = common::DYNAMIC_TARGETS;
 
 fn build_tools() {
     let status = Command::new(env!("CARGO"))

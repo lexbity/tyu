@@ -8,5 +8,3 @@ description = "Core `.lmod` module format and loader data structures."
 # No dependencies: the codec works with raw integers, not ir types.
 [lib]
 
-[dependencies]
-ir = { path = "../ir" }
