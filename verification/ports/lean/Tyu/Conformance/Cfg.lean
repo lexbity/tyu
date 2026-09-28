@@ -24,9 +24,12 @@ def empty : Block := { id := 0, ops := [], succs := [] }
 
 end Block
 
-/-- Run `ops` through a state (the per-block transfer). -/
-def runOps (ops : List OpInst) (st : State) (sr : Option (Int × Int)) (widthBits : Nat) (mem : MemModel) : State :=
-  ops.foldl (fun s o => stepOp o s sr widthBits mem) st
+/-- Run `ops` through a state (the per-block transfer); the updated model
+rides along (`store`/`load` mutate and consult it, P12.2). -/
+def runOps (ops : List OpInst) (st : State) (sr : Option (Int × Int)) (widthBits : Nat) (mem : MemModel) : MemModel × State :=
+  ops.foldl (fun (acc : MemModel × State) o =>
+    let (m, s) := acc
+    stepOp o s sr widthBits m) (mem, st)
 
 /-- The two-state hull join (`verifier::interp::hull_state`): per-index join
 of stack positions up to `stackLen`; locals everywhere; stack beyond
@@ -70,17 +73,20 @@ def widenState (header bodyEnd : State) (stackLen : Nat) : State :=
 /-- The worklist fixpoint body (`verifier::interp::run_cfg`'s loop): structurally
 recursive over the fuel list (`List.range budget0`; one element = one pop,
 mirroring Rust's `budget -= 1` per iteration). States and visits are plain
-lists indexed by block id (core-only `getD`), set with `mapIdxN`. -/
+lists indexed by block id (core-only `getD`), set with `mapIdxN`. The model
+is threaded like the Rust engine's `&mut mem`: each block's run reads and
+mutates the single model instance (P12.2's recorded stores persist across
+the fixpoint). -/
 def runCfgLoop (blocks : List Block) (sigOut : Nat) (sr : Option (Int × Int)) (widthBits : Nat) (mem : MemModel)
-    (states : List State) (worklist : List Nat) (visits : List Nat) (fuel : List Nat) : List State :=
+    (states : List State) (worklist : List Nat) (visits : List Nat) (fuel : List Nat) : MemModel × List State :=
   match fuel with
-  | [] => states
+  | [] => (mem, states)
   | _ :: frest =>
       match worklist with
-      | [] => states
+      | [] => (mem, states)
       | bid :: rest =>
         let block := blocks.getD bid Block.empty
-        let flow := runOps block.ops (states.getD bid (State.fresh 64)) sr widthBits mem
+        let (mem', flow) := runOps block.ops (states.getD bid (State.fresh 64)) sr widthBits mem
         let visits' := mapIdxN visits (fun i v => if i == bid then v + 1 else v)
         let (states', worklist', visits'') :=
           block.succs.foldl
@@ -92,30 +98,31 @@ def runCfgLoop (blocks : List Block) (sigOut : Nat) (sr : Option (Int × Int)) (
                 else mapIdxN st (fun i s => if i == tgt then mergeFirstVisit (st.getD tgt (State.fresh 64)) flow else s)
               (st', tgt :: wl, vs))
             (states, rest, visits')
-        runCfgLoop blocks sigOut sr widthBits mem states' worklist' visits'' frest
+        runCfgLoop blocks sigOut sr widthBits mem' states' worklist' visits'' frest
 
 /-- `verifier::interp::run_cfg` — the worklist fixpoint with back-edge
 widening (FR-12). Worklist discipline: LIFO order is not observable in the
 interval results (all updates are monotone joins / top-widening), so the
 implementation uses head-LIFO; the budget (`nblocks*4+2`) and the
 visit/oracle rules mirror the Rust engine exactly. -/
-def runCfg (blocks : List Block) (sigIn sigOut : Nat) (sr : Option (Int × Int)) (widthBits : Nat) (mem : MemModel) : List State :=
+def runCfg (blocks : List Block) (sigIn sigOut : Nat) (sr : Option (Int × Int)) (widthBits : Nat) (mem : MemModel) : MemModel × List State :=
   let nblocks := max blocks.length 1
   let initStates : List State := List.ofFn (fun i : Fin nblocks => if i.1 == 0 then State.calleeEntry sigIn 64 else State.fresh 64)
   let budget0 := nblocks * 4 + 2
   runCfgLoop blocks sigOut sr widthBits mem initStates [0] (List.replicate nblocks 0) (List.range budget0)
 
 /-- `verifier::interp::exit_state` — the join of every ret-block's stepped
-state; the returned value sits on top of the abstract stack. -/
+state; the returned value sits on top of the abstract stack. The model is
+threaded so a ret-block's own memory ops are faithful (P12.2). -/
 def exitState (blocks : List Block) (cf : List State) (sr : Option (Int × Int)) (widthBits : Nat) (mem : MemModel) : State :=
   let retBlocks := blocks.filter (fun b => (b.ops.getLast? |>.map (fun o => o.form == Tyu.IR.OpForm.ret)).getD false)
-  let acc0 : Option State := none
-  let acc := retBlocks.foldl (fun acc b =>
-    let flow := runOps b.ops (cf.getD b.id (State.fresh 1)) sr widthBits mem
-    some (match acc with
+  let (_, acc) := retBlocks.foldl (fun (acc : MemModel × Option State) b =>
+    let (m, accSt) := acc
+    let (m', flow) := runOps b.ops (cf.getD b.id (State.fresh 1)) sr widthBits m
+    (m', some (match accSt with
       | none => flow
-      | some a => mergeFirstVisit a flow))
-    acc0
+      | some a => mergeFirstVisit a flow)))
+    (mem, none)
   acc.getD (State.fresh 1)
 
 end Tyu.Conformance

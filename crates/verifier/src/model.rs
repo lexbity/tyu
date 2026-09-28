@@ -534,7 +534,9 @@ impl ExtractionCtx {
     /// Create a fresh extraction context for `module` with default identity:
     /// `target`/`platform` empty (filled by [`ExtractionCtx::set_identity`]
     /// once the driver knows the compile target) and
-    /// `model_semantics = "unmodeled"` (§Q15 until P12 wires the bundle).
+    /// `model_semantics = "unmodeled"` (§Q15 — the ID is overridden by the
+    /// caller once the resolved pack's `[model]` id is known; P12 wired the
+    /// bundle identity flow).
     pub fn new(module: &[u8]) -> Self {
         Self::new_with_identity(module, b"", b"", MODEL_UNMODELED.as_bytes())
     }

@@ -20,11 +20,24 @@ pub use compile::{descriptor_file_path, ensure_compiled_descriptor, COMPILED_DES
 use crate::error::TyuError;
 use std::path::Path;
 
-/// Descriptor schema version. Folds into `platform_hash` (canonical §5.3).
+/// Descriptor schema version — the *content* model compiled from a pack
+/// (`Descriptor`, `platform_hash`). Folds into `platform_hash` (canonical
+/// §5.3).
 ///
 /// Bump only when the *shape* of the descriptor model changes such that a
 /// descriptor written for an older schema must not load on a newer toolchain.
+///
+/// Distinct from the pack-manifest schema stamp ([`MANIFEST_SCHEMA_MODEL`]):
+/// the manifest's `schema = 3` (developer-proof-pipeline.md §6.7, P12.1) is
+/// additive — it admits the `[model]` identity section without changing the
+/// descriptor content, so the compiled board identity never rotates on the
+/// manifest bump (§13: "load unchanged").
 pub const DESCRIPTOR_SCHEMA: u32 = 2;
+
+/// The pack-manifest schema stamp that introduced `[model]`
+/// (developer-proof-pipeline.md §6.7, P12.1). Re-exported from the manifest
+/// model so the parse gate can pair the `[model]` section with its schema.
+pub use crate::platform::config::MANIFEST_SCHEMA_MODEL;
 
 /// MMIO semantics version — the compiler-side strategy/access-semantics model
 /// (decision D-2/D-3). Folds into `platform_hash` so that a *semantics*
@@ -364,6 +377,7 @@ mod tests {
     #[test]
     fn constants_match_design_doc() {
         assert_eq!(DESCRIPTOR_SCHEMA, 2);
+        assert_eq!(MANIFEST_SCHEMA_MODEL, 3);
         assert_eq!(MMIO_SEM_VER, 1);
         assert_eq!(E_DESC_UNKNOWN_KIND, 3646);
         assert_eq!(E_DESC_INVALID, 3647);

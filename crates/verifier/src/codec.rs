@@ -1860,6 +1860,11 @@ fn write_report_modules(out: &mut Vec<u8>, modules: &[crate::report::ModuleAccou
         }
         out.extend_from_slice(b"{\"name\":");
         write_str(out, &m.name);
+        // P12.1 (§7.3): the per-module `(target, model)` identity.
+        out.extend_from_slice(b",\"target\":");
+        write_str(out, &m.target);
+        out.extend_from_slice(b",\"model\":");
+        write_str(out, &m.model);
         out.extend_from_slice(b",\"classes\":{");
         for (j, c) in m.classes.iter().enumerate() {
             if j != 0 {

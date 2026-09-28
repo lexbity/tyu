@@ -44,18 +44,39 @@ pub fn parse_descriptor(text: &str) -> Result<Option<Descriptor>, DescriptorErro
     if schema == 0 {
         return Err(DescriptorError::new(
             E_DESC_INVALID,
-            "missing `[platform] schema` (set schema = 2)",
+            "missing `[platform] schema` (set schema = 2, or 3 to declare [model])",
         ));
     }
-    if schema != super::DESCRIPTOR_SCHEMA {
+    // P12.1 (§6.7): schema 3 is additive — the descriptor *content* model is
+    // unchanged (the `[model]` identity is not board geometry and does not
+    // enter the Descriptor/platform_hash; it flows manifest → build →
+    // `langc --model-semantics`, exactly like the target triple). The
+    // recorded `Descriptor.schema` stays the content schema so a pack's
+    // board identity never rotates on the additive manifest bump (§13:
+    // "load unchanged").
+    if schema != super::DESCRIPTOR_SCHEMA && schema != super::MANIFEST_SCHEMA_MODEL {
         return Err(DescriptorError::new(
             E_DESC_INVALID,
             format!(
-                "unsupported descriptor schema {} (this toolchain supports {})",
+                "unsupported platform.toml schema {} (this toolchain supports {} and {})",
                 schema,
-                super::DESCRIPTOR_SCHEMA
+                super::DESCRIPTOR_SCHEMA,
+                super::MANIFEST_SCHEMA_MODEL
             ),
         ));
+    }
+    if raw.model.is_some() && schema < super::MANIFEST_SCHEMA_MODEL {
+        return Err(DescriptorError::new(
+            E_DESC_INVALID,
+            format!(
+                "platform.toml declares [model] but schema = {} (set schema = {})",
+                schema,
+                super::MANIFEST_SCHEMA_MODEL
+            ),
+        ));
+    }
+    if let Some(model) = &raw.model {
+        validate_model_section(model)?;
     }
 
     let apertures = platform
@@ -140,7 +161,11 @@ pub fn parse_descriptor(text: &str) -> Result<Option<Descriptor>, DescriptorErro
     };
 
     Ok(Some(Descriptor {
-        schema,
+        // The descriptor *content* schema (see the gate above): the manifest
+        // schema stamp may be 2 or 3, but the content model compiled from it
+        // is v2 in both — recording the stamp here would rotate the canonical
+        // form (and platform_hash) on an additive manifest bump.
+        schema: super::DESCRIPTOR_SCHEMA,
         name: platform.name,
         family: platform.family.unwrap_or_default(),
         description: platform.description,
@@ -302,6 +327,61 @@ struct RawManifest {
     /// from the runtime binary's geometry, never declared.
     #[serde(default)]
     verification: Option<RawVerification>,
+    /// `[model]` (developer-proof-pipeline.md §6.7, P12.1) — acknowledged and
+    /// validated here so a typo'd key fails loud (E3646/E3647) at
+    /// descriptor-compile time, exactly like the other new sections. The
+    /// parsed values are *not* carried into the `Descriptor`: the model id is
+    /// build identity, not board geometry, and travels to langc via the
+    /// manifest → `tyu build` → `--model-semantics` path.
+    #[serde(default)]
+    model: Option<RawModel>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawModel {
+    model_semantics: String,
+    #[serde(default)]
+    mmio: Option<String>,
+    #[serde(default)]
+    concurrency: Option<String>,
+}
+
+/// Closed-set validation of `[model]` (§6.7): the id must be non-empty, and
+/// `mmio`/`concurrency` must come from their v1 value sets. Unknown values
+/// are E3646 with the supported set named (the D-2 registry rule).
+fn validate_model_section(model: &RawModel) -> Result<(), DescriptorError> {
+    if model.model_semantics.is_empty() {
+        return Err(DescriptorError::new(
+            E_DESC_INVALID,
+            "[model] model_semantics must be a non-empty id (\"tyu.model/<bundle>/<ver>\" or \"unmodeled\")",
+        ));
+    }
+    if let Some(mmio) = &model.mmio {
+        if !super::super::config::ModelSection::MMIO_VALUES.contains(&mmio.as_str()) {
+            return Err(DescriptorError::new(
+                E_DESC_UNKNOWN_KIND,
+                format!(
+                    "unknown [model] mmio '{}' (supported: {})",
+                    mmio,
+                    super::super::config::ModelSection::MMIO_VALUES.join("|")
+                ),
+            ));
+        }
+    }
+    if let Some(concurrency) = &model.concurrency {
+        if !super::super::config::ModelSection::CONCURRENCY_VALUES.contains(&concurrency.as_str()) {
+            return Err(DescriptorError::new(
+                E_DESC_UNKNOWN_KIND,
+                format!(
+                    "unknown [model] concurrency '{}' (supported: {})",
+                    concurrency,
+                    super::super::config::ModelSection::CONCURRENCY_VALUES.join("|")
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[derive(serde::Deserialize)]
@@ -639,5 +719,119 @@ ds_size = 0x4000
         let sram = desc.region("SRAM").unwrap();
         assert_eq!(sram.ds_size, Some(0x4000));
         assert_eq!(desc.region("FLASH").unwrap().ds_size, None);
+    }
+
+    // --- P12.1: [model] section (developer-proof-pipeline.md §6.7) ---
+
+    #[test]
+    fn schema_three_with_model_parses_content_schema_stays_two() {
+        let text = r#"
+[platform]
+name = "demo"
+schema = 3
+family = "demo"
+
+[model]
+model_semantics = "tyu.model/demo/1"
+mmio = "nondeterministic"
+concurrency = "abstract-atomic"
+"#;
+        let desc = parse_ok(text);
+        // The manifest stamp is 3, but the descriptor *content* model is v2
+        // in both — the board identity never rotates on the additive bump.
+        assert_eq!(desc.schema, 2);
+    }
+
+    #[test]
+    fn schema_three_without_model_parses() {
+        let text = r#"
+[platform]
+name = "demo"
+schema = 3
+"#;
+        let desc = parse_ok(text);
+        assert_eq!(desc.schema, 2);
+    }
+
+    #[test]
+    fn model_under_schema_two_is_e3647() {
+        let text = r#"
+[platform]
+name = "demo"
+schema = 2
+
+[model]
+model_semantics = "tyu.model/demo/1"
+"#;
+        let err = parse_descriptor(text).unwrap_err();
+        assert_eq!(err.code, E_DESC_INVALID);
+        assert!(err.detail.contains("[model]"), "{}", err.detail);
+        assert!(err.detail.contains("schema = 3"), "{}", err.detail);
+    }
+
+    #[test]
+    fn unknown_model_mmio_value_is_e3646() {
+        let text = r#"
+[platform]
+name = "demo"
+schema = 3
+
+[model]
+model_semantics = "tyu.model/demo/1"
+mmio = "strong"
+"#;
+        let err = parse_descriptor(text).unwrap_err();
+        assert_eq!(err.code, E_DESC_UNKNOWN_KIND);
+        assert!(err.detail.contains("mmio"), "{}", err.detail);
+        assert!(err.detail.contains("nondeterministic"), "{}", err.detail);
+    }
+
+    #[test]
+    fn unknown_model_concurrency_value_is_e3646() {
+        let text = r#"
+[platform]
+name = "demo"
+schema = 3
+
+[model]
+model_semantics = "unmodeled"
+concurrency = "preemptive"
+"#;
+        let err = parse_descriptor(text).unwrap_err();
+        assert_eq!(err.code, E_DESC_UNKNOWN_KIND);
+        assert!(err.detail.contains("concurrency"), "{}", err.detail);
+    }
+
+    #[test]
+    fn unknown_key_in_model_section_is_e3647() {
+        let text = r#"
+[platform]
+name = "demo"
+schema = 3
+
+[model]
+model_semantics = "unmodeled"
+refined = true
+"#;
+        let err = parse_descriptor(text).unwrap_err();
+        assert_eq!(err.code, E_DESC_INVALID);
+        assert!(err.detail.contains("unknown field"), "{}", err.detail);
+    }
+
+    /// P12 finding 5 (§13 forward rejection): a schema-4 stamp is a FUTURE
+    /// manifest the current toolchain must refuse to consume — never a
+    /// silent parse. The error names both supported stamps.
+    #[test]
+    fn schema_four_is_forward_rejected() {
+        let text = r#"
+[platform]
+name = "demo"
+schema = 4
+"#;
+        let err = parse_descriptor(text).unwrap_err();
+        assert_eq!(err.code, E_DESC_INVALID);
+        assert!(err.detail.contains("schema 4"), "{}", err.detail);
+        assert!(err.detail.contains("2"), "{}", err.detail);
+        assert!(err.detail.contains("3"), "{}", err.detail);
     }
 }

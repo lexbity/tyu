@@ -90,7 +90,8 @@ pub struct VerifyEnvKey {
     /// integrity digest — FR-14 governs the codec digests).
     toolchain_hash: u64,
     /// The bundle's model-semantics identity (sanitized into the name);
-    /// `"unmodeled"` until P12 supplies `platform.toml [model]`.
+    /// `"unmodeled"` for a bundle whose pack declares no `[model]` (P12.1
+    /// wires the pack-sourced id).
     model_id: String,
     proof_files_hash: u64,
 }
@@ -115,12 +116,13 @@ impl VerifyEnvKey {
         }
     }
 
-    /// The build-wide env key: project root from the CWD resolution, model id
-    /// `"unmodeled"` until P12 wires `platform.toml [model]` (the §Q15 honest
-    /// default for a bundle without model semantics).
-    pub(crate) fn for_build() -> Result<Self, TyuError> {
+    /// The build-wide env key: project root from the CWD resolution and the
+    /// caller-resolved model id (P12.1: the selected pack's `[model]`
+    /// `model_semantics`; `"unmodeled"` when no pack is selected — the §Q15
+    /// honest default for a bundle without model semantics).
+    pub(crate) fn for_build(model_id: &str) -> Result<Self, TyuError> {
         let root = project_root_for(None)?;
-        Ok(Self::compute(&root, verifier::model::MODEL_UNMODELED))
+        Ok(Self::compute(&root, model_id))
     }
 
     /// The sanitized filename slug: `-sem-…-stmt-…-tc-…-model-…-proofs-…`

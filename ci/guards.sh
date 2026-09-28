@@ -453,9 +453,12 @@ else
     failures=$((failures + 1))
 fi
 
-# --- G14: descriptor schema stamp coverage (Phase P1, renewed P8) ---
+# --- G14: descriptor schema stamp coverage (Phase P1, renewed P8, P12.1) ---
 # Every discovered platform pack manifest (platforms/<name>/platform.toml and
-# runtime/*.platform.toml) must carry the descriptor v2 stamp `schema = 2`.
+# runtime/*.platform.toml) must carry the pack-manifest schema stamp. Since
+# P12.1 (developer-proof-pipeline.md §6.7) that stamp is `schema = 3` (the
+# additive [model] section); the descriptor *content* model stays v2 — the
+# manifest stamp and the descriptor content schema are distinct versions.
 # A pack without the stamp is a legacy pack the compiler cannot consume; a
 # missing stamp is exactly the drift this spec retires. Mutation check #8.
 missing_schema=""
@@ -463,14 +466,14 @@ for manifest in platforms/*/platform.toml runtime/*.platform.toml; do
     if [ ! -e "$manifest" ]; then
         continue
     fi
-    if ! grep -qE '^schema[[:space:]]*=[[:space:]]*2' "$manifest"; then
+    if ! grep -qE '^schema[[:space:]]*=[[:space:]]*3' "$manifest"; then
         missing_schema="$missing_schema $manifest"
     fi
 done
 if [ -z "$missing_schema" ]; then
-    msg $GREEN "  G14: all platform pack manifests carry the descriptor schema stamp"
+    msg $GREEN "  G14: all platform pack manifests carry the schema-3 stamp"
 else
-    msg $RED "  G14 FAIL: pack manifests missing 'schema = 2':$missing_schema"
+    msg $RED "  G14 FAIL: pack manifests missing 'schema = 3':$missing_schema"
     failures=$((failures + 1))
 fi
 
@@ -1672,6 +1675,104 @@ for code in E6500 E6501 E6502 E6503 E6504 E6510; do
 done
 [ "$g45_fail" -eq 0 ] && msg $GREEN "  G45: P11.3 certification-package surface (cert.rs + tyu cert CLI + FR-21 deploy gate + E6503/E6504 + fuzz + registry)"
 failures=$((failures + g45_fail))
+
+# G46: PLAN-VERIFY-3 P12.1 — platform.toml schema 3 [model], identity flow,
+# and the lint matrix (§6.7, §Q15, FR-10).
+# Pins the *surface*: the [model] manifest model, the pack-sourced model id
+# accessors, the langc --model-semantics pass-through (with the P1.2
+# hardcoding retired), the E5413–E5416 lint codes plus the warnings channel,
+# the report's per-module (target, model) identity, and the build-side E6510
+# (proven × unmodeled). Behaviour is exercised by platform_model_lint /
+# model_id_flow / unmodeled_pipeline under `cargo test --workspace`.
+g46_fail=0
+grep -q 'MANIFEST_SCHEMA_MODEL: u32 = 3' crates/tyu/src/platform/config.rs || { msg $RED "  G46 FAIL: manifest schema-3 constant missing"; g46_fail=1; }
+for tok in 'pub struct ModelSection' 'pub fn model_semantics' 'MMIO_VALUES' 'CONCURRENCY_VALUES'; do
+    grep -q "$tok" crates/tyu/src/platform/config.rs || { msg $RED "  G46 FAIL: config.rs lacks $tok"; g46_fail=1; }
+done
+for code in E_PACK_MODEL_ARTIFACT_MISSING E_PACK_MODEL_UNDECLARED_ARTIFACT E_PACK_MODEL_ENUM_INVALID E_PACK_MODEL_EVIDENCE_MISSING; do
+    grep -q "$code" crates/tyu/src/platform/lint.rs || { msg $RED "  G46 FAIL: lint.rs lacks $code"; g46_fail=1; }
+done
+grep -q 'pub warnings' crates/tyu/src/platform/lint.rs || { msg $RED "  G46 FAIL: LintOutcome lacks the warnings channel"; g46_fail=1; }
+# langc: the flag parses, the drivers take the id, and the P1.2 unmodeled
+# hardcoding is gone from the driver.
+grep -q 'model-semantics=' crates/langc/src/args.rs || { msg $RED "  G46 FAIL: langc --model-semantics unparsed"; g46_fail=1; }
+grep -q 'model_semantics: &\[u8\]' crates/langc/src/driver.rs || { msg $RED "  G46 FAIL: driver does not take the model id"; g46_fail=1; }
+if grep -n 'MODEL_UNMODELED' crates/langc/src/driver.rs >/dev/null 2>&1; then
+    msg $RED "  G46 FAIL: driver.rs still hardcodes MODEL_UNMODELED (P1.2 default must be retired)"
+    g46_fail=1
+fi
+# tyu: the build forwards the pack-sourced id; the verdicts cache keys on it.
+grep -q 'for_build(model_semantics)' crates/tyu/src/build.rs || { msg $RED "  G46 FAIL: build does not key VerifyEnvKey on the pack model"; g46_fail=1; }
+grep -q -- '--model-semantics={}' crates/tyu/src/build.rs || { msg $RED "  G46 FAIL: build does not forward --model-semantics to langc"; g46_fail=1; }
+# Report: per-module (target, model) identity (§7.3).
+grep -q 'pub target: String' crates/verifier/src/report.rs || { msg $RED "  G46 FAIL: ModuleAccounting lacks target"; g46_fail=1; }
+grep -q 'pub model: String' crates/verifier/src/report.rs || { msg $RED "  G46 FAIL: ModuleAccounting lacks model"; g46_fail=1; }
+# Build-side E6510 (§Q15(c)/§11.9).
+grep -q 'E_MODEL_UNMODELED' crates/tyu/src/verify.rs || { msg $RED "  G46 FAIL: build-side E6510 (proven × unmodeled) missing"; g46_fail=1; }
+# The slice's test suites exist.
+for t in platform_model_lint model_id_flow unmodeled_pipeline; do
+    if [ ! -f "crates/tyu/tests/$t.rs" ] && [ ! -f "crates/tooling-tests/tests/$t.rs" ]; then
+        msg $RED "  G46 FAIL: missing test suite $t"
+        g46_fail=1
+    fi
+done
+[ "$g46_fail" -eq 0 ] && msg $GREEN "  G46: P12.1 platform model semantics (schema 3 [model] + identity flow + lint matrix + E6510)"
+failures=$((failures + g46_fail))
+
+# G47: PLAN-VERIFY-3 P12.2 — bundle model instances (model artifacts +
+# evidence corpora + Lean Tyu.Bundles instances + T-D subset theorems, §6.7
+# / §Q16 / FR-11) and the Rust×Lean conformance pin.
+# Pins the *surface*: the three modeled packs carry `[model]` ids matching
+# their model artifacts; the evidence corpora exist and are committed;
+# the Lean instance files + T-D registry theorems + audit lines exist; the
+# bundle conformance test suite exists; the port gate runs the bundle
+# corpora. Behaviour is exercised by bundle_instance_conformance /
+# platform_model_lint / unmodeled_pipeline under `cargo test --workspace`
+# and by `ci/port.sh lean`.
+g47_fail=0
+for triple in x86_64-unknown-none armv7m-unknown-none riscv32-unknown-none; do
+    manifest="platforms/$triple/platform.toml"
+    artifact="platforms/$triple/model/model.toml"
+    corpus="platforms/$triple/evidence/vectors.json"
+    grep -q "model_semantics = \"tyu.model/$triple/1\"" "$manifest" \
+        || { msg $RED "  G47 FAIL: $manifest lacks the declared model id"; g47_fail=1; }
+    [ -f "$artifact" ] \
+        || { msg $RED "  G47 FAIL: missing model artifact $artifact"; g47_fail=1; }
+    grep -q "\[memory\]" "$artifact" \
+        || { msg $RED "  G47 FAIL: $artifact lacks [memory] geometry"; g47_fail=1; }
+    grep -q "\[refinements\]" "$artifact" \
+        || { msg $RED "  G47 FAIL: $artifact lacks the refinement manifest"; g47_fail=1; }
+    [ -f "$corpus" ] \
+        || { msg $RED "  G47 FAIL: missing evidence corpus $corpus"; g47_fail=1; }
+    grep -q '"schema": "tyu.vec/1"' "$corpus" \
+        || { msg $RED "  G47 FAIL: $corpus is not a tyu.vec/1 document"; g47_fail=1; }
+    grep -q '"ram": \[' "$corpus" \
+        || { msg $RED "  G47 FAIL: $corpus lacks the ram header"; g47_fail=1; }
+done
+# The Lean bundle instances + their registry theorems + audit lines.
+for inst in Tyu/Bundles/Bundle.lean Tyu/Bundles/X86_64.lean Tyu/Bundles/ArmV7M.lean Tyu/Bundles/Riscv32.lean; do
+    [ -f "verification/ports/lean/$inst" ] || { msg $RED "  G47 FAIL: missing $inst"; g47_fail=1; }
+done
+grep -q "import Tyu.Bundles" verification/ports/lean/Tyu/Sound.lean || { msg $RED "  G47 FAIL: Sound.lean does not import the bundle substrate"; g47_fail=1; }
+for thm in Tyu.Sound.TD.store_load Tyu.Sound.TD.frame_law Tyu.Sound.TD.aperture_width_bound Tyu.Sound.TD.aperture_width_bound_full Tyu.Sound.TD.x86_64_geometry Tyu.Sound.TD.x86_64_inram Tyu.Sound.TD.armv7m_geometry Tyu.Sound.TD.armv7m_inram Tyu.Sound.TD.riscv32_geometry Tyu.Sound.TD.riscv32_inram Tyu.Sound.TD.bundle_aperture_agrees Tyu.Sound.TD.bundle_load_agrees; do
+    grep -q "$thm" verification/ports/lean/AxiomAudit.lean || { msg $RED "  G47 FAIL: $thm not audited"; g47_fail=1; }
+    grep -q "$thm" verification/ports/lean/REVIEW.md || { msg $RED "  G47 FAIL: $thm not in REVIEW.md §3"; g47_fail=1; }
+done
+# Conformance runner carries the bundle model + the file-fallback reader.
+grep -q "| bundle (ramLo" verification/ports/lean/Tyu/Conformance/Step.lean || { msg $RED "  G47 FAIL: conformance lacks the bundle model"; g47_fail=1; }
+grep -q "vectors.json" verification/ports/lean/Main.lean || { msg $RED "  G47 FAIL: conformance lacks the vectors.json fallback"; g47_fail=1; }
+# Rust×Lean conformance suite + the port gate wiring.
+[ -f "crates/verifier/tests/bundle_instance_conformance.rs" ] || { msg $RED "  G47 FAIL: missing bundle_instance_conformance"; g47_fail=1; }
+grep -q "BUNDLE_CORPUS" ci/port.sh || { msg $RED "  G47 FAIL: ci/port.sh lacks the bundle corpus gate"; g47_fail=1; }
+# P12 findings 4/5: the lint checks `evidence/vectors.json` *specifically*,
+# the build path enforces the pairing gate, and the model-only stale case is
+# unit-tested.
+grep -q "evidence\").join(\"vectors.json\")\|evidence/vectors.json" crates/tyu/src/platform/lint.rs || { msg $RED "  G47 FAIL: lint does not require evidence/vectors.json specifically"; g47_fail=1; }
+grep -q "pub fn ensure_model_pairing" crates/tyu/src/platform/lint.rs || { msg $RED "  G47 FAIL: missing the build-time ensure_model_pairing gate"; g47_fail=1; }
+grep -q "ensure_model_pairing(selection.pack)\|ensure_model_pairing(&selection.pack)" crates/tyu/src/build.rs || { msg $RED "  G47 FAIL: build does not run the model pairing gate"; g47_fail=1; }
+grep -q "stale_harvest_under_another_model_is_rejected" crates/tyu/src/vm_summary.rs || { msg $RED "  G47 FAIL: missing the model-only stale test"; g47_fail=1; }
+[ "$g47_fail" -eq 0 ] && msg $GREEN "  G47: P12.2 bundle model instances (model artifacts + evidence corpora + Lean Tyu.Bundles + T-D registry + Rust×Lean conformance)"
+failures=$((failures + g47_fail))
 
 echo ""
 msg $GREEN "============================================"

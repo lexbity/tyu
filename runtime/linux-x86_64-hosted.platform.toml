@@ -1,6 +1,6 @@
 [platform]
 name = "linux-x86_64-hosted"
-schema = 2
+schema = 3
 family = "q35-hosted"
 compiler-interface = 1
 description = "x86_64 hosted runtime"

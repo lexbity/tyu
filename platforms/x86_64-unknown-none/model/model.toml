@@ -1,0 +1,22 @@
+# The x86_64-unknown-none bundle model (PLAN-VERIFY-3 P12.2).
+#
+# The model-semantics identity `tyu.model/x86_64-unknown-none/1` must be
+# declared verbatim in `platform.toml [model] model_semantics` (§6.7). The
+# `[memory]` geometry is the single source the bundle instances consume:
+#   - the Rust `ApertureMem` instance (bundle_instance_conformance.rs),
+#   - the Lean `Tyu.Bundles.X86_64` instance,
+#   - the `evidence/vectors.json` corpus's `"ram"` header.
+# The window mirrors the q35 load region: code+data start at the 1 MiB
+# multiboot placement (`metal/link.ld`); the model tracks point stores
+# within this 1 MiB window.
+
+[model]
+id = "tyu.model/x86_64-unknown-none/1"
+
+[memory]
+ram = { name = "RAM", origin = 0x100000, length = 0x100000 }
+
+[refinements]
+# Device refinements (P13): named abstract state machines are declared here
+# and named in the model id. Empty today — MMIO reads are the §Q13
+# nondeterministic width-bounded default.

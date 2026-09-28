@@ -279,6 +279,8 @@ fn signed_package_sig_verifies_with_the_right_key() {
             &format!("--key-sign=file:{}", key_file.display()),
             &format!("--sysroot={}", sysroot.display()),
             &format!("--out-dir={}", out_dir.display()),
+            // P12 (§Q15): `proven` requires a modeled bundle.
+            "--platform=x86_64-unknown-none",
             "--verify-policy=proven",
             &format!("--verify-manifest={}", summary.display()),
             dir.join("Main.mod").to_str().unwrap(),

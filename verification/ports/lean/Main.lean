@@ -3,6 +3,7 @@ import Tyu.Conformance.Fragment
 import Tyu.Conformance.IntervalLaws
 import Tyu.Stackmeta
 import Tyu.IR.Semantics
+import Tyu.Bundles
 
 open Tyu.Conformance
 open Tyu.Stackmeta
@@ -20,16 +21,22 @@ def conformanceMain (args : List String) : IO UInt32 := do
   let mut total := 0
   let mut failures := 0
   for dir in corpusDirs do
-    let path := dir ++ "/index.json"
-    -- A missing/unreadable corpus is a counted FAIL, never an uncaught
-    -- exception: the gate must fail closed through the RESULT line.
-    let content ←
-      try
-        IO.FS.readFile path
-      catch _ =>
-        pure ""
+    -- P12.2: a corpus document is `<dir>/index.json` (the shared per-target
+    -- corpora) or `<dir>/vectors.json` (the bundle evidence corpora); the
+    -- first readable candidate wins.
+    let mut content : String := ""
+    let mut path : String := ""
+    for candidate in [dir ++ "/index.json", dir ++ "/vectors.json"] do
+      let c ←
+        try
+          IO.FS.readFile candidate
+        catch _ =>
+          pure ""
+      if c ≠ "" && content == "" then
+        content := c
+        path := candidate
     if content == "" then
-      IO.println s!"FAIL: {path}: unreadable or empty (not a tyu.vec/1 corpus)"
+      IO.println s!"FAIL: {dir}/index.json or vectors.json: unreadable or empty (not a tyu.vec/1 corpus)"
       failures := failures + 1
       continue
     match parseVecFile content with
@@ -87,6 +94,24 @@ def stackmetaMain (jsons : List String) : IO UInt32 := do
   IO.println s!"RESULT: stackmeta words={totalWords} skipped={skipped} divergences={failures}"
   if failures == 0 then return 0 else return 1
 
+/-- The bundle-geometry report (PLAN-VERIFY-3 P12.2): every modeled
+bundle instance's RAM window, as JSON. The Rust
+`bundle_instance_conformance` suite pins these numbers against the
+bundles' `model/model.toml [memory] ram` artifacts — the single shared
+source the Rust `ApertureMem` instances, this port's instances, and the
+`evidence/` corpus headers all consume. -/
+def geometryEntry (name : String) (b : Tyu.Bundles.BundleMem) : String :=
+  "{\"id\":\"" ++ name ++ "\",\"ramLo\":" ++ toString b.ramLo ++ ",\"ramHi\":" ++ toString b.ramHi ++ "}"
+
+def bundlesMain (_ : List String) : IO UInt32 := do
+  let parts : List String :=
+    [ geometryEntry "x86_64" Tyu.Bundles.x86_64,
+      geometryEntry "armv7m" Tyu.Bundles.armv7m,
+      geometryEntry "riscv32" Tyu.Bundles.riscv32 ]
+  let joined := parts.foldl (fun acc p => if acc == "" then p else acc ++ "," ++ p) ""
+  IO.println ("{\"schema\":\"tyu.bind/1\",\"bundles\":[" ++ joined ++ "]}")
+  return 0
+
 def main (args : List String) : IO UInt32 := do
   match args with
   | "--level" :: "fragment" :: rest =>
@@ -124,6 +149,9 @@ def main (args : List String) : IO UInt32 := do
               failures := failures + mismatches.length
       IO.println s!"RESULT: fragment={total} mismatches={failures}"
       if failures == 0 then return 0 else return 1
+  | "--level" :: "bundles" :: _ =>
+      -- P12.2: the bundle-instance geometry report (no corpus needed).
+      bundlesMain []
   | "--level" :: "stackmeta" :: rest =>
       let files := rest.filter (fun a => a ≠ "--stackmeta")
       if files.isEmpty then

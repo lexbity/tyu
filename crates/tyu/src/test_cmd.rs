@@ -1673,6 +1673,7 @@ mod tests {
             manifest: platform::PlatformManifest {
                 platform: platform::PlatformSection {
                     name: "rp2350".to_string(),
+                    schema: None,
                     compiler_interface: 1,
                     description: None,
                     isa: vec![platform::IsaEntry {
@@ -1702,6 +1703,7 @@ mod tests {
                 },
                 secure_boot: None,
                 verification: None,
+                model: None,
             },
         };
 

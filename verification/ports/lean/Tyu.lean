@@ -6,13 +6,14 @@
 -- `Tyu.Sound`) are the P4 substrate; the conformance executable (Main.lean)
 -- implements the abstract transfer over the generated layer.
 --
--- Authored semantic files (Mem, and the P9 source-fragment embedding Src)
--- consume this generated layer; the remaining authored surfaces (Abs,
--- Services) land in their phases.
+-- Authored semantic files (Mem, the P9 source-fragment embedding Src, and
+-- the P12 bundle instances Bundles) consume this generated layer; the
+-- remaining authored surfaces (Abs, Services) land in their phases.
 import Tyu.IR.Op
 import Tyu.IR.Semantics
 import Tyu.IR.Target
 import Tyu.Mem
+import Tyu.Bundles
 import Tyu.Src
 import Tyu.Step
 import Tyu.Sound

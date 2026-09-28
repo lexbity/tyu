@@ -322,6 +322,9 @@ pub fn emit_obj_driver(
     verify_tool: Option<&[u8]>,
     verify_policy_proven: bool,
     bind_obl: Option<&verifier::model::OblSet>,
+    // P12.1 (§6.7): the bundle's model-semantics id (§Q15 default
+    // `unmodeled`) — the artifact's `(triple, model_semantics)` identity.
+    model_semantics: &[u8],
 ) -> i32 {
     let module_name = slice_span(src, module.name);
     // P2/P4: extract obligations alongside the object and write
@@ -332,15 +335,12 @@ pub fn emit_obj_driver(
     // path (FR-22).
     let undischarged = checks == ChecksMode::Undischarged;
     let mut extract_ctx = (write_obl || undischarged).then(|| ExtractionCtx::new(module_name));
-    // PLAN-VERIFY-3 §Q3/§Q15 (P1.2): every obligation artifact is relativized
-    // to `(triple, model_semantics)`. The bundle's model identity flows from
-    // the platform pack from P12 on; until then it is `unmodeled`.
+    // PLAN-VERIFY-3 §Q3/§Q15: every obligation artifact is relativized to
+    // `(triple, model_semantics)`. P12.1: the model identity arrives from the
+    // resolved platform pack (`tyu build` forwards its `[model]` section);
+    // a direct langc run without a bundle stays `unmodeled` (§Q15).
     if let Some(ctx) = extract_ctx.as_mut() {
-        ctx.set_identity(
-            target.triple(),
-            target.triple(),
-            verifier::model::MODEL_UNMODELED.as_bytes(),
-        );
+        ctx.set_identity(target.triple(), target.triple(), model_semantics);
     }
     let mut path_buf = [0u8; 512];
     let asm_path = match join_path(&mut path_buf, out_dir, module_name, b".asm") {
@@ -801,6 +801,9 @@ pub fn emit_obl_driver(
     target: Target,
     descriptor: Option<&CompiledDescriptor>,
     out_dir: &[u8],
+    // P12.1 (§6.7): the bundle's model-semantics id (§Q15 default
+    // `unmodeled`).
+    model_semantics: &[u8],
 ) -> i32 {
     let module_name = slice_span(src, module.name);
     let mut obl_buf = [0u8; 512];
@@ -829,11 +832,9 @@ pub fn emit_obl_driver(
     };
 
     let mut ctx = ExtractionCtx::new(module_name);
-    ctx.set_identity(
-        target.triple(),
-        target.triple(),
-        verifier::model::MODEL_UNMODELED.as_bytes(),
-    );
+    // §Q3/§Q15 + P12.1: identity arrives from the resolved pack (see
+    // emit_obj_driver); a direct run without a bundle stays `unmodeled`.
+    ctx.set_identity(target.triple(), target.triple(), model_semantics);
     match semantics::typecheck::for_each_ir_word(
         module,
         src,

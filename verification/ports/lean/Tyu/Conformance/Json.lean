@@ -99,13 +99,20 @@ def parseJson (input : String) : Option Json :=
       if rest'.isEmpty then some j else none
   | none => none
 
-/-- The typed `tyu.vec/1` document. -/
+/-- The typed `tyu.vec/1` document. `ram` is the optional P12.2 bundle
+corpus header: the modeled RAM window as an **inclusive first/last pair**
+`[origin, origin + length - 1]` (the model artifact declares the half-open
+region `origin`+`length`; the `"bundle"`-model vectors execute against the
+inclusive window, exactly like `ApertureMem`'s ram pair and the
+`Tyu.Bundles` instances). Absent on the shared per-target corpora, which
+exercise `flat`/`aperture` only. -/
 structure VecFile where
   schema : String
   triple : String
   slotBytes : Nat
   wordBits : Nat
   archTag : Nat
+  ram : Option (Int × Int)
   vectors : List Vector
   deriving DecidableEq, Repr, Inhabited
 
@@ -120,6 +127,12 @@ def parseVecFile (input : String) : Option VecFile :=
       let sb := target.bind (fun t => (t.field "slot_bytes").bind Json.asInt)
       let wb := target.bind (fun t => (t.field "word_bits").bind Json.asInt)
       let archTag := target.bind (fun t => (t.field "arch_tag").bind Json.asInt)
+      -- P12.2: the optional bundle RAM window `"ram": [lo, hi]`.
+      let ram := (j.field "ram").bind Json.asArr |>.bind (fun arr => match arr with
+        | [loJ, hiJ] => match Json.asInt loJ, Json.asInt hiJ with
+            | some lo, some hi => some (lo, hi)
+            | _, _ => none
+        | _ => none)
       match schema, triple, sb, wb, archTag with
       | some s, some t, some sl, some w, some ar =>
           if s ≠ "tyu.vec/1" then none
@@ -127,7 +140,7 @@ def parseVecFile (input : String) : Option VecFile :=
             let vs := (j.field "vectors").bind Json.asArr |>.getD []
             let parsed := vs.filterMap vectorFromJson
             if parsed.length ≠ vs.length then none
-            else some (VecFile.mk s t sl.toNat w.toNat ar.toNat parsed)
+            else some (VecFile.mk s t sl.toNat w.toNat ar.toNat ram parsed)
       | _, _, _, _, _ => none
 
 end Tyu.Conformance

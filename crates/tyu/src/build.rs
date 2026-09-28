@@ -172,12 +172,29 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
 
     let mode = effective_build_mode(args, target);
 
+    // P12.1 (§6.7/§Q15): the bundle's model-semantics id, resolved from the
+    // selected pack's `[model]` section (`"unmodeled"` when no pack is
+    // selected or the pack declares none). It stamps every langc invocation
+    // below and keys the verdicts cache.
+    //
+    // P12 finding 4c: the id is only *grounded* when the declared↔artifact
+    // pairing holds — a third-party pack cannot build as "modeled" while
+    // its model artifact/vectors are missing or mismatched (CI guards the
+    // in-tree packs; this is the structural protection).
+    let model_semantics: &str = match platform_selection.as_ref() {
+        Some(selection) => {
+            platform::ensure_model_pairing(&selection.pack)?;
+            selection.pack.model_semantics()
+        }
+        None => verifier::model::MODEL_UNMODELED,
+    };
+
     // §7.2 (P6 amendment): the verification-environment components of every
     // verdicts-cache slot — semantics, stmt, toolchain pin hash, model id,
     // proof-files hash. A proof-file edit, a toolchain change, or a bundle-
     // model change must rotate each module's slot so P7's harvested
     // (`proof`-class) verdicts can never be silently reused stale.
-    let verify_env = crate::proof::VerifyEnvKey::for_build()?;
+    let verify_env = crate::proof::VerifyEnvKey::for_build(model_semantics)?;
 
     // Slice P7 (Q5): guard elision is a per-image fact of the *single*
     // derived data-stack geometry. A dynamic image loads modules into its own
@@ -210,6 +227,7 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
             args.sysroot.as_deref(),
             &out_dir,
             platform_selection.as_ref().map(|s| s.pack.pack_root()),
+            model_semantics,
             feature_set,
         )?;
         let verdict = super::verify::elision_main_verdict(
@@ -281,6 +299,7 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
                 args.sysroot.as_deref(),
                 &out_dir,
                 platform_selection.as_ref().map(|s| s.pack.pack_root()),
+                model_semantics,
                 feature_set,
                 triple,
             )?;
@@ -323,6 +342,7 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
             args.sysroot.as_deref(),
             &out_dir,
             platform_selection.as_ref().map(|s| s.pack.pack_root()),
+            model_semantics,
             &mut cache,
             compiler_fp,
             inputs_fp,
@@ -1178,6 +1198,7 @@ fn compile_module(
     sysroot: Option<&Path>,
     out_dir: &Path,
     platform_dir: Option<&Path>,
+    model_semantics: &str,
     cache: &mut BuildCache,
     compiler_fp: u64,
     inputs_fp: u64,
@@ -1294,6 +1315,10 @@ fn compile_module(
     if let Some(dir) = platform_dir {
         cmd.arg(format!("--platform={}", dir.display()));
     }
+    // P12.1 (§6.7/§Q3): the artifact identity stamp — always forwarded so a
+    // modeled pack and a bare build emit visibly different (triple, model)
+    // identities.
+    cmd.arg(format!("--model-semantics={}", model_semantics));
 
     for inc in include_dirs {
         cmd.arg("-I");
@@ -1402,6 +1427,51 @@ pub struct CompiledModule {
     pub obl_path: Option<PathBuf>,
 }
 
+/// The shared `langc --emit=obligations` pass-1 command (P7 / P7.3): the
+/// common flag surface both extraction passes build — model-semantics
+/// identity, sysroot, platform dir, include dirs, features, lib flag, input.
+/// The two callers diverge only on the out-dir (scratch vs `.tyu-oblig`),
+/// the elision pass's extra include dirs (P6 Q7 cross-module facts), and
+/// the explicit `--target` the proof-pipeline pass passes. One builder so
+/// the flag surface cannot drift between the two passes.
+#[allow(clippy::too_many_arguments)] // the builder carries the full pass-1 identity surface
+fn langc_obligations_command(
+    langc: &Path,
+    out_dir_arg: &Path,
+    include_dirs: &[PathBuf],
+    sysroot: Option<&Path>,
+    platform_dir: Option<&Path>,
+    model_semantics: &str,
+    feature_set: FeatureSet,
+    is_lib: bool,
+    path: &Path,
+) -> Command {
+    let mut cmd = Command::new(langc);
+    cmd.arg("--emit=obligations");
+    cmd.arg(format!("--out-dir={}", out_dir_arg.display()));
+    if let Some(sr) = sysroot {
+        cmd.arg(format!("--sysroot={}", sr.display()));
+    }
+    if let Some(dir) = platform_dir {
+        cmd.arg(format!("--platform={}", dir.display()));
+    }
+    cmd.arg(format!("--model-semantics={}", model_semantics));
+    for inc in include_dirs {
+        cmd.arg("-I");
+        cmd.arg(inc);
+    }
+    let mut flag_buf = [""; 8];
+    let n = feature_set.write_flags(&mut flag_buf);
+    if n > 0 {
+        cmd.arg(format!("--features={}", flag_buf[..n].join(",")));
+    }
+    if is_lib {
+        cmd.arg("--lib");
+    }
+    cmd.arg(path);
+    cmd
+}
+
 /// Slice P7 pass 1: extract every module's obligation facts
 /// (`langc --emit=obligations`, no codegen) into a per-process scratch dir,
 /// read each artifact back (`read_obl` — fail-closed, E6400/E6401), delete
@@ -1410,6 +1480,7 @@ pub struct CompiledModule {
 /// which forces the image verdict open (§7.3: absence can only cause more
 /// checking, never less). The scratch dir is an implicit include dir so
 /// callee `.obl.json` facts resolve for cross-module contracts (P6/Q7).
+#[allow(clippy::too_many_arguments)] // the elision pass carries the per-build identity context
 fn extract_obligations_for_elision(
     langc: &Path,
     modules: &[ModuleNode],
@@ -1417,6 +1488,7 @@ fn extract_obligations_for_elision(
     sysroot: Option<&Path>,
     out_dir: &Path,
     platform_dir: Option<&Path>,
+    model_semantics: &str,
     feature_set: FeatureSet,
 ) -> Result<Vec<(String, Option<verifier::model::OblSet>)>, TyuError> {
     let scratch = out_dir.join(format!(".tyu-elide-pass1-{}", std::process::id()));
@@ -1428,33 +1500,22 @@ fn extract_obligations_for_elision(
         e
     };
     for module in modules {
-        let mut cmd = Command::new(langc);
-        cmd.arg("--emit=obligations");
-        cmd.arg(format!("--out-dir={}", scratch.display()));
-        if let Some(sr) = sysroot {
-            cmd.arg(format!("--sysroot={}", sr.display()));
-        }
-        if let Some(dir) = platform_dir {
-            cmd.arg(format!("--platform={}", dir.display()));
-        }
-        for inc in include_dirs {
-            cmd.arg("-I");
-            cmd.arg(inc);
-        }
+        let mut cmd = langc_obligations_command(
+            langc,
+            &scratch,
+            include_dirs,
+            sysroot,
+            platform_dir,
+            model_semantics,
+            feature_set,
+            module.is_lib,
+            &module.path,
+        );
         // The scratch holds this pass's own artifacts (callee obl facts for
         // cross-module contract transclusion); out_dir holds the re-homed
         // artifacts of *previous* builds (P6 Q7 include-dir search).
         cmd.arg("-I").arg(&scratch);
         cmd.arg("-I").arg(out_dir);
-        let mut flag_buf = [""; 8];
-        let n = feature_set.write_flags(&mut flag_buf);
-        if n > 0 {
-            cmd.arg(format!("--features={}", flag_buf[..n].join(",")));
-        }
-        if module.is_lib {
-            cmd.arg("--lib");
-        }
-        cmd.arg(&module.path);
         let status = cmd
             .status()
             .map_err(|e| fail(TyuError::Build(format!("running langc: {e}"))))?;
@@ -1507,6 +1568,7 @@ fn extract_module_artifacts(
     sysroot: Option<&Path>,
     out_dir: &Path,
     platform_dir: Option<&Path>,
+    model_semantics: &str,
     feature_set: FeatureSet,
     triple: &str,
 ) -> Result<Vec<(String, PathBuf)>, TyuError> {
@@ -1514,29 +1576,20 @@ fn extract_module_artifacts(
     fs::create_dir_all(&dir).map_err(TyuError::Io)?;
     let mut out = Vec::with_capacity(modules.len());
     for module in modules {
-        let mut cmd = Command::new(langc);
-        cmd.arg("--emit=obligations");
-        cmd.arg(format!("--out-dir={}", dir.display()));
+        let mut cmd = langc_obligations_command(
+            langc,
+            &dir,
+            include_dirs,
+            sysroot,
+            platform_dir,
+            model_semantics,
+            feature_set,
+            module.is_lib,
+            &module.path,
+        );
+        // This pass's artifacts feed the proof pipeline; the explicit
+        // target makes the artifact's (triple, model) identity explicit.
         cmd.arg(format!("--target={}", triple));
-        if let Some(sr) = sysroot {
-            cmd.arg(format!("--sysroot={}", sr.display()));
-        }
-        if let Some(p) = platform_dir {
-            cmd.arg(format!("--platform={}", p.display()));
-        }
-        for inc in include_dirs {
-            cmd.arg("-I");
-            cmd.arg(inc);
-        }
-        let mut flag_buf = [""; 8];
-        let n = feature_set.write_flags(&mut flag_buf);
-        if n > 0 {
-            cmd.arg(format!("--features={}", flag_buf[..n].join(",")));
-        }
-        if module.is_lib {
-            cmd.arg("--lib");
-        }
-        cmd.arg(&module.path);
         let status = cmd.status().map_err(|e| {
             TyuError::Build(format!(
                 "pass-1 extraction for '{}': {e}",

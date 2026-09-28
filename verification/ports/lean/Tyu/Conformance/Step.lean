@@ -75,23 +75,77 @@ def truncateStack (st : State) (len : Nat) : State :=
 
 end State
 
-/-- The memory model boundary (the degenerate instances exercised by
-`tyu.vec/1`: FlatMem and an empty ApertureMem). -/
+/-- The memory model boundary (P3.2's degenerate instances + the P12.2
+bundle instance). `flat` = FlatMem (unmodeled memory, reads `top`);
+`apertureEmpty` = an empty ApertureMem (no RAM); `bundle` = ApertureMem
+over the bundle's modeled RAM window — the **inclusive** `[ramLo, ramHi]`
+pair from the corpus `"ram"` header (`model/model.toml [memory] ram`'s
+half-open region minus its exclusive top byte), mirroring
+`verifier::mem::ApertureMem`: recorded point stores within the window are
+returned by loads; everything else is `top`. -/
 inductive MemModel where
   | flat
   | apertureEmpty
+  | bundle (ramLo : Int) (ramHi : Int) (cells : List (Int × Interval))
   deriving DecidableEq, Repr, Inhabited
 
 namespace MemModel
 
-/-- Abstract load (FlatMem: top; empty ApertureMem: top — no recorded cells). -/
-def load (_m : MemModel) (_addr : Interval) (_widthBits : Nat) : Interval := Interval.top
+/-- Is a point address inside the modeled RAM window? -/
+def inRam (m : MemModel) (a : Int) : Bool :=
+  match m with
+  | .bundle ramLo ramHi _ => ramLo ≤ a && a ≤ ramHi
+  | _ => false
 
-/-- MMIO aperture read — the injected nondeterminism oracle (§Q13). -/
+/-- The recorded-cell list (empty for the non-bundle instances). -/
+def cellsOf (m : MemModel) : List (Int × Interval) :=
+  match m with
+  | .bundle _ _ cs => cs
+  | _ => []
+
+/-- The joined abstract value recorded for a point address (`top` when
+unrecorded — mirroring `ApertureMem::recorded_at`; with replace-semantics
+stores there is at most one live cell per address). -/
+def recordedAt (m : MemModel) (a : Int) : Interval :=
+  match m.cellsOf.find? (fun c => c.1 == a) with
+  | some (_, v) => v
+  | none => Interval.top
+
+/-- Store with replace semantics (`ApertureMem::store`): the newest value
+for an address replaces any prior cell. Head-first so `find?` sees the
+newest first. -/
+def storeCells (cs : List (Int × Interval)) (a : Int) (v : Interval) : List (Int × Interval) :=
+  (a, v) :: cs.filter (fun c => c.1 ≠ a)
+
+/-- Abstract load (`verifier::mem::MemModel::load`): a point address within
+the RAM window answers the recorded join; a non-point or unmapped address is
+`top` (it could alias anything). -/
+def load (m : MemModel) (addr : Interval) (_widthBits : Nat) : Interval :=
+  match addr with
+  | Interval.range a b => if a == b && m.inRam a then m.recordedAt a else Interval.top
+  | _ => Interval.top
+
+/-- Abstract store: only point addresses within the modeled RAM window are
+tracked; anything else keeps reads at `top` (sound — the load
+over-approximates). -/
+def store (m : MemModel) (addr : Interval) (val : Interval) : MemModel :=
+  match addr with
+  | Interval.range a b =>
+      if a == b then
+        match m with
+        | .bundle ramLo ramHi cs =>
+            if ramLo ≤ a && a ≤ ramHi then .bundle ramLo ramHi (storeCells cs a val) else m
+        | _ => m
+      else m
+  | _ => m
+
+/-- MMIO aperture read — the injected nondeterminism oracle (§Q13). `flat`
+answers `top` (sound for any register width); the aperture-bearing
+instances answer the width-bounded domain. -/
 def apertureRead (m : MemModel) (widthBits : Nat) : Interval :=
   match m with
   | .flat => Interval.top
-  | .apertureEmpty =>
+  | .apertureEmpty | .bundle _ _ _ =>
       match wordDomain widthBits with
       | none => Interval.top
       | some (lo, hi) => Interval.range lo hi
@@ -134,63 +188,65 @@ word). -/
 def percentRange : Option (Int × Int) := some (0, 100)
 
 /-- The normative transfer over one op (`verifier::interp::State::step`,
-parameterized by target word width and memory model). -/
-def stepOp (op : OpInst) (st : State) (sr : Option (Int × Int)) (widthBits : Nat) (mem : MemModel) : State :=
+parameterized by target word width and memory model). Returns the updated
+model alongside the state (P12.2: the bundle instance's recorded stores are
+observable — `store` mutates the model, `load`/`vol_load` consult it). -/
+def stepOp (op : OpInst) (st : State) (sr : Option (Int × Int)) (widthBits : Nat) (mem : MemModel) : MemModel × State :=
   match op.form with
   | .const_i64 =>
       let v := op.constVal.getD 0
-      st.push' (Slot.computed (Interval.range v v))
+      (mem, st.push' (Slot.computed (Interval.range v v)))
   | .const_bool =>
       let b := op.constBool.getD false
-      st.push' (Slot.computed (Interval.range (if b then 1 else 0) (if b then 1 else 0)))
-  | .const_str => st.push' Slot.top
-  | .addr_of | .addr_of_mut | .mmio_place | .scoped_enter | .task_spawn => st.push' Slot.top
+      (mem, st.push' (Slot.computed (Interval.range (if b then 1 else 0) (if b then 1 else 0))))
+  | .const_str => (mem, st.push' Slot.top)
+  | .addr_of | .addr_of_mut | .mmio_place | .scoped_enter | .task_spawn => (mem, st.push' Slot.top)
   | .ptr_add_const =>
       let (st1, _) := State.popVal' st
-      st1.push' Slot.top
+      (mem, st1.push' Slot.top)
   | .ptr_add_index =>
       let (st1, _, _) := State.pop2 st
-      st1.push' Slot.top
+      (mem, st1.push' Slot.top)
   | .dup =>
       let (st1, v) := State.popVal' st
-      st1.push' v |>.push' v
+      (mem, st1.push' v |>.push' v)
   | .drop =>
       let (st1, _) := State.popVal' st
-      st1
+      (mem, st1)
   | .swap =>
       let (st1, a, b) := State.pop2 st
-      st1.push' b |>.push' a
-  | .add_i64 => State.binop st Interval.add
-  | .sub_i64 => State.binop st Interval.sub
-  | .mul_i64 => State.binop st Interval.mul
+      (mem, st1.push' b |>.push' a)
+  | .add_i64 => (mem, State.binop st Interval.add)
+  | .sub_i64 => (mem, State.binop st Interval.sub)
+  | .mul_i64 => (mem, State.binop st Interval.mul)
   | .cmp_lt | .cmp_le | .cmp_gt | .cmp_ge | .cmp_eq | .cmp_ne =>
       let (st1, a, b) := State.pop2 st
       let t := triCmp a.iv b.iv op.form.mnemonic
-      st1.push' (Slot.computed (boolIv t))
+      (mem, st1.push' (Slot.computed (boolIv t)))
   | .and_bool =>
       let (st1, a, b) := State.pop2 st
       let t := triAnd (triFromBoolIv a.iv) (triFromBoolIv b.iv)
-      st1.push' (Slot.computed (boolIv t))
+      (mem, st1.push' (Slot.computed (boolIv t)))
   | .or_bool =>
       let (st1, a, b) := State.pop2 st
       let t := triOr (triFromBoolIv a.iv) (triFromBoolIv b.iv)
-      st1.push' (Slot.computed (boolIv t))
+      (mem, st1.push' (Slot.computed (boolIv t)))
   | .not_bool =>
       let (st1, a) := State.popVal' st
       let t := triNot (triFromBoolIv a.iv)
-      st1.push' (Slot.computed (boolIv t))
-  | .interrupt_disable | .interrupt_enable => st
+      (mem, st1.push' (Slot.computed (boolIv t)))
+  | .interrupt_disable | .interrupt_enable => (mem, st)
   | .local_set =>
       let (st1, v) := State.popVal' st
       let idx := op.slot.getD 0
       let locals' := if idx < st1.locals.length
         then (mapIdx st1.locals (fun i s => if i == idx then v else s))
         else st1.locals
-      { st1 with locals := locals' }
+      (mem, { st1 with locals := locals' })
   | .local_get =>
       let idx := op.slot.getD 0
       let v := st.locals.getD idx Slot.top
-      st.push' v
+      (mem, st.push' v)
   | .cast =>
       -- narrowing cast to the subtype: the abstract successor is the
       -- intersection with the target range; otherwise identity.
@@ -198,34 +254,33 @@ def stepOp (op : OpInst) (st : State) (sr : Option (Int × Int)) (widthBits : Na
       let iv := match sr with
         | some (lo, hi) => if op.subtypeCast then Interval.castNarrow v.iv lo hi else v.iv
         | none => v.iv
-      st1.push' (Slot.computed iv)
+      (mem, st1.push' (Slot.computed iv))
   | .bitcast =>
       let (st1, v) := State.popVal' st
-      st1.push' v
+      (mem, st1.push' v)
   | .call =>
       -- representative call sig (1,1): row pops/pushes (drives the corpus
       -- vectors; a real call's sig is payload-carried in the full pipeline).
       let (st1, _) := State.popVal' st
-      st1.push' Slot.top
+      (mem, st1.push' Slot.top)
   | .load =>
       let (st1, addr) := State.popVal' st
-      st1.push' (Slot.computed (mem.load addr.iv widthBits))
+      (mem, st1.push' (Slot.computed (mem.load addr.iv widthBits)))
   | .store =>
       let (st1, addr, val) := State.pop2 st
-      let _ := (addr, val)
-      st1
+      (mem.store addr.iv val.iv, st1)
   | .vol_load | .vol_load_field =>
       let (st1, _) := State.popVal' st
-      st1.push' (Slot.computed (mem.apertureRead widthBits))
+      (mem, st1.push' (Slot.computed (mem.apertureRead widthBits)))
   | .vol_store | .vol_store_field =>
       let (st1, _, _) := State.pop2 st
-      st1
+      (mem, st1)
   | .trap_if_false =>
       let (st1, _) := State.popVal' st
-      st1
+      (mem, st1)
   | .br_if =>
       let (st1, _) := State.popVal' st
-      st1
-  | .br | .ret => st
+      (mem, st1)
+  | .br | .ret => (mem, st)
 
 end Tyu.Conformance

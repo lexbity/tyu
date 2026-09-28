@@ -1,0 +1,193 @@
+{
+  "schema": "tyu.vec/1",
+  "bundle": "tyu.model/x86_64-unknown-none",
+  "triple": "x86_64-unknown-none",
+  "target": {
+    "slot_bytes": 8,
+    "word_bits": 64,
+    "arch_tag": 1
+  },
+  "ram": [1048576, 2097151],
+  "vectors": [
+    {
+      "id": "td/store-load-in-window",
+      "class": "td:store-load",
+      "row": "store",
+      "model": "bundle",
+      "mode": "linear",
+      "ops": "const_i64 1048576\nconst_i64 42\nstore i64\nconst_i64 1048576\nload i64",
+      "entry": "",
+      "target": [0, 100],
+      "cast_site": false,
+      "expect": {"head": "discharged", "top": "[42,42]"}
+    },
+    {
+      "id": "td/store-load-replace",
+      "class": "td:store-load",
+      "row": "store",
+      "model": "bundle",
+      "mode": "linear",
+      "ops": "const_i64 1048576\nconst_i64 42\nstore i64\nconst_i64 1048576\nconst_i64 7\nstore i64\nconst_i64 1048576\nload i64",
+      "entry": "",
+      "target": [0, 100],
+      "cast_site": false,
+      "expect": {"head": "discharged", "top": "[7,7]"}
+    },
+    {
+      "id": "td/frame-unrecorded-other",
+      "class": "td:frame",
+      "row": "store",
+      "model": "bundle",
+      "mode": "linear",
+      "ops": "const_i64 1048576\nconst_i64 42\nstore i64\nconst_i64 2097151\nload i64",
+      "entry": "",
+      "target": [0, 100],
+      "cast_site": false,
+      "expect": {"head": "open", "top": "<top>"}
+    },
+    {
+      "id": "td/frame-preserves-recorded",
+      "class": "td:frame",
+      "row": "store",
+      "model": "bundle",
+      "mode": "linear",
+      "ops": "const_i64 1048577\nconst_i64 42\nstore i64\nconst_i64 1048576\nconst_i64 7\nstore i64\nconst_i64 1048577\nload i64",
+      "entry": "",
+      "target": [0, 100],
+      "cast_site": false,
+      "expect": {"head": "discharged", "top": "[42,42]"}
+    },
+    {
+      "id": "td/boundary-high-byte",
+      "class": "td:store-load",
+      "row": "store",
+      "model": "bundle",
+      "mode": "linear",
+      "ops": "const_i64 2097151\nconst_i64 9\nstore i64\nconst_i64 2097151\nload i64",
+      "entry": "",
+      "target": [0, 100],
+      "cast_site": false,
+      "expect": {"head": "discharged", "top": "[9,9]"}
+    },
+    {
+      "id": "td/boundary-past-window",
+      "class": "td:store-load",
+      "row": "store",
+      "model": "bundle",
+      "mode": "linear",
+      "ops": "const_i64 2097152\nconst_i64 9\nstore i64\nconst_i64 2097152\nload i64",
+      "entry": "",
+      "target": [0, 100],
+      "cast_site": false,
+      "expect": {"head": "open", "top": "<top>"}
+    },
+    {
+      "id": "td/load-unrecorded-in-window",
+      "class": "td:load",
+      "row": "load",
+      "model": "bundle",
+      "mode": "linear",
+      "ops": "const_i64 1048576\nload i64",
+      "entry": "",
+      "target": [0, 100],
+      "cast_site": false,
+      "expect": {"head": "open", "top": "<top>"}
+    },
+    {
+      "id": "td/load-outside-window",
+      "class": "td:load",
+      "row": "load",
+      "model": "bundle",
+      "mode": "linear",
+      "ops": "const_i64 1048575\nload i64",
+      "entry": "",
+      "target": [0, 100],
+      "cast_site": false,
+      "expect": {"head": "open", "top": "<top>"}
+    },
+    {
+      "id": "td/store-outside-window-inert",
+      "class": "td:store",
+      "row": "store",
+      "model": "bundle",
+      "mode": "linear",
+      "ops": "const_i64 1048570\nconst_i64 1\nstore i64\nconst_i64 1048570\nload i64",
+      "entry": "",
+      "target": [0, 100],
+      "cast_site": false,
+      "expect": {"head": "open", "top": "<top>"}
+    },
+    {
+      "id": "td/aperture-width-domain",
+      "class": "td:aperture-width",
+      "row": "vol_load",
+      "model": "bundle",
+      "mode": "linear",
+      "ops": "vol_load i64 tdreg atomic=64",
+      "entry": "",
+      "target": [0, 100],
+      "cast_site": false,
+      "expect": {"head": "open", "top": "<top>"}
+    },
+    {
+      "id": "boundary/const-i64-max",
+      "class": "boundary:i64-max",
+      "row": "const_i64",
+      "model": "flat",
+      "mode": "linear",
+      "ops": "const_i64 9223372036854775807",
+      "entry": "",
+      "target": [0, 100],
+      "cast_site": false,
+      "expect": {"head": "def-false", "top": "[9223372036854775807,9223372036854775807]"}
+    },
+    {
+      "id": "boundary/wrap-add",
+      "class": "boundary:wrap-add",
+      "row": "add_i64",
+      "model": "flat",
+      "mode": "linear",
+      "ops": "add_i64",
+      "entry": "[9223372036854775806,9223372036854775807];[1,1]",
+      "target": [0, 100],
+      "cast_site": false,
+      "expect": {"head": "open", "top": "<top>"}
+    },
+    {
+      "id": "boundary/sub-wraps-to-top",
+      "class": "boundary:wrap-sub",
+      "row": "sub_i64",
+      "model": "flat",
+      "mode": "linear",
+      "ops": "sub_i64",
+      "entry": "[-9223372036854775807,-9223372036854775808];[2,4]",
+      "target": [0, 100],
+      "cast_site": false,
+      "expect": {"head": "open", "top": "<top>"}
+    },
+    {
+      "id": "boundary/cast-in-range",
+      "class": "boundary:cast-bounds",
+      "row": "cast",
+      "model": "flat",
+      "mode": "linear",
+      "ops": "cast percent",
+      "entry": "[42,42]",
+      "target": [0, 100],
+      "cast_site": true,
+      "expect": {"head": "discharged", "top": "[42,42]"}
+    },
+    {
+      "id": "boundary/cast-trap-above",
+      "class": "boundary:cast-trap",
+      "row": "cast",
+      "model": "flat",
+      "mode": "linear",
+      "ops": "cast percent",
+      "entry": "[150,150]",
+      "target": [0, 100],
+      "cast_site": true,
+      "expect": {"head": "def-false", "top": "[150,150]"}
+    }
+  ]
+}

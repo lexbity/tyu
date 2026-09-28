@@ -239,8 +239,17 @@ pub(crate) fn compose(
     for (i, (name, set)) in sets.iter().enumerate() {
         let echo = echoes[i].1.as_ref();
         let (classes, trust, methods, surfaces) = classes_for(set.as_ref(), echo);
+        // P12.1 (§7.3): the per-module `(target, model)` identity, copied
+        // from the artifact (the no-artifact fallback stays empty — a
+        // mixed-mode cache the report already degrades for elsewhere).
+        let (target, model) = match set.as_ref() {
+            Some(set) => (set.target.clone(), set.model_semantics.clone()),
+            None => (String::new(), String::new()),
+        };
         report.modules.push(ModuleAccounting {
             name: name.clone(),
+            target,
+            model,
             classes,
             trust,
             methods,
@@ -819,17 +828,35 @@ fn report_totals(r: &VerifyReport) -> (u32, u32, u32, u32) {
 /// assumptions` additionally fails on assumed verdicts; `proven` (P7.3,
 /// §Q12) fails on any open or assumed obligation — the langc trust gate
 /// already forced interval-only `checked` and unrecognized-trust sites open,
-/// so the report's opens are exactly the not-`proof`-closed remainder.
+/// so the report's opens are exactly the not-`proof`-closed remainder — and
+/// (P12.1, §Q15(c)/§11.9) on any module whose bundle is *unmodeled*: a
+/// proven claim is meaningless against a bundle without model semantics,
+/// so the build fails closed (E6510) exactly as the deploy gate does.
 /// `--verify=off` is exempt — it is the legacy all-checks mode, not a policy
 /// decision.
 fn enforce_policy(report: &VerifyReport, policy: VerifyPolicy) -> Result<(), TyuError> {
     match policy {
         VerifyPolicy::OpenOk => Ok(()),
         VerifyPolicy::Proven | VerifyPolicy::NoOpen | VerifyPolicy::NoOpenNoAssumptions => {
+            // P12.1 (§Q15(c)): proven × unmodeled bundle ⇒ E6510. The model
+            // identity is the report's per-module leg of the id-flow chain;
+            // a module recording no identity at all (missing artifact in a
+            // mixed-mode cache) is equally uncertifiable.
+            let unmodeled: Vec<&verifier::report::ModuleAccounting> = if policy
+                == VerifyPolicy::Proven
+            {
+                report
+                    .modules
+                    .iter()
+                    .filter(|m| m.model == verifier::model::MODEL_UNMODELED || m.model.is_empty())
+                    .collect()
+            } else {
+                Vec::new()
+            };
             let fails_assumed = (policy == VerifyPolicy::NoOpenNoAssumptions
                 || policy == VerifyPolicy::Proven)
                 && !report.assumed.is_empty();
-            if report.open.is_empty() && !fails_assumed {
+            if report.open.is_empty() && !fails_assumed && unmodeled.is_empty() {
                 return Ok(());
             }
             if !report.open.is_empty() {
@@ -867,7 +894,25 @@ fn enforce_policy(report: &VerifyReport, policy: VerifyPolicy) -> Result<(), Tyu
                     );
                 }
             }
-            Err(TyuError::Build(format!(
+            if !unmodeled.is_empty() {
+                eprintln!(
+                    "tyu: error[E6510]: proven requires a modeled bundle (--verify-policy=proven):"
+                );
+                for m in unmodeled.iter().take(64) {
+                    if m.model.is_empty() {
+                        eprintln!(
+                            "  module '{}' records no model identity (E_MODEL_UNMODELED)",
+                            m.name
+                        );
+                    } else {
+                        eprintln!(
+                            "  module '{}' records model '{}' (E_MODEL_UNMODELED)",
+                            m.name, m.model
+                        );
+                    }
+                }
+            }
+            let mut msg = format!(
                 "E6410: {} open obligations and {} assumed under --verify-policy={}",
                 report.open.len(),
                 if fails_assumed {
@@ -876,7 +921,14 @@ fn enforce_policy(report: &VerifyReport, policy: VerifyPolicy) -> Result<(), Tyu
                     0
                 },
                 policy.as_str(),
-            )))
+            );
+            if !unmodeled.is_empty() {
+                msg.push_str(&format!(
+                    "; E6510: {} unmodeled module(s) in a proven image (E_MODEL_UNMODELED)",
+                    unmodeled.len()
+                ));
+            }
+            Err(TyuError::Build(msg))
         }
     }
 }

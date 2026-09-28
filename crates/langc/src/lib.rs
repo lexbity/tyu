@@ -51,6 +51,13 @@ pub unsafe fn run(argc: isize, argv: *const *const hosted::c::c_char) -> i32 {
         None => target.spec().mmio_apertures,
     };
 
+    // P12.1 (§6.7/§Q3): the bundle's model-semantics identity. tyu forwards
+    // the resolved pack's `[model] model_semantics`; a direct langc run
+    // without a bundle keeps the §Q15 honest default (`unmodeled`).
+    let model_semantics: &[u8] = cfg
+        .model_semantics
+        .unwrap_or(verifier::model::MODEL_UNMODELED.as_bytes());
+
     let buf = match fs::read_file(cfg.input) {
         Ok(b) => b,
         Err(_) => {
@@ -228,6 +235,7 @@ pub unsafe fn run(argc: isize, argv: *const *const hosted::c::c_char) -> i32 {
                 cfg.verify_tool,
                 cfg.verify_policy_proven,
                 bind_obl.as_ref(),
+                model_semantics,
             )
         }
         EmitMode::Obligations => {
@@ -241,6 +249,7 @@ pub unsafe fn run(argc: isize, argv: *const *const hosted::c::c_char) -> i32 {
                 target,
                 descriptor,
                 out_dir,
+                model_semantics,
             )
         }
     }

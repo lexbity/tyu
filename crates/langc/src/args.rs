@@ -8,7 +8,7 @@ pub const HELP: &[u8] = b"langc (tyu_lang) v0.1.0\n\nUSAGE:\n  langc [options] <
   --verify-policy=proven      P7.3 trust gate (default open-ok): only proof-class or
                               exact-method checked discharges close a site\n  --bind-obl=<path>           P7.3: bind statement hashes against this pre-computed
                               tyu.obl/v2 artifact (the artifact the proofs were
-                              certified against) instead of the live lowering\n  --elide-ds-guards           Slice P7: omit the per-push x86 data-stack overflow\n                              guards (C8). A per-image codegen input - tyu forwards\n                              it only when the image-level stack-budget verdict is\n                              discharged (two-pass, --elide-stack-guards); the\n                              __lang_ds_high observability update is kept\n  --allow-raw-casts           Enable raw pointer casts\n  --features=<csv>            Image features to enable (default: all) [concurrency, module-loading]\n  --no-default-features       Start from empty feature set\n  --sysroot=<path>            Sysroot root directory\n  --out-dir=<path>            Output directory (--emit=obj / --emit=obligations)\n  --platform=<dir>            Platform pack directory; the compiled descriptor\n                              at <dir>/platform.desc sources MMIO aperture facts\n  --target=<triple>           Target triple, required for --emit=obj\n                              Supported: x86_64-unknown-linux-gnu\n                                         x86_64-unknown-none\n                                         armv7m-unknown-none\n                                         riscv32-unknown-none\n\n";
+                              certified against) instead of the live lowering\n  --elide-ds-guards           Slice P7: omit the per-push x86 data-stack overflow\n                              guards (C8). A per-image codegen input - tyu forwards\n                              it only when the image-level stack-budget verdict is\n                              discharged (two-pass, --elide-stack-guards); the\n                              __lang_ds_high observability update is kept\n  --allow-raw-casts           Enable raw pointer casts\n  --features=<csv>            Image features to enable (default: all) [concurrency, module-loading]\n  --no-default-features       Start from empty feature set\n  --sysroot=<path>            Sysroot root directory\n  --out-dir=<path>            Output directory (--emit=obj / --emit=obligations)\n  --platform=<dir>            Platform pack directory; the compiled descriptor\n                              at <dir>/platform.desc sources MMIO aperture facts\n  --model-semantics=<id>      P12: the bundle's model-semantics identity\n                              (tyu.model/<bundle>/<ver> or \"unmodeled\"; the\n                              default for a direct run without a bundle)\n  --target=<triple>           Target triple, required for --emit=obj\n                              Supported: x86_64-unknown-linux-gnu\n                                         x86_64-unknown-none\n                                         armv7m-unknown-none\n                                         riscv32-unknown-none\n\n";
 
 /// Validated compiler configuration.
 pub struct Config<'a> {
@@ -31,6 +31,13 @@ pub struct Config<'a> {
     /// Platform pack directory (advisory in P3; arms in P4). langc reads the
     /// compiled descriptor `<dir>/platform.desc` to source MMIO aperture facts.
     pub platform_dir: Option<&'a [u8]>,
+    /// P12.1 (§6.7/§Q3): `--model-semantics=<id>` — the bundle's
+    /// model-semantics identity, forwarded by `tyu build` from the resolved
+    /// pack's `[model]` section. It stamps the `(triple, model_semantics)`
+    /// identity of the obligation artifact and the verdicts echo. `None`
+    /// (direct langc runs without a bundle) keeps the §Q15 honest default:
+    /// `unmodeled`.
+    pub model_semantics: Option<&'a [u8]>,
     /// P4: `--verdicts=<path>` — a `tyu.verdicts/v2` file consumed under
     /// `--checks=undischarged` (E6402 when that mode lacks one).
     pub verdicts: Option<&'a [u8]>,
@@ -118,6 +125,7 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]], emit_diagnostics: bool) -> (Parse
     let mut out_dir: Option<&[u8]> = None;
     let mut target: Option<Target> = None;
     let mut platform_dir: Option<&[u8]> = None;
+    let mut model_semantics: Option<&[u8]> = None;
     let mut verdicts: Option<&[u8]> = None;
     let mut elide_ds_guards = false;
     let mut verify_tool: Option<&[u8]> = None;
@@ -284,6 +292,32 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]], emit_diagnostics: bool) -> (Parse
             i += 1;
             continue;
         }
+        if a.starts_with(b"--model-semantics=") {
+            let v = &a[b"--model-semantics=".len()..];
+            if v.is_empty() {
+                maybe_emit_error(
+                    emit_diagnostics,
+                    1006,
+                    b"--model-semantics requires a non-empty id",
+                );
+                return (ParseResult::Error(2), true);
+            }
+            // P12 finding 5: the model id must be a valid UTF-8 string — it
+            // is the `(target, model)` identity stamped verbatim into every
+            // evidence-chain surface; a lossy conversion would manufacture a
+            // different id than the operator passed (fail closed instead).
+            if core::str::from_utf8(v).is_err() {
+                maybe_emit_error(
+                    emit_diagnostics,
+                    1006,
+                    b"--model-semantics must be a valid UTF-8 string",
+                );
+                return (ParseResult::Error(2), true);
+            }
+            model_semantics = Some(v);
+            i += 1;
+            continue;
+        }
         if a.starts_with(b"--target=") {
             let triple = &a[b"--target=".len()..];
             target = match Target::parse(triple) {
@@ -418,6 +452,7 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]], emit_diagnostics: bool) -> (Parse
             out_dir,
             features,
             platform_dir,
+            model_semantics,
             verdicts,
             elide_ds_guards,
             verify_tool,
@@ -776,5 +811,50 @@ mod tests {
     fn features_unknown_value_errs() {
         let code = err_code(&[b"langc", b"--features=bogus", b"--emit=ast", b"x.mod"]);
         assert_eq!(code, 2);
+    }
+
+    #[test]
+    fn model_semantics_parses_and_is_utf8_checked() {
+        // Well-formed id.
+        let cfg = ok(&[
+            b"langc",
+            b"--emit=ast",
+            b"--model-semantics=tyu.model/demo/1",
+            b"x.mod",
+        ]);
+        assert_eq!(cfg.model_semantics, Some(&b"tyu.model/demo/1"[..]));
+        // The §Q15 literal.
+        let cfg = ok(&[
+            b"langc",
+            b"--emit=ast",
+            b"--model-semantics=unmodeled",
+            b"x.mod",
+        ]);
+        assert_eq!(cfg.model_semantics, Some(&b"unmodeled"[..]));
+        // Empty id → error.
+        assert_eq!(
+            err_code(&[b"langc", b"--emit=ast", b"--model-semantics=", b"x.mod"]),
+            2
+        );
+        // Non-UTF8 id → error (the id is stamped verbatim into the evidence
+        // chain; a lossy conversion would manufacture a different id).
+        assert_eq!(
+            err_code(&[
+                b"langc",
+                b"--emit=ast",
+                b"--model-semantics=\xFF\xFEid",
+                b"x.mod"
+            ]),
+            2
+        );
+    }
+
+    #[test]
+    fn help_mentions_model_semantics() {
+        let text = core::str::from_utf8(HELP).expect("help is UTF-8");
+        assert!(
+            text.contains("--model-semantics"),
+            "help must document --model-semantics"
+        );
     }
 }

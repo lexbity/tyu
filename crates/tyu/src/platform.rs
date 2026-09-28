@@ -12,8 +12,9 @@ pub use config::{
     info_report, is_qemu_capable_selection, list_report, load_platform_pack,
     platform_pack_for_target, print_info, print_list, resolve_platform_selection, run,
     DebugAgentSection, DebugSection, DeploySection, DeployStep, FeatureUnit, IsaEntry,
-    MemoryRegion, MemorySection, MetalSection, PlatformManifest, PlatformPack, PlatformSection,
-    ResolvedPlatformSelection, SecureBootSection, TestRung, TestSection,
+    MemoryRegion, MemorySection, MetalSection, ModelSection, PlatformManifest, PlatformPack,
+    PlatformSection, ResolvedPlatformSelection, SecureBootSection, TestRung, TestSection,
+    MANIFEST_SCHEMA_MODEL,
 };
 pub use desc::compile::{descriptor_file_path, ensure_compiled_descriptor, COMPILED_DESC_FILE};
 pub use desc::{
@@ -23,7 +24,8 @@ pub use desc::{
 };
 pub use linker_script::scaffold_platform_pack;
 pub use lint::{
-    ensure_build_platform_interface, format_lint_outcome, lint_pack, LintError, LintOutcome,
+    ensure_build_platform_interface, ensure_model_pairing, format_lint_outcome, lint_pack,
+    model_artifact_ram, parse_model_artifact, LintError, LintOutcome, ModelArtifactInfo,
 };
 
 #[cfg(test)]

@@ -274,6 +274,10 @@ fn deploy(dir: &Path) -> bool {
         .args([
             "deploy",
             "--target=x86_64-unknown-none",
+            // P12 (§Q15): `proven` requires a modeled bundle — the deploy's
+            // build resolves the now-modeled x86_64-unknown-none pack so the
+            // module records the pack's model id (E6510 else).
+            "--platform=x86_64-unknown-none",
             &format!("--sysroot={}", sysroot.display()),
             &format!("--out-dir={}", out_dir.display()),
             "--verify-policy=proven",

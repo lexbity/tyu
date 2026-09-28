@@ -90,6 +90,13 @@ pub struct SurfaceAccounting {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ModuleAccounting {
     pub name: String,
+    /// P12.1 (§7.3/§Q3): the module's `(target, model_semantics)` identity —
+    /// the report's leg of the id-flow chain (pack → artifact → verdicts →
+    /// manifest → package), copied from the artifact at report-composition
+    /// time. `model` is `"unmodeled"` for a bundle without model semantics
+    /// (§Q15); under `proven` an unmodeled module fails the build (E6510).
+    pub target: String,
+    pub model: String,
     pub classes: Vec<ClassAccounting>,
     /// P7.3: the v2 trust split across this module's obligations.
     pub trust: TrustAccounting,

@@ -12,7 +12,7 @@
 
 [platform]
 name = "rp2350"
-schema = 2
+schema = 3
 family = "rp2350"
 compiler-interface = 1
 description = "Raspberry Pi Pico 2 / RP2350 custom platform"

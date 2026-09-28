@@ -44,6 +44,10 @@ pub struct PlatformManifest {
     /// this copy is for `tyu platform` reporting and must agree with it.
     #[serde(default)]
     pub verification: Option<VerificationSection>,
+    /// The `[model]` model-semantics identity (developer-proof-pipeline.md
+    /// §6.7, P12.1). `None` ⇒ `"unmodeled"` (§Q15).
+    #[serde(default)]
+    pub model: Option<ModelSection>,
 }
 
 /// The v1-model view of `[verification]` (static-verification.md §6.4,
@@ -57,15 +61,72 @@ pub struct VerificationSection {
     pub isr_stack_slots: Option<u32>,
 }
 
+/// The pack-manifest schema that introduced `[model]`
+/// (developer-proof-pipeline.md §6.7, P12.1). Schema-2 packs load unchanged
+/// (no `[model]` ⇒ `"unmodeled"`, §Q15); declaring a `[model]` section
+/// requires `schema = 3` — enforced by the lint and by the descriptor parse
+/// gate, so a schema-2 pack cannot smuggle model identity past either.
+pub const MANIFEST_SCHEMA_MODEL: u32 = 3;
+
 #[derive(Clone, Debug, serde::Deserialize)]
 pub struct PlatformSection {
     pub name: String,
+    /// The pack-manifest schema stamp. Schema 2 = descriptor-era content;
+    /// schema 3 adds the `[model]` section (§6.7). Absent on legacy packs
+    /// (the descriptor parse gate rejects a descriptor-bearing pack without
+    /// one); acknowledged here so the lint can enforce the `[model]` ×
+    /// schema pairing.
+    #[serde(default)]
+    pub schema: Option<u32>,
     #[serde(rename = "compiler-interface")]
     pub compiler_interface: u16,
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
     pub isa: Vec<IsaEntry>,
+}
+
+/// The `[model]` section (developer-proof-pipeline.md §6.7, P12.1): the
+/// bundle's model-semantics identity. An absent section ⇒ the bundle is
+/// *unmodeled* (§Q15): loadable, runnable, testable — and uncertifiable
+/// under `proven`. The parse stays structural (strings); the closed value
+/// sets are enforced by the lint (`platform::lint`), which owns the lint
+/// matrix and can name the supported set in the diagnostic.
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct ModelSection {
+    /// The model-semantics id: `tyu.model/<bundle>/<ver>`, or the literal
+    /// `"unmodeled"`. This exact string is the model half of the
+    /// `(triple, model_semantics)` identity carried by every obligation
+    /// artifact, verdict set, `verify_manifest` record, and certification
+    /// package (§Q3).
+    pub model_semantics: String,
+    /// MMIO semantics. Closed set (v1): `"nondeterministic"` only (§Q13) —
+    /// anything stronger would manufacture a hardware promise.
+    #[serde(default)]
+    pub mmio: Option<String>,
+    /// Concurrency service modeling: `"abstract-atomic"` (§Q14) or
+    /// `"unmodeled"`.
+    #[serde(default)]
+    pub concurrency: Option<String>,
+}
+
+impl ModelSection {
+    /// The supported `mmio` values (§Q13). Only the safe default exists in
+    /// v1; device refinements are declared inside the model artifact
+    /// (P13), never here.
+    pub const MMIO_VALUES: &'static [&'static str] = &["nondeterministic"];
+    /// The supported `concurrency` values (§Q14).
+    pub const CONCURRENCY_VALUES: &'static [&'static str] = &["unmodeled", "abstract-atomic"];
+
+    /// The effective `mmio` value (declared, or the v1 default).
+    pub fn mmio_str(&self) -> &str {
+        self.mmio.as_deref().unwrap_or("nondeterministic")
+    }
+
+    /// The effective `concurrency` value (declared, or the v1 default).
+    pub fn concurrency_str(&self) -> &str {
+        self.concurrency.as_deref().unwrap_or("unmodeled")
+    }
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -211,6 +272,24 @@ pub struct ResolvedPlatformSelection {
 impl PlatformPack {
     pub fn name(&self) -> &str {
         &self.manifest.platform.name
+    }
+
+    /// The declared `[model]` section, if any (§6.7).
+    pub fn model(&self) -> Option<&ModelSection> {
+        self.manifest.model.as_ref()
+    }
+
+    /// The model-semantics id this bundle declares: the `[model]
+    /// model_semantics` id verbatim, or `"unmodeled"` when the pack declares
+    /// no `[model]` (§Q15). This is the single identity string that flows
+    /// pack → obligation artifact → verdicts → `verify_manifest` record →
+    /// certification package; the build forwards it to langc as
+    /// `--model-semantics` and keys the verdicts cache on it (§7.2).
+    pub fn model_semantics(&self) -> &str {
+        match self.manifest.model.as_ref() {
+            Some(model) => &model.model_semantics,
+            None => verifier::model::MODEL_UNMODELED,
+        }
     }
 
     pub fn pack_root(&self) -> &Path {
@@ -535,6 +614,21 @@ pub fn info_report(root: &Path, name: &str, isa_filter: Option<&str>) -> Result<
             secure_boot.supported, secure_boot.encryption_implies_secure_boot,
         )
         .map_err(|e| TyuError::Platform(e.to_string()))?;
+    }
+    // P12.1 (§6.7/FR-10): the model identity, rendered whether declared or
+    // not — an unmodeled bundle is a first-class toolchain citizen and the
+    // operator surface says so honestly (§Q15).
+    match pack.model() {
+        Some(model) => writeln!(
+            &mut out,
+            "  model: model_semantics={} mmio={} concurrency={}",
+            model.model_semantics,
+            model.mmio_str(),
+            model.concurrency_str(),
+        )
+        .map_err(|e| TyuError::Platform(e.to_string()))?,
+        None => writeln!(&mut out, "  model: unmodeled (not declared)")
+            .map_err(|e| TyuError::Platform(e.to_string()))?,
     }
     match &pack.manifest.verification {
         Some(v) => writeln!(

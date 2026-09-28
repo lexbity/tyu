@@ -540,7 +540,9 @@ fn check_deploy_policy(
     }
     // The deploy-side-only bundle-model rule (§Q15): a proven pairing must
     // target a modeled bundle.
-    if policy == DeployVerifyPolicy::Proven && vm.model == b"unmodeled" {
+    if policy == DeployVerifyPolicy::Proven
+        && vm.model == verifier::model::MODEL_UNMODELED.as_bytes()
+    {
         return Err(einterr(
             "proven pairing against an unmodeled bundle (E_MODEL_UNMODELED)".to_string(),
         ));
@@ -709,7 +711,7 @@ fn check_image_pairing(
                 }
             )));
         }
-        if policy == DeployVerifyPolicy::Proven && spec.model == "unmodeled" {
+        if policy == DeployVerifyPolicy::Proven && spec.model == verifier::model::MODEL_UNMODELED {
             return Err(einterr(format!(
                 "unmodeled callee '{}' in a proven image (E_MODEL_UNMODELED)",
                 node.name

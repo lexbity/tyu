@@ -34,6 +34,10 @@
 
 extern crate alloc;
 
+/// The bundle model-artifact geometry reader (P12.2): the single
+/// `[memory] ram` parser shared by the evidence chain and the Lean-instance
+/// pin (cleanup item 3).
+pub mod bundle;
 pub mod codec;
 pub mod export;
 pub mod gen;

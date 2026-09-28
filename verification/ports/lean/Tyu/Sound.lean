@@ -1,5 +1,6 @@
 import Tyu.Step
 import Tyu.Src
+import Tyu.Bundles
 
 /-! T-C: the stack algebra (PLAN-VERIFY-3 P4.2) — the first registry
 theorem, proved against the concrete step semantics of `Tyu.Step` and over
@@ -1162,5 +1163,126 @@ theorem transcription_offset {blocks : List Tyu.Src.Block} {entry : Nat}
   Tyu.Src.transcription_offset blocks entry off width size
 
 end T_Server
+
+/-! ## T-D: the memory-model laws (PLAN-VERIFY-3 P12.2, §6.8/§Q16)
+
+The registry statements over the bundle-instance substrate
+(`Tyu.Bundles.BundleMem`): for every modeled bundle's instance (`x86_64`,
+`armv7m`, `riscv32` — each with the RAM window declared by its
+`model/model.toml [memory] ram`):
+
+  - **store-load**: a point store within the modeled window is observable
+    by a subsequent load of the same address — the stored abstract value
+    flows back (memory is a real abstract store, not `⊤`).
+  - **frame**: a store to one point address leaves the load behavior of
+    every other point address unchanged (the frame property — a load that
+    the store does not target reads exactly what it read before).
+  - **aperture width bound**: an MMIO read answers exactly the §Q13
+    width-bounded nondeterministic domain — a value *within* the register's
+    width, `top` (the full i64 domain) at ≥ 64 bits, never wider.
+
+The Rust `ApertureMem` instance (`verifier::mem`) implements the same
+rules; the committed `tyu.vec/1` bundle corpora are executed by both sides
+and must agree byte-for-byte (`crates/verifier/tests/bundle_instance_conformance.rs`
++ the port's `conformance` exe) — the mechanical pin of this section. -/
+namespace TD
+
+open Tyu.Bundles
+open Tyu.Mem
+
+/-- T-D (store-load): a point store within the model's window is read back
+by a load of that address. -/
+theorem store_load {m : BundleMem} {a : Int} (hin : m.inRam a) (v : IntervalVal) :
+    BundleMem.loadVal (BundleMem.storeVal m (IntervalVal.range a a) v) (IntervalVal.range a a) = v := by
+  simp [BundleMem.storeVal, BundleMem.loadVal, BundleMem.inRam, hin]
+
+/-- T-D (frame): a store to one point address does not disturb the load
+behavior of any other point address. -/
+theorem frame_law {m : BundleMem} {a b : Int} (hina : m.inRam a) (hinb : m.inRam b)
+    (hne : a ≠ b) (v : IntervalVal) :
+    BundleMem.loadVal (BundleMem.storeVal m (IntervalVal.range a a) v) (IntervalVal.range b b)
+      = BundleMem.loadVal m (IntervalVal.range b b) := by
+  have hba : b ≠ a := by exact Ne.symm hne
+  simp [BundleMem.storeVal, BundleMem.loadVal, BundleMem.inRam, hina, hinb, hba]
+
+/-- T-D (aperture width bound, sub-64-bit): a register read of width
+`0 < w < 64` answers the signed `w`-bit domain — never a wider value
+(§Q13). The read goes through the single `Tyu.Conformance.wordDomain`. -/
+theorem aperture_width_bound {w : Nat} (hw : 0 < w) (hw64 : w < 64) :
+    BundleMem.apertureRead w =
+      IntervalVal.range (-((2 : Int) ^ (w - 1))) (((2 : Int) ^ (w - 1)) - 1) := by
+  have hz : w ≠ 0 := by omega
+  have hb : (if w = 0 then 64 else w) = w := by
+    by_cases h : w = 0
+    · exact False.elim (hz h)
+    · simp [h]
+  have hd : Tyu.Conformance.wordDomain w =
+      some (-((2 : Int) ^ (w - 1)), ((2 : Int) ^ (w - 1)) - 1) := by
+    simp [Tyu.Conformance.wordDomain, hb, hw64]
+  simp [BundleMem.apertureRead, hd]
+
+/-- T-D (aperture width bound, full domain): a ≥ 64-bit register read is
+the whole i64 domain (`top`) — the read cannot be narrower than the
+register (§Q13). -/
+theorem aperture_width_bound_full {w : Nat} (hw64 : 64 ≤ w) :
+    BundleMem.apertureRead w = IntervalVal.top := by
+  have hz : w ≠ 0 := by omega
+  have hb : (if w = 0 then 64 else w) = w := by
+    by_cases h : w = 0
+    · exact False.elim (hz h)
+    · simp [h]
+  have hd : Tyu.Conformance.wordDomain w = none := by
+    simp [Tyu.Conformance.wordDomain, hb, hw64]
+  simp [BundleMem.apertureRead, hd]
+
+/-! The per-bundle instances (their windows must equal the model artifacts'
+declarations — pinned mechanically by the Rust suite via `--geometry`). -/
+
+theorem x86_64_geometry : Bundles.x86_64.ramLo = 1048576 ∧ Bundles.x86_64.ramHi = 2097151 := by
+  decide
+
+theorem x86_64_inram (a : Int) (hlo : 1048576 ≤ a) (hhi : a ≤ 2097151) :
+    Bundles.x86_64.inRam a := by
+  simp [Bundles.x86_64, BundleMem.inRam, hlo, hhi]
+
+theorem armv7m_geometry : Bundles.armv7m.ramLo = 536870912 ∧ Bundles.armv7m.ramHi = 536936447 := by
+  decide
+
+theorem armv7m_inram (a : Int) (hlo : 536870912 ≤ a) (hhi : a ≤ 536936447) :
+    Bundles.armv7m.inRam a := by
+  simp [Bundles.armv7m, BundleMem.inRam, hlo, hhi]
+
+theorem riscv32_geometry : Bundles.riscv32.ramLo = 2147483648 ∧ Bundles.riscv32.ramHi = 2281701375 := by
+  decide
+
+theorem riscv32_inram (a : Int) (hlo : 2147483648 ≤ a) (hhi : a ≤ 2281701375) :
+    Bundles.riscv32.inRam a := by
+  simp [Bundles.riscv32, BundleMem.inRam, hlo, hhi]
+
+/-! The T-D consolidation equivalence (P12 cleanup): the conformance
+runner's operational `MemModel.bundle` and the theorem-surface `BundleMem`
+are two mirrors of one abstract memory; these wrap `Tyu/Bundles/Bundle.lean`'s
+equivalence proofs as registry entries so the mirrors cannot drift (the
+boundary-byte defect class, finding #1, is exactly what they catch). -/
+
+/-- T-D (mirror equivalence, aperture): the operational conformance read and
+`BundleMem.apertureRead` agree value-for-value (both through the one
+`wordDomain`). -/
+theorem bundle_aperture_agrees (lo hi : Int)
+    (cells : List (Int × Tyu.Conformance.Interval)) (w : Nat) :
+    Tyu.Conformance.MemModel.apertureRead (Tyu.Conformance.MemModel.bundle lo hi cells) w
+      = Tyu.Bundles.toConformance (BundleMem.apertureRead w) :=
+  Tyu.Bundles.aperture_read_agrees lo hi cells w
+
+/-- T-D (mirror equivalence, load): a point-address load of the recorded
+cells reads identically under both mirrors. -/
+theorem bundle_load_agrees (lo hi : Int) (cells : List (Int × Tyu.Conformance.Interval)) (a : Int)
+    (w : Nat) :
+    Tyu.Conformance.MemModel.load (Tyu.Conformance.MemModel.bundle lo hi cells)
+        (Tyu.Conformance.Interval.range a a) w
+      = Tyu.Bundles.toConformance (BundleMem.loadVal (ofCells lo hi cells) (IntervalVal.range a a)) :=
+  Tyu.Bundles.load_agrees lo hi cells a w
+
+end TD
 
 end Tyu.Sound

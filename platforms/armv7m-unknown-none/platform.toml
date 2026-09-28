@@ -1,6 +1,6 @@
 [platform]
 name = "armv7m-unknown-none"
-schema = 2
+schema = 3
 family = "lm3s6965evb"
 compiler-interface = 1
 description = "ARMv7-M bare-metal runtime"
@@ -35,6 +35,14 @@ unit = "concurrency.asm"
 
 [features.module-loading]
 unit = "modload.asm"
+
+[model]
+# P12.2 (§6.7): the bundle's model-semantics identity. Matches
+# `model/model.toml` (`tyu.model/<bundle>/<ver>`) and the `evidence/`
+# vector corpus the lint requires iff modeled.
+model_semantics = "tyu.model/armv7m-unknown-none/1"
+mmio = "nondeterministic"
+concurrency = "unmodeled"
 
 [capabilities.gpio]
 glue = "glue/gpio"

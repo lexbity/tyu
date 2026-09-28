@@ -1,0 +1,19 @@
+# The riscv32-unknown-none bundle model (PLAN-VERIFY-3 P12.2).
+#
+# The model-semantics identity `tyu.model/riscv32-unknown-none/1` must be
+# declared verbatim in `platform.toml [model] model_semantics` (§6.7). The
+# `[memory]` geometry is the single source the bundle instances consume
+# (Rust `ApertureMem`, Lean `Tyu.Bundles.Riscv32`, and the corpus `"ram"`
+# header). The window mirrors the pack's `[memory]` DRAM
+# (`origin 0x80000000 length 0x08000000`, the QEMU virt RAM).
+
+[model]
+id = "tyu.model/riscv32-unknown-none/1"
+
+[memory]
+ram = { name = "DRAM", origin = 0x80000000, length = 0x08000000 }
+
+[refinements]
+# Device refinements (P13): named abstract state machines are declared here
+# and named in the model id. Empty today — MMIO reads are the §Q13
+# nondeterministic width-bounded default.

@@ -174,6 +174,46 @@ echo "$FRAG_OUT" | grep -q "RESULT: fragment=.*mismatches=0" || {
     exit 1
 }
 msg 2 "  port.sh: P9.3 fragment corpus green (zero divergence, Lean↔Rust pin OK)"
+# --- PLAN-VERIFY-3 P12.2 — bundle-instance conformance ---
+# The modeled bare-metal bundles' evidence corpora
+# (`platforms/<triple>/evidence/vectors.json`, `tyu.vec/1` + a `"ram"`
+# header) are executed by the port's `conformance` exe against the `.bundle`
+# model (recorded point stores within the declared RAM window, width-bounded
+# aperture reads — the §Q13/Q15 instance semantics) and must reproduce
+# byte-exactly. `crates/verifier/tests/bundle_instance_conformance.rs`
+# executes the SAME corpora on the Rust `ApertureMem` instances; the two
+# pins must both be green (Rust↔Lean bundle-instance drift diverges here).
+BUNDLE_CORPUS=(
+    "$ROOT/platforms/x86_64-unknown-none/evidence"
+    "$ROOT/platforms/armv7m-unknown-none/evidence"
+    "$ROOT/platforms/riscv32-unknown-none/evidence"
+)
+msg 2 "  port.sh: P12.2 bundle-instance conformance (${#BUNDLE_CORPUS[@]} evidence corpora)"
+BUNDLE_OUT="$(.lake/build/bin/conformance --corpus "${BUNDLE_CORPUS[@]}")" || {
+    printf '%s\n' "$BUNDLE_OUT"
+    msg 1 "  port.sh: P12.2 bundle corpora DIVERGED (Rust↔Lean bundle-instance drift)"
+    exit 1
+}
+printf '%s\n' "$BUNDLE_OUT"
+echo "$BUNDLE_OUT" | grep -q "RESULT: vectors=.*mismatches=0" || {
+    msg 1 "  port.sh: P12.2 bundle conformance failed (nonzero mismatches)"
+    exit 1
+}
+# Geometry chain: the Lean bundle instances' RAM windows
+# (`--level bundles`) must equal the model artifacts' `[memory] ram`
+# declarations — asserted numerically by the Rust suite
+# (`bundle_geometry_matches_lean_instance`); the port-side report is gated
+# here for shape/schema so the chain cannot silently erode.
+GEOM_OUT="$(.lake/build/bin/conformance --level bundles)" || {
+    printf '%s\n' "$GEOM_OUT"
+    msg 1 "  port.sh: P12.2 bundle geometry report failed"
+    exit 1
+}
+if ! printf '%s\n' "$GEOM_OUT" | grep -q '"schema":"tyu.bind/1"'; then
+    msg 1 "  port.sh: P12.2 bundle geometry report malformed"
+    exit 1
+fi
+msg 2 "  port.sh: P12.2 bundle conformance green (zero divergence; geometry report ok)"
 # --- PLAN-VERIFY-3 P5 — the statement renderer + Gen goldens (the drift lock) ---
 # The `gen` renderer (a pure function of the `tyu.obl/v2` artifacts → the
 # generated statements) must (1) pass its SHA-256 self-check, (2) regenerate

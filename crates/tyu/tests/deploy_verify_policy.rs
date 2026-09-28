@@ -55,14 +55,14 @@ fn ensure_tools() {
 }
 
 fn deploy_with(dir: &std::path::Path, verify_policy: Option<&str>, summary: Option<&str>) -> bool {
-    deploy_with_extra(dir, verify_policy, summary, None)
+    deploy_with_extra(dir, verify_policy, summary, &[])
 }
 
 fn deploy_with_extra(
     dir: &std::path::Path,
     verify_policy: Option<&str>,
     summary: Option<&str>,
-    extra_flag: Option<&str>,
+    extra_flags: &[&str],
 ) -> bool {
     if !require_tools(&["langc", "fasm", "ld", "lmod-pack", "lmod-sign"]) {
         // Tools absent in this environment — skip (same convention as the
@@ -90,7 +90,7 @@ fn deploy_with_extra(
         std::fs::write(&sum, s).unwrap();
         args.insert(1, format!("--verify-manifest={}", sum.display()));
     }
-    if let Some(f) = extra_flag {
+    for f in extra_flags {
         args.insert(1, f.to_string());
     }
 
@@ -112,6 +112,8 @@ fn deploy_with_extra(
 
 #[test]
 fn proven_requires_a_manifest() {
+    // No platform: the modeled-bundle gate (E6510) rejects the packless
+    // proven build before any deploy-level handling — the honest e2e fail.
     let dir = temp_dir("vm_proven_missing");
     let ok = deploy_with(&dir, Some("proven"), None);
     assert!(
@@ -123,10 +125,13 @@ fn proven_requires_a_manifest() {
 #[test]
 fn proven_with_proven_modeled_manifest_succeeds() {
     let dir = temp_dir("vm_proven_ok");
-    let ok = deploy_with(
+    let ok = deploy_with_extra(
         &dir,
         Some("proven"),
         Some(&proven_summary("tyu.model/x86_64-unknown-none/1", "proven")),
+        // P12 (§Q15): `proven` requires a modeled bundle — the deploy's
+        // build resolves the modeled x86_64-unknown-none pack (E6510 else).
+        &["--platform=x86_64-unknown-none"],
     );
     assert!(
         ok,
@@ -150,6 +155,8 @@ fn proven_with_proven_modeled_manifest_succeeds() {
 fn proven_rejects_below_bar_and_unmodeled() {
     // open-ok manifest under a proven requirement.
     let dir = temp_dir("vm_proven_openok");
+    // No platform: the modeled-bundle gate (E6510) rejects the packless
+    // proven build — the honest e2e fail masking nothing at policy layer.
     let ok = deploy_with(
         &dir,
         Some("proven"),
@@ -296,7 +303,13 @@ fn proven_no_candidates_knob_gates_the_ratio() {
 
     let dir = temp_dir("vm_ratio_default");
     assert!(
-        deploy_with(&dir, Some("proven"), Some(&ratio_summary)),
+        deploy_with_extra(
+            &dir,
+            Some("proven"),
+            Some(&ratio_summary),
+            // P12 (§Q15): `proven` success requires a modeled bundle.
+            &["--platform=x86_64-unknown-none"],
+        ),
         "default proven deploy must admit a candidate-authored ratio"
     );
 
@@ -305,7 +318,7 @@ fn proven_no_candidates_knob_gates_the_ratio() {
         &dir2,
         Some("proven"),
         Some(&ratio_summary),
-        Some("--proven-no-candidates"),
+        &["--proven-no-candidates", "--platform=x86_64-unknown-none"],
     );
     assert!(
         !ok,
@@ -318,7 +331,7 @@ fn proven_no_candidates_knob_gates_the_ratio() {
         &dir3,
         Some("proven"),
         Some(&proven_summary("tyu.model/x86_64-unknown-none/1", "proven")),
-        Some("--proven-no-candidates"),
+        &["--proven-no-candidates", "--platform=x86_64-unknown-none"],
     );
     assert!(ok3, "--proven-no-candidates must admit a zero ratio");
 }

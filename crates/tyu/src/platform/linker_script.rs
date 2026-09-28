@@ -127,6 +127,10 @@ fn scaffold_manifest(name: &str, expected_abi_hash: u64) -> String {
     format!(
         r#"[platform]
 name = "{name}"
+# Pack-manifest schema 3 (developer-proof-pipeline.md §6.7): descriptor-era
+# content plus the optional [model] identity section. A scaffold stays
+# unmodeled (§Q15) until the bundle ships a model artifact.
+schema = 3
 compiler-interface = {compiler_interface}
 description = "{name} scaffold pack"
 

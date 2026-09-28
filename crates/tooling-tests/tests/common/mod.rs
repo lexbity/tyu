@@ -18,6 +18,9 @@ use loader_core::symbols::SymMap;
 use std::path::PathBuf;
 use std::process::Command;
 
+use std::fs;
+use std::path::Path;
+
 // ---------------------------------------------------------------------------
 // Paths
 // ---------------------------------------------------------------------------
@@ -246,6 +249,96 @@ pub fn dynamic_load_value(source: &str, dir: &PathBuf) -> i64 {
     let container = Container::parse(&raw).unwrap();
     let h = LoaderHarness::new(container.header().abi_hash);
     h.load_and_run(&container).unwrap()
+}
+
+// ---------------------------------------------------------------------------
+// P12 bundle-test scaffolding — the synthetic pack fixtures shared by
+// model_id_flow / unmodeled_pipeline (cleanup item 4: one home for the
+// copy-dir helper, the x86 ABI-hash constant, the shared PASS fixture, and
+// the 64 MiB big-stack `build_resolved` wrapper instead of per-file copies;
+// `workspace_root`/`fresh_dir` are the pre-existing shared helpers above).
+// ---------------------------------------------------------------------------
+
+/// The x86_64-unknown-none ABI hash (compute_abi_hash(x86_64, MODINFO_VER=4));
+/// every synthetic pack in these suites pins it via `expected_abi_hash`.
+pub const X86_NONE_ABI_HASH: u64 = 0x50FB_AC4F_4E87_016C;
+
+/// Recursively copy `src` into `dst`.
+pub fn copy_dir(src: &Path, dst: &Path) {
+    fs::create_dir_all(dst).unwrap();
+    for entry in fs::read_dir(src).unwrap() {
+        let entry = entry.unwrap();
+        let to = dst.join(entry.file_name());
+        if entry.path().is_dir() {
+            copy_dir(&entry.path(), &to);
+        } else {
+            fs::copy(entry.path(), to).unwrap();
+        }
+    }
+}
+
+/// The shared single-module PASS fixture (no obligations; modeled/unmodeled
+/// pipeline tests both build it).
+pub const BUNDLE_MAIN_MOD: &str =
+    "module Main;\nimport platform/testio { testio.write-byte };\n: main ( -- i64 ) \
+     83 testio.write-byte 10 testio.write-byte 0 ;\nexport { main };\nend;\n";
+
+/// Run a **static** `build_resolved` under the synthetic pack `pack_name`
+/// with the given policy, on the big-stack thread (the graph resolver's deep
+/// parse frames exceed the 2 MiB default test-thread stack — the shared
+/// convention the per-file copies used). `out` is `<dir>/out`.
+pub fn big_stack_static_build(
+    dir: &Path,
+    pack_name: &str,
+    policy: tyu::args::VerifyPolicy,
+    input: &Path,
+) -> Result<tyu::build::BuildOutcome, tyu::error::TyuError> {
+    let build_dir = dir.to_path_buf();
+    let build_input = input.to_path_buf();
+    let build_pack_name = pack_name.to_string();
+    let sysroot = workspace_root().join("sysroot");
+    let build_out = dir.join("out");
+    let closure_out = build_out.clone();
+    let closure_sysroot = sysroot;
+    std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(move || {
+            let selection =
+                tyu::platform::resolve_platform_selection(&build_dir, &build_pack_name, None)
+                    .expect("selection");
+            let target = selection.target;
+            let ctx = tyu::build::BuildContext {
+                target,
+                out_dir: closure_out,
+                platform_selection: Some(selection),
+            };
+            let args = tyu::args::BuildArgs {
+                target,
+                platform: Some(build_pack_name),
+                isa: None,
+                input: build_input,
+                include_dirs: Vec::new(),
+                sysroot: Some(closure_sysroot),
+                out_dir: build_out,
+                profile: None,
+                feature_set: codegen_core::FeatureSet::all(),
+                mode: Some(tyu::args::BuildMode::Static),
+                metal_sign_key: None,
+                metal_kek: None,
+                metal_encrypt_mode: None,
+                verbose: false,
+                verify: tyu::args::VerifyMode::On,
+                verify_policy: policy,
+                verify_manifest: None,
+                elide_stack_guards: false,
+                verify_tool: None,
+                proven_no_candidates: false,
+            };
+            tyu::build::build_resolved(&args, ctx)
+        })
+        .expect("spawn big-stack build thread")
+        .join()
+        .expect("build thread")
 }
 
 // ---------------------------------------------------------------------------

@@ -1091,11 +1091,16 @@ pub fn assemble_for_deploy(
     let mut certifiers: Vec<CertificateId> = Vec::new();
     let mut candidate_ids: Vec<String> = Vec::new();
 
-    let verify_env = crate::proof::VerifyEnvKey::for_build()?;
     for (module, sum_path) in &with_state {
         let text = fs::read_to_string(sum_path).map_err(TyuError::Io)?;
         let spec = lmod_pack::verify::verify_manifest_from_json(&text)
             .map_err(|e| cert_fail(format!("module {module} summary malformed: {e}")))?;
+
+        // P12.1: the verdicts-cache slots this module's echo was re-homed
+        // into are keyed on the build's model id (§7.2) — which is exactly
+        // the model the summary records (both derive from the artifact's
+        // `(triple, model_semantics)` identity).
+        let verify_env = crate::proof::VerifyEnvKey::for_build(&spec.model)?;
 
         // Obligation artifact `<out>/<Module>-<16hex>.obl.json` (exactly one).
         let obl = find_obl_artifact(args.out_dir, module)?;
@@ -1135,7 +1140,17 @@ pub fn assemble_for_deploy(
         };
 
         // Verdicts member: the canonical v2 re-encode (harvest doc → echo).
-        let verdicts = module_verdicts(args.out_dir, module, obl.as_deref(), &verify_env)?;
+        // The expected identity (artifact, else summary) is passed so a
+        // name-keyed harvest doc from another model is rejected (stale ⇒
+        // empty verdicts — P12 finding 3/§Q3).
+        let verdicts = module_verdicts(
+            args.out_dir,
+            module,
+            obl.as_deref(),
+            &verify_env,
+            &target,
+            &model,
+        )?;
         let verdicts_bytes = verifier::verdict::encode_verdicts(
             "harvest",
             "0.1.0",
@@ -1342,29 +1357,62 @@ fn module_verdicts(
     module: &str,
     obl_path: Option<&Path>,
     verify_env: &crate::proof::VerifyEnvKey,
+    expect_target: &str,
+    expect_model: &str,
 ) -> Result<verifier::verdict::Verdicts, crate::error::TyuError> {
+    // A verdicts doc whose identity pair differs from the consuming build's
+    // is stale — fail-closed to empty (all obligations open), never silently
+    // reused (§Q3; P12 finding 3 — the elision path enforces the same rule
+    // independently as E6421).
+    let reject_stale =
+        |v: verifier::verdict::Verdicts, src: &Path| -> verifier::verdict::Verdicts {
+            if v.target != expect_target || v.model_semantics != expect_model {
+                eprintln!(
+                "tyu: error[E6421]: verdicts '{}' stale: recorded ({}, {}) != build ({}, {}) — \
+                 verdicts ignored, obligations open (checks retained)",
+                src.display(),
+                v.target,
+                v.model_semantics,
+                expect_target,
+                expect_model
+            );
+                return verifier::verdict::Verdicts {
+                    semantics: verifier::semantics::SEMANTICS_VERSION.to_string(),
+                    stmt: verifier::stmt::STMT_SCHEMA.to_string(),
+                    certifier: None,
+                    target: expect_target.to_string(),
+                    model_semantics: expect_model.to_string(),
+                    records: Vec::new(),
+                };
+            }
+            v
+        };
+    let empty = || verifier::verdict::Verdicts {
+        semantics: verifier::semantics::SEMANTICS_VERSION.to_string(),
+        stmt: verifier::stmt::STMT_SCHEMA.to_string(),
+        certifier: None,
+        target: expect_target.to_string(),
+        model_semantics: expect_model.to_string(),
+        records: Vec::new(),
+    };
     if let Some(obl) = obl_path {
-        if let Some(v) = crate::vm_summary::verdicts_for_module(out_dir, module, obl, verify_env)? {
-            return Ok(v);
+        // The artifact-keyed path (`verdicts_for_module`) carries the full
+        // identity gate (§Q3) — stale harvest/echo docs read as `None`.
+        match crate::vm_summary::verdicts_for_module(out_dir, module, obl, verify_env)? {
+            Some(v) => Ok(v),
+            None => Ok(empty()),
         }
     } else {
         let harvest = crate::vm_summary::harvest_verdicts_path(out_dir, module);
         if harvest.is_file() {
             if let Ok(bytes) = fs::read(&harvest) {
                 if let Ok(v) = verifier::verdict::read_verdicts(&bytes) {
-                    return Ok(v);
+                    return Ok(reject_stale(v, &harvest));
                 }
             }
         }
+        Ok(empty())
     }
-    Ok(verifier::verdict::Verdicts {
-        semantics: verifier::semantics::SEMANTICS_VERSION.to_string(),
-        stmt: verifier::stmt::STMT_SCHEMA.to_string(),
-        certifier: None,
-        target: String::new(),
-        model_semantics: String::new(),
-        records: Vec::new(),
-    })
 }
 
 /// The canonical `statements/<Module>.stmt.json` member (the statement set

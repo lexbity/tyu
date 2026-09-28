@@ -51,34 +51,74 @@ pub fn harvest_verdicts_path(out_dir: &Path, module: &str) -> PathBuf {
 /// The verdicts source for a module: the harvest doc (post-certificate
 /// `--verify-tool=lean`) when present, else the in-tree echo slot. Both are
 /// `tyu.verdicts/v2`.
+///
+/// **Identity gate (P12 finding 3 / §Q3):** a module-name-keyed harvest doc
+/// from an earlier build is only reusable under the CURRENT artifact's
+/// identity. If the doc's recorded `(target, model_semantics)` differs from
+/// the artifact's, it is *stale* — fail-closed to `None` (every obligation
+/// reads open in the summary; the E6421-class diagnostic is emitted), never
+/// silently reused. The elision path enforces the same rule independently
+/// (langc E6421); this is the package/summary leg.
 pub fn verdicts_for_module(
     out_dir: &Path,
     module: &str,
     obl_path: &Path,
     verify_env: &VerifyEnvKey,
 ) -> Result<Option<Verdicts>, TyuError> {
+    // The artifact's identity is the ground truth the verdicts must match.
+    let (art_target, art_model) = artifact_identity(obl_path)?;
+    let stale = |v: &Verdicts| v.target != art_target || v.model_semantics != art_model;
+    let reject_stale = |v: Verdicts, src: &Path| -> Option<Verdicts> {
+        if stale(&v) {
+            eprintln!(
+                "tyu: error[E6421]: harvest verdicts '{}' stale: recorded ({}, {}) != artifact ({}, {}) — \
+                 verdicts ignored, obligations open (checks retained)",
+                src.display(),
+                v.target,
+                v.model_semantics,
+                art_target,
+                art_model
+            );
+            return None;
+        }
+        Some(v)
+    };
+
     // 1. The harvest doc (the certificate post-pipeline state).
     let harvest = harvest_verdicts_path(out_dir, module);
     if harvest.is_file() {
         let bytes = fs::read(&harvest).map_err(TyuError::Io)?;
-        return Ok(Some(verifier::verdict::read_verdicts(&bytes).map_err(
-            |e| {
-                TyuError::Build(format!(
-                    "E6416: harvest verdicts '{}' unreadable for the manifest summary: {e:?}",
-                    harvest.display()
-                ))
-            },
-        )?));
+        let v = verifier::verdict::read_verdicts(&bytes).map_err(|e| {
+            TyuError::Build(format!(
+                "E6416: harvest verdicts '{}' unreadable for the manifest summary: {e:?}",
+                harvest.display()
+            ))
+        })?;
+        return Ok(reject_stale(v, &harvest));
     }
     // 2. The in-tree echo slot (the langc verdicts store).
     if let Some(echo_path) = echo_path_for(obl_path, verify_env) {
         if let Ok(bytes) = fs::read(&echo_path) {
             if let Ok(echo) = verifier::verdict::read_echo(&bytes) {
-                return Ok(Some(echo.verdicts));
+                return Ok(reject_stale(echo.verdicts, &echo_path));
             }
         }
     }
     Ok(None)
+}
+
+/// The obligation artifact's `(target, model_semantics)` identity — the
+/// consuming build's pair (§Q3).
+fn artifact_identity(obl_path: &Path) -> Result<(String, String), TyuError> {
+    let bytes = fs::read(obl_path).map_err(TyuError::Io)?;
+    let set = verifier::codec::read_obl(&bytes).map_err(|e| {
+        TyuError::Build(format!(
+            "vm summary: artifact '{}' invalid (E{}): {e:?}",
+            obl_path.display(),
+            e.code()
+        ))
+    })?;
+    Ok((set.target, set.model_semantics))
 }
 
 /// The langc verdicts-echo slot for an obligation artifact (mirrors
@@ -305,4 +345,106 @@ fn write_if_changed(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     fs::write(&tmp, bytes)?;
     fs::rename(&tmp, path)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use verifier::codec::encode_obl;
+    use verifier::model::OblSet;
+
+    const ART_TARGET: &str = "x86_64-unknown-none";
+    const ART_MODEL: &str = "tyu.model/x86_64-unknown-none/1";
+
+    fn artifact(dir: &Path) -> PathBuf {
+        let obl = dir.join("Main.obl.json");
+        let set: OblSet = OblSet {
+            schema: "tyu.obl/v2".to_string(),
+            semantics: verifier::semantics::SEMANTICS_VERSION.to_string(),
+            stmt: verifier::stmt::STMT_SCHEMA.to_string(),
+            module: "Main".to_string(),
+            target: ART_TARGET.to_string(),
+            platform: ART_TARGET.to_string(),
+            model_semantics: ART_MODEL.to_string(),
+            abi_contract_version: ir::contract::ABI_CONTRACT_VERSION as u32,
+            facts: verifier::model::Facts {
+                words: Vec::new(),
+                subtypes: Vec::new(),
+                predicates: Vec::new(),
+            },
+            obligations: Vec::new(),
+        };
+        fs::write(&obl, encode_obl(&set).unwrap()).unwrap();
+        obl
+    }
+
+    fn harvest(dir: &Path, target: &str, model: &str) {
+        let doc = verifier::verdict::encode_verdicts(
+            "harvest",
+            "0.1.0",
+            None,
+            target,
+            model,
+            &[],
+            0,
+            &verifier::verdict::EmittedChecksData {
+                subtype_range: 0,
+                contract: 0,
+                mmio_bounds: 0,
+            },
+        )
+        .unwrap();
+        fs::write(harvest_verdicts_path(dir, "Main"), &doc).unwrap();
+    }
+
+    /// The identity gate over one `(harvest target, harvest model)` case:
+    /// only a doc whose recorded pair equals the artifact's pair is reused.
+    fn case(harvest_target: &str, harvest_model: &str) -> bool {
+        let dir = std::env::temp_dir().join(format!(
+            "tyu_vm_summary_{}_{}",
+            std::process::id(),
+            harvest_target
+                .len()
+                .wrapping_mul(31)
+                .wrapping_add(harvest_model.len())
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join(".tyu-verify").join("harvest")).unwrap();
+        let obl = artifact(&dir);
+        harvest(&dir, harvest_target, harvest_model);
+        let env = VerifyEnvKey::compute(&dir, ART_MODEL);
+        verdicts_for_module(&dir, "Main", &obl, &env)
+            .unwrap()
+            .is_some()
+    }
+
+    /// P12 finding 5 / §Q3 — a doc recorded under a *different model* (same
+    /// target) is stale: fail-closed to `None` (obligations open).
+    #[test]
+    fn stale_harvest_under_another_model_is_rejected() {
+        assert!(
+            !case(ART_TARGET, "tyu.model/some-other-bundle/9"),
+            "model-only mismatch must be rejected (stale → open)"
+        );
+    }
+
+    /// P12 finding 5 / §Q3 — a doc recorded under a *different target* (same
+    /// model) is equally stale.
+    #[test]
+    fn stale_harvest_under_another_target_is_rejected() {
+        assert!(
+            !case("riscv32-unknown-none", ART_MODEL),
+            "target-only mismatch must be rejected (stale → open)"
+        );
+    }
+
+    /// The matching-identity doc is reused (the normal path — no false
+    /// rejection).
+    #[test]
+    fn matching_identity_harvest_is_reused() {
+        assert!(
+            case(ART_TARGET, ART_MODEL),
+            "the matching-identity harvest doc is reused"
+        );
+    }
 }

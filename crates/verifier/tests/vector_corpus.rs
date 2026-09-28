@@ -21,11 +21,16 @@
 //! --test vector_corpus`; a committed-file mismatch is a *reviewed update*
 //! (the band rule's spirit applies to the transfer table too).
 
+mod common;
+
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 
-use ir::{Atom, BlockId, CmpKind, EffectSet, OpKind, Sig, Span, TypeId};
+use common::{
+    build_word, canonical_op_text, interval_text, intervals_text, json_esc, tri_name, VecOut,
+};
+use ir::{Atom, BlockId, CmpKind, OpKind, TypeId};
 use verifier::interp::{exit_state, run_cfg, ApertureMem, FlatMem, State, SubtypeRange};
 use verifier::interval::{eval_in_range, Interval, Tri};
 use verifier::semantics::semantics;
@@ -511,24 +516,6 @@ fn vectors_for(spec: TargetSpec) -> Vec<Vector> {
 // Canonical op text (drift-locked against `ir::write_word_ops`).
 // ---------------------------------------------------------------------------
 
-/// Render `ops` as canonical IR op lines (the exact text `write_word_ops`
-/// prints, minus the "block bN" headers) — the port parses THIS text, so it
-/// is the interface.
-fn canonical_op_text(ops: &[OpKind]) -> String {
-    let w = synthetic_word(ops);
-    let mut buf = VecOut(Vec::new());
-    ir::write_word_ops(&mut buf, &w);
-    let text = String::from_utf8_lossy(&buf.0).to_string();
-    let mut lines: Vec<&str> = Vec::new();
-    for line in text.lines() {
-        if line.starts_with("block ") {
-            continue;
-        }
-        lines.push(line);
-    }
-    lines.join("\n")
-}
-
 /// The full canonical block text of a CFG vector (block headers INCLUDED —
 /// the port needs the block structure, not just an op list).
 fn canonical_cfg_text(cfg: &CfgVec) -> String {
@@ -536,64 +523,6 @@ fn canonical_cfg_text(cfg: &CfgVec) -> String {
     let mut buf = VecOut(Vec::new());
     ir::write_word_ops(&mut buf, &w);
     String::from_utf8_lossy(&buf.0).trim_end().to_string()
-}
-
-/// The `ir::Output` sink for the canonical text (a `Vec<u8>`).
-struct VecOut(Vec<u8>);
-
-impl ir::Output for VecOut {
-    fn write(&mut self, bytes: &[u8]) {
-        self.0.extend_from_slice(bytes);
-    }
-}
-
-/// Build a synthetic word from per-block op lists (types `i64`/`bool`/
-/// `percent`, subtype `TypeId(2)` = `percent`).
-fn build_word(blocks: &[Vec<OpKind>], sig_in: usize, sig_out: usize) -> ir::Word {
-    let mut w = ir::Word {
-        name: Atom::new(b"vector").unwrap(),
-        sig: Sig {
-            in_len: sig_in as u8,
-            out_len: sig_out as u8,
-            ..Sig::empty()
-        },
-        performs: EffectSet::empty(),
-        requires: ir::CapSet::empty(),
-        bound: ir::StackBound::ID,
-        entry: BlockId(0),
-        types: Default::default(),
-        type_sizes: Default::default(),
-        type_classes: Default::default(),
-        apertures: Default::default(),
-        subtype_bases: Default::default(),
-        blocks: Default::default(),
-    };
-    w.types.push(Atom::new(b"i64").unwrap()).unwrap();
-    w.types.push(Atom::new(b"bool").unwrap()).unwrap();
-    w.types.push(Atom::new(b"percent").unwrap()).unwrap();
-    for (i, ops) in blocks.iter().enumerate() {
-        let mut block = ir::Block {
-            id: BlockId(i as u16),
-            entry_stack: Default::default(),
-            ops: Default::default(),
-        };
-        for op in ops {
-            block
-                .ops
-                .push(ir::Op {
-                    kind: *op,
-                    span: Span::UNKNOWN,
-                })
-                .unwrap();
-        }
-        w.blocks.push(block).unwrap();
-    }
-    w
-}
-
-fn synthetic_word(ops: &[OpKind]) -> ir::Word {
-    let owned: Vec<OpKind> = ops.to_vec();
-    build_word(core::slice::from_ref(&owned), 0, 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -672,36 +601,6 @@ fn render_json(spec: TargetSpec) -> String {
     }
     c.push("  ]\n}".to_string());
     c.join("\n")
-}
-
-fn json_esc(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-}
-
-fn intervals_text(ivs: &[Interval]) -> String {
-    let mut parts = Vec::new();
-    for iv in ivs {
-        parts.push(interval_text(*iv));
-    }
-    parts.join(";")
-}
-
-fn interval_text(iv: Interval) -> String {
-    match iv {
-        Interval::Bottom => "<bottom>".to_string(),
-        Interval::Top => "<top>".to_string(),
-        Interval::Range { lo, hi } => format!("[{lo},{hi}]"),
-    }
-}
-
-fn tri_name(t: Tri) -> &'static str {
-    match t {
-        Tri::DefTrue => "discharged",
-        Tri::DefFalse => "def-false",
-        Tri::Top => "open",
-    }
 }
 
 // ---------------------------------------------------------------------------
