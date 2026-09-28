@@ -749,6 +749,7 @@ mod tests {
     fn try_build_arm_loop_elf(out_dir: &std::path::Path) -> Option<std::path::PathBuf> {
         let asm = out_dir.join("loop.s");
         let obj = out_dir.join("loop.o");
+        let script = out_dir.join("link.t");
         let elf = out_dir.join("loop.elf");
         // Minimal vector table + infinite loop for lm3s6965evb.
         std::fs::write(
@@ -773,9 +774,25 @@ mod tests {
             eprintln!("note: arm-none-eabi-as failed to build infinite-loop ELF");
             return None;
         }
+        // Link with an explicit script: the assembler emits `.text` *before*
+        // `.vectors` in the object, so `-Ttext=0x0` alone puts the vector
+        // table at 0x4 — the reset handler then loads garbage and the guest
+        // lockups (HardFault escalation) instead of reaching `_start`.
+        std::fs::write(
+            &script,
+            b"ENTRY(_start)\n\
+              SECTIONS {\n\
+              \x20   . = 0x0;\n\
+              \x20   .vectors : { *(.vectors) }\n\
+              \x20   .text : { *(.text) }\n\
+              \x20   .bss : { *(.bss) }\n\
+              }\n",
+        )
+        .ok()?;
         let status = std::process::Command::new("arm-none-eabi-ld")
             .args([
-                "-Ttext=0x0",
+                "-T",
+                script.to_str().unwrap(),
                 obj.to_str().unwrap(),
                 "-o",
                 elf.to_str().unwrap(),
@@ -862,13 +879,20 @@ mod tests {
             "enable=on,target=native",
             "-nographic",
         ];
+        // The test kernel's loop: `.vectors` occupies [0x0, 0x100) and ld
+        // places `.text` right behind it, so `_start` (a 2-byte Thumb
+        // `b .`) is at 0x100 — the reset vector enters at 0x101 (Thumb),
+        // which is the same instruction. The range admits the Thumb-bit
+        // forms of the reported PC.
+        const ARM_START_LOOP: u64 = 0x100;
+        const ARM_IMAGE: (u64, u64) = (0x100, 0x102);
         let result = qemu_rsp_roundtrip(
             "qemu-system-arm",
             &qemu_args,
             &elf,
             regs::arm::PC,
-            None,
-            None,
+            Some(ARM_START_LOOP),
+            Some(ARM_IMAGE),
         );
         if let Err(e) = result {
             panic!("ARM RSP integration test failed: {}", e);
@@ -923,13 +947,18 @@ mod tests {
             "enable=on,target=native",
             "-nographic",
         ];
+        // The test kernel is a single `j _start` linked at 0x80000000
+        // (QEMU's virt reset ROM jumps there with `-bios none`), so the
+        // breakpoint is the kernel's first — and only — instruction.
+        const RISCV_START_LOOP: u64 = 0x80000000;
+        const RISCV_IMAGE: (u64, u64) = (0x80000000, 0x80001000);
         let result = qemu_rsp_roundtrip(
             "qemu-system-riscv32",
             &qemu_args,
             &elf,
             regs::riscv::PC,
-            None,
-            None,
+            Some(RISCV_START_LOOP),
+            Some(RISCV_IMAGE),
         );
         if let Err(e) = result {
             panic!("RISC-V RSP integration test failed: {}", e);
