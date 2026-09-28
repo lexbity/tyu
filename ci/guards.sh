@@ -1605,6 +1605,59 @@ grep -q "fn render_candidate_ratios" crates/tyu/src/deploy.rs || { msg $RED "  G
 [ "$g43_fail" -eq 0 ] && msg $GREEN "  G43: cleanup — shared satisfies() (loader+deploy), single encode_from_json_text path, --proven-no-candidates not dropped, §Q10 ratio rendered"
 failures=$((failures + g43_fail))
 
+# G45: PLAN-VERIFY-3 P11.3 — the certification-package surface (`tyu.cert`)
+# The `<image>.tyucert/` package, its B4→B1→B2→B3 bindings, the `tyu cert
+# verify|show|diff` CLI, the E6503 deploy FR-21 gate, the fuzz target, and
+# the error-registry rows must all be present. Behaviour is exercised by the
+# test suites (cert_assembly/cert_verify/deploy_pairing under
+# `cargo test --workspace`, tools-gated where a real deploy is needed); this
+# gate pins the *surface* in the regular Rust CI, like G40–G44.
+g45_fail=0
+if [ ! -f crates/tyu/src/cert.rs ]; then
+    msg $RED "  G45 FAIL: missing the certification-package module (crates/tyu/src/cert.rs)"
+    g45_fail=1
+fi
+grep -q 'code: E_CERT_PAIRING' crates/tyu/src/cert.rs || { msg $RED "  G45 FAIL: E6503 E_CERT_PAIRING missing"; g45_fail=1; }
+for tok in 'assemble_for_deploy' 'verify_package' 'parse_index' 'pub fn show' 'pub fn diff' 'package.sig'; do
+    if ! grep -q "$tok" crates/tyu/src/cert.rs; then
+        msg $RED "  G45 FAIL: cert.rs lacks $tok"
+        g45_fail=1
+    fi
+done
+# CLI surface: `tyu cert verify|show|diff` parsed + dispatched.
+grep -q 'Cert(CertArgs)' crates/tyu/src/args.rs || { msg $RED "  G45 FAIL: Command::Cert unparsed"; g45_fail=1; }
+grep -q 'parse_cert' crates/tyu/src/args.rs || { msg $RED "  G45 FAIL: parse_cert missing"; g45_fail=1; }
+grep -q 'Command::Cert(cert_args)' crates/tyu/src/main.rs || { msg $RED "  G45 FAIL: tyu cert not dispatched in main.rs"; g45_fail=1; }
+# FR-21: the deploy wires the pre-ship B1/B2 verification (E6503).
+grep -q 'assemble_for_deploy' crates/tyu/src/deploy.rs || { msg $RED "  G45 FAIL: deploy does not assemble the certification package"; g45_fail=1; }
+# E6503 cert variant in the host error type.
+grep -q 'Cert { code: u32' crates/tyu/src/error.rs || { msg $RED "  G45 FAIL: TyuError::Cert missing"; g45_fail=1; }
+# Tests (hermetic always-run; deploy e2e is tools-gated inside).
+for t in crates/tyu/tests/cert_assembly.rs crates/tyu/tests/cert_verify.rs crates/tyu/tests/deploy_pairing.rs; do
+    if [ ! -f "$t" ]; then
+        msg $RED "  G45 FAIL: $t missing"
+        g45_fail=1
+    fi
+done
+# Fuzz target registered + seeded.
+if ! grep -q 'name = "cert_index_decode"' fuzz/Cargo.toml; then
+    msg $RED "  G45 FAIL: cert_index_decode fuzz target not registered"
+    g45_fail=1
+fi
+if [ ! -f fuzz/fuzz_targets/cert_index_decode.rs ]; then
+    msg $RED "  G45 FAIL: cert_index_decode fuzz harness missing"
+    g45_fail=1
+fi
+# Error-registry rows (65xx band).
+for code in E6500 E6501 E6502 E6503 E6504 E6510; do
+    if ! grep -q "$code" devdocs/book_v3/appendix-b-error-registry.md; then
+        msg $RED "  G45 FAIL: appendix-b error registry missing $code"
+        g45_fail=1
+    fi
+done
+[ "$g45_fail" -eq 0 ] && msg $GREEN "  G45: P11.3 certification-package surface (cert.rs + tyu cert CLI + FR-21 deploy gate + E6503/E6504 + fuzz + registry)"
+failures=$((failures + g45_fail))
+
 echo ""
 msg $GREEN "============================================"
 msg $GREEN "Per-package test counts:"

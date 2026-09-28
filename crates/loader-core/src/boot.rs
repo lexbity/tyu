@@ -15,6 +15,10 @@ use {
 
 const LOADHEAP_ALIGN: usize = 16;
 const MAIN_HASH: u64 = 0x1f5962a2ce9803c8;
+/// The modpack container cap, matching `LoadedSet<64>`'s module ceiling
+/// (one parsed container per modpack blob; the parse views are fixed-slot,
+/// not heap-allocated — the boot path never allocates).
+const MODPACK_MAX_MODULES: usize = 64;
 #[cfg(feature = "signing")]
 const KEY_MASK_SIGN: u8 = 1 << 0;
 #[cfg(feature = "encryption")]
@@ -426,33 +430,86 @@ pub extern "C" fn __lang_load_and_run() -> ! {
         trap(E_BAD_CONTAINER);
     }
 
-    let lmod = match acquire_modpack_module() {
-        Some(bytes) => bytes,
-        None => trap(E_BAD_CONTAINER),
-    };
-    let container = match Container::parse(lmod) {
-        Ok(container) => container,
-        Err(_) => trap(E_BAD_CONTAINER),
-    };
-
-    match load_module(
-        &container,
-        &mut platform,
-        &mut symmap,
-        &mut loaded_set,
-        &mut aperture_registry,
-    ) {
-        Ok(_) => {
-            let Some(main) = symmap.lookup_by_hash(MAIN_HASH) else {
-                trap(LoadError::SymbolUnresolved.code());
-            };
-            let code = unsafe { __lang_call_loaded_main(main.addr) };
-            unsafe { __lang_exit_code(code) }
+    // Parse EVERY blob before loading any: the symbol map registers names
+    // that borrow from the parsed `Container` values, so every container
+    // must outlive the map. The containers are fixed-capacity (no heap —
+    // the firmware boot path allocates nothing); they are zero-copy views
+    // into the firmware's `.modpack` section.
+    let mut containers: [Option<Container<'static>>; MODPACK_MAX_MODULES] =
+        core::array::from_fn(|_| None);
+    let mut count = 0usize;
+    for blob in modpack_blobs() {
+        if count >= MODPACK_MAX_MODULES {
+            trap(E_BAD_CONTAINER);
         }
-        Err(err) => {
+        match Container::parse(blob) {
+            Ok(container) => {
+                containers[count] = Some(container);
+                count += 1;
+            }
+            Err(_) => {
+                platform.reset(mark);
+                trap(E_BAD_CONTAINER);
+            }
+        }
+    }
+    if count == 0 {
+        platform.reset(mark);
+        trap(E_BAD_CONTAINER);
+    }
+
+    // Load in embed order — dependencies first (the build embeds the graph
+    // deps-first) — so each module's exports register before the next
+    // module's imports bind against them. A single-module image is the N=1
+    // case of the same loop.
+    for container in containers.iter().flatten() {
+        if let Err(err) = load_module(
+            container,
+            &mut platform,
+            &mut symmap,
+            &mut loaded_set,
+            &mut aperture_registry,
+        ) {
             platform.reset(mark);
             trap(err.code());
         }
+    }
+
+    let Some(main) = symmap.lookup_by_hash(MAIN_HASH) else {
+        trap(LoadError::SymbolUnresolved.code());
+    };
+    let code = unsafe { __lang_call_loaded_main(main.addr) };
+    unsafe { __lang_exit_code(code) }
+}
+
+/// Every `.lmod` blob in the embedded modpack, in embed order
+/// (dependencies first). An empty or malformed modpack yields nothing —
+/// the caller traps on the empty case.
+fn modpack_blobs() -> ModpackBlobs<'static> {
+    extern "C" {
+        static __lang_modpack_start: u8;
+        static __lang_modpack_end: u8;
+    }
+    let start = core::ptr::addr_of!(__lang_modpack_start);
+    let end = core::ptr::addr_of!(__lang_modpack_end);
+    // SAFETY: the linker places the section pair around the `.modpack`
+    // payload (modload.asm / render_modpack_asm); the range is valid memory
+    // and lives for the image's lifetime.
+    ModpackBlobs {
+        inner: unsafe { crate::modpack::ModpackIter::new_from_range(start, end) },
+    }
+}
+
+/// `no_std` newtype wrapper so the boot path can iterate modpack blobs
+/// without exposing the raw iterator's mutability through the loop.
+struct ModpackBlobs<'a> {
+    inner: crate::modpack::ModpackIter<'a>,
+}
+
+impl<'a> Iterator for ModpackBlobs<'a> {
+    type Item = &'a [u8];
+    fn next(&mut self) -> Option<&'a [u8]> {
+        self.inner.next_blob()
     }
 }
 
@@ -586,28 +643,6 @@ fn is_runtime_data_symbol(hash: u64) -> bool {
             || h == lmod::hash::fnv1a_u64(b"__lang_gpio_state")
             || h == lmod::hash::fnv1a_u64(b"__lang_time_counter")
     )
-}
-
-fn acquire_modpack_module() -> Option<&'static [u8]> {
-    extern "C" {
-        static __lang_modpack_start: u8;
-        static __lang_modpack_end: u8;
-    }
-
-    let start = core::ptr::addr_of!(__lang_modpack_start) as usize;
-    let end = core::ptr::addr_of!(__lang_modpack_end) as usize;
-    if end < start || end - start < 4 {
-        return None;
-    }
-
-    let bytes = unsafe { core::slice::from_raw_parts(start as *const u8, end - start) };
-    let len = u32::from_le_bytes(bytes[0..4].try_into().ok()?) as usize;
-    let payload_start = 4usize;
-    let payload_end = payload_start.checked_add(len)?;
-    if payload_end > bytes.len() {
-        return None;
-    }
-    Some(&bytes[payload_start..payload_end])
 }
 
 fn trap(code: u32) -> ! {

@@ -17,6 +17,7 @@ pub enum Command {
     Platform(PlatformArgs),
     ToolchainCheck(ToolchainCheckArgs),
     Proof(ProofArgs),
+    Cert(CertArgs),
     Clean,
     /// Help was explicitly requested (`--help`/`-h`); exit 0.
     Help,
@@ -55,6 +56,29 @@ pub enum ProofArgs {
         /// `x86_64-unknown-none`; a prior build's artifacts carry their own).
         target: codegen_core::Target,
     },
+}
+
+/// Arguments for the `cert` subcommand (PLAN-VERIFY-3 P11.3, FR-9): host-side
+/// verification/inspection of `<image>.tyucert/` certification packages.
+#[derive(Debug)]
+pub enum CertArgs {
+    /// `tyu cert verify [--image=<path>] [--key-sign=<keyref>] <pkg>`
+    /// — B4 → B1 → B2 → B3, fail-fast (E6503 on any mismatch). The image
+    /// defaults to the sibling of the package (`<image>.tyucert` →
+    /// `<image>`); `--key-sign` additionally verifies `package.sig`.
+    Verify {
+        /// The certification package dir (`<image>.tyucert/`).
+        pkg: PathBuf,
+        /// The image to bind B1/B2 against (default: the sibling path).
+        image: Option<PathBuf>,
+        /// A keyref for `package.sig` HMAC verification (B4).
+        key_sign: Option<String>,
+    },
+    /// `tyu cert show <pkg>` — render per-module trust counts, claims, the
+    /// candidate ratio, the certifier identity, and the shipped TCB boundary.
+    Show { pkg: PathBuf },
+    /// `tyu cert diff <pkg-a> <pkg-b>` — structural comparison.
+    Diff { a: PathBuf, b: PathBuf },
 }
 
 /// The developer-proof tool requested via `--verify-tool=<tool>`
@@ -131,6 +155,20 @@ pub enum DeployVerifyPolicy {
     NoOpen,
     /// `proven` — the module must declare `proven` and a modeled bundle.
     Proven,
+}
+
+impl DeployVerifyPolicy {
+    /// The byte-level requirement encoding the loader's `VerifyPolicy` and
+    /// `lmod::verify_manifest::satisfies` share (0 Off / 1 RequireNoOpen /
+    /// 2 RequireProven) — the one mapping every enforcer (loader hook,
+    /// deploy gate, pairing walk) uses, so they cannot drift.
+    pub fn requirement(self) -> u8 {
+        match self {
+            DeployVerifyPolicy::OpenOk => 0,
+            DeployVerifyPolicy::NoOpen => 1,
+            DeployVerifyPolicy::Proven => 2,
+        }
+    }
 }
 
 /// Arguments for the `deploy` subcommand.
@@ -438,6 +476,7 @@ pub fn parse() -> Command {
         "platform" => parse_platform(&args[2..]),
         "toolchain" => parse_toolchain(&args[2..]),
         "proof" => parse_proof(&args[2..]),
+        "cert" => parse_cert(&args[2..]),
         "clean" => Command::Clean,
         "--help" | "-h" => {
             print_usage();
@@ -513,6 +552,13 @@ fn print_usage() {
     eprintln!("Proof options:");
     eprintln!("  tyu proof init [--dir=<root>] [input.mod]   Scaffold the developer\n                      proofs/ directory (idempotent)");
     eprintln!("  tyu proof fill [--dir=<root>] [input.mod]\n                      P10: generate candidate proofs into proofs/candidates/");
+    eprintln!();
+    eprintln!("Cert options:");
+    eprintln!(
+        "  tyu cert verify [--image=<path>] [--key-sign=<keyref>] <pkg>\n                      P11.3: verify a certification package (B4->B1->B2->B3, fail-fast)"
+    );
+    eprintln!("  tyu cert show <pkg>    Render trust counts, claims, TCB boundary");
+    eprintln!("  tyu cert diff <a> <b>   Structural comparison of two packages");
     eprintln!("Run-specific options:");
     eprintln!("  --timeout=<secs>    Maximum execution time (default: 10)");
     eprintln!("  --runner=<mode>     Runner: native|qemu (default: auto)");
@@ -1260,6 +1306,92 @@ fn parse_proof(args: &[String]) -> Command {
     }
 }
 
+/// `tyu cert verify [--image=<path>] [--key-sign=<keyref>] <pkg>`, `tyu cert
+/// show <pkg>`, `tyu cert diff <a> <b>` (PLAN-VERIFY-3 P11.3, FR-9). Unknown
+/// flags are a usage error (BUG-009).
+fn parse_cert(args: &[String]) -> Command {
+    if args.is_empty() {
+        eprintln!(
+            "tyu: usage: tyu cert verify [--image=<path>] [--key-sign=<keyref>] <pkg> | \
+             tyu cert show <pkg> | tyu cert diff <a> <b>"
+        );
+        return Command::Usage;
+    }
+    match args[0].as_str() {
+        "verify" => {
+            let mut pkg: Option<PathBuf> = None;
+            let mut image: Option<PathBuf> = None;
+            let mut key_sign: Option<String> = None;
+            let mut i = 1;
+            while i < args.len() {
+                let a = &args[i];
+                if let Some(val) = a.strip_prefix("--image=") {
+                    image = Some(PathBuf::from(val));
+                } else if a == "--image" {
+                    i += 1;
+                    if i < args.len() {
+                        image = Some(PathBuf::from(&args[i]));
+                    } else {
+                        eprintln!("tyu: cert verify --image requires a value");
+                        return Command::Usage;
+                    }
+                } else if let Some(val) = a.strip_prefix("--key-sign=") {
+                    key_sign = Some(val.to_string());
+                } else if a.starts_with('-') {
+                    eprintln!("tyu: unknown option '{}'", a);
+                    return Command::Usage;
+                } else if pkg.is_none() {
+                    pkg = Some(PathBuf::from(a));
+                } else {
+                    eprintln!(
+                        "tyu: cert verify takes exactly one package directory (got extra '{}')",
+                        a
+                    );
+                    return Command::Usage;
+                }
+                i += 1;
+            }
+            match pkg {
+                Some(pkg) => Command::Cert(CertArgs::Verify {
+                    pkg,
+                    image,
+                    key_sign,
+                }),
+                None => {
+                    eprintln!("tyu: cert verify requires a package directory");
+                    Command::Usage
+                }
+            }
+        }
+        "show" => {
+            if args.len() != 2 || args[1].starts_with('-') {
+                eprintln!("tyu: usage: tyu cert show <pkg>");
+                return Command::Usage;
+            }
+            Command::Cert(CertArgs::Show {
+                pkg: PathBuf::from(&args[1]),
+            })
+        }
+        "diff" => {
+            if args.len() != 3 {
+                eprintln!("tyu: usage: tyu cert diff <pkg-a> <pkg-b>");
+                return Command::Usage;
+            }
+            Command::Cert(CertArgs::Diff {
+                a: PathBuf::from(&args[1]),
+                b: PathBuf::from(&args[2]),
+            })
+        }
+        other => {
+            eprintln!(
+                "tyu: unknown cert subcommand '{}' (expected verify|show|diff)",
+                other
+            );
+            Command::Usage
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1635,5 +1767,77 @@ mod tests {
             }
             other => panic!("unexpected command: {:?}", other),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // P11.3: the `cert` subcommand
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parses_cert_verify_with_image_and_key() {
+        match parse_cert(&strings(&[
+            "verify",
+            "out/firmware.img.tyucert",
+            "--image=out/firmware.img",
+            "--key-sign=k1",
+        ])) {
+            Command::Cert(CertArgs::Verify {
+                pkg,
+                image,
+                key_sign,
+            }) => {
+                assert_eq!(pkg, Path::new("out/firmware.img.tyucert"));
+                assert_eq!(image.as_deref(), Some(Path::new("out/firmware.img")));
+                assert_eq!(key_sign.as_deref(), Some("k1"));
+            }
+            other => panic!("unexpected command: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_cert_verify_default_image() {
+        match parse_cert(&strings(&["verify", "out/firmware.img.tyucert"])) {
+            Command::Cert(CertArgs::Verify {
+                pkg,
+                image: None,
+                key_sign: None,
+            }) => assert_eq!(pkg, Path::new("out/firmware.img.tyucert")),
+            other => panic!("unexpected command: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_cert_show_and_diff() {
+        match parse_cert(&strings(&["show", "a.tyucert"])) {
+            Command::Cert(CertArgs::Show { pkg }) => {
+                assert_eq!(pkg, Path::new("a.tyucert"));
+            }
+            other => panic!("unexpected command: {:?}", other),
+        }
+        match parse_cert(&strings(&["diff", "a.tyucert", "b.tyucert"])) {
+            Command::Cert(CertArgs::Diff { a, b }) => {
+                assert_eq!(a, Path::new("a.tyucert"));
+                assert_eq!(b, Path::new("b.tyucert"));
+            }
+            other => panic!("unexpected command: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn cert_parse_errors_are_usage_errors() {
+        assert!(matches!(parse_cert(&strings(&["hack"])), Command::Usage));
+        assert!(matches!(parse_cert(&strings(&["verify"])), Command::Usage));
+        assert!(matches!(
+            parse_cert(&strings(&["verify", "a", "b"])),
+            Command::Usage
+        ));
+        assert!(matches!(
+            parse_cert(&strings(&["show", "a", "b"])),
+            Command::Usage
+        ));
+        assert!(matches!(
+            parse_cert(&strings(&["diff", "a"])),
+            Command::Usage
+        ));
     }
 }

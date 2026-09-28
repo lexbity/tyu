@@ -102,13 +102,42 @@ pub fn run(args: &DeployArgs) -> Result<(), TyuError> {
     };
     write_atomic(&encrypted_path, &encrypted).map_err(TyuError::Io)?;
 
-    if args.sign || args.key_sign.is_some() {
-        let sign_key = resolve_key_material(&args.key_sign, "--key-sign is required for signing")?;
+    let sign_key = if args.sign || args.key_sign.is_some() {
+        Some(resolve_key_material(
+            &args.key_sign,
+            "--key-sign is required for signing",
+        )?)
+    } else {
+        None
+    };
+    if let Some(sign_key) = &sign_key {
         let signed = lmod_sign::sign(&encrypted, sign_key.try_as_32bytes()?)
             .map_err(|e| TyuError::Deploy(format!("lmod-sign: {}", e)))?;
         write_atomic(&signed_path, &signed).map_err(TyuError::Io)?;
     } else {
         fs::copy(&encrypted_path, &signed_path).map_err(TyuError::Io)?;
+    }
+
+    // P11.3 (§6.6, FR-21): assemble `<image>.tyucert/` — the certification
+    // package paired with the shipped image — and enforce FR-21: the deploy
+    // MUST verify bindings B1/B2 for every module BEFORE shipping (E6503 on
+    // mismatch, fail-closed). The package is written when the build produced
+    // verification state; a legacy no-verify build has nothing certifiable.
+    let signed_bytes = fs::read(&signed_path).map_err(TyuError::Io)?;
+    let module_bytes = fs::read(&packed_path).map_err(TyuError::Io)?;
+    let cert_key = sign_key.as_ref().map(|k| k.try_as_32bytes()).transpose()?;
+    if let Some(pkg) = crate::cert::assemble_for_deploy(&crate::cert::AssembleInput {
+        image: &signed_path,
+        image_bytes: &signed_bytes,
+        module_bytes: &module_bytes,
+        out_dir: &resolved_out_dir,
+        input: &args.input,
+        include_dirs: &args.include_dirs,
+        sysroot: args.sysroot.as_deref(),
+        policy: args.verify_policy,
+        sign_key: cert_key,
+    })? {
+        eprintln!("tyu: certification package: {}", pkg.display());
     }
 
     let recipe = DeployRecipeContext {
@@ -502,11 +531,7 @@ fn check_deploy_policy(
     // The shared policy comparison (`lmod::verify_manifest::satisfies` —
     // the same byte-level rule the loader enforces for RequireNoOpen/
     // RequireProven, so the two enforcers cannot drift).
-    let require = match policy {
-        DeployVerifyPolicy::OpenOk => 0,
-        DeployVerifyPolicy::NoOpen => 1,
-        DeployVerifyPolicy::Proven => 2,
-    };
+    let require = policy.requirement();
     if require != 0 && !lmod::verify_manifest::satisfies(vm.policy, require) {
         return Err(einterr(format!(
             "declared policy ({}) does not satisfy the requirement ({})",
@@ -635,11 +660,7 @@ fn check_image_pairing(
         code: E6510,
         detail,
     };
-    let require = match policy {
-        DeployVerifyPolicy::OpenOk => 0,
-        DeployVerifyPolicy::NoOpen => 1,
-        DeployVerifyPolicy::Proven => 2,
-    };
+    let require = policy.requirement();
     // The resolved import graph (dependencies first, root last) IS the
     // image's closure; platform-sysroot imports are excluded (they are not
     // application modules).

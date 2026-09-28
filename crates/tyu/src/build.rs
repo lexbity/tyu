@@ -356,11 +356,12 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
             &ctx,
             feature_set,
             &module_objs,
-            modules.last(),
+            &modules,
             args.metal_sign_key.as_deref(),
             args.metal_kek.as_deref(),
             args.metal_encrypt_mode,
             args.verify_manifest.as_deref(),
+            args.verify_policy,
         )?
     } else {
         let mut objs = module_objs.clone();
@@ -465,27 +466,40 @@ fn build_dynamic_image(
     ctx: &BuildContext,
     feature_set: FeatureSet,
     module_objs: &[PathBuf],
-    root_module: Option<&ModuleNode>,
+    modules: &[ModuleNode],
     metal_sign_key: Option<&str>,
     metal_kek: Option<&str>,
     metal_encrypt_mode: Option<EncryptMode>,
     verify_manifest: Option<&Path>,
+    verify_policy: VerifyPolicy,
 ) -> Result<(PathBuf, PathBuf), TyuError> {
-    let root_obj = module_objs
-        .last()
-        .ok_or_else(|| TyuError::Build("no root module object to pack".into()))?;
-    let build_manifest_record = build_manifest_record_for(
-        verify_manifest,
-        VerifyPolicy::OpenOk,
-        &ctx.out_dir,
-        root_module.map(|m| m.name.as_str()),
-    )?;
-    let app_lmod = pack_final_lmod(
-        root_obj,
-        &ctx.out_dir,
-        root_module.map(|m| m.name.as_str()),
-        &build_manifest_record,
-    )?;
+    if module_objs.len() != modules.len() {
+        return Err(TyuError::Build(
+            "dynamic image: module objects and graph nodes are misaligned".into(),
+        ));
+    }
+    let root_name = modules.last().map(|m| m.name.as_str()).to_owned();
+    // Pack EVERY graph module (the objects/graph are already deps-first) —
+    // the modpack is the shipped module set, and the firmware loader loads
+    // all of it, binding each module's imports against the previous ones.
+    // Each .lmod carries its OWN verify_manifest record (P11.1: derived from
+    // the module's `tyu.vm/1` summary under a requiring policy; the root
+    // additionally honors an explicit `--verify-manifest`).
+    let mut lmod_paths: Vec<PathBuf> = Vec::new();
+    for (obj, node) in module_objs.iter().zip(modules) {
+        let record = if Some(node.name.as_str()) == root_name {
+            build_manifest_record_for(
+                verify_manifest,
+                verify_policy,
+                &ctx.out_dir,
+                Some(node.name.as_str()),
+            )?
+        } else {
+            build_manifest_record_for(None, verify_policy, &ctx.out_dir, Some(node.name.as_str()))?
+        };
+        let lmod = pack_final_lmod(obj, &ctx.out_dir, Some(node.name.as_str()), &record)?;
+        lmod_paths.push(lmod);
+    }
     let sign_key = resolve_metal_sign_key(metal_sign_key)?;
     let kek = resolve_metal_kek(metal_kek)?;
     if kek.is_some() && sign_key.is_none() {
@@ -498,18 +512,27 @@ fn build_dynamic_image(
             "--metal-encrypt requires --metal-kek".into(),
         ));
     }
+    let root_lmod = lmod_paths
+        .last()
+        .ok_or_else(|| TyuError::Build("no root module object to pack".into()))?;
     if let Some(kek) = kek.as_ref() {
         let encrypt_kek = test_encrypt_kek_override()?.unwrap_or(*kek);
-        encrypt_lmod_in_place(
-            &app_lmod,
-            &encrypt_kek,
-            metal_encrypt_mode.unwrap_or(EncryptMode::Fleet),
-        )?;
+        for p in &lmod_paths {
+            encrypt_lmod_in_place(
+                p,
+                &encrypt_kek,
+                metal_encrypt_mode.unwrap_or(EncryptMode::Fleet),
+            )?;
+        }
     }
     if let Some(key) = sign_key.as_ref() {
-        sign_lmod_in_place(&app_lmod, key)?;
+        for p in &lmod_paths {
+            sign_lmod_in_place(p, key)?;
+        }
     }
-    maybe_apply_test_lmod_mutation(&app_lmod)?;
+    // The test-mutation hook targets the ROOT module (the tamper tests break
+    // the shipped root's signature and expect the E_SIG_INVALID trap).
+    maybe_apply_test_lmod_mutation(root_lmod)?;
 
     let mut firmware_objs =
         assemble_runtime_for_context_mode(ctx, feature_set, BuildMode::Dynamic)?;
@@ -541,7 +564,7 @@ fn build_dynamic_image(
     firmware_objs.push(assemble_modpack_object(
         ctx.target,
         &ctx.out_dir,
-        &app_lmod,
+        &lmod_paths,
     )?);
     firmware_objs.push(build_device_loader_staticlib(
         ctx.target,
@@ -2211,65 +2234,82 @@ fn render_mmio_apertures_asm(
 fn assemble_modpack_object(
     target: Target,
     out_dir: &Path,
-    lmod_path: &Path,
+    lmod_paths: &[PathBuf],
 ) -> Result<PathBuf, TyuError> {
-    let len = fs::metadata(lmod_path).map_err(TyuError::Io)?.len();
-    if len > u32::MAX as u64 {
-        return Err(TyuError::Build(format!(
-            "module '{}' is too large for v1 modpack",
-            lmod_path.display()
-        )));
+    if lmod_paths.is_empty() {
+        return Err(TyuError::Build(
+            "dynamic image modpack requires at least one module".into(),
+        ));
     }
-    let lmod_abs = if lmod_path.is_absolute() {
-        lmod_path.to_path_buf()
-    } else {
-        std::env::current_dir()
-            .map_err(TyuError::Io)?
-            .join(lmod_path)
-    };
-    let lmod_str = lmod_abs
-        .to_str()
-        .ok_or_else(|| TyuError::Build(format!("non-UTF-8 path '{}'", lmod_abs.display())))?;
+    let mut lmods: Vec<(u32, String)> = Vec::new();
+    for lmod_path in lmod_paths {
+        let len = fs::metadata(lmod_path).map_err(TyuError::Io)?.len();
+        if len > u32::MAX as u64 {
+            return Err(TyuError::Build(format!(
+                "module '{}' is too large for v1 modpack",
+                lmod_path.display()
+            )));
+        }
+        let lmod_abs = if lmod_path.is_absolute() {
+            lmod_path.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map_err(TyuError::Io)?
+                .join(lmod_path)
+        };
+        let lmod_str = lmod_abs
+            .to_str()
+            .ok_or_else(|| TyuError::Build(format!("non-UTF-8 path '{}'", lmod_abs.display())))?;
+        lmods.push((len as u32, lmod_str.to_string()));
+    }
 
     let asm_path = out_dir.join("modpack_generated.asm");
     let obj_path = out_dir.join("modpack_generated.o");
-    let asm = render_modpack_asm(target, len as u32, lmod_str, &lmod_abs)?;
+    let asm = render_modpack_asm(target, &lmods)?;
     fs::write(&asm_path, asm).map_err(TyuError::Io)?;
     assemble_asm_file(target, &asm_path, &obj_path, Some(out_dir), "modpack")?;
     Ok(obj_path)
 }
 
-fn render_modpack_asm(
-    target: Target,
-    len: u32,
-    lmod_str: &str,
-    lmod_abs: &Path,
-) -> Result<String, TyuError> {
+/// One `u32` length + blob per module, back-to-back — the v1 modpack layout
+/// `loader_core::modpack` documents and scans (deps-first embed order). No
+/// padding between blobs (the scanner reads lengths contiguously); the
+/// leading/trailing `.balign 4` keep the section 4-aligned exactly as the
+/// single-module rendering always did (N=1 output is byte-identical).
+fn render_modpack_asm(target: Target, lmods: &[(u32, String)]) -> Result<String, TyuError> {
+    let mut asm = String::new();
     match target.spec().assembler {
         AssemblerKind::Fasm => {
-            if lmod_str.contains('\'') {
-                return Err(TyuError::Build(format!(
-                    "FASM modpack path contains an unsupported quote: '{}'",
-                    lmod_abs.display()
-                )));
+            asm.push_str("format ELF64\n\nsection '.modpack' writeable\n");
+            for (len, path) in lmods {
+                if path.contains('\'') {
+                    return Err(TyuError::Build(format!(
+                        "FASM modpack path contains an unsupported quote: '{path}'"
+                    )));
+                }
+                asm.push_str(&format!("    dd {len}\n    file '{path}'\n"));
             }
-            Ok(format!(
-                "format ELF64\n\nsection '.modpack' writeable\n    dd {len}\n    file '{lmod_str}'\n"
-            ))
         }
-        AssemblerKind::GasArm => {
-            let path = gas_string_literal(lmod_str, lmod_abs)?;
-            Ok(format!(
-                ".syntax unified\n.thumb\n\n.section .modpack, \"a\", %progbits\n.balign 4\n.word {len}\n.incbin \"{path}\"\n.balign 4\n.section .note.GNU-stack, \"\", %progbits\n"
-            ))
-        }
-        AssemblerKind::GasRiscV => {
-            let path = gas_string_literal(lmod_str, lmod_abs)?;
-            Ok(format!(
-                ".section .modpack, \"a\", @progbits\n.balign 4\n.word {len}\n.incbin \"{path}\"\n.balign 4\n.section .note.GNU-stack, \"\", @progbits\n"
-            ))
+        AssemblerKind::GasArm | AssemblerKind::GasRiscV => {
+            if matches!(target.spec().assembler, AssemblerKind::GasArm) {
+                asm.push_str(".syntax unified\n.thumb\n\n.section .modpack, \"a\", %progbits\n");
+            } else {
+                asm.push_str(".section .modpack, \"a\", @progbits\n");
+            }
+            asm.push_str(".balign 4\n");
+            for (len, path) in lmods {
+                let quoted = gas_string_literal(path, std::path::Path::new(path))?;
+                asm.push_str(&format!(".word {len}\n.incbin \"{quoted}\"\n"));
+            }
+            asm.push_str(".balign 4\n");
+            if matches!(target.spec().assembler, AssemblerKind::GasArm) {
+                asm.push_str(".section .note.GNU-stack, \"\", %progbits\n");
+            } else {
+                asm.push_str(".section .note.GNU-stack, \"\", @progbits\n");
+            }
         }
     }
+    Ok(asm)
 }
 
 fn assemble_keys_object(

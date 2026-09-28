@@ -50,3 +50,9 @@ name = "obl_v2_decode"
 path = "fuzz_targets/obl_v2_decode.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "cert_index_decode"
+path = "fuzz_targets/cert_index_decode.rs"
+test = false
+doc = false

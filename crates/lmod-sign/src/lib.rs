@@ -81,6 +81,21 @@ pub fn sign(input: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, SignError> {
     Ok(out)
 }
 
+/// Detached HMAC-SHA256 over `data` with the given 32-byte key — the same
+/// key surface and primitive the module trailer uses (§6.6 B4: the
+/// certification package's `package.sig` is a detached HMAC over the
+/// `package_digest`). Deterministic and dependency-free beyond `sha2`/`hmac`.
+pub fn hmac_sha256(key: &[u8; 32], data: &[u8]) -> [u8; 32] {
+    use hmac::{Hmac, Mac};
+    type HmacSha256 = Hmac<Sha256>;
+    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts a 32-byte key");
+    mac.update(data);
+    let tag = mac.finalize().into_bytes();
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&tag);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,6 +156,32 @@ mod tests {
         let a = sign(&input, &[0xAAu8; 32]).unwrap();
         let b = sign(&input, &[0xBBu8; 32]).unwrap();
         assert_ne!(a, b, "different keys must produce different signatures");
+    }
+
+    #[test]
+    fn hmac_sha256_known_answer() {
+        // RFC 4231 test case 1: key = 0x0b × 20 (right-padded to 32),
+        // data = "Hi There", expected HMAC-SHA256 =
+        //   b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7
+        let mut key = [0u8; 32];
+        key[..20].fill(0x0b);
+        let tag = hmac_sha256(&key, b"Hi There");
+        let hex_expected = "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7";
+        let hex_actual: String = tag.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(
+            hex_actual, hex_expected,
+            "HMAC-SHA256 must match RFC 4231 case 1"
+        );
+    }
+
+    #[test]
+    fn hmac_sha256_deterministic_and_key_sensitive() {
+        let data = b"package_digest-payload";
+        let a = hmac_sha256(&[0xabu8; 32], data);
+        let b = hmac_sha256(&[0xabu8; 32], data);
+        assert_eq!(a, b, "HMAC must be deterministic");
+        let c = hmac_sha256(&[0xbbu8; 32], data);
+        assert_ne!(a, c, "HMAC must be key-sensitive");
     }
 
     #[test]

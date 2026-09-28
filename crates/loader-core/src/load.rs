@@ -88,8 +88,12 @@ impl<'a, 'e, const N: usize> Drop for RollbackGuard<'a, 'e, N> {
 
 /// A fixed-capacity set of module identifiers used to enforce load-once.
 ///
-/// Each entry is an `abi_hash` (enough to uniquely identify a module
-/// within a given build).
+/// Each entry is the module's identity key — fnv1a64 over the modinfo
+/// module name (identity-key domain; distinct from the integrity-digest
+/// boundary, FR-14). NOT the `abi_hash`: that names the ABI contract a
+/// module was compiled against and is shared by every module of a build,
+/// so keying on it would reject the second module of any multi-module
+/// image.
 pub struct LoadedSet<const N: usize> {
     hashes: [u64; N],
     len: usize,
@@ -772,7 +776,16 @@ pub fn load_module<'a>(
     if hdr.abi_hash != platform.expected_abi_hash() {
         return Err(LoadError::AbiMismatch);
     }
-    if loaded_set.contains(hdr.abi_hash) {
+    // Load-once is keyed by MODULE identity — the modinfo module name's
+    // fnv1a64 (an identity key, not an integrity digest) — NOT by
+    // `abi_hash`: every module of a build shares one abi_hash (it names the
+    // ABI contract they were compiled against), so an abi_hash key would
+    // reject the second module of any multi-module image.
+    let module_id = {
+        let mi = lmod::modinfo::decode(container.modinfo()).ok_or(LoadError::BadContainer)?;
+        lmod::hash::fnv1a_u64(mi.module_name)
+    };
+    if loaded_set.contains(module_id) {
         return Err(LoadError::ModuleAlreadyLoaded);
     }
     if hdr.flags & lmod::header::LMOD_FLAG_SIGNED != 0
@@ -848,7 +861,7 @@ pub fn load_module<'a>(
     verify_trust_two_stack_bounds(platform, &code_region, modinfo_data)?;
     check_resource_sharing(modinfo_data)?;
 
-    loaded_set.insert(hdr.abi_hash)?;
+    loaded_set.insert(module_id)?;
     aperture_guard.disarm();
     sym_guard.commit();
 
@@ -1067,6 +1080,84 @@ mod tests {
         }
 
         assert!(map.lookup_by_name(b"perm").is_some());
+    }
+
+    /// A minimal loadable container named `name` (the multi-module test
+    /// needs DISTINCT module names sharing one abi_hash). The header and
+    /// modinfo abi_hash agree at 0 — `build_minimal_lmod_with_modinfo`
+    /// writes that in the header, and the load-once rule under test keys on
+    /// the module NAME, not the abi value.
+    fn build_named_lmod(name: &[u8]) -> alloc::vec::Vec<u8> {
+        let exports = alloc::vec![lmod::modinfo::ExportEntry {
+            sym_hash: lmod::hash::fnv1a_u64(name),
+            name,
+            effects: 0,
+            requires_caps: 0,
+            stack_bound: 0,
+        }];
+        let mut mi_buf = [0u8; 256];
+        let mi_size =
+            lmod::modinfo::encode_into(&mut mi_buf, name, &exports, &[], 0, 0, &[], 0, &[])
+                .unwrap_or(0) as usize;
+        build_minimal_lmod_with_modinfo(&mi_buf[..mi_size], 64)
+    }
+
+    #[test]
+    fn two_modules_of_one_build_share_one_abi_hash_and_both_load() {
+        // The multi-module image rule (the P11.3 compositional rule's loader
+        // half): every module of a build carries the SAME abi_hash — it
+        // names the ABI contract they were compiled against, not the module
+        // — so the load-once set must key on module identity. Two
+        // distinct-name modules load in sequence, and re-loading either is
+        // the E5210 duplicate. Keying the set on abi_hash would reject the
+        // second module of ANY multi-module image (the two-module QEMU
+        // regression this pins).
+        let callee_bytes = build_named_lmod(b"Cal");
+        let root_bytes = build_named_lmod(b"Main");
+        let callee = lmod::validate::Container::parse(&callee_bytes).unwrap();
+        let root = lmod::validate::Container::parse(&root_bytes).unwrap();
+
+        let mut plat = TestPlatform {
+            expected_hash: 0,
+            fail: false,
+            trust_level: TrustLevel::Zero,
+        };
+        let mut map: SymMap<'_, 256> = SymMap::new();
+        let mut set = LoadedSet::<64>::new();
+
+        let first = load_module(
+            &callee,
+            &mut plat,
+            &mut map,
+            &mut set,
+            &mut ApertureRegistry::new(),
+        );
+        assert!(
+            first.is_ok(),
+            "the callee module must load: {:?}",
+            first.err()
+        );
+        let second = load_module(
+            &root,
+            &mut plat,
+            &mut map,
+            &mut set,
+            &mut ApertureRegistry::new(),
+        );
+        assert!(
+            second.is_ok(),
+            "the second module of the same build must load (same abi_hash, \
+             different module identity): {:?}",
+            second.err()
+        );
+        let reload = load_module(
+            &callee,
+            &mut plat,
+            &mut map,
+            &mut set,
+            &mut ApertureRegistry::new(),
+        );
+        assert_eq!(reload.unwrap_err(), LoadError::ModuleAlreadyLoaded);
     }
 
     #[test]

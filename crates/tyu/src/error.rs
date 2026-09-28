@@ -58,6 +58,12 @@ pub enum TyuError {
     #[error("E{code}: verify pairing: {detail}")]
     VerifyPairing { code: u32, detail: String },
 
+    /// A certification-package failure (P11.3, §6.9): the `tyu.cert/v1`
+    /// index is malformed or schema-invalid (E6504), or an assembly-time
+    /// binding failure (E6503, `E_CERT_PAIRING` — B1/B2 digests).
+    #[error("E{code}: cert: {detail}")]
+    Cert { code: u32, detail: String },
+
     #[error("compilation failed on '{}'", path.display())]
     CompileFailed { path: std::path::PathBuf },
 
@@ -121,6 +127,27 @@ mod tests {
                     detail: "module Tiny: axiom audit failed".into(),
                 },
                 "E6419: harvest: module Tiny: axiom audit failed",
+            ),
+            (
+                TyuError::VerifyPairing {
+                    code: 6510,
+                    detail: "unproven callee".into(),
+                },
+                "E6510: verify pairing: unproven callee",
+            ),
+            (
+                TyuError::Cert {
+                    code: 6503,
+                    detail: "B1 mismatch".into(),
+                },
+                "E6503: cert: B1 mismatch",
+            ),
+            (
+                TyuError::Cert {
+                    code: 6504,
+                    detail: "index malformed".into(),
+                },
+                "E6504: cert: index malformed",
             ),
             (TyuError::Deploy("x".into()), "deploy: x"),
             (TyuError::Cache("x".into()), "cache: x"),

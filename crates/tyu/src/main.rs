@@ -2,7 +2,7 @@
 
 use std::path::Path;
 use tyu::project::ProjectManifest;
-use tyu::{args, build, deploy, platform, run_cmd, test_cmd, toolchain};
+use tyu::{args, build, cert, deploy, platform, run_cmd, test_cmd, toolchain};
 
 fn main() {
     let cwd = std::env::current_dir().unwrap_or_default();
@@ -131,6 +131,12 @@ fn main() {
             let target_dir = std::path::Path::new("target").join("tyu");
             if target_dir.exists() {
                 let _ = std::fs::remove_dir_all(&target_dir);
+            }
+        }
+        args::Command::Cert(cert_args) => {
+            if let Err(e) = cert::run(&cert_args) {
+                eprintln!("tyu: cert error: {}", e);
+                std::process::exit(1);
             }
         }
         args::Command::Help => {}

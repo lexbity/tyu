@@ -334,6 +334,7 @@ name = "lmod-pack"
 version = "0.1.0"
 dependencies = [
  "lmod",
+ "sha2",
 ]
 
 [[package]]
@@ -649,6 +650,7 @@ dependencies = [
  "rsp-client",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
  "toml",
  "verifier",
