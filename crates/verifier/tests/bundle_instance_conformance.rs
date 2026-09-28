@@ -47,8 +47,10 @@ fn sr() -> &'static verifier::interp::SubtypeRange<'static> {
     }
 }
 
-/// One modeled bundle: its triple, its model-id (`tyu.model/<triple>/1`),
-/// and its **inclusive** modeled RAM window.
+/// One modeled bundle: its target triple, its **pack directory** name (the
+/// pack dir — `platforms/<triple>` for the per-triple packs, `platforms/<name>`
+/// for a multi-ISA board pack like `rp2350`), its model-id label
+/// (`tyu.model/<bundle>`), and its **inclusive** modeled RAM window.
 ///
 /// The model artifact declares `ram = { origin, length }` — a half-open
 /// region `[origin, origin + length)`. The window the engines actually
@@ -59,6 +61,10 @@ fn sr() -> &'static verifier::interp::SubtypeRange<'static> {
 /// geometry-chain test against `model.toml`.
 struct Bundle {
     triple: &'static str,
+    /// The pack directory under `platforms/`.
+    pack: &'static str,
+    /// The evidence corpus `"bundle"` label (`tyu.model/<bundle>`).
+    label: &'static str,
     /// The inclusive model window `[first, last]` (last = origin + length - 1).
     window: (u64, u64),
     /// The artifact's half-open region `(origin, origin + length)`.
@@ -77,25 +83,41 @@ impl Bundle {
     fn evidence_dir(&self) -> PathBuf {
         workspace_root()
             .join("platforms")
-            .join(self.triple)
+            .join(self.pack)
             .join("evidence")
     }
 }
 
 /// The declared bundles (G46/G47's modeled set): geometry via the ONE
 /// `[memory] ram` parser (`verifier::bundle::model_memory_ram` — the same
-/// parser the tyu accessor and the corpus header use; cleanup item 3).
+/// parser the tyu accessor and the corpus header use; cleanup item 3). The
+/// per-triple packs plus the rp2350 board pack (P13.2 — a multi-ISA board
+/// whose default ISA is armv7m; its own `tyu.model/rp2350/1` model id and a
+/// window over the first 64 KiB of SRAM).
 fn bundles() -> Vec<Bundle> {
     let mut out = Vec::new();
-    for triple in [
-        "x86_64-unknown-none",
-        "armv7m-unknown-none",
-        "riscv32-unknown-none",
+    for (triple, pack, label) in [
+        (
+            "x86_64-unknown-none",
+            "x86_64-unknown-none",
+            "tyu.model/x86_64-unknown-none",
+        ),
+        (
+            "armv7m-unknown-none",
+            "armv7m-unknown-none",
+            "tyu.model/armv7m-unknown-none",
+        ),
+        (
+            "riscv32-unknown-none",
+            "riscv32-unknown-none",
+            "tyu.model/riscv32-unknown-none",
+        ),
+        ("armv7m-unknown-none", "rp2350", "tyu.model/rp2350"),
     ] {
         let text = fs::read_to_string(
             workspace_root()
                 .join("platforms")
-                .join(triple)
+                .join(pack)
                 .join("model/model.toml"),
         )
         .expect("model artifact present");
@@ -105,11 +127,13 @@ fn bundles() -> Vec<Bundle> {
         // exclusive top byte (model.toml `length` = number of modeled bytes).
         assert!(
             declared.1 > declared.0,
-            "{triple}: [memory] ram must be non-empty"
+            "{pack}: [memory] ram must be non-empty"
         );
         let window = (declared.0, declared.1 - 1);
         out.push(Bundle {
             triple,
+            pack,
+            label,
             window,
             declared,
         });
@@ -467,8 +491,8 @@ fn render_json(b: &Bundle) -> String {
     assert!(!vectors.is_empty(), "{} corpus is empty", b.triple);
     let mut c = Vec::new();
     c.push(format!(
-        "{{\n  \"schema\": \"{VEC_SCHEMA}\",\n  \"bundle\": \"tyu.model/{}\",\n  \"triple\": \"{}\",\n  \"target\": {{",
-        b.triple, b.triple
+        "{{\n  \"schema\": \"{VEC_SCHEMA}\",\n  \"bundle\": \"{}\",\n  \"triple\": \"{}\",\n  \"target\": {{",
+        b.label, b.triple
     ));
     c.push(format!(
         "    \"slot_bytes\": {},\n    \"word_bits\": {},\n    \"arch_tag\": {}",
@@ -650,14 +674,128 @@ fn bundle_corpus_matches_lean_conformance() {
     }
 }
 
-/// The Lean instance name for each modeled bundle (the `Tyu.Bundles`
-/// defs the geometry report prints).
-fn instance_name(triple: &str) -> &str {
-    match triple {
+/// The refinement-band pin (PLAN-VERIFY-3 P13.2, P3 finding): the Lean
+/// bundle instance's declared refinement device (`mask`/`mode`, the
+/// `--level bands` report) MUST equal the model artifact's
+/// `[[refinements.device]]` transcription — the datasheet band is a
+/// reviewed artifact-pair (Lean instance + manifest), never prose; and the
+/// band the registry consumes (`uartfr_band_domain_at_device`) equals the
+/// report's value mechanically.
+#[test]
+fn refinement_band_matches_lean_instance_and_manifest() {
+    let port_dir = workspace_root().join("verification/ports/lean");
+    let exe = port_dir.join(".lake/build/bin/conformance");
+    if !exe.is_file() {
+        eprintln!("skipping: port conformance exe not built (lake build)");
+        return;
+    }
+    let out = Command::new(&exe)
+        .arg("--level")
+        .arg("bands")
+        .output()
+        .expect("bands report");
+    assert!(out.status.success(), "conformance --level bands failed");
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let json: serde_json::Value = serde_json::from_str(&text).expect("tyu.bands/1 parses");
+    let devices = json["devices"].as_array().expect("devices array");
+
+    // Every modeled bare pack declares an EMPTY `[refinements]` (no devices)
+    // — nothing to pin; the rp2350 board pack declares the one device, which
+    // the LEAN instance must report with the manifest's mask/mode.
+    for pack in [
+        "x86_64-unknown-none",
+        "armv7m-unknown-none",
+        "riscv32-unknown-none",
+    ] {
+        let artifact = fs::read_to_string(
+            workspace_root()
+                .join("platforms")
+                .join(pack)
+                .join("model/model.toml"),
+        )
+        .unwrap();
+        assert!(
+            refinement_devices(&artifact).is_empty(),
+            "{pack}: bare modeled packs carry no refinement device"
+        );
+    }
+    let rp =
+        fs::read_to_string(workspace_root().join("platforms/rp2350/model/model.toml")).unwrap();
+    let declared = refinement_devices(&rp);
+    assert_eq!(
+        declared.len(),
+        1,
+        "rp2350 declares exactly one refinement device"
+    );
+
+    // The report carries the rp2350 entry with the manifest's band + mode.
+    let entry = devices
+        .iter()
+        .find(|d| d["id"].as_str().unwrap_or("") == "rp2350.uart-fr")
+        .expect("rp2350.uart-fr present in the bands report");
+    let (mask, mode) = &declared[0];
+    assert_eq!(*mask, 0xF9, "the datasheet band (P3 finding)");
+    assert_eq!(mode.as_str(), "ro", "the UARTFR access-mode (P3 finding)");
+    assert_eq!(entry["mask"].as_i64().unwrap() as u64, *mask as u64);
+    assert_eq!(entry["mode"].as_str().unwrap_or(""), mode.as_str());
+}
+
+/// The `[[refinements.device]]` transcription of a `model/model.toml`: the
+/// `(mask, mode)` pairs, in declaration order (a minimal scanner for the
+/// committed shape — the same shape the tyu lint validates strictly).
+fn refinement_devices(text: &str) -> Vec<(u32, String)> {
+    let mut in_refinements = false;
+    let mut mask: Option<u32> = None;
+    let mut mode: Option<String> = None;
+    let mut out = Vec::new();
+    let flush =
+        |mask: &mut Option<u32>, mode: &mut Option<String>, out: &mut Vec<(u32, String)>| {
+            if let (Some(m), Some(mo)) = (mask.take(), mode.take()) {
+                out.push((m, mo));
+            }
+        };
+    for line in text.lines() {
+        let t = line.trim();
+        if t == "[refinements]" {
+            in_refinements = true;
+            continue;
+        }
+        if !in_refinements {
+            continue;
+        }
+        if t.starts_with("[[refinements.device]]") {
+            flush(&mut mask, &mut mode, &mut out);
+            continue;
+        }
+        if let Some(v) = t.strip_prefix("mask =") {
+            mask = parse_int_literal(v.trim());
+        } else if let Some(v) = t.strip_prefix("mode =") {
+            mode = Some(v.trim().trim_matches('"').to_string());
+        }
+    }
+    flush(&mut mask, &mut mode, &mut out);
+    out
+}
+
+/// Parse `0x…` or a decimal literal into a u32.
+fn parse_int_literal(s: &str) -> Option<u32> {
+    if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        u32::from_str_radix(hex, 16).ok()
+    } else {
+        s.parse::<u32>().ok()
+    }
+}
+
+/// The Lean instance name for each modeled bundle (the `Tyu.Bundles` defs
+/// the geometry report prints). Keyed by PACK name — the rp2350 board pack
+/// is its own instance alongside the per-triple packs.
+fn instance_name(pack: &str) -> &str {
+    match pack {
         "x86_64-unknown-none" => "x86_64",
         "armv7m-unknown-none" => "armv7m",
         "riscv32-unknown-none" => "riscv32",
-        other => panic!("no Lean instance for {other}"),
+        "rp2350" => "rp2350",
+        other => panic!("no Lean instance for pack {other}"),
     }
 }
 
@@ -685,7 +823,7 @@ fn bundle_geometry_matches_lean_instance() {
         .collect();
     for b in bundles() {
         let instance = by_name
-            .get(instance_name(b.triple))
+            .get(instance_name(b.pack))
             .expect("instance present in report");
         let lo = instance["ramLo"].as_i64().expect("ramLo");
         let hi = instance["ramHi"].as_i64().expect("ramHi");

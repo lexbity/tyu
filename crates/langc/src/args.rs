@@ -8,7 +8,7 @@ pub const HELP: &[u8] = b"langc (tyu_lang) v0.1.0\n\nUSAGE:\n  langc [options] <
   --verify-policy=proven      P7.3 trust gate (default open-ok): only proof-class or
                               exact-method checked discharges close a site\n  --bind-obl=<path>           P7.3: bind statement hashes against this pre-computed
                               tyu.obl/v2 artifact (the artifact the proofs were
-                              certified against) instead of the live lowering\n  --elide-ds-guards           Slice P7: omit the per-push x86 data-stack overflow\n                              guards (C8). A per-image codegen input - tyu forwards\n                              it only when the image-level stack-budget verdict is\n                              discharged (two-pass, --elide-stack-guards); the\n                              __lang_ds_high observability update is kept\n  --allow-raw-casts           Enable raw pointer casts\n  --features=<csv>            Image features to enable (default: all) [concurrency, module-loading]\n  --no-default-features       Start from empty feature set\n  --sysroot=<path>            Sysroot root directory\n  --out-dir=<path>            Output directory (--emit=obj / --emit=obligations)\n  --platform=<dir>            Platform pack directory; the compiled descriptor\n                              at <dir>/platform.desc sources MMIO aperture facts\n  --model-semantics=<id>      P12: the bundle's model-semantics identity\n                              (tyu.model/<bundle>/<ver> or \"unmodeled\"; the\n                              default for a direct run without a bundle)\n  --target=<triple>           Target triple, required for --emit=obj\n                              Supported: x86_64-unknown-linux-gnu\n                                         x86_64-unknown-none\n                                         armv7m-unknown-none\n                                         riscv32-unknown-none\n\n";
+                              certified against) instead of the live lowering\n  --elide-ds-guards           Slice P7: omit the per-push x86 data-stack overflow\n                              guards (C8). A per-image codegen input - tyu forwards\n                              it only when the image-level stack-budget verdict is\n                              discharged (two-pass, --elide-stack-guards); the\n                              __lang_ds_high observability update is kept\n  --allow-raw-casts           Enable raw pointer casts\n  --features=<csv>            Image features to enable (default: all) [concurrency, module-loading]\n  --no-default-features       Start from empty feature set\n  --sysroot=<path>            Sysroot root directory\n  --out-dir=<path>            Output directory (--emit=obj / --emit=obligations)\n  --platform=<dir>            Platform pack directory; the compiled descriptor\n                              at <dir>/platform.desc sources MMIO aperture facts\n  --model-semantics=<id>      P12: the bundle's model-semantics identity\n                              (tyu.model/<bundle>/<ver> or \"unmodeled\"; the\n                              default for a direct run without a bundle)\n  --refinements=<path>        P13: a tyu.refinements/1 context document (the\n                              bundle's device-refinement manifest) - relativizes\n                              the FR-5 statement-binding recompute\n  --target=<triple>           Target triple, required for --emit=obj\n                              Supported: x86_64-unknown-linux-gnu\n                                         x86_64-unknown-none\n                                         armv7m-unknown-none\n                                         riscv32-unknown-none\n\n";
 
 /// Validated compiler configuration.
 pub struct Config<'a> {
@@ -41,6 +41,14 @@ pub struct Config<'a> {
     /// P4: `--verdicts=<path>` — a `tyu.verdicts/v2` file consumed under
     /// `--checks=undischarged` (E6402 when that mode lacks one).
     pub verdicts: Option<&'a [u8]>,
+    /// PLAN-VERIFY-3 P13.1: `--refinements=<path>` — a `tyu.refinements/1`
+    /// context document (the bundle's `[refinements]` device-refinement
+    /// manifest). It relativizes the FR-5 statement-binding recompute: a
+    /// statement certified under a refinement binds only when the consuming
+    /// build's context carries it (the `(triple, model_semantics,
+    /// refinement)` identity, §Q3/P13.1). `None` ⇒ the §Q13
+    /// nondeterministic-read default (refinement-free binding).
+    pub refinements: Option<&'a [u8]>,
     /// Slice P7: `--elide-ds-guards` — a per-image codegen input that omits
     /// the per-push x86 data-stack guards (C8). Deliberately independent of
     /// `--checks` (Q5: the image-level stack-budget verdict is a per-image
@@ -127,6 +135,7 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]], emit_diagnostics: bool) -> (Parse
     let mut platform_dir: Option<&[u8]> = None;
     let mut model_semantics: Option<&[u8]> = None;
     let mut verdicts: Option<&[u8]> = None;
+    let mut refinements: Option<&[u8]> = None;
     let mut elide_ds_guards = false;
     let mut verify_tool: Option<&[u8]> = None;
     let mut verify_policy_proven = false;
@@ -318,6 +327,20 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]], emit_diagnostics: bool) -> (Parse
             i += 1;
             continue;
         }
+        if a.starts_with(b"--refinements=") {
+            let v = &a[b"--refinements=".len()..];
+            if v.is_empty() {
+                maybe_emit_error(
+                    emit_diagnostics,
+                    1006,
+                    b"--refinements requires a file path",
+                );
+                return (ParseResult::Error(2), true);
+            }
+            refinements = Some(v);
+            i += 1;
+            continue;
+        }
         if a.starts_with(b"--target=") {
             let triple = &a[b"--target=".len()..];
             target = match Target::parse(triple) {
@@ -454,6 +477,7 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]], emit_diagnostics: bool) -> (Parse
             platform_dir,
             model_semantics,
             verdicts,
+            refinements,
             elide_ds_guards,
             verify_tool,
             verify_policy_proven,

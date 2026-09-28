@@ -412,7 +412,11 @@ mod tests {
         fs::create_dir_all(dir.join(".tyu-verify").join("harvest")).unwrap();
         let obl = artifact(&dir);
         harvest(&dir, harvest_target, harvest_model);
-        let env = VerifyEnvKey::compute(&dir, ART_MODEL);
+        let env = VerifyEnvKey::compute(
+            &dir,
+            ART_MODEL,
+            crate::proof::refinements_hash_for_model(ART_MODEL),
+        );
         verdicts_for_module(&dir, "Main", &obl, &env)
             .unwrap()
             .is_some()

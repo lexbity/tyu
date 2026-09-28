@@ -66,12 +66,31 @@ pub struct StatementContext {
 
 impl StatementContext {
     /// Build the context for an obligation record: relativity fields are
-    /// caller-supplied, site/kind identity come from the record.
+    /// caller-supplied, site/kind identity come from the record. No device
+    /// refinement in context (the §Q13 nondeterministic-read default).
     pub fn for_obligation(
         module: &str,
         target: &str,
         model_semantics: &str,
         word_ir_hash: &str,
+        o: &crate::model::Obligation,
+    ) -> Self {
+        Self::for_obligation_with_refinement(module, target, model_semantics, word_ir_hash, None, o)
+    }
+
+    /// Build the context with an optional device refinement (P13.1, §Q13):
+    /// `Some(name)` relativizes the statement to the bundle's named
+    /// refinement of a register its word reads. A statement proven under a
+    /// refinement is meaningless for a build whose context does not carry it
+    /// — the `refinement` field is part of the canonical encoding, so the
+    /// statement hash differs and the stale/absent binding fails closed
+    /// (E6421 / E6420 paths).
+    pub fn for_obligation_with_refinement(
+        module: &str,
+        target: &str,
+        model_semantics: &str,
+        word_ir_hash: &str,
+        refinement: Option<&str>,
         o: &crate::model::Obligation,
     ) -> Self {
         Self {
@@ -84,7 +103,7 @@ impl StatementContext {
             word_ir_hash: word_ir_hash.to_string(),
             kind: o.kind,
             occurrence: o.site.occurrence,
-            refinement: None,
+            refinement: refinement.map(str::to_string),
         }
     }
 

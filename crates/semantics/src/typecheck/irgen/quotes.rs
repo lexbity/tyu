@@ -197,6 +197,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                 false,
                 self.proven_gate,
                 self.bind_obl,
+                self.refinements,
                 arena,
                 sig,
                 name,

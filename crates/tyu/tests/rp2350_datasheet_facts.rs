@@ -607,6 +607,22 @@ fn dangerous_semantics_are_pinned() {
     ));
     assert!(matches!(find("uart0", 0x044).write_kind, WriteKind::W1c));
 
+    // P3 finding — the refinement's datasheet transcription is pinned
+    // against the descriptor: the UARTFR row the refinement models is the
+    // READ-ONLY 32-bit frame-status register (`access = ro` — `REG_ACCESS_RO`,
+    // the manifest's `mode = "ro"`), and `width = 32` matches the manifest's
+    // `width = 32`. The datasheet band itself (mask 0xF9, the six modeled
+    // flag bits of DS2 §12.1) is pinned against the LEAN instance by
+    // `verifier::bundle_instance_conformance::refinement_band_matches_lean_instance_and_manifest`.
+    let uartfr = find("uart0", 0x018);
+    assert_eq!(uartfr.name.as_str(), "UARTFR");
+    assert_eq!(uartfr.width, 32);
+    assert_eq!(
+        uartfr.access,
+        tyu::platform::desc::AccessKind::Ro,
+        "UARTFR is read-only (the refinement's access-mode transcription)"
+    );
+
     // PIO: the SM-IRQ flags register sits at 0x30 (0x24 is RXF1) and the
     // RX FIFOs pop on read.
     assert_eq!(find("pio0", 0x030).name.as_str(), "IRQ");

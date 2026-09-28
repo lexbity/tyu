@@ -25,7 +25,8 @@ pub use desc::{
 pub use linker_script::scaffold_platform_pack;
 pub use lint::{
     ensure_build_platform_interface, ensure_model_pairing, format_lint_outcome, lint_pack,
-    model_artifact_ram, parse_model_artifact, LintError, LintOutcome, ModelArtifactInfo,
+    model_artifact_ram, model_artifact_refinements, parse_model_artifact, LintError, LintOutcome,
+    ModelArtifactInfo,
 };
 
 #[cfg(test)]

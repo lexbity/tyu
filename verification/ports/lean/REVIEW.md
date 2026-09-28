@@ -34,6 +34,12 @@
 | T-D (aperture bound) | an MMIO read answers exactly the §Q13 width-bounded nondeterministic domain — a value within the register's width, never wider | `Tyu.Sound.TD.aperture_width_bound`, `Tyu.Sound.TD.aperture_width_bound_full` | proven, axiom-audited |
 | T-D (bundle geometry) | each modeled bundle instance's RAM window equals its `model/model.toml [memory] ram` declaration (pinned mechanically by the Rust suite against `--level bundles`) and the window's points are in-RAM per the instance | `Tyu.Sound.TD.x86_64_geometry`, `Tyu.Sound.TD.armv7m_geometry`, `Tyu.Sound.TD.riscv32_geometry` (+ the instance in-window lemmas `*_inram`, axiom-audited, §3) | proven, axiom-audited |
 | T-D (mirror equivalence) | the conformance runner's operational `MemModel.bundle` and the theorem-surface `BundleMem` agree on observable reads (aperture via the single `wordDomain`; loads via the recorded-cells coercion) — the two mirrors cannot drift (the boundary-byte defect class) | `Tyu.Sound.TD.bundle_aperture_agrees`, `Tyu.Sound.TD.bundle_load_agrees` | proven, axiom-audited |
+| T-D (rp2350 geometry, P13.2) | the rp2350 board pack's bundle instance window equals its `model/model.toml [memory] ram` declaration (the first 64 KiB of SRAM) and the window's points are in-RAM | `Tyu.Sound.TD.rp2350_geometry`, `Tyu.Sound.TD.rp2350_inram` | proven, axiom-audited |
+| T-D (width/mask, P13.2) | a refined register read answers exactly the refinement's modeled band `[0, mask]` — within the register's width, never wider than the §Q13 width-bounded default, **instanced at the device** (`uartfr_band_domain_at_device`: `[0, 0xF9]` — the band IS consumed by the registry, P3 finding) | `Tyu.Sound.TD.uartfr_band_domain`, `Tyu.Sound.TD.uartfr_band_domain_at_device` | proven, axiom-audited |
+| T-D (access-mode, ro, P13.2) | a refined READ-ONLY register answers exactly the refinement's band — `refinedOf` consults the access-mode (`AccessMode`): `ro` closes the read to the datasheet stable-value set | `Tyu.Sound.TD.ro_read_answers_band` | proven, axiom-audited |
+| T-D (access-mode, write-capable, P13.2) | every WRITE-CAPABLE refined register answers the §Q13 width-bounded nondeterministic domain (the model records no register state; the w1c/w1s bit-clears are structural, stated in the TCB boundary) | `Tyu.Sound.TD.write_capable_read_width_bounded` | proven, axiom-audited |
+| T-D (access-mode, writes, P13.2) | reads of a refined device are memory-independent — RAM stores and the (unmodeled) register write state only change memory, which no read consults (abstract); the concrete write channel is isolated: a `vol_store` then a `vol_load` answers exactly the oracle's read | `Tyu.Sound.TD.read_independent_of_memory`, `Tyu.Sound.TD.store_then_read_is_oracle` | proven, axiom-audited |
+| T-D (volatility/ordering, P13.2) | two consecutive MMIO reads are NOT merged — each `vol_load` records its own read in the run's ACCESS TRACE (`Tyu.Step.runBlockTrace`, execution order); the trace of `[vol_load, vol_load]` has TWO entries, and the trace run is proven equal to `Block.runBlock` (the trace is a formalization of the run's reads, never a parallel semantics) — the §Q13 no-elide/merge/reorder guarantee as the trace (the final stack alone cannot distinguish merged reads; the trace can) | `Tyu.Sound.TD.runBlockTrace_eq_runBlock`, `Tyu.Sound.TD.two_reads_trace` | proven, axiom-audited |
 
 Helper lemmas (not registry entries, reviewed definitions): `id_wf`,
 `compose_wf` (as `Bound.compose_wf`), `branch_max_wf`, `compose_high_ge_*`,
@@ -46,6 +52,7 @@ Helper lemmas (not registry entries, reviewed definitions): `id_wf`,
 | `Tyu.Step.ConcreteMem` (cells + load/mmio oracles) | `Tyu/Step.lean` | §Q13: nondeterminism is a parameter; reviewed against `verifier::mem::MemModel` |
 | `Tyu.Step.stepOp` (42-form concrete transfer) | `Tyu/Step.lean` | per-op reviewed against `crates/verifier/src/semantics/mod.rs` rows; depth claims *proved* (§3 per-op form), value claims pinned by `tyu.vec/1` where the op is observable |
 | `Tyu.Step.runOk` / `Outcome.trap` | `Tyu/Step.lean` | trap = retained check firing (`trap_if_false`) or stack underflow; `some` = terminating non-trapping run |
+| `Tyu.Step.runBlockTrace` (the MMIO-read access trace) + `runBlockTrace_eq_runBlock` | `Tyu/Step.lean` | **P13.2:** the trace-collecting sibling of `Block.runBlock` — one read VALUE per `vol_load`/`vol_load_field` in execution order; identical routing/memory/end, proven equal to `Block.runBlock` (`Tyu.Sound.TD.runBlockTrace_eq_runBlock`, §3), so the trace is a formalization of the run's reads, not a parallel semantics. This is the "volatility ordering as a TRACE property" (the final stack cannot distinguish merged reads; the trace can) — P2 finding discharged. |
 | `Tyu.Sound.Bound` + monoid | `Tyu/Sound.lean` | the §13.2 monoid, mirrored from `stack-bound-analysis.md` |
 | `Tyu.Sound.AssumptionClosure.VerdictSet` (abstract verdict-set structure) | `Tyu/Sound.lean` | P8: the T-CL substrate — `closed`/`runtime`/`assumptions`, the closed-path reachability `closedPathTo`, `wellClosed` (acyclic ∧ edge-sound). Reviewed against §Q7 rule 2; the image walker (`tyu::closure`) executes it on concrete artifacts. |
 | `Tyu.Stackmeta` parser + checker | `Tyu/Stackmeta.lean` | consumes `tyu.stackmeta/1` (schema-checked); unresolved calls skip a word — the gate FAILS on any skip (`ci/port.sh`) |
@@ -55,6 +62,7 @@ Helper lemmas (not registry entries, reviewed definitions): `id_wf`,
 | `Tyu.Gen.Render` (statement renderer) | `Tyu/Gen/Render.lean` | P5: renders `Gen/<Module>.lean` from `tyu.obl/v2`; re-derives canonical statements + `statement_hash` in Lean (own SHA-256) — the renderer↔encoder drift lock, verified byte-exact against `crates/verifier/src/stmt.rs` over the corpus (`crates/tooling-tests/tests/gen_render_drift.rs`). The canonical dispatches on the formula op (`InRange` / `OffsetLE` / `PredicateHolds` — `stmt.rs::push_formula` byte-for-byte, incl. `{"name":"$top","op":"Var"}` opaque args). Omission classification (opaque `$top`, `call`-unmodeled words, dynamic MMIO, `stack-budget`) is part of the normative rendering rules (§Q4 item 4). **Contract statements (P8.2 scope):** `contract-post` renders `∀ σ₀ σf, run w … = some σf → predicateHolds wpred … [exit outputs]`; `contract-pre` renders the ∀-scheme over the argument tuple (a sound over-claim); both evaluate the predicate via `Tyu.Gen.Stmt.predicateHolds` (the predicate word run over the argument values). A named-predicate contract word contains the predicate `call` op — the statement-side step approximates `call` (representative sig), so such words stay `calls-unmodeled` (omitted honestly, never hashed to a wrong statement): the faithful statement-side mechanism for predicate calls (splicing the predicate's blocks inline at render time — the only calls in contract words) is a committed follow-on (`crates/tooling-tests/tests/renderer_scope.rs` pins the classification + the mmio/encoder hash lock). Inline (`unnamed`) clauses carry no artifact IR (`facts.predicates` records named words only) — the recording of inline clause IR is the second named follow-on. |
 | `Tyu.Src` (fragment semantics + statement forms + transcription) + `Tyu.Src.transcription*` | `Tyu/Src.lean` | **P9 (T-S):** the pure-fragment *source-level* embedding (PLAN-VERIFY-3 §Q8): `Src.Op` (values, typed-stack ops, arithmetic/comparison/bool logic, memory over the oracles, the return-slot local-cell ops, CFG control), `Src.stepOp` (written directly — *not* the IR step), `Src.Block.runBlock`/`Src.Word.run` (mirrors of the IR runs), the source statement forms (`outInRange`, `offsetWithin`, `inInputRange`, `predHolds(path)`), the op-local **transcription** (`transcribeOp`/`transcribeBlock`, one IR op per source construct), and the per-op/block/word simulation theorems (T-S). The op-locality detector is the transcription being total: casts/traps/calls/address ops are EXCLUDED from the fragment (their lowering is not op-local — §Q2's shrink), and the renderer refuses source-surface statements for words containing them. Reviewed against `Tyu.Step`, `ir-op-semantics.md`, and §Q13 (memory oracles are parameters, never fixed values). |
 | `Tyu.Bundles.BundleMem` (functional bundle-memory model) + the `x86_64`/`armv7m`/`riscv32` instances | `Tyu/Bundles/` | **P12 (T-D):** the abstract memory state of a modeled bundle — `cell : Int → IntervalVal` plus the RAM window; loads honor only point stores inside the window, stores replace the cell (newest wins), MMIO reads answer the width-bounded nondeterministic domain. This is the denotational shape the Rust `verifier::mem::ApertureMem` (list-of-cells) implements; the two are pinned to agree by the committed `tyu.vec/1` bundle corpora (Rust `bundle_instance_conformance` suite + the port's `conformance` exe = zero divergence) and by the `--level bundles` geometry report against `model/model.toml`. Reviewed against `verifier::mem` and §Q13. |
+| `Tyu.Bundles.rp2350` (the rp2350 board instance) + `uartFrBand` (0xF9) / `uartFrMode` (ro) + `BundleMem.apertureReadRefined` / `refinedOf` + `AccessMode` (the refinement surface) | `Tyu/Bundles/Bundle.lean`, `Tyu/Bundles/Rp2350.lean` | **P13.2 (T-D completion + refinements):** the rp2350 modeled bundle — SRAM window `[0x20000000, 0x2000FFFF]` (pinned mechanically against `model/model.toml` by the Rust suite), the one `[refinements]` device (`UARTFR` → `rp2350.uart-fr`, datasheet band `mask = 0xF9` — the SIX modeled flag bits of the RP2350's UARTFR, DS2 §12.1, NOT the full-PL011 0xFF8 — and access-mode `ro`, both transcribed in the manifest and pinned against the Lean instance by `--level bands`), `AccessMode` (the closed source-level access set `{ro, wo, rw, w1c, w1s, rc}`), `apertureReadRefined` (the §Q13 width-bounded read narrowed to the refinement's band), and `refinedOf` (mode-gated: ro ⇒ the band, write-capable ⇒ the §Q13 default, writes inert). Registry entries §3: the geometry/inram laws + the width/mask (instanced at the device), access-mode (ro/write-capable/writes), and volatility trace laws. |
 | `Tyu.Conformance.MemModel.bundle` (operational bundle model in the abstract transfer) | `Tyu/Conformance/Step.lean` | **P12.2:** the conformance runner's operational mirror of the bundle instance — `store` mutates the recorded cells, `load` consults them, `apertureRead` answers the width domain (the single `Tyu.Conformance.wordDomain`, shared with `Bundles.BundleMem.apertureRead`). Behavior-preserving for the shared corpora (all 236 pre-existing vectors re-pass unchanged); bundle corpora exercise the new flavor. **Do not re-implement the bundle rules here**: the denotational twin is `Tyu.Bundles.BundleMem`, and the two mirrors' agreement is a **registry theorem** (`Tyu.Sound.TD.bundle_aperture_agrees` / `bundle_load_agrees`, §3) — a change to one mirror without the other fails those lemmas. |
 | `Tyu.Gen.Sha256` (port SHA-256) | `Tyu/Gen/Sha256.lean` | FIPS 180-4, known-answer vectors pinned in `gen --selfcheck`; FR-14 (the only digest). |
 | `Tyu.Gen.Golden` / `goldens/` (statement goldens) | `Tyu/Gen/Golden/*.lean`, `goldens/gen/*.gen.json`, `goldens/obl/*.obl.json` | P5: the committed generated statements, elaborated by the port gate; byte-stable; `ci/port.sh` rediffs them against the live `gen` output. |
@@ -113,6 +121,16 @@ Tyu.Sound.TD.armv7m_geometry
 Tyu.Sound.TD.armv7m_inram
 Tyu.Sound.TD.riscv32_geometry
 Tyu.Sound.TD.riscv32_inram
+Tyu.Sound.TD.rp2350_geometry
+Tyu.Sound.TD.rp2350_inram
+Tyu.Sound.TD.uartfr_band_domain
+Tyu.Sound.TD.uartfr_band_domain_at_device
+Tyu.Sound.TD.ro_read_answers_band
+Tyu.Sound.TD.write_capable_read_width_bounded
+Tyu.Sound.TD.read_independent_of_memory
+Tyu.Sound.TD.store_then_read_is_oracle
+Tyu.Sound.TD.runBlockTrace_eq_runBlock
+Tyu.Sound.TD.two_reads_trace
 Tyu.Sound.TD.bundle_aperture_agrees
 Tyu.Sound.TD.bundle_load_agrees
 ```
@@ -164,3 +182,29 @@ it: tyu/Gen carries no placeholders.
   and the generic `via_cycle_sound` is proved, but the hand-proof of the
   concrete member-step preservation is deferred while the block evaluator's
   definitional transparency is finalized (no placeholder is shipped).
+- **P13 (device refinements, §Q13):** the refined worked example
+  (`verification/ports/lean/tests/refined-fixture/` — the `Uart7` artifact
+  + `Uart7Fix` proof) is a **SOURCE-surface certificate**: the proof is a
+  theorem of `src_stmt_Uart7_…` (`Tyu.Src.outInRange` over the
+  pure-fragment word), harvested with `surface: "source"` and
+  `relies: ["T-S"]` and the statement hash carrying
+  `refinement: "rp2350.uart-fr"` (§Q13/P13.1). The word is fragment-
+  parseable BECAUSE the fixture omits the `addr_of`/`mmio_place` address
+  materialization langc's lowering inserts ahead of a real MMIO `vol_load`
+  — those ops are NOT in `Tyu.Src.Op`, so a *full lowering's* MMIO word is
+  refused at the source surface (`non-fragment-ops`; the fragment boundary
+  of `Tyu/Src.lean`, §Q2). The example demonstrates the source-surface
+  mechanism on the fragment word; the address-materialization boundary
+  stays the honest refusal for full lowerings.
+- **P13.1 render refusal ("mismatch ⇒ render refuses"):** the renderer
+  OMITS a MODELED bundle's MMIO-word statements when no refinement context
+  document was given (`refined-read-unbound`), never silently re-binding
+  them to the unrefined default — a modeled artifact ALWAYS waits for the
+  bundle's `tyu.refinements/1` context (`TYU_GEN_REFINEMENTS`; tyu passes it
+  via `refinement_context`). Unmodeled bundles render the honest §Q13
+  nondeterministic-read default either way.
+- The gen renderer's refinement context (`Tyu.Gen.Render.RefinementDecl` /
+  `parseRefinements` / `refinementOf` / `refinementRefuses`) is part of the
+  rendering-rules surface (§Q4 item 4) — reviewed with the renderer (T-F2
+  discipline), byte-drift-locked by
+  `crates/tooling-tests/tests/refined_proof_e2e.rs`.

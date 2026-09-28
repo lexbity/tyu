@@ -441,6 +441,59 @@ def runBlock (spec : Tyu.IR.TargetSpec) (mem : ConcreteMem) (ops : List Concrete
 
 end Block
 
+/-- The MMIO-read TRACE a block run records — one read VALUE per
+`vol_load`/`vol_load_field`, in execution order (§Q13's volatile
+no-elide/merge/reorder guarantee, P13.2). The trace is a SIBLING of
+[`Block.runBlock`]: identical routing, memory threading and end, with the
+read sequence carried as a projection — and the correspondence is the
+registry theorem `Tyu.Sound.TD.runBlockTrace_eq_runBlock`, so the trace is a
+genuine formalization of the run's reads, never a parallel semantics that
+can drift. -/
+def runBlockTrace (spec : Tyu.IR.TargetSpec) (mem : ConcreteMem) (ops : List ConcreteOp)
+    (st : State) : (ConcreteMem × Block.End) × List Value :=
+  match ops with
+  | [] => ((mem, Block.End.ret st), [])
+  | o :: rest =>
+      match o.form with
+      | .ret => ((mem, Block.End.ret st), [])
+      | .br => ((mem, Block.End.go (o.brTgt.getD 0) st), [])
+      | .br_if =>
+          let (s1, v) := State.pop1 st
+          let (t, e) := o.brIfTgts.getD (0, 0)
+          ((mem, Block.End.brIf t e v s1), [])
+      | _ =>
+          match stepOp spec mem o st with
+          | (m1, .trap) => ((m1, Block.End.trap), [])
+          | (m1, .ok s1) =>
+              let ((m2, e2), tr) := runBlockTrace spec m1 rest s1
+              let read :=
+                match o.form with
+                | .vol_load | .vol_load_field => [mem.mmioRead]
+                | _ => []
+              ((m2, e2), read ++ tr)
+
+/-- The trace run performs the SEMANTICS of [`Block.runBlock`] exactly —
+identical memory/end — with the read sequence as a projection. Two runs
+cannot drift (the trace is a formalization of the run's MMIO reads, not an
+independent semantics). -/
+theorem runBlockTrace_eq_runBlock (spec : Tyu.IR.TargetSpec) (mem : ConcreteMem)
+    (ops : List ConcreteOp) (st : State) :
+    (runBlockTrace spec mem ops st).1 = Block.runBlock spec mem ops st := by
+  induction ops generalizing mem st with
+  | nil => rfl
+  | cons o rest ih =>
+      unfold runBlockTrace Block.runBlock
+      cases hf : o.form with
+      | ret => rfl
+      | br => rfl
+      | br_if => rfl
+      | _ =>
+          cases hstep : stepOp spec mem o st with
+          | mk m1 out =>
+              cases out with
+              | trap => rfl
+              | ok s1 => simp [ih m1 s1]
+
 /-- The word-level run: fuel steps through the CFG from block `entry`;
 `fuel = 0` means the run did not terminate within the budget. -/
 def runWord (blocks : List Block) (spec : Tyu.IR.TargetSpec) (entry : Nat) (fuel : Nat)

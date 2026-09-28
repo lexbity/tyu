@@ -138,6 +138,7 @@ pub fn emit_ir(
             false,
             false, // proven_gate (tests: off)
             None,  // no bind artifact on the inspection surface
+            &[],
             &mut null_obs,
         )?;
         lir::verify_word(out_words.word).map_err(|e| TcError::InternalError {
@@ -343,6 +344,7 @@ pub fn emit_stackcheck(
                 false,
                 false, // proven_gate (tests: off)
                 None,  // no bind artifact on the inspection surface
+                &[],
                 &mut obs,
             )
             .map_err(|e| TcError::InternalError {
@@ -374,6 +376,7 @@ pub fn for_each_ir_word<E, F>(
     keep_contract_checks: bool,
     proven_gate: bool,
     bind_obl: Option<&verifier::model::OblSet>,
+    refinements: &[verifier::refinements::Refinement],
     mut f: F,
 ) -> Result<(), ForEachIrError<E>>
 where
@@ -471,6 +474,7 @@ where
             keep_contract_checks,
             proven_gate,
             bind_obl,
+            refinements,
             &mut null_obs,
         )
         .map_err(ForEachIrError::Type)?;
@@ -592,6 +596,7 @@ fn local_summary_env(
                 false,
                 false, // proven_gate (tests: off)
                 None,  // no bind artifact on the forecast pass
+                &[],
                 &mut null_obs,
             )?;
 

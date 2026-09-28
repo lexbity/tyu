@@ -45,6 +45,11 @@ pub mod interp;
 pub mod interval;
 pub mod mem;
 pub mod model;
+/// The device-refinement binding surface (P13.1, §Q13): the shared
+/// register-matching + `tyu.refinements/1` context document writers/readers
+/// used by the Rust digest verifier and (via the rendered manifest) the
+/// port's `gen` renderer.
+pub mod refinements;
 pub mod report;
 pub mod semantics;
 pub mod src_interp;

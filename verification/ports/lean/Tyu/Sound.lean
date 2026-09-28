@@ -1259,6 +1259,126 @@ theorem riscv32_inram (a : Int) (hlo : 2147483648 ≤ a) (hhi : a ≤ 2281701375
     Bundles.riscv32.inRam a := by
   simp [Bundles.riscv32, BundleMem.inRam, hlo, hhi]
 
+/-! ### The rp2350 instance + the T-D completion laws (PLAN-VERIFY-3 P13.2)
+
+The rp2350 board pack is a modeled bundle: its window is the first 64 KiB
+of SRAM, and it carries the one `[refinements]` device refinement
+(`UARTFR` → `rp2350.uart-fr`, datasheet band `mask = 0xF9`, access-mode
+`ro` — pinned against the manifest by `--level bands`). The completion laws
+close the T-D family for it: width/mask (the refined read answers the
+refinement's band — instanced AT the device), access-mode (ro ⇒ the band,
+write-capable ⇒ the §Q13 width-bounded default, reads memory-independent,
+the concrete write channel isolated), and volatility/ordering (two reads
+record TWO trace entries — the no-elide/merge/reorder guarantee formalized
+as the access trace, never merged). -/
+
+/-- The rp2350 window (SRAM `[0x20000000, 0x2000FFFF]`). -/
+theorem rp2350_geometry : Bundles.rp2350.ramLo = 536870912 ∧ Bundles.rp2350.ramHi = 536936447 := by
+  decide
+
+theorem rp2350_inram (a : Int) (hlo : 536870912 ≤ a) (hhi : a ≤ 536936447) :
+    Bundles.rp2350.inRam a := by
+  simp [Bundles.rp2350, BundleMem.inRam, hlo, hhi]
+
+/-- T-D (width/mask): a refined read answers exactly the refinement's
+modeled band `[0, mask]` — within the register's width, never wider than
+the §Q13 width-bounded default (the generic law over any datasheet mask). -/
+theorem uartfr_band_domain (mask : Int) (h0 : 0 ≤ mask) (hm : mask ≤ 2147483647) :
+    BundleMem.apertureReadRefined mask 32 = IntervalVal.range 0 mask := by
+  have hd : Tyu.Conformance.wordDomain 32 = some (-2147483648, 2147483647) := by
+    unfold Tyu.Conformance.wordDomain
+    decide
+  rw [BundleMem.apertureReadRefined, hd]
+  have hmax : max (-2147483648) 0 = 0 := by omega
+  have hmin : min 2147483647 mask = mask := by omega
+  simp [hmax, hmin]
+
+/-- T-D (width/mask, INSTANCED at the device): the UARTFR refinement's read
+answers exactly the datasheet band `[0, 0xF9]` over the 32-bit register —
+the six modeled flag bits (P3 finding: the declared band `uartFrBand`
+equals the manifest's `mask = 0xF9`, pinned by `--level bands`, and the
+band IS consumed by the registry — for `mask ≤ 0xF9`, reads answer within
+the band). -/
+theorem uartfr_band_domain_at_device :
+    BundleMem.apertureReadRefined Bundles.uartFrBand 32 = IntervalVal.range 0 249 := by
+  decide
+
+/-- T-D (access-mode, ro): a refined READ-ONLY register answers exactly the
+refinement's band — `refinedOf` consults the mode: `ro` closes the read to
+the datasheet stable-value set (the descriptor's `access = "ro"` UARTFR
+row). -/
+theorem ro_read_answers_band (m : BundleMem) (mask : Int) (place : String) (w : Nat) :
+    (refinedOf m Tyu.Bundles.AccessMode.ro mask place).apertureRead place w
+      = BundleMem.apertureReadRefined mask w := by
+  unfold refinedOf
+  simp [Tyu.Bundles.AccessMode.isRO]
+
+/-- T-D (access-mode, write-capable): every WRITE-CAPABLE refined register
+answers the §Q13 width-bounded nondeterministic domain — the abstract model
+records no register state, so reads of write-capable registers stay
+unrestricted (the w1c/w1s bit-clears are carried structurally, stated in
+the TCB boundary). -/
+theorem write_capable_read_width_bounded (m : BundleMem) (mode : Tyu.Bundles.AccessMode)
+    (hmode : mode ≠ Tyu.Bundles.AccessMode.ro) (mask : Int) (place : String) (w : Nat) :
+    (refinedOf m mode mask place).apertureRead place w = BundleMem.apertureRead w := by
+  unfold refinedOf
+  cases mode with
+  | ro => contradiction
+  | wo | rw | w1c | w1s | rc => simp [Tyu.Bundles.AccessMode.isRO]
+
+/-- T-D (access-mode, writes): reads of a refined device are a function of
+the refinement — never of the memory state. RAM stores and the (unmodeled)
+register write state only change memory, and no read consults it: under any
+two memories a refined device's read answers the same domain. This is the
+abstract model's write-channel isolation; the concrete mirror is
+[`store_then_read_is_oracle`]. -/
+theorem read_independent_of_memory (m1 m2 : BundleMem) (mode : Tyu.Bundles.AccessMode)
+    (mask : Int) (place : String) (w : Nat) :
+    (refinedOf m1 mode mask place).apertureRead place w
+      = (refinedOf m2 mode mask place).apertureRead place w := by
+  unfold refinedOf
+  rfl
+
+/-- T-D (access-mode, concrete write channel): on the CONCRETE step (the
+surface refined statements live on), an MMIO write never feeds the read
+channel — a `vol_store` then a `vol_load` of the same register answers
+exactly the oracle's read (the written value is discarded; the abstract
+model records no register write state). -/
+theorem store_then_read_is_oracle (spec : Tyu.IR.TargetSpec)
+    (mem : Tyu.Step.ConcreteMem) (a : Tyu.Step.Value) :
+    Tyu.Step.Block.runBlock spec mem
+        [ConcreteOp.opMk .vol_store, ConcreteOp.opMk .vol_load]
+      { stack := [a, 7, a], locals := [] } =
+    (mem, .ret { stack := [mem.mmioRead], locals := [] }) := by
+  unfold Tyu.Step.Block.runBlock
+  simp [Tyu.Step.Block.runBlock, Tyu.Step.ConcreteOp.opMk,
+        Tyu.Step.stepOp, Tyu.Step.State.pop1, Tyu.Step.State.push1]
+
+/-- T-D (volatility trace ↔ semantics): the trace-collecting run performs
+the semantics of `Block.runBlock` exactly (identical memory/end) — the
+access trace is a formalization of the run's MMIO reads, proven to agree
+with the semantics, never a parallel semantics that can drift. -/
+theorem runBlockTrace_eq_runBlock (spec : Tyu.IR.TargetSpec) (mem : Tyu.Step.ConcreteMem)
+    (ops : List ConcreteOp) (st : Tyu.Step.State) :
+    (Tyu.Step.runBlockTrace spec mem ops st).1 = Tyu.Step.Block.runBlock spec mem ops st :=
+  Tyu.Step.runBlockTrace_eq_runBlock spec mem ops st
+
+/-- T-D (volatility/ordering): two consecutive MMIO reads are NOT merged —
+each `vol_load` records its own read in the run's access TRACE, in
+execution order; the trace of `[vol_load, vol_load]` has TWO entries. A
+merged implementation (reading once) would record one. This is §Q13's
+no-elide/merge/reorder guarantee, formalized as the trace — the final stack
+alone cannot distinguish it (a deterministic oracle answers the same value
+twice), which is exactly why the trace, not the stack, is the property. -/
+theorem two_reads_trace (spec : Tyu.IR.TargetSpec) (mem : Tyu.Step.ConcreteMem)
+    (a : Tyu.Step.Value) :
+    (Tyu.Step.runBlockTrace spec mem
+        [ConcreteOp.opMk .vol_load, ConcreteOp.opMk .vol_load]
+      { stack := [a], locals := [] }).2 = [mem.mmioRead, mem.mmioRead] := by
+  unfold Tyu.Step.runBlockTrace
+  simp [Tyu.Step.runBlockTrace, Tyu.Step.ConcreteOp.opMk, Tyu.Step.stepOp,
+        Tyu.Step.State.pop1, Tyu.Step.State.push1]
+
 /-! The T-D consolidation equivalence (P12 cleanup): the conformance
 runner's operational `MemModel.bundle` and the theorem-surface `BundleMem`
 are two mirrors of one abstract memory; these wrap `Tyu/Bundles/Bundle.lean`'s

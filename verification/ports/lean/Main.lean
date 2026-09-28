@@ -107,9 +107,29 @@ def bundlesMain (_ : List String) : IO UInt32 := do
   let parts : List String :=
     [ geometryEntry "x86_64" Tyu.Bundles.x86_64,
       geometryEntry "armv7m" Tyu.Bundles.armv7m,
-      geometryEntry "riscv32" Tyu.Bundles.riscv32 ]
+      geometryEntry "riscv32" Tyu.Bundles.riscv32,
+      geometryEntry "rp2350" Tyu.Bundles.rp2350 ]
   let joined := parts.foldl (fun acc p => if acc == "" then p else acc ++ "," ++ p) ""
   IO.println ("{\"schema\":\"tyu.bind/1\",\"bundles\":[" ++ joined ++ "]}")
+  return 0
+
+/-- The refinement-band report (PLAN-VERIFY-3 P13.2, P3 finding): each
+modeled bundle instance's declared refinement DEVICE values — the datasheet
+band (`uartFrBand`) and the access-mode — as JSON. The Rust
+`bundle_instance_conformance` suite pins these against the bundles'
+`model/model.toml [[refinements.device]] mask`/`mode` declarations, so a
+datasheet transcription is a reviewed artifact-pair (Lean instance +
+manifest), never prose. The band the registry consumes
+(`Tyu.Sound.TD.uartfr_band_domain_at_device`) equals this report's value
+mechanically. -/
+def bandsEntry (refinement : String) (mask : Int) (mode : String) : String :=
+  "{\"id\":\"" ++ refinement ++ "\",\"mask\":" ++ toString mask ++ ",\"mode\":\"" ++ mode ++ "\"}"
+
+def bandsMain (_ : List String) : IO UInt32 := do
+  let parts : List String :=
+    [ bandsEntry "rp2350.uart-fr" Tyu.Bundles.uartFrBand (Tyu.Bundles.AccessMode.s Tyu.Bundles.uartFrMode) ]
+  let joined := parts.foldl (fun acc p => if acc == "" then p else acc ++ "," ++ p) ""
+  IO.println ("{\"schema\":\"tyu.bands/1\",\"devices\":[" ++ joined ++ "]}")
   return 0
 
 def main (args : List String) : IO UInt32 := do
@@ -152,6 +172,10 @@ def main (args : List String) : IO UInt32 := do
   | "--level" :: "bundles" :: _ =>
       -- P12.2: the bundle-instance geometry report (no corpus needed).
       bundlesMain []
+  | "--level" :: "bands" :: _ =>
+      -- P13.2: the refinement-band report (the datasheet mask/access-mode,
+      -- pinned against the manifest by bundle_instance_conformance).
+      bandsMain []
   | "--level" :: "stackmeta" :: rest =>
       let files := rest.filter (fun a => a ≠ "--stackmeta")
       if files.isEmpty then

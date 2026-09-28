@@ -85,6 +85,7 @@ fn compile_with_apertures(apertures: &[MmioApertureSpec]) -> String {
         None,  // bind_obl (no pass-1 artifact in direct-driver tests)
         // P12.1 (§Q15): direct-driver runs carry the honest default.
         verifier::model::MODEL_UNMODELED.as_bytes(),
+        &[], // P13.1: no refinement context (direct-driver tests)
     );
     assert_eq!(status, 0, "object emission failed with {apertures:?}");
 

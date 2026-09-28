@@ -49,6 +49,7 @@ fn compile(source: Vec<u8>) -> Result<(), u32> {
                 false,
                 false, // proven_gate (tests: off)
                 None,  // bind_obl (tests: off)
+                &[],
                 |_w, _ctx| Ok::<(), ()>(()),
             ) {
                 Ok(()) => Ok(()),

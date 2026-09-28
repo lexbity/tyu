@@ -160,6 +160,12 @@ struct IrWordGen<'a, 'r> {
     /// the Gen statements were rendered from — or every record stale-evals
     /// (E6421) and nothing ever elides. `None` ⇒ live context (single-pass).
     bind_obl: Option<&'a verifier::model::OblSet>,
+    /// P13.1 (§Q13): the bundle's `[refinements]` device-refinement context.
+    /// The FR-5 statement-binding recompute relativizes the statement to
+    /// `(triple, model_semantics, refinement)`: a certificate bound under a
+    /// refinement binds only when the consuming build carries it (E6421
+    /// otherwise — fail-closed to open, check retained).
+    refinements: &'a [verifier::refinements::Refinement],
 
     locals: [TypeAtom; 64],
     local_tys: [TypeAtom; 64],
@@ -210,6 +216,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
         keep_contract_checks: bool,
         proven_gate: bool,
         bind_obl: Option<&'a verifier::model::OblSet>,
+        refinements: &'a [verifier::refinements::Refinement],
         arena: &mut arena::ArenaAllocator,
         sig: WordSig,
         name: lir::Atom,
@@ -361,6 +368,7 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
             keep_contract_checks,
             proven_gate,
             bind_obl,
+            refinements,
             interp: Linear::new(target_spec, sig.in_len as usize, 64),
             mem_model: verifier::interp::FlatMem,
             target_spec,
@@ -955,39 +963,33 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
     /// model) come from the certified artifact (identical to the live build's
     /// — same build, same bundle).
     fn recompute_bind_hash(&mut self, id: &str) -> Option<String> {
-        if let Some(bind) = self.bind_obl {
-            let o = bind.obligations.iter().find(|o| o.id == id)?;
-            let word_ir_hash = bind
-                .facts
-                .words
-                .iter()
-                .find(|w| w.name == o.site.word)
-                .map(|w| verifier::stmt::sha256_hex16(w.ir.as_bytes()))
-                .unwrap_or_default();
-            let stmt = verifier::stmt::StatementContext::for_obligation(
-                &bind.module,
-                &bind.target,
-                &bind.model_semantics,
-                &word_ir_hash,
-                o,
-            );
-            return Some(stmt.statement_hash_hex(&o.formula));
-        }
-        let ctx = self.extraction.as_ref()?;
-        let o = ctx.set().obligations.iter().find(|o| o.id == id)?;
-        let word_ir_hash = ctx
-            .set()
+        // P7.3/FR-5 + P13.1: bind against the certified (pass-1) artifact
+        // when present (its word IR is verdict-independent — the live
+        // lowering's is verdict-dependent), else the live extraction; either
+        // way the statement is relativized to `(triple, model_semantics,
+        // refinement)` — a certificate binds only when the consuming build
+        // carries the same refinement context (E6421 otherwise, fail-closed
+        // to open, check retained).
+        let set: &verifier::model::OblSet = match self.bind_obl {
+            Some(bind) => bind,
+            None => self.extraction.as_ref()?.set(),
+        };
+        let o = set.obligations.iter().find(|o| o.id == id)?;
+        let word_ir = set
             .facts
             .words
             .iter()
             .find(|w| w.name == o.site.word)
-            .map(|w| verifier::stmt::sha256_hex16(w.ir.as_bytes()))
-            .unwrap_or_default();
-        let stmt = verifier::stmt::StatementContext::for_obligation(
-            &ctx.set().module,
-            &ctx.set().target,
-            &ctx.set().model_semantics,
+            .map(|w| w.ir.as_str())
+            .unwrap_or("");
+        let word_ir_hash = verifier::stmt::sha256_hex16(word_ir.as_bytes());
+        let refinement = verifier::refinements::word_refinement(word_ir, self.refinements);
+        let stmt = verifier::stmt::StatementContext::for_obligation_with_refinement(
+            &set.module,
+            &set.target,
+            &set.model_semantics,
             &word_ir_hash,
+            refinement.map(|r| r.refinement.as_str()),
             o,
         );
         Some(stmt.statement_hash_hex(&o.formula))
@@ -1633,6 +1635,7 @@ pub fn build_ir_word<'r>(
     keep_contract_checks: bool,
     proven_gate: bool,
     bind_obl: Option<&verifier::model::OblSet>,
+    refinements: &[verifier::refinements::Refinement],
     observer: &mut dyn TypecheckObserver,
 ) -> Result<IrWordOutput<'r>, TcError> {
     let name = lir_atom(slice_span(src, decl.name))?;
@@ -1653,6 +1656,7 @@ pub fn build_ir_word<'r>(
         keep_contract_checks,
         proven_gate,
         bind_obl,
+        refinements,
         arena,
         *sig,
         name,

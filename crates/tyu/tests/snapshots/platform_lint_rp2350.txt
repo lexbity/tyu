@@ -1,4 +1,3 @@
-warning: pack=rp2350 detail=model semantics not declared: bundle is unmodeled (§Q15) — obligations stay uncertifiable under --verify-policy=proven; declare [model] per developer-proof-pipeline.md §6.7
 platform rp2350: ok
 descriptor rp2350 schema=2 family=rp2350
 platform-hash 0x38bd5d8d616aa461

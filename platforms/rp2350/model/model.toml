@@ -1,0 +1,41 @@
+# The rp2350 bundle model (PLAN-VERIFY-3 P13.2).
+#
+# The model-semantics identity `tyu.model/rp2350/1` must be declared verbatim
+# in `platform.toml [model] model_semantics` (§6.7). The `[memory]` geometry
+# is the single source the bundle instances consume:
+#   - the Rust `ApertureMem` instance (bundle_instance_conformance.rs),
+#   - the Lean `Tyu.Bundles.Rp2350` instance,
+#   - the `evidence/vectors.json` corpus's `"ram"` header.
+# The window covers the first 64 KiB of the 520 KiB SRAM region
+# (DS2 Tables 11-12: banks 0-7 striped beginning at 0x20000000) — the
+# point-store tracking domain of the abstract model.
+#
+# [refinements] — the named device refinements (§Q13, P13.1). One
+# datasheet-transcribed refinement: the UART0 flag register UARTFR (PL011,
+# DS2 12.1), whose reads a word may be proven against. The register token is
+# the trailing segment of the IR `vol_load` place (`uart0.UARTFR`,
+# `uart.UARTFR`, ...), so the refinement binds the register under any app
+# const name; the refinement id (`rp2350.uart-fr`) is the statement-context
+# refinement recorded in `tyu.stmt/1.0`.
+
+[model]
+id = "tyu.model/rp2350/1"
+
+[memory]
+ram = { name = "SRAM", origin = 0x20000000, length = 0x10000 }
+
+[refinements]
+
+[[refinements.device]]
+register   = "UARTFR"
+refinement = "rp2350.uart-fr"
+width      = 32
+# The datasheet-transcribed flag band (P13.2, P3 finding): the six modeled
+# flag bits of the RP2350's UARTFR (DS2 §12.1) — mask 0xF9. Together with
+# `mode = "ro"` (the UARTFR descriptor row's access kind) this is the
+# READ-ONLY stable-value-set refinement; the Lean `Tyu.Bundles.rp2350`
+# instance is pinned against this pair mechanically (`--level bands`,
+# bundle_instance_conformance). A full PL011 UARTFR (bits 3-11, 0xFF8) is
+# NOT this register: the RP2350 UART is the reduced flag-layout variant.
+mask = 0xF9
+mode = "ro"

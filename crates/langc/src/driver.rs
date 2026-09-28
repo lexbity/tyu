@@ -230,6 +230,7 @@ pub fn emit_asm_driver(
         feature_set.contains(codegen_core::Feature::ModuleLoading),
         verify_policy_proven,
         None, // --emit=asm: no bind artifact (inspection surface only)
+        &[],  // --emit=asm: no refinement context (no statement binding)
         |w, _ctx| {
             // Feature gate check — reject gated ops before codegen.
             if check_word_for_gate(w, feature_set, input_path, src) {
@@ -325,6 +326,10 @@ pub fn emit_obj_driver(
     // P12.1 (§6.7): the bundle's model-semantics id (§Q15 default
     // `unmodeled`) — the artifact's `(triple, model_semantics)` identity.
     model_semantics: &[u8],
+    // P13.1 (§Q13): the bundle's `[refinements]` context — relativizes the
+    // FR-5 statement-binding recompute (a certificate bound under a
+    // refinement binds only when the consuming build carries it).
+    refinements: &[verifier::refinements::Refinement],
 ) -> i32 {
     let module_name = slice_span(src, module.name);
     // P2/P4: extract obligations alongside the object and write
@@ -486,6 +491,7 @@ pub fn emit_obj_driver(
         feature_set.contains(codegen_core::Feature::ModuleLoading),
         verify_policy_proven,
         bind_obl,
+        refinements,
         |w, ctx| {
             if check_word_for_gate(w, feature_set, input_path, src) {
                 gate_hit = true;
@@ -850,6 +856,7 @@ pub fn emit_obl_driver(
         false,
         false,
         None, // --emit=obligations: bind against the live extraction itself
+        &[],  // --emit=obligations: no refinement context (extraction only)
         |_w, _ctx| Ok::<(), ()>(()),
     ) {
         Ok(()) => {}

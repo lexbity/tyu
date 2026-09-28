@@ -34,6 +34,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+use verifier::refinements::{render_manifest, Refinement};
 use verifier::report::{ModuleStatements, ProofStatus};
 use verifier::stmt::{sha256_hex16, StatementContext};
 
@@ -64,6 +65,12 @@ pub const LOCK_TIMEOUT_ENV: &str = "TYU_VERIFY_LOCK_TIMEOUT_MS";
 /// Default lock wait (§7.2: contention waits ≤ 60 s then E6416).
 const DEFAULT_LOCK_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// The env var that hands the refinement context to the port's `gen`
+/// renderer (P13.1, §Q13): the absolute path to a `tyu.refinements/1`
+/// document, or absent when the build's bundle declares no refinement (the
+/// nondeterministic-read default).
+pub const GEN_REFINEMENTS_ENV: &str = "TYU_GEN_REFINEMENTS";
+
 const PKG_STATE_SCHEMA: &str = "tyu.pkg/1";
 
 // ---------------------------------------------------------------------------
@@ -74,14 +81,18 @@ const PKG_STATE_SCHEMA: &str = "tyu.pkg/1";
 ///
 /// Every verdicts-cache slot is named
 /// `<Module>-<inputs_fp>-sem-<semantics>-stmt-<stmt>-tc-<toolchain_hash16>-
-/// model-<model_id>-proofs-<proof_files_hash16>.verdicts.json` (slashes
-/// sanitized to `_` — ids like `tyu.ir-sem/1.0` or `tyu.model/…/1` are not
-/// file-name characters). The extended key means a proof-file edit
-/// (`proof_files_hash`), a toolchain pin change (`toolchain_hash`), a model
-/// change (`model_id`), or a schema/version bump invalidates cached verdicts
-/// exactly when it must — P7's *harvested* (`proof`-class) verdicts land in
-/// these slots, and a stale slot for a changed proof environment would
-/// otherwise be silently reused.
+/// model-<model_id>-ref-<refinements_hash16>-proofs-<proof_files_hash16>.
+/// verdicts.json` (slashes sanitized to `_` — ids like `tyu.ir-sem/1.0` or
+/// `tyu.model/…/1` are not file-name characters). The extended key means a
+/// proof-file edit (`proof_files_hash`), a toolchain pin change
+/// (`toolchain_hash`), a bundle model change (`model_id`), a bundle
+/// `[refinements]` MANIFEST change (`refinements_hash` — P13.1: the manifest
+/// feeds the statement hashes and the Gen digests, so a manifest change
+/// must invalidate every cached verdict slot and, through the cache-hit
+/// verdicts gate, every cached object), or a schema/version bump
+/// invalidates cached verdicts exactly when it must — P7's *harvested*
+/// (`proof`-class) verdicts land in these slots, and a stale slot for a
+/// changed proof environment would otherwise be silently reused.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VerifyEnvKey {
     semantics: String,
@@ -93,16 +104,47 @@ pub struct VerifyEnvKey {
     /// `"unmodeled"` for a bundle whose pack declares no `[model]` (P12.1
     /// wires the pack-sourced id).
     model_id: String,
+    /// P13.1: FNV-1a over the bundle's `[refinements]` declarations (the
+    /// same serialized bytes the package fingerprint folds) — a cache key;
+    /// a manifest change rotates every verdicts slot, which (through the
+    /// cache-hit verdicts gate below) rotates every cached object too.
+    refinements_hash: u64,
     proof_files_hash: u64,
+}
+
+/// The deterministic bytes a [`Refinement`] declaration serializes to — the
+/// single serialization for BOTH the cache keys (`VerifyEnvKey`'s
+/// `refinements_hash`) and the package regeneration fingerprint
+/// (`package_fingerprint`): one source, no drift between invalidation
+/// surfaces. A cache key, never an integrity digest (FR-14 governs the
+/// codec digests).
+pub(crate) fn refinement_decls_serialization(decls: &[Refinement]) -> Vec<u8> {
+    let mut ref_bytes = Vec::new();
+    for r in decls {
+        ref_bytes.extend_from_slice(r.register.as_bytes());
+        ref_bytes.push(0);
+        ref_bytes.extend_from_slice(r.refinement.as_bytes());
+        ref_bytes.push(0);
+        ref_bytes.extend_from_slice(&r.width.to_le_bytes());
+        // The datasheet band + access mode are part of the refinement's
+        // semantics — a band/mode change must invalidate caches exactly like
+        // a declaration change.
+        ref_bytes.extend_from_slice(&r.mask.to_le_bytes());
+        ref_bytes.push(0);
+        ref_bytes.extend_from_slice(r.mode.as_bytes());
+        ref_bytes.push(0);
+    }
+    ref_bytes
 }
 
 impl VerifyEnvKey {
     /// Build the key for a build: the toolchain pin is read from the port
     /// (absent port → the empty-pin hash, so a repo without the verification
     /// tree still gets a stable, well-defined key), the model id is caller-
-    /// supplied, and the proof-files hash covers the developer-owned
-    /// `proofs/` directory. Total: never fails.
-    pub(crate) fn compute(project_root: &Path, model_id: &str) -> Self {
+    /// supplied (and the refinement hash is derived from it — the same pack
+    /// resolution the renderer context uses), and the proof-files hash covers
+    /// the developer-owned `proofs/` directory. Total: never fails.
+    pub(crate) fn compute(project_root: &Path, model_id: &str, refinements_hash: u64) -> Self {
         let pin = crate::platform::workspace_root()
             .join(PORT_DIR_REL)
             .join("lean-toolchain");
@@ -112,6 +154,7 @@ impl VerifyEnvKey {
             stmt: verifier::stmt::STMT_SCHEMA.to_string(),
             toolchain_hash: cache::fnv1a_u64(&pin_bytes),
             model_id: model_id.to_string(),
+            refinements_hash,
             proof_files_hash: proof_files_hash(&project_root.join(PROOFS_DIR)),
         }
     }
@@ -119,25 +162,49 @@ impl VerifyEnvKey {
     /// The build-wide env key: project root from the CWD resolution and the
     /// caller-resolved model id (P12.1: the selected pack's `[model]`
     /// `model_semantics`; `"unmodeled"` when no pack is selected — the §Q15
-    /// honest default for a bundle without model semantics).
+    /// honest default for a bundle without model semantics). The refinement
+    /// hash is DERIVED from the model id — the same pack resolution the
+    /// renderer's context uses — so the key matches the one every consumer
+    /// (verify, cert) derives for the same build, and a `[refinements]`
+    /// manifest change rotates every slot (P1 finding).
     pub(crate) fn for_build(model_id: &str) -> Result<Self, TyuError> {
         let root = project_root_for(None)?;
-        Ok(Self::compute(&root, model_id))
+        let refinements_hash = refinements_hash_for_model(model_id);
+        Ok(Self::compute(&root, model_id, refinements_hash))
     }
 
-    /// The sanitized filename slug: `-sem-…-stmt-…-tc-…-model-…-proofs-…`
-    /// (slashes → `_`; the dash-sentinel `-sem-` cannot occur in a module
-    /// name, which makes the slot name parse unambiguous).
+    /// The sanitized filename slug:
+    /// `-sem-…-stmt-…-tc-…-model-…-ref-…-proofs-…` (slashes → `_`; the
+    /// dash-sentinel `-sem-` cannot occur in a module name, which makes the
+    /// slot name parse unambiguous).
     fn slug(&self) -> String {
         format!(
-            "-sem-{}-stmt-{}-tc-{:016x}-model-{}-proofs-{:016x}",
+            "-sem-{}-stmt-{}-tc-{:016x}-model-{}-ref-{:016x}-proofs-{:016x}",
             sanitize_component(&self.semantics),
             sanitize_component(&self.stmt),
             self.toolchain_hash,
             sanitize_component(&self.model_id),
+            self.refinements_hash,
             self.proof_files_hash
         )
     }
+}
+
+/// The FNV-1a over the bundle's `[refinements]` declarations — derived from
+/// the model id via the SAME pack resolution the statement pipeline uses
+/// ([`refinement_context`]): a modeled bundle's declared manifest (the
+/// renderer's context), empty for `"unmodeled"` (no context). Cache key.
+pub(crate) fn refinements_hash_for_model(model_id: &str) -> u64 {
+    let decls: Vec<Refinement> = if model_id == verifier::model::MODEL_UNMODELED {
+        Vec::new()
+    } else {
+        crate::platform::discover_platforms()
+            .ok()
+            .and_then(|packs| packs.into_iter().find(|p| p.model_semantics() == model_id))
+            .map(|pack| crate::platform::model_artifact_refinements(pack.pack_root()))
+            .unwrap_or_default()
+    };
+    cache::fnv1a_u64(&refinement_decls_serialization(&decls))
 }
 
 /// The full slot file name for `(module, inputs_fp)` under an environment.
@@ -205,6 +272,17 @@ pub fn project_root_for(dir: Option<&Path>) -> Result<PathBuf, TyuError> {
 /// The generated Lean package root for a project: `<root>/.tyu-verify/lean/`.
 fn lean_package_path(project_root: &Path) -> PathBuf {
     project_root.join(VERIFY_DIR).join(LEAN_PKG_DIR)
+}
+
+/// The refinement-context document path in the generated package (P13.1):
+/// `<root>/.tyu-verify/lean/refinements.json`, written by package
+/// generation for every modeled bundle (the `[refinements]` manifest, or an
+/// empty-device document for an explicitly unrefined modeled bundle).
+/// Passed to langc's pass-2 consumption as `--refinements` so the FR-5
+/// statement-binding recompute binds the same statements the renderer
+/// produced.
+pub fn package_refinements_path(project_root: &Path) -> PathBuf {
+    lean_package_path(project_root).join("refinements.json")
 }
 
 // ---------------------------------------------------------------------------
@@ -456,6 +534,11 @@ pub fn proof_fill(
         ));
     }
 
+    // P13.1: the refinement context for the render step — the bundle's
+    // `[refinements]` manifest resolved from the artifacts' model identity;
+    // `None` (unmodeled) renders the §Q13 default.
+    let refinements = refinement_context(&artifacts)?;
+
     // Render the Gen statements (the `gen` renderer) into a temp dir so the
     // `fill` exe has the `tyu.gen/1` metadata beside the artifacts.
     let gen_tmp = std::env::temp_dir().join(format!("tyu-fill-gen-{}", std::process::id()));
@@ -467,6 +550,13 @@ pub fn proof_fill(
         cmd.arg(a);
     }
     cmd.arg("--out").arg(&gen_tmp);
+    if let Some(decls) = refinements.as_deref() {
+        let doc = refinements_document(&artifacts, decls);
+        let doc_path = gen_tmp.join("refinements.json");
+        fs::create_dir_all(&gen_tmp).map_err(TyuError::Io)?;
+        fs::write(&doc_path, doc).map_err(TyuError::Io)?;
+        cmd.env(GEN_REFINEMENTS_ENV, &doc_path);
+    }
     let out = cmd.output().map_err(|e| {
         TyuError::Build(format!(
             "E6416: running gen renderer '{}': {e}",
@@ -711,6 +801,66 @@ fn ensure_fill_exe(port_dir: &Path) -> Result<PathBuf, TyuError> {
 // P6.2 entry: the full `--verify-tool=lean` pipeline
 // ---------------------------------------------------------------------------
 
+/// Resolve the refinement context for an obligation-artifact set (P13.1):
+/// `Some(decls)` when the artifacts' bundle is MODELED — the `[refinements]`
+/// manifest of the workspace pack whose `model_semantics` matches the
+/// artifacts' identity (`tyu.model/<bundle>/<ver>`), possibly with zero
+/// devices (an explicitly unrefined modeled bundle). `None` for the §Q15
+/// `"unmodeled"` bundle or one whose model id resolves to no pack — the
+/// NO-context state: a modeled bundle's MMIO-word statements then REFUSE to
+/// render (`refined-read-unbound`, the "mismatch ⇒ render refuses" rule).
+///
+/// This is the single resolution point for the statement pipeline: the Rust
+/// digest verifier and the renderer's context (via the `tyu.refinements/1`
+/// document) bind the SAME statements — a statement is relativized to
+/// `(triple, model_semantics, refinement)` on both sides of the gate.
+pub fn refinement_context(artifacts: &[PathBuf]) -> Result<Option<Vec<Refinement>>, TyuError> {
+    let Some(first) = artifacts.first() else {
+        return Ok(None);
+    };
+    let bytes = fs::read(first).map_err(TyuError::Io)?;
+    let set = verifier::codec::read_obl(&bytes).map_err(|e| {
+        TyuError::Build(format!(
+            "obligation artifact '{}' invalid (E{}): {e:?}",
+            first.display(),
+            e.code()
+        ))
+    })?;
+    if set.model_semantics == verifier::model::MODEL_UNMODELED {
+        return Ok(None);
+    }
+    for pack in crate::platform::discover_platforms()? {
+        if pack.model_semantics() == set.model_semantics {
+            return Ok(Some(crate::platform::model_artifact_refinements(
+                pack.pack_root(),
+            )));
+        }
+    }
+    // A model id that no workspace pack declares: no refinement context —
+    // the honest `None` (a modeled artifact without a resolvable manifest
+    // refuses its MMIO-word statements rather than guessing).
+    Ok(None)
+}
+
+/// The refinement declarations of the artifacts' bundle, when the context is
+/// present (the [`refinement_context`] projection the digest verifier uses).
+pub fn refinements_for_artifacts(artifacts: &[PathBuf]) -> Result<Vec<Refinement>, TyuError> {
+    Ok(refinement_context(artifacts)?.unwrap_or_default())
+}
+
+/// The `tyu.refinements/1` document for `refinements` (deterministic; the
+/// model identity is the first artifact's).
+pub fn refinements_document(artifacts: &[PathBuf], decls: &[Refinement]) -> Vec<u8> {
+    let model = artifacts
+        .first()
+        .and_then(|a| verifier::codec::read_obl(&fs::read(a).ok()?).ok())
+        .map(|s| s.model_semantics)
+        .unwrap_or_else(|| verifier::model::MODEL_UNMODELED.to_string());
+    let mut out = Vec::new();
+    render_manifest(&model, decls, &mut out);
+    out
+}
+
 /// Run the developer-proof pipeline for a build: package generation (P6.1) →
 /// Gen-digest verification (E6418) → the elaborating `lake build` → the
 /// harvest (P7.1: kernel-checked theorems become `tyu.verdicts/v2`) → an
@@ -762,7 +912,14 @@ pub fn run_lean_pipeline(
         return Ok((ProofStatus::lean("skipped", "", Vec::new()), Vec::new()));
     }
 
-    let package = generate_package(&project_root, &port_dir, &artifacts)?;
+    // P13.1: the refinement context — the bundle's `[refinements]` manifest
+    // resolved from the artifacts' model identity, or `None` (unmodeled).
+    // Both the renderer and the Rust E6418 digest verifier bind the SAME
+    // statements; a MODELED bundle without a context refuses its MMIO-word
+    // statements (`refined-read-unbound`).
+    let refinements = refinement_context(&artifacts)?;
+
+    let package = generate_package(&project_root, &port_dir, &artifacts, refinements.as_deref())?;
 
     // The vendored semantics surface must be exactly the port's (a tampered
     // `Tyu/*.lean` in the package would prove the *wrong system* — the
@@ -772,7 +929,7 @@ pub fn run_lean_pipeline(
 
     // E6418 pre-lake gate: recompute canonical statement hashes and compare
     // against the rendered Gen surface.
-    let mut statements = verify_gen_digests(&package, &artifacts)?;
+    let mut statements = verify_gen_digests(&package, &artifacts, refinements.as_deref())?;
 
     // The elaborating build (late the developer-visible gate: their proofs
     // must compile against the generated statements; then the harvest's env
@@ -1108,6 +1265,7 @@ fn generate_package(
     project_root: &Path,
     port_dir: &Path,
     artifacts: &[PathBuf],
+    refinements: Option<&[Refinement]>,
 ) -> Result<LeanPackage, TyuError> {
     let root = lean_package_path(project_root);
     let gen_dir = root.join("Gen");
@@ -1116,7 +1274,7 @@ fn generate_package(
 
     // Fast path: the generation state records the current fingerprint and the
     // package content is present.
-    let fingerprint = package_fingerprint(project_root, port_dir, artifacts, &root)?;
+    let fingerprint = package_fingerprint(project_root, port_dir, artifacts, refinements, &root)?;
     if let Ok(state) = fs::read_to_string(root.join(".tyu-gen.json")) {
         if state.trim() == state_text(&fingerprint).trim() && gen_dir.is_dir() {
             return Ok(LeanPackage {
@@ -1138,7 +1296,7 @@ fn generate_package(
     vendor_port_lib(port_dir, &root)?;
 
     // 3. The generated statements + metadata (the port's `gen` renderer).
-    render_gen_files(port_dir, artifacts, &root, &gen_dir)?;
+    render_gen_files(port_dir, artifacts, &root, &gen_dir, refinements)?;
 
     // 4. The lakefile (libs + harvest exe stub; the TyuProofs lib resolves the
     //    developer's own proofs/ directory).
@@ -1250,9 +1408,23 @@ fn package_fingerprint(
     project_root: &Path,
     port_dir: &Path,
     artifacts: &[PathBuf],
+    refinements: Option<&[Refinement]>,
     root: &Path,
 ) -> Result<u64, TyuError> {
+    let refinements = refinements.unwrap_or(&[]);
     let mut items: Vec<(String, u64)> = Vec::new();
+
+    // The refinement context (§Q13/P13.1): the renderer's document is a pure
+    // function of the bundle manifest, and a manifest change must regenerate
+    // the package + invalidate the cached verdicts. The serialization is the
+    // SINGLE one [`refinement_decls_serialization`] (shared with
+    // `VerifyEnvKey::refinements_hash`) — the two invalidation surfaces
+    // cannot drift. (Cache key only, never an integrity digest — FR-14
+    // governs the codec digests.)
+    items.push((
+        "refinements".to_string(),
+        cache::fnv1a_u64(&refinement_decls_serialization(refinements)),
+    ));
 
     // The vendored surface: every file the package copies from the port.
     for rel in vendored_port_files() {
@@ -1354,13 +1526,29 @@ fn vendor_port_lib(port_dir: &Path, root: &Path) -> Result<(), TyuError> {
 
 /// Run the port's `gen` renderer over the artifacts into `gen_dir`,
 /// then prune stale Gen files (modules no longer in the artifact set).
+/// The refinement context (P13.1) travels as a `tyu.refinements/1`
+/// document in the package tree, handed to the renderer via
+/// [`GEN_REFINEMENTS_ENV`]; without a manifest the renderer uses the §Q13
+/// nondeterministic-read default (statements render exactly as before).
 fn render_gen_files(
     port_dir: &Path,
     artifacts: &[PathBuf],
     root: &Path,
     gen_dir: &Path,
+    refinements: Option<&[Refinement]>,
 ) -> Result<(), TyuError> {
     let gen_bin = ensure_gen_exe(port_dir)?;
+
+    // The refinement context document: deterministic bytes (the model id is
+    // the first artifact's identity). The env var is set whenever the
+    // bundle is MODELED (`Some` — even with zero devices: an explicitly
+    // unrefined modeled bundle); for `None` (unmodeled) the env is absent —
+    // the renderer's "no refinement in context" state, under which a MODELED
+    // bundle's MMIO-word statements refuse (`refined-read-unbound`, P13.1).
+    let refinements_path = root.join("refinements.json");
+    let manifest = refinements_document(artifacts, refinements.unwrap_or(&[]));
+    write_if_changed(&refinements_path, &manifest)?;
+    let ref_env: Option<PathBuf> = refinements.map(|_| refinements_path);
 
     // Clean the Gen dir so a removed module cannot leave a stale statement
     // behind (determinism: the dir is a pure function of the artifact set).
@@ -1382,6 +1570,9 @@ fn render_gen_files(
         cmd.arg(a);
     }
     cmd.arg("--out").arg(gen_dir);
+    if let Some(path) = &ref_env {
+        cmd.env(GEN_REFINEMENTS_ENV, path);
+    }
     let out = cmd.output().map_err(|e| {
         TyuError::Build(format!(
             "E6416: running gen renderer '{}': {e}",
@@ -1706,7 +1897,9 @@ fn verify_vendored_files(package: &LeanPackage, port_dir: &Path) -> Result<Strin
 fn verify_gen_digests(
     package: &LeanPackage,
     artifacts: &[PathBuf],
+    refinements: Option<&[Refinement]>,
 ) -> Result<Vec<ModuleStatements>, TyuError> {
+    let refinements = refinements.unwrap_or(&[]);
     let mut out: Vec<ModuleStatements> = Vec::new();
     for a in artifacts {
         let bytes = fs::read(a).map_err(TyuError::Io)?;
@@ -1738,21 +1931,27 @@ fn verify_gen_digests(
         let mut rendered: u32 = 0;
         let mut omitted: u32 = 0;
         for o in &set.obligations {
-            let word_ir_hash = set
+            let word_ir = set
                 .facts
                 .words
                 .iter()
                 .find(|w| w.name == o.site.word)
-                .map(|w| sha256_hex16(w.ir.as_bytes()))
-                .unwrap_or_default();
+                .map(|w| w.ir.as_str())
+                .unwrap_or("");
+            let word_ir_hash = sha256_hex16(word_ir.as_bytes());
             // §Q3 relativity: the statement is bound to the artifact's own
             // (target, model_semantics) identity — the consuming build's
             // mismatch is the E6421 path at langc, a different surface.
-            let ctx = StatementContext::for_obligation(
+            // P13.1: the refinement relativity is carried identically here
+            // and in the renderer — a statement proven under a refinement is
+            // bound to `(triple, model_semantics, refinement)`.
+            let refinement = verifier::refinements::word_refinement(word_ir, refinements);
+            let ctx = StatementContext::for_obligation_with_refinement(
                 module,
                 &set.target,
                 &set.model_semantics,
                 &word_ir_hash,
+                refinement.map(|r| r.refinement.as_str()),
                 o,
             );
             let expected_hash = ctx.statement_hash_hex(&o.formula);
@@ -2242,6 +2441,102 @@ mod tests {
     }
 
     #[test]
+    fn verify_env_key_rotates_on_refinement_manifest_change() {
+        // P1 finding: the verdicts-slot key MUST rotate when the bundle's
+        // `[refinements]` manifest changes — the manifest feeds the
+        // statement hashes and the Gen digests, so a stale slot (and, via
+        // the cache-hit verdicts gate, a stale OBJECT) would otherwise be
+        // silently reused after a manifest edit. Two different decl sets
+        // give different hashes AND different slot slugs.
+        let root = temp_dir("key");
+        fs::create_dir_all(root.join("proofs")).unwrap();
+        fs::write(root.join("proofs/proofs.lean"), "import Bank\n").unwrap();
+        let a = Refinement {
+            register: "UARTFR".to_string(),
+            refinement: "rp2350.uart-fr".to_string(),
+            width: 32,
+            mask: 0xF9,
+            mode: "ro".to_string(),
+        };
+        let empty: Vec<Refinement> = Vec::new();
+        let h0 = cache::fnv1a_u64(&refinement_decls_serialization(&empty));
+        let h1 = cache::fnv1a_u64(&refinement_decls_serialization(std::slice::from_ref(&a)));
+        assert_ne!(h0, h1, "a declared refinement must change the derived hash");
+        let key0 = VerifyEnvKey::compute(&root, "tyu.model/rp2350/1", h0);
+        let key1 = VerifyEnvKey::compute(&root, "tyu.model/rp2350/1", h1);
+        assert_eq!(key0.model_id, key1.model_id);
+        assert_ne!(
+            key0, key1,
+            "the manifest component must distinguish the keys"
+        );
+        assert_ne!(
+            key0.slug(),
+            key1.slug(),
+            "the verdicts slot name must rotate"
+        );
+        // Same manifest bytes ⇒ the same key (stability across runs).
+        let key1b = VerifyEnvKey::compute(&root, "tyu.model/rp2350/1", h1);
+        assert_eq!(key1, key1b);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn refinement_context_resolves_from_the_bundle_manifest() {
+        // P13.1: the refinement context for an artifact set resolves from the
+        // workspace pack whose `model_semantics` matches the artifacts'
+        // identity — the rp2350 pack's `[refinements]` (UARTFR →
+        // rp2350.uart-fr). A MODELED bundle yields `Some(decls)` (the
+        // CONTEXT is PRESENT — the renderer's refusal keys on presence);
+        // `"unmodeled"` and unknown ids yield `None` (no context).
+        let dir = temp_dir("ref");
+        let artifact = dir.join("Uart7.obl.json");
+        fs::copy(
+            crate::platform::workspace_root()
+                .join("verification/ports/lean/tests/refined-fixture/Uart7.obl.json"),
+            &artifact,
+        )
+        .unwrap();
+        let ctx = refinement_context(std::slice::from_ref(&artifact)).expect("resolve");
+        let decls = ctx.as_ref().expect("modeled bundle carries a context");
+        assert_eq!(decls.len(), 1);
+        assert_eq!(decls[0].register, "UARTFR");
+        assert_eq!(decls[0].refinement, "rp2350.uart-fr");
+        // P3 finding: the datasheet band + access mode ride the manifest
+        // (the Lean instance is pinned against them, not prose).
+        assert_eq!(decls[0].mask, 0xF9);
+        assert_eq!(decls[0].mode, "ro");
+        // The `tyu.refinements/1` document carries the artifact's model id.
+        let doc = refinements_document(std::slice::from_ref(&artifact), decls);
+        let text = String::from_utf8(doc).unwrap();
+        assert!(
+            text.contains("\"model\":\"tyu.model/rp2350/1\"")
+                && text.contains("\"register\":\"UARTFR\""),
+            "manifest must carry the bundle identity + the device: {text}"
+        );
+        // An unmodeled artifact resolves NO refinement context (§Q15) — the
+        // state under which MMIO-word statements render (unmodeled) rather
+        // than refuse.
+        let set_bytes = fs::read(&artifact).unwrap();
+        let mut set = verifier::codec::read_obl(&set_bytes).unwrap();
+        set.model_semantics = verifier::model::MODEL_UNMODELED.to_string();
+        let unmodeled = dir.join("Unmodeled.obl.json");
+        fs::write(&unmodeled, verifier::codec::encode_obl(&set).unwrap()).unwrap();
+        assert!(
+            refinement_context(std::slice::from_ref(&unmodeled))
+                .unwrap()
+                .is_none(),
+            "unmodeled artifacts carry no refinement context"
+        );
+        assert!(
+            refinements_for_artifacts(std::slice::from_ref(&unmodeled))
+                .unwrap()
+                .is_empty(),
+            "the Vec projection of a None context is empty"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn proof_files_hash_is_deterministic_and_sensitive() {
         let dir = temp_dir("pfh");
         let proofs = dir.join("proofs");
@@ -2489,7 +2784,7 @@ mod tests {
         fs::write(project.join("proofs").join("proofs.lean"), b"").unwrap();
         let (artifact, _, _) = corpus_fixture(&project);
         let port = synthetic_port(&dir);
-        let pkg = generate_package(&project, &port, &[artifact]).unwrap();
+        let pkg = generate_package(&project, &port, &[artifact], None).unwrap();
         // A clean package verifies and yields a digest.
         let digest = verify_vendored_files(&pkg, &port).unwrap();
         assert_eq!(digest.len(), 64, "sha256 hex");
@@ -2520,7 +2815,7 @@ mod tests {
             gen_dir: gen_dir.clone(),
             project_root: dir.clone(),
         };
-        let statements = verify_gen_digests(&pkg, std::slice::from_ref(&artifact)).unwrap();
+        let statements = verify_gen_digests(&pkg, std::slice::from_ref(&artifact), None).unwrap();
         // The Bank corpus: ≥ 1 rendered statement and ≥ 1 omitted one (the
         // opaque/contract rows the renderer refuses) — both arms exercised;
         // every rendered statement is unproven in P6.
@@ -2540,7 +2835,7 @@ mod tests {
         let text2 = text.replacen(&real, &tampered, 1);
         assert_ne!(text2, text, "tamper must change the text");
         fs::write(&lean_path, text2).unwrap();
-        let err = verify_gen_digests(&pkg, &[artifact]).unwrap_err();
+        let err = verify_gen_digests(&pkg, &[artifact], None).unwrap_err();
         assert!(err.to_string().contains("E6418"), "err: {err}");
         let _ = fs::remove_dir_all(&dir);
     }
@@ -2620,13 +2915,15 @@ mod tests {
         let (artifact, _, _) = corpus_fixture(&project);
 
         let port = synthetic_port(&dir);
-        let package1 = generate_package(&project, &port, std::slice::from_ref(&artifact)).unwrap();
+        let package1 =
+            generate_package(&project, &port, std::slice::from_ref(&artifact), None).unwrap();
 
         // Determinism: regenerating over the same inputs yields the identical
         // byte tree (a second generation fast-paths and does not rewrite).
         let state1 = fs::read(package1.root.join(".tyu-gen.json")).unwrap();
         let tree1 = tree_bytes(&package1.root);
-        let package2 = generate_package(&project, &port, std::slice::from_ref(&artifact)).unwrap();
+        let package2 =
+            generate_package(&project, &port, std::slice::from_ref(&artifact), None).unwrap();
         assert_eq!(
             fs::read(package2.root.join(".tyu-gen.json")).unwrap(),
             state1,
@@ -2660,7 +2957,8 @@ mod tests {
         )
         .unwrap();
         let (artifact2, _, _) = corpus_fixture(&dir2);
-        let package3 = generate_package(&dir2, &port, std::slice::from_ref(&artifact2)).unwrap();
+        let package3 =
+            generate_package(&dir2, &port, std::slice::from_ref(&artifact2), None).unwrap();
         assert_ne!(
             fs::read(package3.root.join(".tyu-gen.json")).unwrap(),
             state1,
@@ -2811,6 +3109,7 @@ mod tests {
             stmt: "tyu.stmt/1.0".to_string(),
             toolchain_hash: 0x1234_5678_9abc_def0,
             model_id: verifier::model::MODEL_UNMODELED.to_string(),
+            refinements_hash: 0,
             proof_files_hash: 0x0bad_cafe_0bad_cafe,
         }
     }

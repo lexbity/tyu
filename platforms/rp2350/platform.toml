@@ -54,6 +54,15 @@ ds_size = 0x4000
 # (stack-bound-analysis.md §13).
 isr_stack_slots = 32   # N_isr; ISRs are masked (no nesting) so one grant covers all handlers
 
+# P13.2: the rp2350 model-semantics identity (developer-proof-pipeline.md
+# §6.7). The id must match `model/model.toml`'s declaration verbatim; MMIO
+# reads are the §Q13 nondeterministic width-bounded default, with the one
+# [refinements.device] UARTFR refinement named in the model artifact.
+[model]
+model_semantics = "tyu.model/rp2350/1"
+mmio = "nondeterministic"
+concurrency = "unmodeled"
+
 [features.concurrency]
 unit = "concurrency.asm"
 

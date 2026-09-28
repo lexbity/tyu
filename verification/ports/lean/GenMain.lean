@@ -12,9 +12,27 @@ def renderErrMsg : Tyu.Gen.Render.RenderErr → String
   | Tyu.Gen.Render.RenderErr.notOblDoc m => m
   | Tyu.Gen.Render.RenderErr.unknownForm m => m
 
-def renderOne (ob : String) (outDir : String) : IO String := do
+/-- The refinement context (P13.1, §Q13): `none` = NO `TYU_GEN_REFINEMENTS`
+document was given (a modeled bundle's MMIO-word statements THEN REFUSE to
+render — `refined-read-unbound`, the "mismatch ⇒ render refuses" rule);
+`some decls` = the bundle's `tyu.refinements/1` manifest (the "refinement
+in context"). A malformed context FAILS the render (the refinement context
+is part of the statement relativism — a broken context must never silently
+bind wrong statements). -/
+def readRefinementContext : IO Tyu.Gen.Render.RefinementContext := do
+  let env ← IO.getEnv "TYU_GEN_REFINEMENTS"
+  match env with
+  | none => pure none
+  | some path => do
+    let doc ← IO.FS.readFile path
+    match Tyu.Gen.Render.parseRefinements doc with
+    | Except.ok decls => pure (some decls)
+    | Except.error e => throw (IO.userError (renderErrMsg e))
+
+def renderOne (ob : String) (outDir : String)
+    (ctx : Tyu.Gen.Render.RefinementContext) : IO String := do
   let doc ← IO.FS.readFile ob
-  match Tyu.Gen.Render.renderModule doc with
+  match Tyu.Gen.Render.renderModuleWith ctx doc with
   | Except.error e => pure ("FAIL: " ++ ob ++ ": " ++ renderErrMsg e)
   | Except.ok (leanText, metaText) =>
       let module := match Tyu.Gen.Render.parseArtifact doc with
@@ -32,11 +50,12 @@ def splitAtOut (args : List String) : List String × List String :=
     | a :: rest, acc => go rest (a :: acc)
   go args []
 
-def renderMain (files : List String) (out : String) : IO UInt32 := do
+def renderMain (files : List String) (out : String)
+    (ctx : Tyu.Gen.Render.RefinementContext) : IO UInt32 := do
   IO.FS.createDirAll out
   let mut failures := 0
   for f in files do
-    let r ← renderOne f out
+    let r ← renderOne f out ctx
     IO.println r
     if r.startsWith "FAIL" then failures := failures + 1
   if failures == 0 then return 0 else return 1
@@ -58,7 +77,9 @@ def main (args : List String) : IO UInt32 := do
       let (files0, out) := splitAtOut rest
       let files := files0.filter (fun a => a ≠ "--obl")
       match out with
-      | o :: _ => renderMain files o
+      | o :: _ => do
+          let decls ← readRefinementContext
+          renderMain files o decls
       | [] =>
           IO.println "usage: gen --render --obl <files...> --out <dir>   |   gen --selfcheck"
           return 2

@@ -72,6 +72,11 @@ const E_PACK_MODEL_ENUM_INVALID: u16 = 5415;
 /// A modeled bundle (`model_semantics` ≠ `"unmodeled"`) has no `evidence/`
 /// vector corpus (required iff modeled, §6.7).
 const E_PACK_MODEL_EVIDENCE_MISSING: u16 = 5416;
+/// A `[refinements]` manifest entry is malformed (P13.1): an empty or
+/// whitespace-bearing register/refinement id, a register longer than the
+/// 32-byte atom limit, a width outside the closed set {8, 16, 32, 64}, or a
+/// duplicate register (a register has exactly one refinement).
+const E_PACK_MODEL_REFINEMENT_INVALID: u16 = 5417;
 
 pub fn lint_pack(root: &Path, name: &str, all: bool) -> Result<LintOutcome, TyuError> {
     let manifest_path = find_pack_manifest_path(root, name)
@@ -694,7 +699,101 @@ fn model_pairing(pack_root: &Path, manifest: &PlatformManifest) -> (Vec<LintErro
             ),
         ));
     }
+
+    // The `[refinements]` manifest must be well-formed (P13.1): a malformed
+    // manifest is malformed regardless of the declared section — the
+    // refinement manifest is part of the model artifact and the statement
+    // context binds to it.
+    errors.extend(validate_refinements(pack_root));
     (errors, warnings)
+}
+
+/// The §6.7 `[refinements]` manifest validation (P13.1, E5417): every
+/// declaration has a non-empty whitespace-free register (≤ the 32-byte atom
+/// limit), a non-empty whitespace-free refinement id, a width in the closed
+/// set {8, 16, 32, 64}, and registers are unique (a register has exactly one
+/// refinement). Absent/malformed artifact: no refinement rows to validate.
+fn validate_refinements(pack_root: &Path) -> Vec<LintError> {
+    let Some(text) = std::fs::read_to_string(model_artifact_path(pack_root)).ok() else {
+        return Vec::new();
+    };
+    let Ok(raw) = toml::from_str::<ModelArtifactFile>(&text) else {
+        return Vec::new(); // artifact already reported as missing/mismatched
+    };
+    let Some(manifest) = raw.refinements else {
+        return Vec::new();
+    };
+    let mut errors = Vec::new();
+    let mut seen: Vec<&str> = Vec::new();
+    for d in &manifest.device {
+        let mut detail = Vec::new();
+        if d.register.trim().is_empty() {
+            detail.push("empty register".to_string());
+        } else {
+            if d.register.len() > 32 {
+                detail.push(format!(
+                    "register '{}' exceeds the 32-byte atom limit",
+                    d.register
+                ));
+            }
+            if d.register.chars().any(|c| c.is_whitespace()) {
+                detail.push(format!("register '{}' contains whitespace", d.register));
+            }
+            if seen.contains(&d.register.as_str()) {
+                detail.push(format!("duplicate register '{}'", d.register));
+            }
+            seen.push(&d.register);
+        }
+        if d.refinement.trim().is_empty() {
+            detail.push("empty refinement id".to_string());
+        } else if d.refinement.chars().any(|c| c.is_whitespace()) {
+            detail.push(format!(
+                "refinement id '{}' contains whitespace",
+                d.refinement
+            ));
+        }
+        if ![8u16, 16, 32, 64].contains(&d.width) {
+            detail.push(format!(
+                "width {} outside the closed set {{8, 16, 32, 64}}",
+                d.width
+            ));
+        }
+        // P13.2 (P3 finding): the datasheet band must be nonzero and fit the
+        // register width (`0 < mask ≤ 2^width − 1`) — an over-band would
+        // model reads the datasheet never produces (the 0x3FF defect class),
+        // and a zero band models a dead register.
+        if d.mask == 0 {
+            detail.push("mask must be nonzero (a datasheet band exists)".to_string());
+        }
+        let width_max: u64 = match d.width {
+            8 => 0xFF,
+            16 => 0xFFFF,
+            32 => 0xFFFF_FFFF,
+            64 => u64::MAX,
+            _ => 0,
+        };
+        if (d.mask as u64) > width_max {
+            detail.push(format!(
+                "mask 0x{:X} exceeds the {} width (max 0x{:X}) — an over-band models reads the \
+                 datasheet never produces",
+                d.mask, d.width, width_max
+            ));
+        }
+        // The access-mode must be the closed source-level set.
+        if !verifier::refinements::ACCESS_MODES.contains(&d.mode.as_str()) {
+            detail.push(format!(
+                "mode '{}' outside the closed access-mode set {{ro, wo, rw, w1c, w1s, rc}}",
+                d.mode
+            ));
+        }
+        if !detail.is_empty() {
+            errors.push(LintError::new(
+                E_PACK_MODEL_REFINEMENT_INVALID,
+                format!("register '{}': {}", d.register, detail.join("; ")),
+            ));
+        }
+    }
+    errors
 }
 
 /// The lint form of the §6.7 model matrix.
@@ -796,17 +895,51 @@ struct ModelArtifactRam {
     length: u64,
 }
 
-/// The refinement manifest (P13 extends with named device refinements);
-/// empty today — `[refinements]` present with no entries.
+/// The refinement manifest (§6.7 / P13.1): named device refinements, parsed
+/// from `model/model.toml [refinements]`.
 ///
-/// Parse-only schema surface: an empty `[refinements]` table must be
-/// accepted (P12.2 ships the empty manifest; P13 adds named devices). The
-/// struct carries no fields yet, so the dead-code allowance keeps the parse
-/// gate honest without a phantom field.
+/// ```toml
+/// [refinements]
+/// [[refinements.device]]
+/// register   = "UARTFR"         # trailing register token of the IR place
+/// refinement = "rp2350.uart-fr" # the §Q13 refinement id (statement context)
+/// width      = 32               # register width in bits
+/// mask       = 0xF9             # datasheet-transcribed flag/field band
+/// mode       = "ro"             # access-mode (closed set below)
+/// ```
+///
+/// P12.2 ships the empty manifest (`[refinements]` with no entries — the
+/// §Q13 nondeterministic default); P13 adds named devices (P13.2: the
+/// datasheet `mask` band and the access `mode` ride the manifest — the
+/// port's bundle instance is pinned against them mechanically, `--level
+/// bands`). The lint validates the closed shape (E5417): the register is a
+/// ≤ 32-byte atom without whitespace, the refinement id is a non-empty
+/// whitespace-free name, the width is in the closed set {8, 16, 32, 64},
+/// the mode is in the closed access-mode set, and the mask is nonzero and
+/// within the register width. Duplicate registers are malformed (a register
+/// has exactly one refinement).
 #[allow(dead_code)]
 #[derive(serde::Deserialize, Default)]
 #[serde(deny_unknown_fields)]
-struct ModelArtifactRefinements {}
+struct ModelArtifactRefinements {
+    #[serde(default)]
+    device: Vec<ModelRefinementDecl>,
+}
+
+/// One `[[refinements.device]]` declaration (P13.1/P13.2).
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ModelRefinementDecl {
+    register: String,
+    refinement: String,
+    width: u16,
+    /// The datasheet-transcribed flag/field band (`0 ≤ mask ≤ 2^width − 1`,
+    /// nonzero): the refinement's modeled value set `[0, mask]` (§Q13/P13.2).
+    mask: u32,
+    /// The register's access-mode (the closed set `{ro, wo, rw, w1c, w1s,
+    /// rc}` — [`verifier::refinements::ACCESS_MODES`]).
+    mode: String,
+}
 
 /// The parsed model-artifact summary the lint exposes for the bundle layer.
 /// The lint reads it to prove the artifact parses (identity and the
@@ -818,6 +951,10 @@ struct ModelArtifactRefinements {}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ModelArtifactInfo {
     pub id: String,
+    /// The named device refinements declared by the artifact's `[refinements]`
+    /// manifest (P13.1), in declared order. Empty for the P12.2 empty-manifest
+    /// shape and for unmodeled bundles.
+    pub refinements: Vec<verifier::refinements::Refinement>,
 }
 
 /// Parse the pack's `model/model.toml` artifact. `None` when the artifact is
@@ -826,7 +963,37 @@ pub struct ModelArtifactInfo {
 pub fn parse_model_artifact(pack_root: &Path) -> Option<ModelArtifactInfo> {
     let text = std::fs::read_to_string(model_artifact_path(pack_root)).ok()?;
     let raw: ModelArtifactFile = toml::from_str(&text).ok()?;
-    Some(ModelArtifactInfo { id: raw.model.id })
+    let refinements = raw
+        .refinements
+        .map(|r| {
+            r.device
+                .into_iter()
+                .map(|d| verifier::refinements::Refinement {
+                    register: d.register,
+                    refinement: d.refinement,
+                    width: d.width,
+                    mask: d.mask,
+                    mode: d.mode,
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    Some(ModelArtifactInfo {
+        id: raw.model.id,
+        refinements,
+    })
+}
+
+/// The named device refinements a modeled pack declares (P13.1) — the
+/// `[refinements]` manifest of `model/model.toml`, empty when the pack has
+/// no model artifact or declares none. This is the identity that flows to
+/// the renderer's refinement context (the `tyu.refinements/1` document) and
+/// to the Rust statement-digest verifier — the two sides bind the same
+/// statements (P13.1's context plumbing).
+pub fn model_artifact_refinements(pack_root: &Path) -> Vec<verifier::refinements::Refinement> {
+    parse_model_artifact(pack_root)
+        .map(|info| info.refinements)
+        .unwrap_or_default()
 }
 
 /// The declared RAM window of a modeled pack (`model/model.toml [memory]

@@ -204,6 +204,7 @@ pub fn check(
                 false,
                 false, // proven_gate (tests: off)
                 None,  // bind_obl (tests: off)
+                &[],
                 &mut obs,
             ) {
                 Ok(_out_words) => on_result(Ok(())),
@@ -304,6 +305,7 @@ pub fn check_ok_with<F>(
                 false,
                 false, // proven_gate (tests: off)
                 None,  // bind_obl (tests: off)
+                &[],
                 &mut obs,
             ) {
                 Ok(out_words) => on_word(out_words.word),

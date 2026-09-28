@@ -308,6 +308,26 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
         }
         None => None,
     };
+    // P13.1: the refinement-context document, when the proof pipeline ran
+    // and the artifacts' bundle is MODELED (the package wrote the manifest;
+    // `refinement_context` decides PRESENCE — an unmodeled bundle does not
+    // carry a context, so langc gets no `--refinements` at all). Resolved
+    // ONCE before the compile loop; langc's pass-2 statement binding consumes
+    // it (`--refinements`, §Q3 relativism).
+    let refinements_ctx: Option<PathBuf> = match &proof_pipeline {
+        Some((_, _, _, artifacts)) => {
+            let paths: Vec<PathBuf> = artifacts.iter().map(|(_, p)| p.clone()).collect();
+            let modeled = crate::proof::refinement_context(&paths)
+                .ok()
+                .flatten()
+                .is_some();
+            crate::proof::project_root_for(None)
+                .ok()
+                .map(|root| crate::proof::package_refinements_path(&root))
+                .filter(|p| modeled && p.is_file())
+        }
+        None => None,
+    };
 
     for module in &modules {
         let inputs_fp = {
@@ -333,6 +353,11 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
             .as_ref()
             .and_then(|(_, _, _, arts)| arts.iter().find(|(m, _)| m == &module.name))
             .map(|(_, p)| p.clone());
+        // P13.1: the bundle's refinement-context document (the package's
+        // `refinements.json`, present when the bundle declares
+        // `[refinements]`) — langc's FR-5 recompute binds the same
+        // statements the renderer produced.
+        let refinements_manifest = refinements_ctx.as_deref();
 
         let compiled = compile_module(
             &langc,
@@ -356,6 +381,7 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
             args.verify_policy,
             harvest_verdicts.as_deref(),
             bind_obl.as_deref(),
+            refinements_manifest,
         )?;
         module_objs.push(compiled.object_path);
         module_obl.push((module.name.clone(), compiled.obl_path));
@@ -1212,6 +1238,7 @@ fn compile_module(
     verify_policy: crate::args::VerifyPolicy,
     verdicts_override: Option<&Path>,
     bind_obl: Option<&Path>,
+    refinements_manifest: Option<&Path>,
 ) -> Result<CompiledModule, TyuError> {
     let features = feature_set.bits();
     // Check cache first. The obligation artifact rides beside the object under
@@ -1300,6 +1327,12 @@ fn compile_module(
     // nothing ever elides.
     if let Some(bind) = bind_obl {
         cmd.arg(format!("--bind-obl={}", bind.display()));
+    }
+    // P13.1 (§Q13): the refinement context relativizes langc's FR-5
+    // statement-binding recompute — a certificate bound under a refinement
+    // (`tyu.refinements/1`) binds only when the consuming build carries it.
+    if let Some(refs) = refinements_manifest {
+        cmd.arg(format!("--refinements={}", refs.display()));
     }
     // Slice P7 (Q5/FR-11): the *image-level* decision — all modules or none
     // (per-image atomicity). A dedicated codegen input, never derived from

@@ -33,6 +33,38 @@ structure BundleMem where
   cell : Int → IntervalVal
   deriving Inhabited
 
+/-- The MMIO access-mode of a register (P13.2, P2/P3 findings): the closed
+source-level access set mirroring the descriptor's register access kinds
+(`ro`/`wo`/`rw`/`w1c`/`w1s`/`rc`). The abstract model's expressible
+access-mode semantics is consumed by [`refinedOf`]: a READ-ONLY register
+answers the refinement's datasheet band (the stable-value set); every
+write-capable mode answers the §Q13 width-bounded nondeterministic domain
+(the model records no register state — reads stay unrestricted, and the
+w1c/w1s bit-clears are carried structurally, stated in the TCB boundary).
+-/
+inductive AccessMode where
+  | ro | wo | rw | w1c | w1s | rc
+  deriving DecidableEq, Repr, Inhabited
+
+namespace AccessMode
+
+/-- The canonical string of a mode (the manifest spelling). -/
+def s : AccessMode → String
+  | .ro => "ro" | .wo => "wo" | .rw => "rw" | .w1c => "w1c" | .w1s => "w1s" | .rc => "rc"
+
+/-- Parse the manifest's closed spelling; `none` for anything else (the lint
+rejects it earlier — E5417). -/
+def ofString : String → Option AccessMode
+  | "ro" => some .ro | "wo" => some .wo | "rw" => some .rw
+  | "w1c" => some .w1c | "w1s" => some .w1s | "rc" => some .rc
+  | _ => none
+
+/-- A read-only register (the datasheet stable-flag case). -/
+def isRO : AccessMode → Bool
+  | .ro => true | _ => false
+
+end AccessMode
+
 namespace BundleMem
 
 /-- Is a point address inside the modeled RAM window? A transparent `Prop`
@@ -52,6 +84,20 @@ def apertureRead (w : Nat) : IntervalVal :=
   match Tyu.Conformance.wordDomain w with
   | none => IntervalVal.top
   | some (lo, hi) => IntervalVal.range lo hi
+
+/-- The refined device read (PLAN-VERIFY-3 P13.2, §Q13): under a named
+device refinement an MMIO read answers within the register's width AND the
+refinement's modeled band `[0, mask]` — the datasheet-transcribed abstract
+state machine's value set (e.g. the RP2350 UARTFR flag register's six
+modeled flag bits, band `[0, 0xF9]`, defined in `Tyu/Bundles/Rp2350.lean`
+and pinned against the manifest by `--level bands`). A refined read is
+*strictly narrower* than the §Q13 nondeterministic default: a bundle
+without that refinement never answers it (the
+`(triple, model_semantics, refinement)` statement relativism, §Q3/P13.1). -/
+def apertureReadRefined (mask : Int) (w : Nat) : IntervalVal :=
+  match Tyu.Conformance.wordDomain w with
+  | none => IntervalVal.top
+  | some (lo, hi) => IntervalVal.range (max lo 0) (min hi mask)
 
 /-- Abstract load (`verifier::mem::ApertureMem::load`): a point address in
 the window answers the recorded cell; a non-point or unmapped address is
@@ -194,6 +240,27 @@ def ofBundle (m : BundleMem) : MemModel := {
   load := fun addr _w => m.loadVal addr,
   store := fun _addr v => v,
   apertureRead := fun _place w => BundleMem.apertureRead w,
+  apertureWrite := fun _place v => v }
+
+/-- The bundle model under a named device refinement (PLAN-VERIFY-3 P13.2):
+identical to [`ofBundle`] except reads of the refined `place` are gated by
+the register's ACCESS-MODE (P2 finding): a READ-ONLY refined register
+answers the datasheet band ([`apertureReadRefined`]) — the stable-value
+set; every WRITE-CAPABLE mode answers the §Q13 width-bounded
+nondeterministic domain (the model records no register state, so
+write-capable reads stay unrestricted — sound). Reads of every other
+register keep the default. The aperture WRITE channel is isolated: no read
+consults it. This is the model-side shape of the statement-context
+`refinement: "…"` relativism: a statement that binds a refined read value is
+meaningful only for a bundle whose model carries that refinement. -/
+def refinedOf (m : BundleMem) (mode : AccessMode) (mask : Int) (place : String) : MemModel := {
+  load := fun addr _w => m.loadVal addr,
+  store := fun _addr v => v,
+  apertureRead := fun p w =>
+    if p == place then
+      if AccessMode.isRO mode then BundleMem.apertureReadRefined mask w
+      else BundleMem.apertureRead w
+    else BundleMem.apertureRead w,
   apertureWrite := fun _place v => v }
 
 end Tyu.Bundles

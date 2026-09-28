@@ -20,66 +20,58 @@ fn tyu_workspace_root() -> std::path::PathBuf {
     tyu::test_helpers::workspace_root()
 }
 
-/// P12.2 gate: the three modeled workspace bundles lint clean — zero errors
+/// P12.2/P13.2 gate: the modeled workspace bundles lint clean — zero errors
 /// AND zero warnings (the `[model]` sections, the `model/model.toml`
-/// artifacts, and the `evidence/` corpora all pair correctly per §6.7).
+/// artifacts — the rp2350 board pack's P13.2 refinement manifest included —
+/// and the `evidence/` corpora all pair correctly per §6.7).
 #[test]
 fn modeled_workspace_packs_lint_clean() {
     let root = tyu_workspace_root();
-    for triple in [
+    for name in [
         "x86_64-unknown-none",
         "armv7m-unknown-none",
         "riscv32-unknown-none",
+        "rp2350",
     ] {
-        let outcome = lint_pack(&root, triple, false).unwrap();
+        let outcome = lint_pack(&root, name, false).unwrap();
         assert!(
             outcome.errors.is_empty(),
             "modeled pack {} must lint clean: {}",
-            triple,
+            name,
             format_lint_outcome(&outcome)
         );
         assert!(
             outcome.warnings.is_empty(),
             "modeled pack {} must not warn: {:?}",
-            triple,
+            name,
             outcome.warnings
         );
     }
 }
 
-/// P12.2 gate: the unmodeled workspace packs carry the §Q15 model warning
-/// and **no model-pairing errors** (E5413–E5416). rp2350 lints fully clean;
-/// the hosted runtime additionally carries a pre-existing, P12-orthogonal
-/// lint gap (the `[capabilities.gpio] glue` path `platform/gpio.def` does
-/// not exist in the hosted layout — a latent hosted-surface issue, tracked
-/// outside this phase) — the model surface is asserted independently of it.
+/// P12.2/P13.2 gate: the unmodeled workspace packs carry the §Q15 model
+/// warning and **no model-pairing errors** (E5413–E5417). (rp2350 joined the
+/// modeled set in P13.2 — it carries a `[model]` section, a model artifact
+/// with a `[refinements]` manifest, and an evidence corpus.) The hosted
+/// runtime additionally carries a pre-existing, P12-orthogonal lint gap (the
+/// `[capabilities.gpio] glue` path `platform/gpio.def` does not exist in the
+/// hosted layout — a latent hosted-surface issue, tracked outside this
+/// phase) — the model surface is asserted independently of it.
 #[test]
 fn unmodeled_workspace_packs_warn_but_pass() {
     let root = tyu_workspace_root();
-    // rp2350's *full* lint (all checks) is clean — only the §Q15 warning.
-    let rp = lint_pack(&root, "rp2350", false).unwrap();
-    assert!(
-        rp.errors.is_empty(),
-        "rp2350 must lint fully clean: {}",
-        format_lint_outcome(&rp)
-    );
-    assert!(
-        rp.warnings.iter().any(|w| w.contains("unmodeled")),
-        "rp2350 must carry the §Q15 warning: {:?}",
-        rp.warnings
-    );
     // The hosted runtime carries P12-orthogonal, pre-existing lint gaps (the
     // DS-geometry symbols are deliberately not exported — the documented
     // fail-closed design pinned by `elide_two_pass::hosted_runtime_keeps_guards_fail_closed`
     // — and the `[capabilities.gpio] glue` path is absent from the hosted
     // layout), so its model surface is asserted under `all` (lint everything) —
-    // no model-pairing errors (E5413–E5416), §Q15 warning present.
+    // no model-pairing errors (E5413–E5417), §Q15 warning present.
     let hosted = lint_pack(&root, "linux-x86_64-hosted", true).unwrap();
     assert!(
         !hosted
             .errors
             .iter()
-            .any(|e| (5413..=5416).contains(&e.code)),
+            .any(|e| (5413..=5417).contains(&e.code)),
         "hosted must have no model-pairing errors: {}",
         format_lint_outcome(&hosted)
     );

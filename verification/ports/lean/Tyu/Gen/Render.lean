@@ -105,6 +105,85 @@ def viaName (module word : String) (kind : String) (occ : Nat) : String :=
   stmtName module word kind occ ++ "_via_cycles"
 
 -- ---------------------------------------------------------------------
+-- Device refinements (P13.1, §Q13/§6.2)
+-- ---------------------------------------------------------------------
+
+/-! The renderer receives the bundle's refinement context as a
+`tyu.refinements/1` document (written by tyu from the pack's `model.toml
+[refinements]` manifest; env `TYU_GEN_REFINEMENTS`). A word that reads a
+refined register renders its statements with `refinement: Some name` in the
+statement context — the §Q13 relativization: a proof against it is
+meaningful only for a bundle whose model carries that refinement. Without a
+manifest (the §Q13 default), every MMIO read stays the nondeterministic
+width-bounded oracle and statements render with `refinement: null`. -/
+
+/-- One declared device refinement (mirrors
+`verifier::refinements::Refinement`). `mask` is the datasheet-transcribed
+flag band (the modeled value set `[0, mask]`, §Q13/P13.2) and `mode` is the
+register's access-mode from the closed set `{ro, wo, rw, w1c, w1s, rc}`. -/
+structure RefinementDecl where
+  register : String   -- trailing register token of the IR place (e.g. `UARTFR`)
+  refinement : String -- the §Q13 refinement id (statement context)
+  width : Nat         -- register width in bits
+  mask : Int          -- datasheet-transcribed flag band (0 < mask ≤ 2^width − 1)
+  mode : String       -- access-mode (closed set)
+  deriving Inhabited
+
+/-- Parse the `tyu.refinements/1` context document. Fail-closed: a
+malformed document (schema mismatch or a malformed device entry) is an
+error, never a silent partial context. -/
+def parseRefinements (doc : String) : M (List RefinementDecl) :=
+  match parseJson doc with
+  | none => throw (.notOblDoc "unparseable refinements document")
+  | some j =>
+      let schema := (j.field "schema").bind Json.asStr |>.getD ""
+      if schema ≠ "tyu.refinements/1" then throw (.notOblDoc ("refinements schema: " ++ schema))
+      else
+        let devices := (j.field "devices").bind Json.asArr |>.getD []
+        let parsed := devices.filterMap (fun d =>
+          match (d.field "refinement").bind Json.asStr, (d.field "register").bind Json.asStr,
+                (d.field "width").bind Json.asInt, (d.field "mask").bind Json.asInt,
+                (d.field "mode").bind Json.asStr with
+          | some refinement, some register, some width, some mask, some mode =>
+              some ({ register := register, refinement := refinement, width := width.toNat,
+                      mask := mask, mode := mode } : RefinementDecl)
+          | _, _, _, _, _ => none)
+        if parsed.length ≠ devices.length then throw (.notOblDoc "refinements device entry malformed")
+        else pure parsed
+
+/-- The MMIO place tokens of a word's IR (mirrors
+`verifier::refinements::place_token`): for `vol_load`/`vol_store`/
+`vol_load_field`/`vol_store_field` the third token (the place), for
+`addr_of`/`addr_of_mut`/`mmio_place` the second. Deduplicated. -/
+def wordPlaces (ir : String) : List String :=
+  let lines := (splitOnStr '\n' ir).map trim |>.filter (fun l => l ≠ "")
+  (lines.filterMap (fun line =>
+    let toks := (splitOnStr ' ' line).filter (fun t => t ≠ "")
+    match toks with
+    | m :: rest =>
+        match m with
+        | "vol_load" | "vol_store" | "vol_load_field" | "vol_store_field" => (rest.drop 1).head?
+        | "addr_of" | "addr_of_mut" | "mmio_place" => rest.head?
+        | _ => none
+    | [] => none)).eraseDups
+
+/-- Whole-token trailing-segment match (mirrors
+`verifier::refinements::token_matches`): the IR place `uart0.UARTFR`
+matches the declared register `UARTFR`; a dot-bearing declaration
+(`uart0.UARTFR`) requires exact equality. -/
+def tokenMatches (place : String) (register : String) : Bool :=
+  if register.contains ('.') then place == register
+  else place == register || (¬ register.isEmpty && place.endsWith ("." ++ register))
+
+/-- The refinement a word's IR binds to: the FIRST declared refinement whose
+register matches any MMIO place token of the word. `none` = the word reads
+no refined register — its read sites stay the §Q13 nondeterministic
+default. -/
+def refinementOf (decls : List RefinementDecl) (ir : String) : Option String :=
+  let places := wordPlaces ir
+  (decls.find? (fun d => places.any (fun p => tokenMatches p d.register))).map (fun d => d.refinement)
+
+-- ---------------------------------------------------------------------
 -- The parsed artifact
 -- ---------------------------------------------------------------------
 
@@ -537,6 +616,41 @@ def classify (a : Artifact) (o : Obl) : Option String :=
     | "contract-pre" | "contract-post" => contractClassify a o
     | _ => some "unknown-kind"
 
+/-- The word IR text of an obligation's word. -/
+def wordIrOf (a : Artifact) (o : Obl) : String :=
+  match a.words.find? (fun w => w.name == o.word) with
+  | some w => w.ir
+  | none => ""
+
+/-- The refinement context (P13.1, §Q13): `none` = NO context document was
+given (the bundle's refinement relativism is NOT bound); `some decls` = the
+bundle's `tyu.refinements/1` manifest (possibly with zero devices — an
+explicitly unrefined modeled bundle). -/
+abbrev RefinementContext := Option (List RefinementDecl)
+
+def ctxDecls (ctx : RefinementContext) : List RefinementDecl := ctx.getD []
+
+/-- The **render refusal** ("mismatch ⇒ render refuses", P13.1): a MODELED
+bundle's MMIO-word statements are only renderable WITH the bundle's
+refinement context — without it the renderer cannot bind the
+`(target, model_semantics, refinement)` relativism of a read-value claim,
+so the statement is refused (`refined-read-unbound`), never silently
+re-bound to the unrefined default (a developer would otherwise prove a
+claim over the wrong read semantics, and a later context change would
+invalidate it as `E6421`). Unmodeled bundles (`model_semantics =
+"unmodeled"`, §Q15) always render the honest nondeterministic-read default. -/
+def refinementRefuses (a : Artifact) (ctx : RefinementContext) (o : Obl) : Option String :=
+  if a.modelSemantics == "unmodeled" then none
+  else if ¬ (wordPlaces (wordIrOf a o)).isEmpty && ctx.isNone then some "refined-read-unbound"
+  else none
+
+/-- The full IR-surface renderability: the refinement refusal first, then
+the form classification. -/
+def irRenderable (a : Artifact) (ctx : RefinementContext) (o : Obl) : Option String :=
+  match refinementRefuses a ctx o, classify a o with
+  | some r, _ => some r
+  | none, r => r
+
 -- ---------------------------------------------------------------------
 -- Statement text rendering
 -- ---------------------------------------------------------------------
@@ -573,9 +687,11 @@ def renderPredicateHolds (a : Artifact) (o : Obl) (w : String) : String :=
 
 /-- Render the `def … : Prop := …` statement text for a renderable
 obligation. -/
-def renderStatement (a : Artifact) (o : Obl) : String :=
-  let ctx := Ctx.mk a.target a.modelSemantics a.module o.word (wordIrHash (tagList a o)) o.kind o.occurrence none
-  let hash := statementHash ctx o
+def renderStatement (a : Artifact) (ctx : RefinementContext) (o : Obl) : String :=
+  let ir := wordIrOf a o
+  let refinement := refinementOf (ctxDecls ctx) ir
+  let ctx' := Ctx.mk a.target a.modelSemantics a.module o.word (wordIrHash ir) o.kind o.occurrence refinement
+  let hash := statementHash ctx' o
   let name := stmtName a.module o.word o.kind o.occurrence
   let w := wordName a o
   let prop : String := match o.formulaOp with
@@ -590,9 +706,6 @@ def renderStatement (a : Artifact) (o : Obl) : String :=
     | "PredicateHolds" => renderPredicateHolds a o w
     | _ => "True"
   "/-- statement: " ++ o.id ++ "\n    statement_hash: " ++ hash ++ " -/\n" ++ "def " ++ name ++ " : Prop :=\n  " ++ prop
-where
-  tagList (a : Artifact) (o : Obl) : String :=
-    (match a.words.find? (fun w => w.name == o.word) with | some w => w.ir | none => "")
 
 /-- The per-cycle scheme (P5.2). -/
 def renderCycleScheme (a : Artifact) (word : String) (cyc : Nat × List Nat) : String :=
@@ -618,19 +731,15 @@ def renderVia (a : Artifact) (o : Obl) (cyc : Nat × List Nat) (i : Nat) (lo hi 
   "Tyu.Gen.Stmt.ViaCycles " ++ wordRef a.module o.word ++ " (" ++ cycTex ++ ") " ++ toString i ++
   " (" ++ toString lo ++ ") (" ++ toString hi ++ ")"
 
-/-- The word IR text of an obligation's word. -/
-def wordIrOf (a : Artifact) (o : Obl) : String :=
-  match a.words.find? (fun w => w.name == o.word) with
-  | some w => w.ir
-  | none => ""
 /-! ### Source-surface statements (P9.1) -/
 
 /-- Is an obligation renderable at the SOURCE surface? `none` = yes (the
 word's IR is entirely fragment ops AND the IR statement itself renders);
-`some reason` = refused (non-fragment word, opaque site, contract predicates
-— each honest, the fragment boundary of `Tyu/Src.lean`). -/
-def srcClassify (a : Artifact) (o : Obl) : Option String :=
-  match classify a o with
+`some reason` = refused (refinement-context mismatch, non-fragment word,
+opaque site, contract predicates — each honest, the fragment boundary of
+`Tyu/Src.lean`). -/
+def srcClassify (a : Artifact) (ctx : RefinementContext) (o : Obl) : Option String :=
+  match irRenderable a ctx o with
   | some r => some r
   | none =>
       if o.formulaOp == "PredicateHolds" then some "predicate-source-unavailable"
@@ -640,6 +749,13 @@ def srcClassify (a : Artifact) (o : Obl) : Option String :=
         else match parseSrcBlocks ir with
           | some _ => none
           | none => some "non-fragment-ops"
+
+/-- The full source-surface renderability: the refinement refusal first,
+then [`srcClassify`]. -/
+def srcRenderable (a : Artifact) (ctx : RefinementContext) (o : Obl) : Option String :=
+  match refinementRefuses a ctx o, srcClassify a ctx o with
+  | some r, _ => some r
+  | none, r => r
 
 /-- The `def src_stmt_… : Prop := …` text for a source-renderable
 obligation (the same claim over the `Tyu.Src` run). -/
@@ -664,9 +780,9 @@ def renderSrcStatement (a : Artifact) (o : Obl) : String :=
 
 /-- The module's source-surface statements (concatenated; empty when no
 obligation is source-renderable). -/
-def renderSourceStatements (a : Artifact) : String :=
+def renderSourceStatements (a : Artifact) (ctx : RefinementContext) : String :=
   String.intercalate "\n" (a.obligations.filterMap (fun o =>
-    match srcClassify a o with
+    match srcRenderable a ctx o with
     | none => some (renderSrcStatement a o)
     | some _ => none))
 
@@ -676,15 +792,15 @@ def renderSourceStatements (a : Artifact) : String :=
 -- ---------------------------------------------------------------------
 
 /-- The module's renderable statements (text). -/
-def renderAllStatements (a : Artifact) : String :=
+def renderAllStatements (a : Artifact) (ctx : RefinementContext) : String :=
   String.intercalate "\n" (a.obligations.filterMap (fun o =>
-    match classify a o with
-    | none => some (renderStatement a o)
+    match irRenderable a ctx o with
+    | none => some (renderStatement a ctx o)
     | some _ => none))
 
 /-- The word-blocks defs referenced by renderable statements. -/
-def renderWordDefs (a : Artifact) : String :=
-  let used := a.obligations.filterMap (fun o => match classify a o with
+def renderWordDefs (a : Artifact) (ctx : RefinementContext) : String :=
+  let used := a.obligations.filterMap (fun o => match irRenderable a ctx o with
     | none => a.words.find? (fun w => w.name == o.word)
     | some _ => none) |>.eraseDups
   String.intercalate "\n" (used.map (fun w =>
@@ -699,9 +815,9 @@ statements (resolved from the transcluded ref or the module's
 `facts.predicates`). A predicate that is itself a rendered word (its own
 obligations rendered, so `renderWordDefs` emitted its `Word` def) is
 skipped — one definition per name. -/
-def renderPredicateDefs (a : Artifact) (skip : List String) : String :=
+def renderPredicateDefs (a : Artifact) (ctx : RefinementContext) (skip : List String) : String :=
   let used := a.obligations.filterMap (fun o =>
-    match classify a o with
+    match irRenderable a ctx o with
     | none => if o.formulaOp == "PredicateHolds"
                 then let ir := predIrOf a o; if ir.isEmpty then none else some (o.predName, ir)
                 else none
@@ -714,13 +830,13 @@ def renderPredicateDefs (a : Artifact) (skip : List String) : String :=
     wordRef a.module pn ++ "_blocks, entry := 0 }"))
 
 /-- The cycle schemes + via-cycles compositions (P5.2). -/
-def renderCycles (a : Artifact) : String :=
+def renderCycles (a : Artifact) (ctx : RefinementContext) : String :=
   let words := a.obligations.filterMap (fun o => a.words.find? (fun w => w.name == o.word)) |>.eraseDups
   let schemes := words.flatMap (fun w =>
     let cycs := (a.obligations.filter (fun o => o.word == w.name)).flatMap (fun o => o.cycles) |>.eraseDups
     cycs.map (fun c => renderCycleScheme a w.name c))
   let vias := a.obligations.filterMap (fun o =>
-    match classify a o, oelRoot o.oel with
+    match irRenderable a ctx o, oelRoot o.oel with
     | none, some ("out", i) =>
         let cycs := o.cycles
         match cycs.head? with
@@ -730,21 +846,21 @@ def renderCycles (a : Artifact) : String :=
   String.intercalate "\n" (schemes ++ vias)
 
 /-- The `Gen/<Module>.lean` text of a module. -/
-def renderModuleLean (a : Artifact) : String :=
+def renderModuleLean (a : Artifact) (ctx : RefinementContext) : String :=
   let header := "-- Generated by the Lean port's `gen` renderer (PLAN-VERIFY-3 P5).\n" ++
                 "-- DO NOT EDIT — regenerated from `tyu.obl/v2`; statement hashes are\n" ++
                 "-- the renderer↔encoder drift lock (crates/tooling-tests).\n\n" ++
                 "import Tyu.Gen.Stmt\nimport Tyu.Src\n\n" ++
                 "namespace Tyu.Gen.Corpus." ++ ident a.module ++ "\n\n"
-  let words := renderWordDefs a
+  let words := renderWordDefs a ctx
   let wordNames := a.obligations.filterMap (fun o =>
-    match classify a o with
+    match irRenderable a ctx o with
     | none => some o.word
     | some _ => none)
-  let preds := renderPredicateDefs a wordNames
-  let stmts := renderAllStatements a
-  let cycs := renderCycles a
-  let srcStmts := renderSourceStatements a
+  let preds := renderPredicateDefs a ctx wordNames
+  let stmts := renderAllStatements a ctx
+  let cycs := renderCycles a ctx
+  let srcStmts := renderSourceStatements a ctx
   let tail := "\n\nend Tyu.Gen.Corpus." ++ ident a.module ++ "\n"
   header ++ words ++ (if words == "" then "" else "\n\n")
     ++ preds ++ (if preds == "" then "" else "\n\n")
@@ -754,24 +870,32 @@ def renderModuleLean (a : Artifact) : String :=
 
 
 
-/-- The `<Module>.gen.json` metadata: statements (name+hash) and the
-omitted set (id + reason). -/
-def renderModuleMeta (a : Artifact) : String :=
+/-- The `<Module>.gen.json` metadata: statements (name+hash, refinement)
+and the omitted set (id + reason). The statement rows use the FULL
+renderability ([`irRenderable`]) — a refinement-refused row records
+`omitted: true` with `reason: refined-read-unbound`, never a silent
+default re-binding. -/
+def renderModuleMeta (a : Artifact) (ctx : RefinementContext) : String :=
   let stmtRows := a.obligations.filterMap (fun o =>
     let id := o.id
-    let hash := match classify a o with
+    let ir := wordIrOf a o
+    let refinement := refinementOf (ctxDecls ctx) ir
+    let hash := match irRenderable a ctx o with
       | none =>
-          let ctx := Ctx.mk a.target a.modelSemantics a.module o.word (wordIrHash (wordIrOf a o)) o.kind o.occurrence none
-          statementHash ctx o
+          let ctx' := Ctx.mk a.target a.modelSemantics a.module o.word (wordIrHash ir) o.kind o.occurrence refinement
+          statementHash ctx' o
       | some _ => ""
-    let omitField := match classify a o with
+    let omitField := match irRenderable a ctx o with
       | none => "\"def\": \"" ++ stmtName a.module o.word o.kind o.occurrence ++ "\", \"omitted\": false"
       | some reason => "\"omitted\": true, \"reason\": \"" ++ jesc reason ++ "\""
-    let srcField := match srcClassify a o with
+    let refField := match irRenderable a ctx o, refinement with
+      | none, some r => ", \"refinement\": \"" ++ jesc r ++ "\""
+      | _, _ => ""
+    let srcField := match srcRenderable a ctx o with
       | none => ", \"src_def\": \"" ++ srcStmtName a.module o.word o.kind o.occurrence ++ "\""
       | some _ => ""
-    some ("  { \"id\": \"" ++ jesc id ++ "\", \"id_hash\": \"" ++ jesc o.idHash ++ "\", " ++ omitField ++ ", \"statement_hash\": \"" ++ hash ++ "\"" ++ srcField ++ " }"))
-  let usedWords := a.obligations.filterMap (fun o => match classify a o with
+    some ("  { \"id\": \"" ++ jesc id ++ "\", \"id_hash\": \"" ++ jesc o.idHash ++ "\", " ++ omitField ++ ", \"statement_hash\": \"" ++ hash ++ "\"" ++ refField ++ srcField ++ " }"))
+  let usedWords := a.obligations.filterMap (fun o => match irRenderable a ctx o with
     | none => a.words.find? (fun w => w.name == o.word)
     | some _ => none) |>.eraseDups
   let wordRows := usedWords.map (fun w =>
@@ -784,10 +908,21 @@ def renderModuleMeta (a : Artifact) : String :=
     String.intercalate ",\n" stmtRows ++ "\n  ],\n  \"words\": [\n" ++
     String.intercalate ",\n" wordRows ++ "\n  ]\n}\n"
 
-/-- The render driver for one artifact document. -/
-def renderModule (doc : String) : M (String × String) := do
+/-- The render driver for one artifact document under a refinement context
+(P13.1). `ctx` is the bundle's refinement context: `none` = NO `[refinements]`
+document was given (a MODELED bundle's MMIO-word statements then refuse to
+render — `refined-read-unbound`); `some decls` = the bundle's manifest, the
+"refinement in context" (possibly with zero devices — an explicitly
+unrefined modeled bundle, the §Q13 nondeterministic-read default). -/
+def renderModuleWith (ctx : RefinementContext) (doc : String) : M (String × String) := do
   let a ← parseArtifact doc
-  pure (renderModuleLean a, renderModuleMeta a)
+  pure (renderModuleLean a ctx, renderModuleMeta a ctx)
+
+/-- The render driver with no refinement context (the §Q13 default; the
+byte-for-byte pre-P13 behavior for unrefined bundles — and the refusal path
+for a modeled bundle's MMIO words, P13.1). -/
+def renderModule (doc : String) : M (String × String) :=
+  renderModuleWith none doc
 
 /-- The SHA-256 known-answer self-check vectors. -/
 def selfcheck : List (String × String) :=

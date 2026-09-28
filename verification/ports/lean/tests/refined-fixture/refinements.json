@@ -1,0 +1,1 @@
+{"schema":"tyu.refinements/1","model":"tyu.model/rp2350/1","devices":[{"mask":249,"mode":"ro","refinement":"rp2350.uart-fr","register":"UARTFR","width":32}]}

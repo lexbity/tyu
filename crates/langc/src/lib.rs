@@ -169,6 +169,34 @@ pub unsafe fn run(argc: isize, argv: *const *const hosted::c::c_char) -> i32 {
         None => None,
     };
 
+    // PLAN-VERIFY-3 P13.1: `--refinements=<path>` — the `tyu.refinements/1`
+    // context document (the bundle's `[refinements]` device-refinement
+    // manifest) relativizing the FR-5 statement-binding recompute. Fail-
+    // closed: a missing or malformed document aborts (the refinement context
+    // is part of the statement identity — a broken context would silently
+    // bind statements to the wrong claim).
+    let refinements: alloc::vec::Vec<verifier::refinements::Refinement> = match cfg.refinements {
+        Some(path) => {
+            let bytes = match fs::read_file(path) {
+                Ok(b) => b,
+                Err(_) => {
+                    let _ = diag::error_simple(6401, b"cannot read --refinements document");
+                    return 2;
+                }
+            };
+            match verifier::refinements::parse_manifest(
+                core::str::from_utf8(bytes.as_slice()).unwrap_or(""),
+            ) {
+                Some(r) => r,
+                None => {
+                    let _ = diag::error_simple(6401, b"invalid --refinements document");
+                    return 2;
+                }
+            }
+        }
+        None => alloc::vec::Vec::new(),
+    };
+
     let mut out = Stdout;
     match cfg.emit {
         EmitMode::Ast => match Parser::new(src).parse_module_dump(&mut out) {
@@ -236,6 +264,7 @@ pub unsafe fn run(argc: isize, argv: *const *const hosted::c::c_char) -> i32 {
                 cfg.verify_policy_proven,
                 bind_obl.as_ref(),
                 model_semantics,
+                refinements.as_slice(),
             )
         }
         EmitMode::Obligations => {
