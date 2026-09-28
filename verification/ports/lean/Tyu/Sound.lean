@@ -1168,8 +1168,8 @@ end T_Server
 
 The registry statements over the bundle-instance substrate
 (`Tyu.Bundles.BundleMem`): for every modeled bundle's instance (`x86_64`,
-`armv7m`, `riscv32` — each with the RAM window declared by its
-`model/model.toml [memory] ram`):
+`armv7m`, `riscv32`, and the `rp2350` board pack's `rp2350` — each with the
+RAM window declared by its `model/model.toml [memory] ram`):
 
   - **store-load**: a point store within the modeled window is observable
     by a subsequent load of the same address — the stored abstract value
@@ -1276,9 +1276,13 @@ as the access trace, never merged). -/
 theorem rp2350_geometry : Bundles.rp2350.ramLo = 536870912 ∧ Bundles.rp2350.ramHi = 536936447 := by
   decide
 
+/-- The rp2350 in-window lemma shares the armv7m proof shape: the rp2350
+SRAM window is the SAME constant class as armv7m's (`[0x20000000,
+0x2000FFFF]`), so the in-RAM claim reuses `armv7m_inram` rather than
+re-proving the constants (P3s finding-6 dedup). -/
 theorem rp2350_inram (a : Int) (hlo : 536870912 ≤ a) (hhi : a ≤ 536936447) :
     Bundles.rp2350.inRam a := by
-  simp [Bundles.rp2350, BundleMem.inRam, hlo, hhi]
+  simpa [Bundles.rp2350, Bundles.armv7m, BundleMem.inRam] using (armv7m_inram a hlo hhi)
 
 /-- T-D (width/mask): a refined read answers exactly the refinement's
 modeled band `[0, mask]` — within the register's width, never wider than
@@ -1303,15 +1307,49 @@ theorem uartfr_band_domain_at_device :
     BundleMem.apertureReadRefined Bundles.uartFrBand 32 = IntervalVal.range 0 249 := by
   decide
 
+/-- T-D (width): the refinement's refined read is WITHIN the register's WIDTH
+domain — `apertureReadRefined mask w` never answers outside the signed
+`w`-bit domain `[−2^(w−1), 2^(w−1) − 1]` (the `min`/`max` cap it; the `width`
+is MATHEMATICALLY consumed — P3s finding 6d). The lint additionally admits
+only `mask ≤ 2^width − 1`; the model is width-safe regardless. -/
+theorem band_within_width_domain (w : Nat) (mask : Int) (hw : 0 < w) (hw64 : w < 64) :
+    BundleMem.apertureReadRefined mask w =
+      IntervalVal.range (max (-((2 : Int) ^ (w - 1))) 0) (min (((2 : Int) ^ (w - 1)) - 1) mask) := by
+  have hz : w ≠ 0 := by omega
+  have hb : (if w = 0 then 64 else w) = w := by
+    by_cases h : w = 0
+    · exact False.elim (hz h)
+    · simp [h]
+  have hd : Tyu.Conformance.wordDomain w = some (-((2 : Int) ^ (w - 1)), ((2 : Int) ^ (w - 1)) - 1) := by
+    simp [Tyu.Conformance.wordDomain, hb, hw64]
+  unfold BundleMem.apertureReadRefined
+  rw [hd]
+
 /-- T-D (access-mode, ro): a refined READ-ONLY register answers exactly the
-refinement's band — `refinedOf` consults the mode: `ro` closes the read to
-the datasheet stable-value set (the descriptor's `access = "ro"` UARTFR
-row). -/
-theorem ro_read_answers_band (m : BundleMem) (mask : Int) (place : String) (w : Nat) :
-    (refinedOf m Tyu.Bundles.AccessMode.ro mask place).apertureRead place w
+refinement's band — `refinedOf` consults the mode and the trailing-token
+register match: a read of any matching place closes to the datasheet
+stable-value set (the descriptor's `access = "ro"` UARTFR row). -/
+theorem ro_read_answers_band (m : BundleMem) (mask : Int) (register : String) (w : Nat) :
+    (refinedOf m Tyu.Bundles.AccessMode.ro mask register).apertureRead register w
       = BundleMem.apertureReadRefined mask w := by
   unfold refinedOf
-  simp [Tyu.Bundles.AccessMode.isRO]
+  simp [Tyu.Bundles.AccessMode.isRO, Tyu.Bundles.tokenMatches]
+
+/-- T-D (trailing-token agreement, P3s finding-6): `refinedOf` applies the
+refinement to EVERY place whose trailing token matches the registered
+register — the model uses the SAME place semantics as the binding (the
+renderer binds `uart.UARTFR`/`uart0.UARTFR` through the single
+`Tyu.Bundles.tokenMatches`; both mirror `verifier::refinements::token_matches`).
+This is the refinement-surface analogue of the P12 `bundle_load_agrees`
+mirror agreement: a read at any matching place IS the refinement's band —
+place matching is load-bearing in the model, not just in the binding. -/
+theorem refined_read_at_any_matching_place (m : BundleMem) (place register : String)
+    (hmatch : Tyu.Bundles.tokenMatches place register = true)
+    (mask : Int) (w : Nat) :
+    (refinedOf m Tyu.Bundles.AccessMode.ro mask register).apertureRead place w
+      = BundleMem.apertureReadRefined mask w := by
+  unfold refinedOf
+  simp [hmatch, Tyu.Bundles.AccessMode.isRO]
 
 /-- T-D (access-mode, write-capable): every WRITE-CAPABLE refined register
 answers the §Q13 width-bounded nondeterministic domain — the abstract model
@@ -1319,12 +1357,12 @@ records no register state, so reads of write-capable registers stay
 unrestricted (the w1c/w1s bit-clears are carried structurally, stated in
 the TCB boundary). -/
 theorem write_capable_read_width_bounded (m : BundleMem) (mode : Tyu.Bundles.AccessMode)
-    (hmode : mode ≠ Tyu.Bundles.AccessMode.ro) (mask : Int) (place : String) (w : Nat) :
-    (refinedOf m mode mask place).apertureRead place w = BundleMem.apertureRead w := by
+    (hmode : mode ≠ Tyu.Bundles.AccessMode.ro) (mask : Int) (register : String) (w : Nat) :
+    (refinedOf m mode mask register).apertureRead register w = BundleMem.apertureRead w := by
   unfold refinedOf
   cases mode with
   | ro => contradiction
-  | wo | rw | w1c | w1s | rc => simp [Tyu.Bundles.AccessMode.isRO]
+  | wo | rw | w1c | w1s | rc => simp [Tyu.Bundles.AccessMode.isRO, Tyu.Bundles.tokenMatches]
 
 /-- T-D (access-mode, writes): reads of a refined device are a function of
 the refinement — never of the memory state. RAM stores and the (unmodeled)
@@ -1333,9 +1371,9 @@ two memories a refined device's read answers the same domain. This is the
 abstract model's write-channel isolation; the concrete mirror is
 [`store_then_read_is_oracle`]. -/
 theorem read_independent_of_memory (m1 m2 : BundleMem) (mode : Tyu.Bundles.AccessMode)
-    (mask : Int) (place : String) (w : Nat) :
-    (refinedOf m1 mode mask place).apertureRead place w
-      = (refinedOf m2 mode mask place).apertureRead place w := by
+    (mask : Int) (register : String) (w : Nat) :
+    (refinedOf m1 mode mask register).apertureRead register w
+      = (refinedOf m2 mode mask register).apertureRead register w := by
   unfold refinedOf
   rfl
 
@@ -1390,7 +1428,7 @@ boundary-byte defect class, finding #1, is exactly what they catch). -/
 `wordDomain`). -/
 theorem bundle_aperture_agrees (lo hi : Int)
     (cells : List (Int × Tyu.Conformance.Interval)) (w : Nat) :
-    Tyu.Conformance.MemModel.apertureRead (Tyu.Conformance.MemModel.bundle lo hi cells) w
+    Tyu.Conformance.MemModel.apertureRead (Tyu.Conformance.MemModel.bundle lo hi cells []) "" w
       = Tyu.Bundles.toConformance (BundleMem.apertureRead w) :=
   Tyu.Bundles.aperture_read_agrees lo hi cells w
 
@@ -1398,7 +1436,7 @@ theorem bundle_aperture_agrees (lo hi : Int)
 cells reads identically under both mirrors. -/
 theorem bundle_load_agrees (lo hi : Int) (cells : List (Int × Tyu.Conformance.Interval)) (a : Int)
     (w : Nat) :
-    Tyu.Conformance.MemModel.load (Tyu.Conformance.MemModel.bundle lo hi cells)
+    Tyu.Conformance.MemModel.load (Tyu.Conformance.MemModel.bundle lo hi cells [])
         (Tyu.Conformance.Interval.range a a) w
       = Tyu.Bundles.toConformance (BundleMem.loadVal (ofCells lo hi cells) (IntervalVal.range a a)) :=
   Tyu.Bundles.load_agrees lo hi cells a w

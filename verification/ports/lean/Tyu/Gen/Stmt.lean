@@ -376,6 +376,17 @@ def outInRange (w : Word) (i : Nat) (lo hi : Int) : Prop :=
     Word.run w spec fuel mem σ₀ = some σf →
     outRangeAt i lo hi σf
 
+/-- The `subtype-range` statement under a DEVICE REFINEMENT (P13.2, §Q13):
+every terminating run whose MMIO reads answer within the refinement's band
+`[bandLo, bandHi]` has its i-th output in `[lo, hi]`. The refinement is
+MATHEMATICALLY load-bearing: a read-dependent output claim is provable
+because reads answer in-band, not over the §Q13 universal oracle. -/
+def outInRangeRefined (w : Word) (i : Nat) (lo hi : Int) (bandLo bandHi : Int) : Prop :=
+  ∀ (spec : Tyu.IR.TargetSpec) (mem : ConcreteMem) (fuel : Nat) (σ₀ σf : State),
+    (bandLo ≤ mem.mmioRead ∧ mem.mmioRead ≤ bandHi) →
+    Word.run w spec fuel mem σ₀ = some σf →
+    outRangeAt i lo hi σf
+
 /-- The `mmio-bounds` statement (`OffsetLE` with a compile-time offset): the
 emulated-aperture access at `off` of access-width `width` fits the aperture
 of size `size` — the same arithmetic as the runtime check. -/

@@ -184,9 +184,14 @@ fn run_harvest(dir: &Path) -> String {
     fs::read_to_string(&out).unwrap()
 }
 
-/// Compile the real source with langc under the rp2350 pack; returns the
-/// object-emission success + stderr (the FR-5 consumption leg).
-fn compile_with_refinements(root: &Path, dir: &Path, refinements: bool) -> (bool, String) {
+/// Compile the real source with langc under the rp2350 pack; returns
+/// `(success, stderr, out-dir)` (the FR-5 consumption leg).
+fn compile_with_refinements(
+    root: &Path,
+    dir: &Path,
+    refinements: bool,
+    proven: bool,
+) -> (bool, String, PathBuf) {
     let out_dir = dir.join(if refinements { "out" } else { "outnr" });
     fs::create_dir_all(&out_dir).unwrap();
     let mut args: Vec<String> = vec![
@@ -198,6 +203,9 @@ fn compile_with_refinements(root: &Path, dir: &Path, refinements: bool) -> (bool
         format!("--platform={}", root.join("platforms/rp2350").display()),
         "--model-semantics=tyu.model/rp2350/1".into(),
     ];
+    if proven {
+        args.push("--verify-policy=proven".into());
+    }
     let verdict_file = dir.join("out.v2.json");
     args.push(format!("--verdicts={}", verdict_file.display()));
     args.push(format!(
@@ -218,7 +226,36 @@ fn compile_with_refinements(root: &Path, dir: &Path, refinements: bool) -> (bool
     (
         out.status.success(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
+        out_dir,
     )
+}
+
+/// The obligation ids discharged at langc (the `.verdicts.inTree.json`
+/// echo — only non-open records are listed). Open/retained sites are ABSENT,
+/// which is exactly the fail-closed stance this test asserts.
+fn echo_discharged_proof_ids(out_dir: &Path) -> Vec<String> {
+    let echo_path = out_dir.join("Uart7.verdicts.inTree.json");
+    let bytes = fs::read(&echo_path).unwrap_or_default();
+    match verifier::verdict::read_echo(&bytes) {
+        Ok(echo) => echo
+            .verdicts
+            .records
+            .iter()
+            .filter(|r| !r.status.is_open() && r.trust == verifier::verdict::Trust::Proof)
+            .map(|r| r.id.clone())
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// The echo's stale-verdicts count (the E6421 accounting).
+fn echo_stale(out_dir: &Path) -> u32 {
+    let echo_path = out_dir.join("Uart7.verdicts.inTree.json");
+    let bytes = fs::read(&echo_path).unwrap_or_default();
+    match verifier::verdict::read_echo(&bytes) {
+        Ok(echo) => echo.stale_verdicts,
+        Err(_) => 0,
+    }
 }
 
 /// The `statement_hash` hex recorded in a `<Module>.gen.json` document for
@@ -327,18 +364,72 @@ fn refined_worked_example_harvests_and_binds_with_refinement_context() {
         "verdict carries the bundle model identity:\n{verdicts}"
     );
 
-    // 4. langc FR-5 consumption: with the refinement context the record
-    // binds and the module compiles; the run-once negative without it still
-    // compiles (the site stays open, check retained — never a wrong
-    // discharge, and never a crash: the E6421 path).
-    let (ok, _) = compile_with_refinements(&root, &dir, true);
+    // 4. langc FR-5 consumption — the site must DISCHARGE with the refinement
+    //    context in hand (even under `--verify-policy=proven` — the
+    //    certificate is proof-class), and must stay OPEN with the check
+    //    retained (E6421-stale, fail-closed — never a wrong discharge, never
+    //    a crash) without it, proven or not.
+    let (ok, _, out) = compile_with_refinements(&root, &dir, true, true);
     assert!(
         ok,
         "langc must bind the refined verdict with --refinements in context"
     );
-    let (ok_neg, _) = compile_with_refinements(&root, &dir, false);
+    assert!(
+        echo_discharged_proof_ids(&out)
+            .iter()
+            .any(|id| id == OBL_ID),
+        "with the refinement context + proven, the site must DISCHARGE (proof):\n{}",
+        fs::read_to_string(out.join("Uart7.verdicts.inTree.json")).unwrap_or_default()
+    );
+    let (ok_neg, stderr_neg, out_neg) = compile_with_refinements(&root, &dir, false, true);
     assert!(
         ok_neg,
         "langc must stay healthy without the refinement in context (E6421-stale → open, check retained)"
+    );
+    assert!(
+        !echo_discharged_proof_ids(&out_neg).iter().any(|id| id == OBL_ID),
+        "the negative (no refinement context) must leave the site OPEN — never a wrong discharge:\n{}",
+        fs::read_to_string(out_neg.join("Uart7.verdicts.inTree.json")).unwrap_or_default()
+    );
+    assert!(
+        stderr_neg.contains("E6421") || echo_stale(&out_neg) >= 1,
+        "the negative must record the E6421-stale accounting (check retained)"
+    );
+    // The same fail-closed stance holds without the proven policy.
+    let (ok_neg2, _, out_neg2) = compile_with_refinements(&root, &dir, false, false);
+    assert!(
+        ok_neg2,
+        "the policy-less negative must still compile (open, retained)"
+    );
+    assert!(
+        !echo_discharged_proof_ids(&out_neg2)
+            .iter()
+            .any(|id| id == OBL_ID),
+        "without the refinement context the site stays open in every policy"
+    );
+}
+
+/// P3s finding-6 dedup — the refinement declaration is single-authoritative:
+/// the fixture `tyu.refinements/1` document (the renderer context tyu hands
+/// any rp2350 build) must declare EXACTLY the devices of the pack's own
+/// `model/model.toml [refinements]` manifest (the lint schema) — both parse
+/// through the same `verifier::refinements` schema, so a drift between the
+/// two data copies fails a compile-time-in-test equality, not a later
+/// review.
+#[test]
+fn fixture_refinement_document_matches_rp2350_pack_manifest() {
+    let root = workspace_root();
+    let fixture = fs::read_to_string(root.join(FIXTURE).join("refinements.json")).unwrap();
+    let from_doc = verifier::refinements::parse_manifest(&fixture)
+        .unwrap_or_else(|| panic!("the fixture tyu.refinements/1 doc must parse"));
+    let from_pack = tyu::platform::model_artifact_refinements(&root.join("platforms/rp2350"));
+    assert!(
+        !from_pack.is_empty(),
+        "the rp2350 pack must declare its [refinements] device"
+    );
+    assert_eq!(
+        from_doc, from_pack,
+        "the renderer context document and the pack manifest must declare the SAME refinement \
+         devices (register/refinement/width/mask/mode)"
     );
 }

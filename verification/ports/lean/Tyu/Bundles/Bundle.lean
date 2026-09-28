@@ -152,7 +152,7 @@ def ofCells (lo hi : Int) (cells : List (Int × Tyu.Conformance.Interval)) : Bun
   { ramLo := lo, ramHi := hi,
     cell := fun a =>
       fromConformance (Tyu.Conformance.MemModel.recordedAt
-        (Tyu.Conformance.MemModel.bundle lo hi cells) a) }
+        (Tyu.Conformance.MemModel.bundle lo hi cells []) a) }
 
 /-- The twin's window-membership, as a proposition iff (the bridge the load
 equivalence uses). -/
@@ -163,7 +163,7 @@ theorem ofCells_inRam_iff (lo hi : Int) (cells : List (Int × Tyu.Conformance.In
 /-- The window-membership bridge: the conformance model's Bool window test
 equals the denotational window proposition. -/
 theorem bundle_inRam_iff (lo hi a : Int) (cells : List (Int × Tyu.Conformance.Interval)) :
-    Tyu.Conformance.MemModel.inRam (Tyu.Conformance.MemModel.bundle lo hi cells) a = true
+    Tyu.Conformance.MemModel.inRam (Tyu.Conformance.MemModel.bundle lo hi cells []) a = true
       ↔ lo ≤ a ∧ a ≤ hi := by
   simp [Tyu.Conformance.MemModel.inRam, decide_eq_true_eq]
 
@@ -181,9 +181,12 @@ defect (finding #1) is what these exist to catch. Registry entries:
 denotational `BundleMem.apertureRead` agree (both through `wordDomain`). -/
 theorem aperture_read_agrees (lo hi : Int)
     (cells : List (Int × Tyu.Conformance.Interval)) (w : Nat) :
-    Tyu.Conformance.MemModel.apertureRead (Tyu.Conformance.MemModel.bundle lo hi cells) w
+    Tyu.Conformance.MemModel.apertureRead (Tyu.Conformance.MemModel.bundle lo hi cells []) "" w
       = toConformance (BundleMem.apertureRead w) := by
   unfold Tyu.Conformance.MemModel.apertureRead BundleMem.apertureRead
+  -- the unscripted bundle answers no scripted read: the aperture path is
+  -- exactly the width domain
+  simp [Tyu.Conformance.MemModel.scriptedRead]
   cases hp : Tyu.Conformance.wordDomain w with
   | none => simp [toConformance, hp]
   | some p => simp [toConformance, hp]
@@ -193,19 +196,19 @@ identically under both mirrors (the in-window case flows the recorded cell
 through; the out-of-window case reads `top` on both sides). -/
 theorem load_agrees (lo hi : Int) (cells : List (Int × Tyu.Conformance.Interval)) (a : Int)
     (w : Nat) :
-    Tyu.Conformance.MemModel.load (Tyu.Conformance.MemModel.bundle lo hi cells)
+    Tyu.Conformance.MemModel.load (Tyu.Conformance.MemModel.bundle lo hi cells [])
         (Tyu.Conformance.Interval.range a a) w
       = toConformance (BundleMem.loadVal (ofCells lo hi cells) (IntervalVal.range a a)) := by
   have hload : BundleMem.loadVal (ofCells lo hi cells) (IntervalVal.range a a) =
       if (ofCells lo hi cells).inRam a then (ofCells lo hi cells).cell a else IntervalVal.top := by
     simp [BundleMem.loadVal]
   have hcell : (ofCells lo hi cells).cell a =
-      fromConformance ((Tyu.Conformance.MemModel.bundle lo hi cells).recordedAt a) := by
+      fromConformance ((Tyu.Conformance.MemModel.bundle lo hi cells []).recordedAt a) := by
     simp [ofCells]
   by_cases h1 : lo ≤ a <;> by_cases h2 : a ≤ hi
   · -- in-window: both mirrors flow the recorded cell through.
     have hin : (ofCells lo hi cells).inRam a := (ofCells_inRam_iff lo hi cells a).2 ⟨h1, h2⟩
-    have hwinb : Tyu.Conformance.MemModel.inRam (Tyu.Conformance.MemModel.bundle lo hi cells) a = true := by
+    have hwinb : Tyu.Conformance.MemModel.inRam (Tyu.Conformance.MemModel.bundle lo hi cells []) a = true := by
       simpa [Tyu.Conformance.MemModel.inRam, decide_eq_true_eq] using (And.intro h1 h2)
     rw [hload, if_pos hin, hcell, to_from_conformance, Tyu.Conformance.MemModel.load]
     simp [hwinb]
@@ -242,22 +245,34 @@ def ofBundle (m : BundleMem) : MemModel := {
   apertureRead := fun _place w => BundleMem.apertureRead w,
   apertureWrite := fun _place v => v }
 
+/-- The trailing-token place matcher (P13.2, P3s finding 6e): mirrors
+`verifier::refinements::token_matches` (and the renderer's matcher) — the
+SAME binding semantics as the manifest: a register declared as a trailing
+token (`UARTFR`) refines any place whose trailing dot-segment equals it
+(`uart.UARTFR`, `uart0.UARTFR`); a dot-bearing declaration requires exact
+equality. One matcher per surface, drift-locked by the `--level bands` and
+corpus evidence. -/
+def tokenMatches (place : String) (register : String) : Bool :=
+  if register.contains ('.') then place == register
+  else place == register || (¬ register.isEmpty && place.endsWith ("." ++ register))
+
 /-- The bundle model under a named device refinement (PLAN-VERIFY-3 P13.2):
-identical to [`ofBundle`] except reads of the refined `place` are gated by
-the register's ACCESS-MODE (P2 finding): a READ-ONLY refined register
-answers the datasheet band ([`apertureReadRefined`]) — the stable-value
-set; every WRITE-CAPABLE mode answers the §Q13 width-bounded
-nondeterministic domain (the model records no register state, so
-write-capable reads stay unrestricted — sound). Reads of every other
-register keep the default. The aperture WRITE channel is isolated: no read
-consults it. This is the model-side shape of the statement-context
-`refinement: "…"` relativism: a statement that binds a refined read value is
-meaningful only for a bundle whose model carries that refinement. -/
-def refinedOf (m : BundleMem) (mode : AccessMode) (mask : Int) (place : String) : MemModel := {
+identical to [`ofBundle`] except reads of any place whose trailing token
+matches the refinement's `register` are gated by the ACCESS-MODE (P2
+finding): a READ-ONLY refined register answers the datasheet band
+([`apertureReadRefined`]) — the stable-value set; every WRITE-CAPABLE mode
+answers the §Q13 width-bounded nondeterministic domain (the model records
+no register state, so write-capable reads stay unrestricted — sound). Reads
+of every other `place` keep the default. The aperture WRITE channel is
+isolated: no read consults it. This is the model-side shape of the
+statement-context `refinement: "…"` relativism: a statement that binds a
+refined read value is meaningful only for a bundle whose model carries that
+refinement. -/
+def refinedOf (m : BundleMem) (mode : AccessMode) (mask : Int) (register : String) : MemModel := {
   load := fun addr _w => m.loadVal addr,
   store := fun _addr v => v,
   apertureRead := fun p w =>
-    if p == place then
+    if tokenMatches p register then
       if AccessMode.isRO mode then BundleMem.apertureReadRefined mask w
       else BundleMem.apertureRead w
     else BundleMem.apertureRead w,

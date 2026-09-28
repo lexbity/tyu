@@ -326,6 +326,22 @@ def outInRange (blocks : List Block) (entry : Nat) (i : Nat) (lo hi : Int) : Pro
     Word.run blocks spec entry fuel mem σ₀ = (mem, some σf) →
     inRange (outputAt σf i) lo hi
 
+/-- The source-side `subtype-range` claim under a DEVICE REFINEMENT
+(PLAN-VERIFY-3 P13.2, §Q13): every terminating source run whose MMIO reads
+answer within the refinement's band `[bandLo, bandHi]` has its i-th output
+in `[lo, hi]`. The refinement is MATHEMATICALLY load-bearing here: without
+the band restriction, a read-dependent output claim (e.g. a word that
+returns the register read) cannot hold over the §Q13 universal oracle — it
+is provable exactly because reads answer in-band. `bandLo` is the modeled
+band floor (0 for the flag-mask bands; the manifest has no negative modeled
+bits) and `bandHi` is the band ceiling (the register's datasheet mask). -/
+def outInRangeRefined (blocks : List Block) (entry : Nat) (i : Nat) (lo hi : Int)
+    (bandLo bandHi : Int) : Prop :=
+  ∀ (spec : Tyu.IR.TargetSpec) (mem : ConcreteMem) (fuel : Nat) (σ₀ σf : State),
+    (bandLo ≤ mem.mmioRead ∧ mem.mmioRead ≤ bandHi) →
+    Word.run blocks spec entry fuel mem σ₀ = (mem, some σf) →
+    inRange (outputAt σf i) lo hi
+
 /-- The source-side `subtype-range` claim for a word input (a sound
 over-claim — the callee cannot know its callers; in practice unprovable). -/
 def inInputRange (i : Nat) (lo hi : Int) : Prop :=

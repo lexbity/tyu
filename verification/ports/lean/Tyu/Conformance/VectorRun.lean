@@ -18,8 +18,9 @@ def parseOp (line : String) : Option OpInst :=
           | [b] => some ((OpInst.opMk .const_bool).setConstBool (b == "true"))
           | _ => none
       | "const_str" => some (OpInst.opMk .const_str)
-      | "addr_of" | "addr_of_mut" => some (OpInst.opMk (if m == "addr_of" then .addr_of else .addr_of_mut))
-      | "mmio_place" => some (OpInst.opMk .mmio_place)
+      | "addr_of" | "addr_of_mut" =>
+          some ((OpInst.opMk (if m == "addr_of" then .addr_of else .addr_of_mut)).setPlace (rest.getD 0 ""))
+      | "mmio_place" => some ((OpInst.opMk .mmio_place).setPlace (rest.getD 0 ""))
       | "scoped_enter" => some (OpInst.opMk .scoped_enter)
       | "task_spawn" => some (OpInst.opMk .task_spawn)
       | "ptr_add_const" => some (OpInst.opMk .ptr_add_const)
@@ -50,10 +51,10 @@ def parseOp (line : String) : Option OpInst :=
       | "call" => some (OpInst.opMk .call)
       | "load" => some (OpInst.opMk .load)
       | "store" => some (OpInst.opMk .store)
-      | "vol_load" => some (OpInst.opMk .vol_load)
-      | "vol_store" => some (OpInst.opMk .vol_store)
-      | "vol_load_field" => some (OpInst.opMk .vol_load_field)
-      | "vol_store_field" => some (OpInst.opMk .vol_store_field)
+      | "vol_load" => some ((OpInst.opMk .vol_load).setPlace (rest.drop 1 |>.head? |>.getD ""))
+      | "vol_store" => some ((OpInst.opMk .vol_store).setPlace (rest.drop 1 |>.head? |>.getD ""))
+      | "vol_load_field" => some ((OpInst.opMk .vol_load_field).setPlace (rest.drop 1 |>.head? |>.getD ""))
+      | "vol_store_field" => some ((OpInst.opMk .vol_store_field).setPlace (rest.drop 1 |>.head? |>.getD ""))
       | "trap_if_false" => some (OpInst.opMk .trap_if_false)
       | "br" => match rest with
           | [t] => parseBlockId t |>.map (fun i => (OpInst.opMk .br).setBrTgt i)
@@ -117,6 +118,24 @@ where
     | none => []
   Block.mk (id : Nat) (ops : List OpInst) (succs : List Nat) : Block := { id := id, ops := ops, succs := succs }
 
+/-- The vector's scripted (refined) MMIO reads:
+`[{"place":"uart.UARTFR","lo":0,"hi":249}, …]` — place-keyed fixed read
+intervals, mirroring `ApertureMem.script_read` (P13.2: the refined-evidence
+corpus scripts the refined register's reads, and the runner applies them on
+BOTH sides so the Rust↔Lean agreement covers a refined READ VALUE). A
+malformed `reads` entry fails the whole vector (fail-closed). -/
+def parseScriptedReads (reads : Json) : Option (List (String × Int × Int)) :=
+  match Json.asArr reads with
+  | none => none
+  | some arr =>
+      arr.mapM (fun entry =>
+        match entry.field "place", entry.field "lo", entry.field "hi" with
+        | some p, some lo, some hi =>
+            match Json.asStr p, Json.asInt lo, Json.asInt hi with
+            | some ps, some l, some h => some (ps, l, h)
+            | _, _, _ => none
+        | _, _, _ => none)
+
 /-- The extracted fields of one `tyu.vec/1` vector. -/
 structure Vector where
   id : String
@@ -132,6 +151,7 @@ structure Vector where
   targetLo : Int
   targetHi : Int
   castSite : Bool
+  scripted : List (String × Int × Int)
   expectHead : String
   expectTop : String
   deriving DecidableEq, Repr, Inhabited
@@ -162,6 +182,9 @@ def vectorFromJson (j : Json) : Option Vector := do
         sigOut := ((j.field "sig_out").bind Json.asInt |>.getD 0).toNat,
         blocks := (j.field "blocks").bind Json.asStr |>.getD "",
         targetLo := lo, targetHi := hi, castSite := castSite.getD false,
+        scripted := (match j.field "reads" with
+          | none => []
+          | some r => (parseScriptedReads r).getD []),
         expectHead := expectHead.getD "", expectTop := expectTop.getD "" }
       some v
   | _ => none

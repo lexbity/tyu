@@ -855,8 +855,9 @@ struct ModelArtifactFile {
     #[allow(dead_code)]
     #[serde(default)]
     memory: Option<ModelArtifactMemory>,
-    // Parsed-and-validated schema surface today (the empty refinement
-    // manifest must be accepted); P13 names refinements here.
+    // The `[refinements]` manifest (P13.1/P13.2): parsed strictly (device
+    // entries carry register/refinement/width/mask/mode; E5417 lint), the
+    // empty manifest accepted (an explicitly unrefined modeled bundle).
     #[allow(dead_code)]
     #[serde(default)]
     refinements: Option<ModelArtifactRefinements>,
@@ -918,7 +919,6 @@ struct ModelArtifactRam {
 /// the mode is in the closed access-mode set, and the mask is nonzero and
 /// within the register width. Duplicate registers are malformed (a register
 /// has exactly one refinement).
-#[allow(dead_code)]
 #[derive(serde::Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 struct ModelArtifactRefinements {

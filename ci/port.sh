@@ -423,91 +423,40 @@ msg 2 "  port.sh: P9 source-surface gate green (src_stmt rendering + surface:sou
 # "mismatch ⇒ render refuses" rule): a modeled bundle's MMIO-word statements
 # WITHOUT the refinement context are omitted (`refined-read-unbound`), never
 # silently re-bound. The repo-level test
-# `crates/tooling-tests/tests/refined_proof_e2e.rs` drives the identical
-# flow; the gate here runs it through the port shell.
+# The repo-level test `crates/tooling-tests/tests/refined_proof_e2e.rs` drives
+# the IDENTICAL flow (drift-lock hash, source-surface harvest, langc FR-5
+# consumption incl. the proven policy); rather than duplicating it in shell
+# (the port.sh↔e2e duplication finding), the gate RUNS it — exactly like the
+# P10 proof_fill_e2e arm below — and keeps ONLY the shell-native refusal
+# grep (a fast negative control visible in the gate log).
 msg 2 "  port.sh: P13 refined-certificate gate (Uart7 fixture, rp2350 refinement)"
 RF="$ROOT/verification/ports/lean/tests/refined-fixture"
 RF_TMP="$(mktemp -d)"
 (
+    # 0. THE REPO-LEVEL e2e: `refined_proof_e2e` re-derives the Rust
+    #    encoder's refined statement hash, byte-compares it against the Lean
+    #    renderer, harvests the source-surface certificate (`surface:
+    #    "source"`, `relies: ["T-S"]`, refined hash), and asserts the langc
+    #    discharge/open fail-closed stances (`--verify-policy=proven`
+    #    included).
+    ( cd "$ROOT" && TYU_REFINED_E2E=1 cargo test -q -p tooling-tests --test refined_proof_e2e 2>&1 | tail -3 ) || exit 1
     cp "$RF/Uart7.obl.json" "$RF_TMP/"
-    cp "$ROOT/verification/ports/lean/lean-toolchain" "$RF_TMP/lean-toolchain"
-    # 1. THE REFUSAL: without the context, the modeled bundle's MMIO-word
-    #    statements are omitted (`refined-read-unbound`) — no statements
-    #    render, never a silent default re-binding.
+    # 1. THE REFUSAL (shell-native): without the context, the modeled
+    #    bundle's MMIO-word statements are omitted (`refined-read-unbound`)
+    #    — no statements render, never a silent default re-binding.
     .lake/build/bin/gen --render --obl "$RF_TMP/Uart7.obl.json" --out "$RF_TMP/GenNR" >/dev/null || exit 1
     grep -q '"reason": "refined-read-unbound"' "$RF_TMP/GenNR/Uart7.gen.json" || exit 1
     if grep -q '"omitted": false' "$RF_TMP/GenNR/Uart7.gen.json"; then
         msg 1 "  port.sh: P13 FAIL — the refinement-less render must REFUSE (no rendered statements)"
         exit 1
     fi
-    # 2. WITH the refinement context: the statement hash must carry the
-    #    refinement in its canonical context (the drift-lock row), AND the
-    #    pure-fragment word renders the SOURCE-surface statement too.
-    TYU_GEN_REFINEMENTS="$RF/refinements.json" \
-      .lake/build/bin/gen --render --obl "$RF_TMP/Uart7.obl.json" --out "$RF_TMP/Gen" >/dev/null || exit 1
-    grep -q '"refinement": "rp2350.uart-fr"' "$RF_TMP/Gen/Uart7.gen.json" || exit 1
-    grep -q '"src_def": "src_stmt_Uart7_read_tx_idle_subtype_range_1"' "$RF_TMP/Gen/Uart7.gen.json" || exit 1
-    grep -q "def src_stmt_Uart7_read_tx_idle_subtype_range_1 : Prop" "$RF_TMP/Gen/Uart7.lean" || exit 1
-    grep -q "Tyu.Src.outInRange" "$RF_TMP/Gen/Uart7.lean" || exit 1
-    # 3. assemble the package around the fixture proof + generated Gen.
-    cp "$RF/Uart7Fix.lean" "$RF_TMP/"
-    cat > "$RF_TMP/hv.lean" <<'LAKEEOF'
-import Uart7Fix
-import Tyu.Verdicts.Harvest
-
-#eval! Tyu.Verdicts.Harvest.run
-LAKEEOF
-    cat > "$RF_TMP/lakefile.toml" <<LAKEEOF
-name = "tyu-refined-suite"
-version = "0.1.0"
-
-[[lean_lib]]
-name = "Tyu"
-srcDir = "$ROOT/verification/ports/lean"
-roots = ["Tyu"]
-
-[[lean_lib]]
-name = "Gen"
-srcDir = "."
-roots = ["Gen"]
-
-[[lean_lib]]
-name = "Uart7Fix"
-srcDir = "."
-roots = ["Uart7Fix"]
-LAKEEOF
-    # 4. build + harvest; the verdict MUST carry the SOURCE-surface
-    #    certificate with the REFINED statement hash + the T-S reliance.
-    ( cd "$RF_TMP" && lake build Uart7Fix Tyu.Verdicts.Harvest >/dev/null 2>&1 ) || exit 1
-    ( cd "$RF_TMP" && TYU_HARVEST_GEN_DIR="$RF_TMP/Gen" TYU_HARVEST_OBL="$RF_TMP/Uart7.obl.json" \
-      TYU_HARVEST_OUT="$RF_TMP/out.v2.json" \
-      lake env lean "$RF_TMP/hv.lean" >/dev/null 2>&1 ) || exit 1
-    grep -q '"trust":"proof"' "$RF_TMP/out.v2.json" || exit 1
-    grep -q '"surface":"source"' "$RF_TMP/out.v2.json" || exit 1
-    grep -Fq '"relies":["T-S"]' "$RF_TMP/out.v2.json" || exit 1
-    grep -q '"model_semantics":"tyu.model/rp2350/1"' "$RF_TMP/out.v2.json" || exit 1
-    # 5. langc consumption: `--refinements` binds (exit 0); without it the
-    #    recompute is E6421-stale — still exit 0 (the site stays open, the
-    #    check is retained — never a wrong discharge, never a crash).
-    ( cd "$ROOT" && cargo build -q -p langc >/dev/null 2>&1 )
-    mkdir -p "$RF_TMP/out" "$RF_TMP/outnr"
-    ( cd "$RF_TMP" && "$ROOT/target/debug/langc" --emit=obj --target=armv7m-unknown-none \
-      --out-dir="$RF_TMP/out" --write-obl --checks=undischarged \
-      --platform="$ROOT/platforms/rp2350" --model-semantics=tyu.model/rp2350/1 \
-      --verdicts="$RF_TMP/out.v2.json" --bind-obl="$RF_TMP/Uart7.obl.json" \
-      --refinements="$RF/refinements.json" "$RF/Uart7.mod" >/dev/null 2>&1 ) || exit 1
-    ( cd "$RF_TMP" && "$ROOT/target/debug/langc" --emit=obj --target=armv7m-unknown-none \
-      --out-dir="$RF_TMP/outnr" --write-obl --checks=undischarged \
-      --platform="$ROOT/platforms/rp2350" --model-semantics=tyu.model/rp2350/1 \
-      --verdicts="$RF_TMP/out.v2.json" --bind-obl="$RF_TMP/Uart7.obl.json" \
-      "$RF/Uart7.mod" >/dev/null 2>&1 ) || exit 1
     rm -rf "$RF_TMP"
 ) || {
     rm -rf "$RF_TMP"
-    msg 1 "  port.sh: P13 refined-certificate gate FAILED (refusal / refinement context / source-surface harvest / langc --refinements)"
+    msg 1 "  port.sh: P13 refined-certificate gate FAILED (refined_proof_e2e / refusal)"
     exit 1
 }
-msg 2 "  port.sh: P13 refined-certificate gate green (refusal + refinement context + drift-lock hash + source-surface harvest + langc binding)"
+msg 2 "  port.sh: P13 refined-certificate gate green (refined_proof_e2e + refusal grep)"
 
 echo ""
 # --- PLAN-VERIFY-3 P10 — automation: rate measurement + candidate fill ---

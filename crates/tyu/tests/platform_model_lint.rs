@@ -181,6 +181,24 @@ fn lint(root: &Path) -> tyu::platform::LintOutcome {
     lint_pack(root, "demo", false).unwrap()
 }
 
+/// A modeled bundle whose model artifact carries a `[refinements]` device
+/// (the E5417 surface, P13.2). Returns the lint outcome.
+fn lint_with_refinement(root: &Path, device: &str) -> tyu::platform::LintOutcome {
+    let manifest = manifest_with_model(&format!(
+        "model_semantics = \"{}\"\nmmio = \"nondeterministic\"\nconcurrency = \"unmodeled\"",
+        MODEL_ID
+    ));
+    write_pack(root, &manifest);
+    write_file(
+        &root.join("platforms/demo/model/model.toml"),
+        &format!(
+            "[model]\nid = \"{MODEL_ID}\"\n\n[refinements]\n[[refinements.device]]\n{device}\n"
+        ),
+    );
+    write_evidence(root);
+    lint(root)
+}
+
 // ---------------------------------------------------------------------------
 // Accept paths
 // ---------------------------------------------------------------------------
@@ -208,6 +226,76 @@ fn modeled_pack_with_artifact_and_evidence_is_clean() {
         outcome.warnings.is_empty(),
         "a declared modeled bundle must not warn: {:?}",
         outcome.warnings
+    );
+}
+
+/// P3s finding 6c — the E5417 refinement-manifest lint: a well-formed
+/// device (valid band + access-mode) lints clean, and every malformed
+/// variant (zero/over-width mask, out-of-set mode, duplicate register)
+/// fails-closed with E5417.
+#[test]
+fn refinement_manifest_is_linted_strictly() {
+    // Accept: a datasheet band within the (32-bit) register + an in-set mode.
+    let ok = lint_with_refinement(
+        &fresh_root("ref-ok"),
+        "register = \"UARTFR\"\nrefinement = \"demo.uart-fr\"\nwidth = 32\n\
+         mask = 0xF9\nmode = \"ro\"",
+    );
+    assert!(
+        ok.errors.is_empty(),
+        "a well-formed refinement device must lint clean: {}",
+        format_lint_outcome(&ok)
+    );
+
+    // reject: a ZERO band models a dead register.
+    let e = lint_with_refinement(
+        &fresh_root("ref-mask0"),
+        "register = \"UARTFR\"\nrefinement = \"demo.uart-fr\"\nwidth = 32\n\
+         mask = 0x0\nmode = \"ro\"",
+    );
+    assert!(
+        e.errors.iter().any(|x| x.code == 5417),
+        "zero mask must be E5417: {}",
+        format_lint_outcome(&e)
+    );
+
+    // reject: an OVER-WIDTH band (the 0x3FF-over-band defect class on an
+    // 8-bit register) models reads the datasheet never produces.
+    let e = lint_with_refinement(
+        &fresh_root("ref-maskwide"),
+        "register = \"UARTFR\"\nrefinement = \"demo.uart-fr\"\nwidth = 8\n\
+         mask = 0x1FF\nmode = \"ro\"",
+    );
+    assert!(
+        e.errors.iter().any(|x| x.code == 5417),
+        "an over-width mask must be E5417: {}",
+        format_lint_outcome(&e)
+    );
+
+    // reject: an access-mode outside the closed set.
+    let e = lint_with_refinement(
+        &fresh_root("ref-mode"),
+        "register = \"UARTFR\"\nrefinement = \"demo.uart-fr\"\nwidth = 32\n\
+         mask = 0xF9\nmode = \"rwx\"",
+    );
+    assert!(
+        e.errors.iter().any(|x| x.code == 5417),
+        "an out-of-set access-mode must be E5417: {}",
+        format_lint_outcome(&e)
+    );
+
+    // reject: a duplicate register (a register has exactly one refinement).
+    let e = lint_with_refinement(
+        &fresh_root("ref-dup"),
+        "register = \"UARTFR\"\nrefinement = \"demo.uart-fr-a\"\nwidth = 32\n\
+         mask = 0xF9\nmode = \"ro\"\n\n[[refinements.device]]\n\
+         register = \"UARTFR\"\nrefinement = \"demo.uart-fr-b\"\nwidth = 32\n\
+         mask = 0xF9\nmode = \"ro\"",
+    );
+    assert!(
+        e.errors.iter().any(|x| x.code == 5417),
+        "a duplicate register must be E5417: {}",
+        format_lint_outcome(&e)
     );
 }
 

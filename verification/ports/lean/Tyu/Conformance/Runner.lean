@@ -5,11 +5,15 @@ namespace Tyu.Conformance
 /-- Execute one vector against the abstract engine, mirroring
 `verifier::tests::vector_corpus::Vector::run`. `ram` is the corpus's
 optional bundle RAM window (P12.2); the `"bundle"` model runs an
-`ApertureMem` instance over it, `"aperture"` runs the empty version. -/
+`ApertureMem` instance over it, `"aperture"` runs the empty version. The
+vector's scripted `reads` (place-keyed fixed intervals, P13.2) seed the
+bundle instance's refined-register reads — applied on the Rust side too, so
+the Rust↔Lean agreement covers a refined READ VALUE. -/
 def runVector (v : Vector) (wordBits : Nat) (ram : Option (Int × Int)) : Tri × Interval :=
   let sr := percentRange
+  let scripted := v.scripted.map (fun (p, lo, hi) => (p, Interval.range lo hi))
   let mem0 : MemModel := match v.model, ram with
-    | "bundle", some (lo, hi) => MemModel.bundle lo hi []
+    | "bundle", some (lo, hi) => MemModel.bundle lo hi [] scripted
     | "bundle", none => MemModel.apertureEmpty
     | "aperture", _ => MemModel.apertureEmpty
     | _, _ => MemModel.flat

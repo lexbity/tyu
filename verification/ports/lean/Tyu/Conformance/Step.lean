@@ -87,6 +87,7 @@ inductive MemModel where
   | flat
   | apertureEmpty
   | bundle (ramLo : Int) (ramHi : Int) (cells : List (Int × Interval))
+           (scripted : List (String × Interval))
   deriving DecidableEq, Repr, Inhabited
 
 namespace MemModel
@@ -94,13 +95,13 @@ namespace MemModel
 /-- Is a point address inside the modeled RAM window? -/
 def inRam (m : MemModel) (a : Int) : Bool :=
   match m with
-  | .bundle ramLo ramHi _ => ramLo ≤ a && a ≤ ramHi
+  | .bundle ramLo ramHi _ _ => ramLo ≤ a && a ≤ ramHi
   | _ => false
 
 /-- The recorded-cell list (empty for the non-bundle instances). -/
 def cellsOf (m : MemModel) : List (Int × Interval) :=
   match m with
-  | .bundle _ _ cs => cs
+  | .bundle _ _ cs _ => cs
   | _ => []
 
 /-- The joined abstract value recorded for a point address (`top` when
@@ -133,27 +134,48 @@ def store (m : MemModel) (addr : Interval) (val : Interval) : MemModel :=
   | Interval.range a b =>
       if a == b then
         match m with
-        | .bundle ramLo ramHi cs =>
-            if ramLo ≤ a && a ≤ ramHi then .bundle ramLo ramHi (storeCells cs a val) else m
+        | .bundle ramLo ramHi cs scr =>
+            if ramLo ≤ a && a ≤ ramHi then .bundle ramLo ramHi (storeCells cs a val) scr else m
         | _ => m
       else m
   | _ => m
 
-/-- MMIO aperture read — the injected nondeterminism oracle (§Q13). `flat`
-answers `top` (sound for any register width); the aperture-bearing
-instances answer the width-bounded domain. -/
-def apertureRead (m : MemModel) (widthBits : Nat) : Interval :=
+/-- The scripted (refined) read for `place`, when the model declares one —
+mirrors `ApertureMem::script_read` (the refinement oracle seed). -/
+def scriptedRead (m : MemModel) (place : String) : Option Interval :=
+  match m with
+  | .bundle _ _ _ scr =>
+      match scr.find? (fun s => s.1 == place) with
+      | some (_, v) => some v
+      | none => none
+  | _ => none
+
+/-- MMIO aperture read — the injected nondeterminism oracle (§Q13). A
+`bundle`-instance read of a SCRIPTED (refined) `place` answers the scripted
+value (the refinement's modeled behavior); every other read answers `top`
+(`flat`) or the width-bounded domain. -/
+def apertureRead (m : MemModel) (place : String) (widthBits : Nat) : Interval :=
   match m with
   | .flat => Interval.top
-  | .apertureEmpty | .bundle _ _ _ =>
+  | .apertureEmpty =>
       match wordDomain widthBits with
       | none => Interval.top
       | some (lo, hi) => Interval.range lo hi
+  | .bundle _ _ _ _ =>
+      match m.scriptedRead place with
+      | some v => v
+      | none =>
+          match wordDomain widthBits with
+          | none => Interval.top
+          | some (lo, hi) => Interval.range lo hi
 
 end MemModel
 
 /-- One parsed op instance: the op form plus the payload fields the abstract
-transfer consumes. -/
+transfer consumes. `place` is the MMIO register token of a
+`vol_load`/`vol_store`/`addr_of`/`mmio_place` access (P13.2: the refined-
+evidence corpus scripts reads by place, mirroring
+`ApertureMem.script_read`). -/
 structure OpInst where
   form : Tyu.IR.OpForm
   constVal : Option Int
@@ -162,6 +184,7 @@ structure OpInst where
   subtypeCast : Bool
   brTgt : Option Nat
   brIfTgts : Option (Nat × Nat)
+  place : String
   deriving DecidableEq, Repr, Inhabited
 
 namespace OpInst
@@ -170,7 +193,7 @@ namespace OpInst
 avoid colliding with the structure's generated `OpInst.mk` constructor. -/
 def opMk (form : Tyu.IR.OpForm) : OpInst :=
   { form := form, constVal := none, constBool := none, slot := none,
-    subtypeCast := false, brTgt := none, brIfTgts := none }
+    subtypeCast := false, brTgt := none, brIfTgts := none, place := "" }
 
 /-- Payload setters (projection-style helpers for the parser). -/
 def setConst (o : OpInst) (v : Int) : OpInst := { o with constVal := some v }
@@ -179,6 +202,7 @@ def setSlot (o : OpInst) (i : Nat) : OpInst := { o with slot := some i }
 def setSubtypeCast (o : OpInst) (b : Bool) : OpInst := { o with subtypeCast := b }
 def setBrTgt (o : OpInst) (i : Nat) : OpInst := { o with brTgt := some i }
 def setBrIf (o : OpInst) (p : Nat × Nat) : OpInst := { o with brIfTgts := some p }
+def setPlace (o : OpInst) (p : String) : OpInst := { o with place := p }
 
 end OpInst
 
@@ -271,7 +295,7 @@ def stepOp (op : OpInst) (st : State) (sr : Option (Int × Int)) (widthBits : Na
       (mem.store addr.iv val.iv, st1)
   | .vol_load | .vol_load_field =>
       let (st1, _) := State.popVal' st
-      (mem, st1.push' (Slot.computed (mem.apertureRead widthBits)))
+      (mem, st1.push' (Slot.computed (mem.apertureRead op.place widthBits)))
   | .vol_store | .vol_store_field =>
       let (st1, _, _) := State.pop2 st
       (mem, st1)

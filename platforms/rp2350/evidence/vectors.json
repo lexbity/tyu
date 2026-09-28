@@ -188,6 +188,57 @@
       "target": [0, 100],
       "cast_site": true,
       "expect": {"head": "def-false", "top": "[150,150]"}
+    },
+    {
+      "id": "td/refined-read-scripted-in-band",
+      "class": "td:refined-read",
+      "row": "vol_load",
+      "model": "bundle",
+      "mode": "linear",
+      "ops": "vol_load i64 uart.UARTFR atomic=32",
+      "entry": "",
+      "target": [0, 249],
+      "cast_site": false,
+      "reads": [{"place":"uart.UARTFR","lo":245,"hi":245}],
+      "expect": {"head": "discharged", "top": "[245,245]"}
+    },
+    {
+      "id": "td/refined-read-scripted-band-top",
+      "class": "td:refined-read",
+      "row": "vol_load",
+      "model": "bundle",
+      "mode": "linear",
+      "ops": "vol_load i64 uart.UARTFR atomic=32",
+      "entry": "",
+      "target": [0, 249],
+      "cast_site": false,
+      "reads": [{"place":"uart.UARTFR","lo":249,"hi":249}],
+      "expect": {"head": "discharged", "top": "[249,249]"}
+    },
+    {
+      "id": "td/refined-read-scripted-out-of-band",
+      "class": "td:refined-read",
+      "row": "vol_load",
+      "model": "bundle",
+      "mode": "linear",
+      "ops": "vol_load i64 uart.UARTFR atomic=32",
+      "entry": "",
+      "target": [0, 249],
+      "cast_site": false,
+      "reads": [{"place":"uart.UARTFR","lo":1023,"hi":1023}],
+      "expect": {"head": "def-false", "top": "[1023,1023]"}
+    },
+    {
+      "id": "td/refined-read-unscripted",
+      "class": "td:refined-read",
+      "row": "vol_load",
+      "model": "bundle",
+      "mode": "linear",
+      "ops": "vol_load i64 uart.UARTFR atomic=32",
+      "entry": "",
+      "target": [0, 249],
+      "cast_site": false,
+      "expect": {"head": "open", "top": "[-2147483648,2147483647]"}
     }
   ]
 }

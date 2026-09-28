@@ -147,7 +147,10 @@ fn bundles() -> Vec<Bundle> {
 
 /// Ops for a linear vector; each travels as the canonical op text. The
 /// entry stack is separate (`"entry"`), exactly like the shared per-target
-/// corpora.
+/// corpora. `scripted` (P13.2) carries the vector's place-keyed fixed MMIO
+/// reads — the refined-register oracle seed (`ApertureMem.script_read`,
+/// mirrored by the Lean runner's `"reads"`), so the corpus exercises a
+/// refined read VALUE, not just the statement hash.
 #[derive(Debug, Clone)]
 struct Vec1 {
     id: String,
@@ -158,12 +161,19 @@ struct Vec1 {
     ops: Vec<OpKind>,
     target: (i64, i64),
     cast_site: bool,
+    scripted: Vec<(Atom, Interval)>,
     expect: (Tri, Interval),
 }
 
 impl Vec1 {
     fn run(&self, spec: TargetSpec, ram: (u64, u64)) -> (Tri, Interval) {
         let mut mem = ApertureMem::new(ram);
+        // P13.2: the refined-register reads are scripted into the instance
+        // before the run (the §Q13 refinement oracle — the read VALUE the
+        // bundle's device refinement models).
+        for (place, iv) in &self.scripted {
+            mem.script_read(place, *iv);
+        }
         let mut st = State::fresh(64);
         for iv in &self.entry {
             st.stack.push(verifier::interp::Slot {
@@ -247,6 +257,7 @@ fn vectors_for(b: &Bundle) -> Vec<Vec1> {
         ],
         target: (0, 100),
         cast_site: false,
+        scripted: Vec::new(),
         expect: (Tri::DefTrue, iv_range(42, 42)),
     });
 
@@ -269,6 +280,7 @@ fn vectors_for(b: &Bundle) -> Vec<Vec1> {
         ],
         target: (0, 100),
         cast_site: false,
+        scripted: Vec::new(),
         expect: (Tri::DefTrue, iv_range(7, 7)),
     });
 
@@ -292,6 +304,7 @@ fn vectors_for(b: &Bundle) -> Vec<Vec1> {
         ],
         target: (0, 100),
         cast_site: false,
+        scripted: Vec::new(),
         expect: (Tri::Top, Interval::TOP),
     });
 
@@ -316,6 +329,7 @@ fn vectors_for(b: &Bundle) -> Vec<Vec1> {
         ],
         target: (0, 100),
         cast_site: false,
+        scripted: Vec::new(),
         expect: (Tri::DefTrue, iv_range(42, 42)),
     });
 
@@ -337,6 +351,7 @@ fn vectors_for(b: &Bundle) -> Vec<Vec1> {
         ],
         target: (0, 100),
         cast_site: false,
+        scripted: Vec::new(),
         expect: (Tri::DefTrue, iv_range(9, 9)),
     });
 
@@ -359,6 +374,7 @@ fn vectors_for(b: &Bundle) -> Vec<Vec1> {
         ],
         target: (0, 100),
         cast_site: false,
+        scripted: Vec::new(),
         expect: (Tri::Top, Interval::TOP),
     });
 
@@ -372,6 +388,7 @@ fn vectors_for(b: &Bundle) -> Vec<Vec1> {
         ops: vec![const_op(a), OpKind::Load { ty: TypeId(0) }],
         target: (0, 100),
         cast_site: false,
+        scripted: Vec::new(),
         expect: (Tri::Top, Interval::TOP),
     });
     v.push(Vec1 {
@@ -383,6 +400,7 @@ fn vectors_for(b: &Bundle) -> Vec<Vec1> {
         ops: vec![const_op(other), OpKind::Load { ty: TypeId(0) }],
         target: (0, 100),
         cast_site: false,
+        scripted: Vec::new(),
         expect: (Tri::Top, Interval::TOP),
     });
     // A store *outside* the window must have no observable effect: it
@@ -402,6 +420,7 @@ fn vectors_for(b: &Bundle) -> Vec<Vec1> {
         ],
         target: (0, 100),
         cast_site: false,
+        scripted: Vec::new(),
         expect: (Tri::Top, Interval::TOP),
     });
 
@@ -421,6 +440,7 @@ fn vectors_for(b: &Bundle) -> Vec<Vec1> {
         ops: vec![mmio_read(b"tdreg", b.spec().word_bits)],
         target: (0, 100),
         cast_site: false,
+        scripted: Vec::new(),
         expect: (Tri::Top, aperture_top),
     });
 
@@ -434,6 +454,7 @@ fn vectors_for(b: &Bundle) -> Vec<Vec1> {
         ops: vec![const_op(i64::MAX)],
         target: (0, 100),
         cast_site: false,
+        scripted: Vec::new(),
         expect: (Tri::DefFalse, iv_range(i64::MAX, i64::MAX)),
     });
     v.push(Vec1 {
@@ -445,6 +466,7 @@ fn vectors_for(b: &Bundle) -> Vec<Vec1> {
         ops: vec![OpKind::AddI64],
         target: (0, 100),
         cast_site: false,
+        scripted: Vec::new(),
         expect: (Tri::Top, Interval::TOP),
     });
     v.push(Vec1 {
@@ -456,6 +478,7 @@ fn vectors_for(b: &Bundle) -> Vec<Vec1> {
         ops: vec![OpKind::SubI64],
         target: (0, 100),
         cast_site: false,
+        scripted: Vec::new(),
         expect: (Tri::Top, Interval::TOP),
     });
     v.push(Vec1 {
@@ -467,6 +490,7 @@ fn vectors_for(b: &Bundle) -> Vec<Vec1> {
         ops: vec![sub_cast()],
         target: (0, 100),
         cast_site: true,
+        scripted: Vec::new(),
         expect: (Tri::DefTrue, iv_range(42, 42)),
     });
     v.push(Vec1 {
@@ -478,8 +502,81 @@ fn vectors_for(b: &Bundle) -> Vec<Vec1> {
         ops: vec![sub_cast()],
         target: (0, 100),
         cast_site: true,
+        scripted: Vec::new(),
         expect: (Tri::DefFalse, iv_range(150, 150)),
     });
+
+    // P13.2 — the REFINED-register evidence for the rp2350 UARTFR device:
+    // reads of `uart.UARTFR` scripted to the refinement's modeled band
+    // discharge; an OUT-OF-BAND scripted read (one the datasheet never
+    // produces) FALSIFIES — the band is meaningful, not cosmetic; and an
+    // UNSCRIPTED read answers the §Q13 width-bounded default. The Lean
+    // runner applies the SAME scripted reads (`tyu.vec/1` `"reads"`), so
+    // the Rust↔Lean agreement covers a refined READ VALUE.
+    if b.pack == "rp2350" {
+        let reg = Atom::new(b"uart.UARTFR").unwrap();
+        let band = (0, 0xF9);
+        // In-band scripted read: the datasheet value set discharges.
+        v.push(Vec1 {
+            id: "td/refined-read-scripted-in-band".into(),
+            class: "td:refined-read".into(),
+            row: "vol_load",
+            model: "bundle",
+            entry: Vec::new(),
+            ops: vec![mmio_read(b"uart.UARTFR", b.spec().word_bits)],
+            target: band,
+            cast_site: false,
+            scripted: vec![(reg, iv_range(0xF5, 0xF5))],
+            expect: (Tri::DefTrue, iv_range(0xF5, 0xF5)),
+        });
+        // A scripted read at the band's top edge discharges exactly at 0xF9.
+        v.push(Vec1 {
+            id: "td/refined-read-scripted-band-top".into(),
+            class: "td:refined-read".into(),
+            row: "vol_load",
+            model: "bundle",
+            entry: Vec::new(),
+            ops: vec![mmio_read(b"uart.UARTFR", b.spec().word_bits)],
+            target: band,
+            cast_site: false,
+            scripted: vec![(reg, iv_range(0xF9, 0xF9))],
+            expect: (Tri::DefTrue, iv_range(0xF9, 0xF9)),
+        });
+        // An OUT-OF-BAND scripted read (a value the datasheet band never
+        // produces — the 0x3FF-over-band defect class!): FALSIFIES.
+        v.push(Vec1 {
+            id: "td/refined-read-scripted-out-of-band".into(),
+            class: "td:refined-read".into(),
+            row: "vol_load",
+            model: "bundle",
+            entry: Vec::new(),
+            ops: vec![mmio_read(b"uart.UARTFR", b.spec().word_bits)],
+            target: band,
+            cast_site: false,
+            scripted: vec![(reg, iv_range(0x3FF, 0x3FF))],
+            expect: (Tri::DefFalse, iv_range(0x3FF, 0x3FF)),
+        });
+        // An UNSCRIPTED read answers the §Q13 width-bounded default (no
+        // modeled refinement read on this side).
+        let (dom_lo, dom_hi) = b.spec().signed_domain();
+        let width_top = if b.spec().word_bits >= 64 {
+            Interval::TOP
+        } else {
+            iv_range(dom_lo, dom_hi)
+        };
+        v.push(Vec1 {
+            id: "td/refined-read-unscripted".into(),
+            class: "td:refined-read".into(),
+            row: "vol_load",
+            model: "bundle",
+            entry: Vec::new(),
+            ops: vec![mmio_read(b"uart.UARTFR", b.spec().word_bits)],
+            target: band,
+            cast_site: false,
+            scripted: Vec::new(),
+            expect: (Tri::Top, width_top),
+        });
+    }
     v
 }
 
@@ -523,6 +620,22 @@ fn render_json(b: &Bundle) -> String {
         ));
         let cs = if v.cast_site { "true" } else { "false" };
         c.push(format!("      \"cast_site\": {cs},"));
+        // P13.2: the scripted (refined) MMIO reads — a place-keyed fixed
+        // read interval the Lean runner applies identically (`"reads"`).
+        if !v.scripted.is_empty() {
+            let reads: Vec<String> = v
+                .scripted
+                .iter()
+                .map(|(p, iv)| {
+                    let (lo, hi) = interval_bounds(iv);
+                    format!(
+                        "{{\"place\":\"{}\",\"lo\":{lo},\"hi\":{hi}}}",
+                        json_esc(&String::from_utf8_lossy(p.as_bytes()))
+                    )
+                })
+                .collect();
+            c.push(format!("      \"reads\": [{}],", reads.join(", ")));
+        }
         c.push(format!(
             "      \"expect\": {{\"head\": \"{}\", \"top\": \"{}\"}}",
             tri_name(v.expect.0),
@@ -536,6 +649,16 @@ fn render_json(b: &Bundle) -> String {
 
 fn evidence_index(b: &Bundle) -> PathBuf {
     b.evidence_dir().join("vectors.json")
+}
+
+/// The inclusive bounds of a point/range `Interval` (the `reads` writer's
+/// lo/hi projection; a non-range reads as (0, 0) — never reached by the
+/// scripted vectors, which are always ranges).
+fn interval_bounds(iv: &Interval) -> (i64, i64) {
+    match iv {
+        Interval::Range { lo, hi } => (*lo, *hi),
+        _ => (0, 0),
+    }
 }
 
 /// Compute each vector's expectation from the engine (the derived path —

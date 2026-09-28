@@ -35,8 +35,8 @@
 | T-D (bundle geometry) | each modeled bundle instance's RAM window equals its `model/model.toml [memory] ram` declaration (pinned mechanically by the Rust suite against `--level bundles`) and the window's points are in-RAM per the instance | `Tyu.Sound.TD.x86_64_geometry`, `Tyu.Sound.TD.armv7m_geometry`, `Tyu.Sound.TD.riscv32_geometry` (+ the instance in-window lemmas `*_inram`, axiom-audited, §3) | proven, axiom-audited |
 | T-D (mirror equivalence) | the conformance runner's operational `MemModel.bundle` and the theorem-surface `BundleMem` agree on observable reads (aperture via the single `wordDomain`; loads via the recorded-cells coercion) — the two mirrors cannot drift (the boundary-byte defect class) | `Tyu.Sound.TD.bundle_aperture_agrees`, `Tyu.Sound.TD.bundle_load_agrees` | proven, axiom-audited |
 | T-D (rp2350 geometry, P13.2) | the rp2350 board pack's bundle instance window equals its `model/model.toml [memory] ram` declaration (the first 64 KiB of SRAM) and the window's points are in-RAM | `Tyu.Sound.TD.rp2350_geometry`, `Tyu.Sound.TD.rp2350_inram` | proven, axiom-audited |
-| T-D (width/mask, P13.2) | a refined register read answers exactly the refinement's modeled band `[0, mask]` — within the register's width, never wider than the §Q13 width-bounded default, **instanced at the device** (`uartfr_band_domain_at_device`: `[0, 0xF9]` — the band IS consumed by the registry, P3 finding) | `Tyu.Sound.TD.uartfr_band_domain`, `Tyu.Sound.TD.uartfr_band_domain_at_device` | proven, axiom-audited |
-| T-D (access-mode, ro, P13.2) | a refined READ-ONLY register answers exactly the refinement's band — `refinedOf` consults the access-mode (`AccessMode`): `ro` closes the read to the datasheet stable-value set | `Tyu.Sound.TD.ro_read_answers_band` | proven, axiom-audited |
+| T-D (width/mask, P13.2) | a refined register read answers exactly the refinement's modeled band `[0, mask]` — within the register's width, never wider than the §Q13 width-bounded default, **instanced at the device** (`uartfr_band_domain_at_device`: `[0, 0xF9]` — the band IS consumed by the registry, P3 finding), and the refined read is proven **within the width domain** for any band (`band_within_width_domain` — `width` mathematically consumed, P3s finding 6d) | `Tyu.Sound.TD.uartfr_band_domain`, `Tyu.Sound.TD.uartfr_band_domain_at_device`, `Tyu.Sound.TD.band_within_width_domain` | proven, axiom-audited |
+| T-D (access-mode, ro, P13.2) | a refined READ-ONLY register answers exactly the refinement's band — `refinedOf` consults the access-mode (`AccessMode`): `ro` closes the read to the datasheet stable-value set; place matching is the SAME trailing-token semantics as the binding (`refined_read_at_any_matching_place`: a read at ANY matching place is the band — the P12 `bundle_load_agrees` agreement pattern on the refinement surface) | `Tyu.Sound.TD.ro_read_answers_band`, `Tyu.Sound.TD.refined_read_at_any_matching_place` | proven, axiom-audited |
 | T-D (access-mode, write-capable, P13.2) | every WRITE-CAPABLE refined register answers the §Q13 width-bounded nondeterministic domain (the model records no register state; the w1c/w1s bit-clears are structural, stated in the TCB boundary) | `Tyu.Sound.TD.write_capable_read_width_bounded` | proven, axiom-audited |
 | T-D (access-mode, writes, P13.2) | reads of a refined device are memory-independent — RAM stores and the (unmodeled) register write state only change memory, which no read consults (abstract); the concrete write channel is isolated: a `vol_store` then a `vol_load` answers exactly the oracle's read | `Tyu.Sound.TD.read_independent_of_memory`, `Tyu.Sound.TD.store_then_read_is_oracle` | proven, axiom-audited |
 | T-D (volatility/ordering, P13.2) | two consecutive MMIO reads are NOT merged — each `vol_load` records its own read in the run's ACCESS TRACE (`Tyu.Step.runBlockTrace`, execution order); the trace of `[vol_load, vol_load]` has TWO entries, and the trace run is proven equal to `Block.runBlock` (the trace is a formalization of the run's reads, never a parallel semantics) — the §Q13 no-elide/merge/reorder guarantee as the trace (the final stack alone cannot distinguish merged reads; the trace can) | `Tyu.Sound.TD.runBlockTrace_eq_runBlock`, `Tyu.Sound.TD.two_reads_trace` | proven, axiom-audited |
@@ -125,7 +125,9 @@ Tyu.Sound.TD.rp2350_geometry
 Tyu.Sound.TD.rp2350_inram
 Tyu.Sound.TD.uartfr_band_domain
 Tyu.Sound.TD.uartfr_band_domain_at_device
+Tyu.Sound.TD.band_within_width_domain
 Tyu.Sound.TD.ro_read_answers_band
+Tyu.Sound.TD.refined_read_at_any_matching_place
 Tyu.Sound.TD.write_capable_read_width_bounded
 Tyu.Sound.TD.read_independent_of_memory
 Tyu.Sound.TD.store_then_read_is_oracle
@@ -184,9 +186,14 @@ it: tyu/Gen carries no placeholders.
   definitional transparency is finalized (no placeholder is shipped).
 - **P13 (device refinements, §Q13):** the refined worked example
   (`verification/ports/lean/tests/refined-fixture/` — the `Uart7` artifact
-  + `Uart7Fix` proof) is a **SOURCE-surface certificate**: the proof is a
-  theorem of `src_stmt_Uart7_…` (`Tyu.Src.outInRange` over the
-  pure-fragment word), harvested with `surface: "source"` and
+  + `Uart7Fix` proof) is a **SOURCE-surface certificate whose refinement is
+  MATHEMATICALLY load-bearing** (P3s finding 5): the word returns the raw
+  UARTFR read, and the generated statement is the BAND-RESTRICTED
+  `Tyu.Src.outInRangeRefined blocks 0 0 0 255 0 249` — "runs whose reads
+  answer within the refinement's datasheet band `[0, 0xF9]` return a
+  subtype-valid byte"; the theorem applies the band hypothesis and closes by
+  arithmetic — NOT provable over the §Q13 universal oracle (an out-of-band
+  read falsifies it). Harvested with `surface: "source"`,
   `relies: ["T-S"]` and the statement hash carrying
   `refinement: "rp2350.uart-fr"` (§Q13/P13.1). The word is fragment-
   parseable BECAUSE the fixture omits the `addr_of`/`mmio_place` address
@@ -196,6 +203,16 @@ it: tyu/Gen carries no placeholders.
   of `Tyu/Src.lean`, §Q2). The example demonstrates the source-surface
   mechanism on the fragment word; the address-materialization boundary
   stays the honest refusal for full lowerings.
+- **P13.2 refined-read VALUE evidence (P3s finding 4):** the rp2350 bundle
+  corpus (`platforms/rp2350/evidence/vectors.json`) now includes vectors
+  that READ `uart.UARTFR` with scripted reads (`tyu.vec/1` `"reads"`,
+  mirroring `ApertureMem.script_read` and exercised identically by the Lean
+  runner, which threads the op place + the scripted table): in-band reads
+  discharge, an OUT-OF-BAND scripted read falsifies (the band is meaningful,
+  not cosmetic), and an unscripted read answers the §Q13 width-bounded
+  default. The Rust↔Lean agreement over refined reads therefore covers a
+  READ VALUE, not just the statement hash (64 bundle vectors, zero
+  divergence).
 - **P13.1 render refusal ("mismatch ⇒ render refuses"):** the renderer
   OMITS a MODELED bundle's MMIO-word statements when no refinement context
   document was given (`refined-read-unbound`), never silently re-binding

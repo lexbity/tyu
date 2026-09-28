@@ -1,6 +1,7 @@
 import Tyu.Gen.Stmt
 import Tyu.Gen.Sha256
 import Tyu.Src
+import Tyu.Bundles
 import Tyu.Conformance.Json
 import Tyu.Conformance.Parse
 
@@ -167,21 +168,35 @@ def wordPlaces (ir : String) : List String :=
         | _ => none
     | [] => none)).eraseDups
 
-/-- Whole-token trailing-segment match (mirrors
+/-- The place matcher — the SINGLE port-side trailing-token semantics,
+shared with the model (`Tyu.Bundles.tokenMatches`, which mirrors
 `verifier::refinements::token_matches`): the IR place `uart0.UARTFR`
 matches the declared register `UARTFR`; a dot-bearing declaration
-(`uart0.UARTFR`) requires exact equality. -/
-def tokenMatches (place : String) (register : String) : Bool :=
-  if register.contains ('.') then place == register
-  else place == register || (¬ register.isEmpty && place.endsWith ("." ++ register))
+(`uart0.UARTFR`) requires exact equality. The renderer and the model route
+through the same function (the P3s finding-6e dedup), so the binding and
+the model's refined reads cannot drift on the Lean side. -/
+abbrev tokenMatches := Tyu.Bundles.tokenMatches
 
 /-- The refinement a word's IR binds to: the FIRST declared refinement whose
 register matches any MMIO place token of the word. `none` = the word reads
 no refined register — its read sites stay the §Q13 nondeterministic
 default. -/
-def refinementOf (decls : List RefinementDecl) (ir : String) : Option String :=
+def refinementDeclOf (decls : List RefinementDecl) (ir : String) : Option RefinementDecl :=
   let places := wordPlaces ir
-  (decls.find? (fun d => places.any (fun p => tokenMatches p d.register))).map (fun d => d.refinement)
+  decls.find? (fun d => places.any (fun p => tokenMatches p d.register))
+
+/-- The refinement NAME a word's IR binds to (the statement-context id). -/
+def refinementOf (decls : List RefinementDecl) (ir : String) : Option String :=
+  (refinementDeclOf decls ir).map (fun d => d.refinement)
+
+/-- The refinement's modeled band `[0, mask]` for a bound word: the
+datasheet flag band the read answers within (`bandLo = 0` — the manifest
+has no negative modeled bits). The band-restricted statement form
+(`Tyu.Src.outInRangeRefined` / `Tyu.Gen.Stmt.outInRangeRefined`) renders
+with it, making the refinement mathematically load-bearing (§Q13/P13.2):
+a read-dependent output claim is provable because reads answer in-band. -/
+def refinementBandOf (decls : List RefinementDecl) (ir : String) : Option Int :=
+  (refinementDeclOf decls ir).map (fun d => d.mask)
 
 -- ---------------------------------------------------------------------
 -- The parsed artifact
@@ -644,12 +659,17 @@ def refinementRefuses (a : Artifact) (ctx : RefinementContext) (o : Obl) : Optio
   else if ¬ (wordPlaces (wordIrOf a o)).isEmpty && ctx.isNone then some "refined-read-unbound"
   else none
 
-/-- The full IR-surface renderability: the refinement refusal first, then
-the form classification. -/
+/-- The renderability compositor (P3s finding-6 dedup): the refinement
+refusal first, then the form classifier — ONE rule, applied to both the IR
+and source surfaces. -/
+def renderable (refuses : Option String) (classify : Option String) : Option String :=
+  match refuses with
+  | some r => some r
+  | none => classify
+
+/-- The full IR-surface renderability. -/
 def irRenderable (a : Artifact) (ctx : RefinementContext) (o : Obl) : Option String :=
-  match refinementRefuses a ctx o, classify a o with
-  | some r, _ => some r
-  | none, r => r
+  renderable (refinementRefuses a ctx o) (classify a o)
 
 -- ---------------------------------------------------------------------
 -- Statement text rendering
@@ -698,7 +718,14 @@ def renderStatement (a : Artifact) (ctx : RefinementContext) (o : Obl) : String 
     | "InRange" =>
         match oelRoot o.oel with
         | some ("in", i) => "Tyu.Gen.Stmt.inInputRange " ++ toString i ++ " (" ++ toString o.lo ++ ") (" ++ toString o.hi ++ ")"
-        | some ("out", i) => "Tyu.Gen.Stmt.outInRange " ++ w ++ " " ++ toString i ++ " (" ++ toString o.lo ++ ") (" ++ toString o.hi ++ ")"
+        | some ("out", i) =>
+            -- P13.2: a word bound to a refinement renders the BAND-RESTRICTED
+            -- claim (reads answer within `[0, mask]`); unbound words render
+            -- the §Q13 universal claim.
+            match refinementBandOf (ctxDecls ctx) ir with
+            | some band => "Tyu.Gen.Stmt.outInRangeRefined " ++ w ++ " " ++ toString i
+                ++ " (" ++ toString o.lo ++ ") (" ++ toString o.hi ++ ") 0 " ++ toString band
+            | none => "Tyu.Gen.Stmt.outInRange " ++ w ++ " " ++ toString i ++ " (" ++ toString o.lo ++ ") (" ++ toString o.hi ++ ")"
         | _ => "True"
     | "OffsetLE" =>
         "Tyu.Gen.Stmt.offsetWithin " ++ w ++ " " ++ toString (o.off.getD 0) ++
@@ -753,23 +780,28 @@ def srcClassify (a : Artifact) (ctx : RefinementContext) (o : Obl) : Option Stri
 /-- The full source-surface renderability: the refinement refusal first,
 then [`srcClassify`]. -/
 def srcRenderable (a : Artifact) (ctx : RefinementContext) (o : Obl) : Option String :=
-  match refinementRefuses a ctx o, srcClassify a ctx o with
-  | some r, _ => some r
-  | none, r => r
+  renderable (refinementRefuses a ctx o) (srcClassify a ctx o)
 
 /-- The `def src_stmt_… : Prop := …` text for a source-renderable
-obligation (the same claim over the `Tyu.Src` run). -/
-def renderSrcStatement (a : Artifact) (o : Obl) : String :=
+obligation (the same claim over the `Tyu.Src` run; P13.2: a word bound to
+a refinement renders the BAND-RESTRICTED form `Tyu.Src.outInRangeRefined`
+— reads answer within `[0, mask]`, making a read-dependent claim provable
+because of the refinement). -/
+def renderSrcStatement (a : Artifact) (ctx : RefinementContext) (o : Obl) : String :=
   let name := srcStmtName a.module o.word o.kind o.occurrence
   let blocks := (parseSrcBlocks (wordIrOf a o)).getD []
   let blocksTex := renderSrcBlocks blocks
+  let band := refinementBandOf (ctxDecls ctx) (wordIrOf a o)
   let prop : String := match o.formulaOp with
     | "InRange" =>
         match oelRoot o.oel with
         | some ("in", i) =>
             "Tyu.Src.inInputRange " ++ toString i ++ " (" ++ toString o.lo ++ ") (" ++ toString o.hi ++ ")"
         | some ("out", i) =>
-            "Tyu.Src.outInRange (" ++ blocksTex ++ ") 0 " ++ toString i ++ " (" ++ toString o.lo ++ ") (" ++ toString o.hi ++ ")"
+            match band with
+            | some b => "Tyu.Src.outInRangeRefined (" ++ blocksTex ++ ") 0 " ++ toString i
+                ++ " (" ++ toString o.lo ++ ") (" ++ toString o.hi ++ ") 0 " ++ toString b
+            | none => "Tyu.Src.outInRange (" ++ blocksTex ++ ") 0 " ++ toString i ++ " (" ++ toString o.lo ++ ") (" ++ toString o.hi ++ ")"
         | _ => "True"
     | "OffsetLE" =>
         "Tyu.Src.offsetWithin (" ++ blocksTex ++ ") 0 " ++ toString (o.off.getD 0) ++
@@ -783,7 +815,7 @@ obligation is source-renderable). -/
 def renderSourceStatements (a : Artifact) (ctx : RefinementContext) : String :=
   String.intercalate "\n" (a.obligations.filterMap (fun o =>
     match srcRenderable a ctx o with
-    | none => some (renderSrcStatement a o)
+    | none => some (renderSrcStatement a ctx o)
     | some _ => none))
 
 

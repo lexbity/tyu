@@ -2,12 +2,12 @@ module Uart7;
 register-map UART
   0x018 UARTFR u32 ro volatile
 end;
-subtype RxBit = i64 range 0..1;
+subtype RxByte = i64 range 0..255;
 const uart = UART @ board.uart0;
-: read-tx-idle ( -- RxBit )
-  &uart.UARTFR @u32 drop 1 as RxBit
+: read-tx-idle ( -- RxByte )
+  &uart.UARTFR @u32 as i64 as RxByte
 ;
 : main ( -- i64 )
-  0 ;
+  read-tx-idle ;
 export { read-tx-idle };
 end;

@@ -58,7 +58,9 @@ to appear in this audit. Keep the two lists in the same commit. -/
 #print axioms Tyu.Sound.TD.rp2350_inram
 #print axioms Tyu.Sound.TD.uartfr_band_domain
 #print axioms Tyu.Sound.TD.uartfr_band_domain_at_device
+#print axioms Tyu.Sound.TD.band_within_width_domain
 #print axioms Tyu.Sound.TD.ro_read_answers_band
+#print axioms Tyu.Sound.TD.refined_read_at_any_matching_place
 #print axioms Tyu.Sound.TD.write_capable_read_width_bounded
 #print axioms Tyu.Sound.TD.read_independent_of_memory
 #print axioms Tyu.Sound.TD.store_then_read_is_oracle
