@@ -490,11 +490,24 @@ mod tests {
 
     /// Helper: launch QEMU, connect RSP client via ephemeral port with
     /// connect_retry, run the roundtrip, kill QEMU, return result.
+    ///
+    /// `run_to_breakpoint`: when given, a breakpoint is set at that guest
+    /// address and the CPU is continued from the `-S` reset halt — the round
+    /// trip then reads registers of a *running* guest stopped at the
+    /// breakpoint, not the reset state (which proves the kernel actually
+    /// booted). When `None` (ARM/RISC-V kernels keep their prior behavior),
+    /// the guest is left at the reset state.
+    ///
+    /// `pc_expected_range`: when given, the read PC must lie within it — a
+    /// firmware-fallback boot (kernel ignored by QEMU) fails loudly instead
+    /// of passing on reset-state reads.
     fn qemu_rsp_roundtrip(
         qemu_bin: &str,
         qemu_args: &[&str],
         kernel_path: &std::path::Path,
         pc_reg: u8,
+        run_to_breakpoint: Option<u64>,
+        pc_expected_range: Option<(u64, u64)>,
     ) -> Result<(), io::Error> {
         let port = ephemeral_port();
 
@@ -514,12 +527,21 @@ mod tests {
             let _ = child.kill();
             let _ = child.wait();
         })?;
+        // Bound every blocking receive (notably `continue_exec` waiting for
+        // the breakpoint stop): if the guest never reaches the breakpoint —
+        // e.g. QEMU ignored the kernel and fell back to firmware boot — the
+        // roundtrip fails loudly instead of hanging the test suite.
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(30)))?;
         let mut client = RspClient {
             stream,
             recv_buf: Vec::with_capacity(4096),
         };
 
         let result = (|| -> io::Result<()> {
+            if let Some(bp) = run_to_breakpoint {
+                client.set_breakpoint(bp)?;
+                client.continue_exec()?;
+            }
             let pc_raw = client.read_register(pc_reg)?;
             assert!(!pc_raw.is_empty(), "PC must be readable");
             let pc_val = match pc_raw.len() {
@@ -532,6 +554,13 @@ mod tests {
                     ))
                 }
             };
+            if let Some((lo, hi)) = pc_expected_range {
+                assert!(
+                    pc_val >= lo && pc_val < hi,
+                    "PC {pc_val:#x} outside the kernel image [{lo:#x}, {hi:#x}) — \
+                     the guest never reached the test kernel"
+                );
+            }
             let mem = client.read_memory(pc_val, 2)?;
             assert!(!mem.is_empty(), "memory at PC must be readable");
             Ok(())
@@ -542,31 +571,119 @@ mod tests {
         result
     }
 
-    /// Build a minimal PVH ELF that loops forever, suitable for
-    /// `qemu-system-x86_64 -kernel`.
+    /// Build a minimal PVH ELF that boots under `qemu-system-x86_64 -kernel`
+    /// (QEMU 10+ PVH direct boot) and spins forever in 64-bit mode at
+    /// `_start` = 0x100063 (the address the x86 roundtrip breaks on).
+    ///
+    /// The image mirrors the production pipeline (`runtime/x86_64-unknown-none`):
+    /// fasm assembles an ELF64 *object* — `section` is only valid in object
+    /// format (`format ELF64 executable` takes `segment`, and no fasm mode
+    /// emits the PT_NOTE program header the PVH loader reads), so `ld` links
+    /// the object with an explicit PHDRS script placing the Xen note in a
+    /// PT_NOTE segment. The 32-bit entry does the full long-mode bring-up
+    /// (identity page tables, PAE, EFER.LME, our GDT, PG) before jumping to
+    /// 64-bit code: QEMU's PVH entry hands over in 32-bit protected mode
+    /// with paging OFF and only CS flat, exactly what the production runtime
+    /// assumes. x86-64 page-directory entries are 8 bytes — entry 1 of the
+    /// PD lives at +0x2008 (writing it at +0x2004 corrupts entry 0's base
+    /// and triple-faults on the first post-PG fetch).
     fn try_build_infinite_loop_elf(out_dir: &std::path::Path) -> Option<std::path::PathBuf> {
         let asm = out_dir.join("loop.asm");
+        let obj = out_dir.join("loop.o");
+        let script = out_dir.join("link.t");
         let elf = out_dir.join("loop.elf");
-        // Minimal 64-bit PVH ELF: the Xen note tells QEMU the 32-bit entry,
-        // which sets up long mode and jumps to the 64-bit _start.
-        // Pattern derived from the working runtime.x86_64.asm.
         std::fs::write(
             &asm,
-            b"format ELF64 executable\n\
-              entry _start32\n\
+            b"format ELF64\n\
+              \n\
               section '.note.Xen' align 4\n\
               dd 4\n  dd 4\n  dd 18\n  db 'Xen',0\n  dd _start32\n\
-              section '.text' executable\n\
-              use32\n_start32:\n  jmp dword 0x08:_start64\n\
-              use64\n_start64:\n_start:\n  jmp _start\n",
+              \n\
+              section '.text' executable align 16\n\
+              use32\n\
+              public _start32\n\
+              _start32:\n\
+              \x20 cli\n\
+              \x20 cld\n\
+              \x20 ; identity-map 0..4 MiB with 2 MiB pages; tables at 0x200000\n\
+              \x20 ; (QEMU zeroes RAM at reset, unwritten entries stay not-present)\n\
+              \x20 mov edi, 0x200000\n\
+              \x20 mov dword [edi], 0x201003\n\
+              \x20 mov dword [edi+0x1000], 0x202003\n\
+              \x20 mov dword [edi+0x2000], 0x83\n\
+              \x20 mov dword [edi+0x2008], 0x200083\n\
+              \x20 mov eax, 0x200000\n\
+              \x20 mov cr3, eax\n\
+              \x20 mov eax, cr4\n\
+              \x20 or  eax, (1 shl 5)\n\
+              \x20 mov cr4, eax\n\
+              \x20 mov ecx, 0xC0000080\n\
+              \x20 rdmsr\n\
+              \x20 or  eax, (1 shl 8)\n\
+              \x20 wrmsr\n\
+              \x20 lgdt [gdt64_ptr]\n\
+              \x20 mov eax, cr0\n\
+              \x20 or  eax, (1 shl 31) or (1 shl 0)\n\
+              \x20 mov cr0, eax\n\
+              \x20 jmp 0x08:_start64\n\
+              use64\n\
+              _start64:\n\
+              _start:\n\
+              \x20 jmp _start\n\
+              align 16\n\
+              gdt64:\n\
+              \x20 dq 0\n\
+              \x20 dq 0x00AF9A000000FFFF\n\
+              gdt64_ptr:\n\
+              \x20 dw (gdt64_ptr - gdt64 - 1)\n\
+              \x20 dd gdt64\n",
         )
         .ok()?;
-        let status = std::process::Command::new("fasm")
-            .args([asm.to_str().unwrap(), elf.to_str().unwrap()])
-            .status()
+        std::fs::write(
+            &script,
+            b"ENTRY(_start32)\n\
+              PHDRS {\n\
+              \x20   note PT_NOTE FLAGS(4);\n\
+              \x20   text PT_LOAD FLAGS(5);\n\
+              }\n\
+              SECTIONS {\n\
+              \x20   .note.Xen 0 : { *(.note.Xen) } :note\n\
+              \x20   . = 0x100000;\n\
+              \x20   .text : { *(.text) } :text\n\
+              }\n",
+        )
+        .ok()?;
+        // Capture output: the fasm banner and the benign `ld` warning about
+        // the note section not being in a *load* segment must not leak into
+        // test output; they are only surfaced on failure.
+        let out = std::process::Command::new("fasm")
+            .args([asm.to_str().unwrap(), obj.to_str().unwrap()])
+            .output()
             .ok()?;
-        if !status.success() {
-            eprintln!("note: fasm failed to build infinite-loop ELF for RSP integration test");
+        if !out.status.success() {
+            eprintln!(
+                "note: fasm failed to build infinite-loop object for RSP integration test:\n{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            return None;
+        }
+        let out = std::process::Command::new("ld")
+            .args([
+                "-T",
+                script.to_str().unwrap(),
+                obj.to_str().unwrap(),
+                "-o",
+                elf.to_str().unwrap(),
+            ])
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            eprintln!(
+                "note: ld failed to link infinite-loop ELF for RSP integration test:\n{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
             return None;
         }
         Some(elf)
@@ -574,7 +691,7 @@ mod tests {
 
     #[test]
     fn qemu_read_register_and_memory() {
-        let tools = ["qemu-system-x86_64", "fasm"];
+        let tools = ["qemu-system-x86_64", "fasm", "ld"];
         let missing: Vec<&str> = tools
             .iter()
             .filter(|t| !tool_available(t))
@@ -595,7 +712,7 @@ mod tests {
         let elf = match try_build_infinite_loop_elf(&dir) {
             Some(e) => e,
             None => {
-                eprintln!("SKIP: could not build test ELF (fasm issue)");
+                eprintln!("SKIP: could not build test ELF (fasm/ld issue)");
                 return;
             }
         };
@@ -610,7 +727,19 @@ mod tests {
             "-device",
             "isa-debug-exit,iobase=0x501,iosize=0x02",
         ];
-        let result = qemu_rsp_roundtrip("qemu-system-x86_64", &qemu_args, &elf, regs::x86_64::RIP);
+        // The test kernel's 64-bit `_start` loop: deterministic (the linker
+        // script pins .text at 0x100000 and the bring-up's encoding is fixed),
+        // so the roundtrip can prove the guest actually booted into it.
+        const X64_START_LOOP: u64 = 0x100063;
+        const X64_IMAGE: (u64, u64) = (0x100000, 0x101000);
+        let result = qemu_rsp_roundtrip(
+            "qemu-system-x86_64",
+            &qemu_args,
+            &elf,
+            regs::x86_64::RIP,
+            Some(X64_START_LOOP),
+            Some(X64_IMAGE),
+        );
         if let Err(e) = result {
             panic!("RSP integration test failed: {}", e);
         }
@@ -733,7 +862,14 @@ mod tests {
             "enable=on,target=native",
             "-nographic",
         ];
-        let result = qemu_rsp_roundtrip("qemu-system-arm", &qemu_args, &elf, regs::arm::PC);
+        let result = qemu_rsp_roundtrip(
+            "qemu-system-arm",
+            &qemu_args,
+            &elf,
+            regs::arm::PC,
+            None,
+            None,
+        );
         if let Err(e) = result {
             panic!("ARM RSP integration test failed: {}", e);
         }
@@ -787,7 +923,14 @@ mod tests {
             "enable=on,target=native",
             "-nographic",
         ];
-        let result = qemu_rsp_roundtrip("qemu-system-riscv32", &qemu_args, &elf, regs::riscv::PC);
+        let result = qemu_rsp_roundtrip(
+            "qemu-system-riscv32",
+            &qemu_args,
+            &elf,
+            regs::riscv::PC,
+            None,
+            None,
+        );
         if let Err(e) = result {
             panic!("RISC-V RSP integration test failed: {}", e);
         }
