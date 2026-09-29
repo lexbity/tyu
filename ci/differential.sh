@@ -13,9 +13,8 @@
 # interval engine's discharges to proof without developer effort".
 #
 # Usage: bash ci/differential.sh [lean]
-# Exit 0 on agreement; the wall-clock budget (NFR-3) is printed and enforced
-# loosely (a multiplier of the last baseline; the differential itself must
-# pass).
+# Exit 0 on agreement; the wall-clock budget (NFR-3) is enforced against a
+# fixed default (`TYU_REDERIVE_BUDGET`, seconds) — no baseline tracking.
 
 set -euo pipefail
 

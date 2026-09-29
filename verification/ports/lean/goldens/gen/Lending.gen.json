@@ -3,6 +3,7 @@
   "module": "Lending",
   "target": "x86_64-unknown-linux-gnu",
   "model_semantics": "unmodeled",
+  "concurrency": "unmodeled",
   "statements": [
   { "id": "Lending::pct-in-range::subtype-range::0", "id_hash": "3f8aeeef262e9e47", "def": "stmt_Lending_pct_in_range_subtype_range_0", "omitted": false, "statement_hash": "23ad8abf2b3a7d656bed013726b9e0cb6b79066b2ba733d4ecb3d03497d17742" },
   { "id": "Lending::pct-in-range::subtype-range::1", "id_hash": "3f8aedef262e9c94", "def": "stmt_Lending_pct_in_range_subtype_range_1", "omitted": false, "statement_hash": "f0eef82fbe8e66da08b1d86a7b5a3844edd2aad9242836c3d3faf54cd5188970" },

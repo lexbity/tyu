@@ -140,6 +140,7 @@ fn write_verdicts(tag: &str, records: &[VerdictRecord]) -> PathBuf {
         None,
         "x86_64-unknown-linux-gnu",
         verifier::model::MODEL_UNMODELED,
+        verifier::model::CONCURRENCY_UNMODELED,
         records,
         0,
         &EmittedChecksData::default(),

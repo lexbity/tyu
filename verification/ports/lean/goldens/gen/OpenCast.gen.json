@@ -3,6 +3,7 @@
   "module": "OpenCast",
   "target": "x86_64-unknown-linux-gnu",
   "model_semantics": "unmodeled",
+  "concurrency": "unmodeled",
   "statements": [
   { "id": "OpenCast::main::subtype-range::0", "id_hash": "a710641f31065365", "omitted": true, "reason": "opaque-site", "statement_hash": "" }
   ],

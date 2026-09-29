@@ -114,6 +114,7 @@ pub fn mk_obl_set(module: &str, obligations: Vec<Obligation>) -> OblSet {
         target: TRIPLE.into(),
         platform: TRIPLE.into(),
         model_semantics: "unmodeled".into(),
+        concurrency: "unmodeled".into(),
         abi_contract_version: 2,
         facts: Facts {
             words: Vec::new(),
@@ -179,6 +180,7 @@ pub fn mk_echo(closed: &[(&str, &str)]) -> Echo {
             certifier: None,
             target: TRIPLE.into(),
             model_semantics: "unmodeled".into(),
+            concurrency: "unmodeled".into(),
             records,
         },
         stale_verdicts: 0,
@@ -206,7 +208,7 @@ pub fn mk_harvest_doc(closed: &[(&str, &str)]) -> String {
         })
         .collect();
     format!(
-        "{{\"schema\":\"tyu.verdicts/v2\",\"certifier\":{{\"class\":\"port\",\"name\":\"lean\",\"recognition\":\"tyu-port/lean/1\",\"tool\":{{\"name\":\"harvest\",\"version\":\"0.1.0\"}},\"toolchain\":\"lean4:4.27.0\"}},\"semantics\":\"tyu.ir-sem/1.0\",\"stmt\":\"tyu.stmt/1.0\",\"target\":\"{}\",\"model_semantics\":\"unmodeled\",\"verdicts\":[{}]}}",
+        "{{\"schema\":\"tyu.verdicts/v2\",\"certifier\":{{\"class\":\"port\",\"name\":\"lean\",\"recognition\":\"tyu-port/lean/1\",\"tool\":{{\"name\":\"harvest\",\"version\":\"0.1.0\"}},\"toolchain\":\"lean4:4.27.0\"}},\"semantics\":\"tyu.ir-sem/1.0\",\"stmt\":\"tyu.stmt/1.0\",\"target\":\"{}\",\"model_semantics\":\"unmodeled\",\"concurrency\":\"unmodeled\",\"verdicts\":[{}]}}",
         TRIPLE,
         recs.join(",")
     )

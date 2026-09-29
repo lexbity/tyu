@@ -118,6 +118,10 @@ fn write_doc(out: &mut Vec<u8>, set: &OblSet) {
     write_str(out, &set.platform);
     out.extend_from_slice(b",\"model_semantics\":");
     write_str(out, &set.model_semantics);
+    // P15.1 (§Q14): the bundle's concurrency-service modeling declaration —
+    // additive member of `tyu.obl/v2` (readers skip unknown keys).
+    out.extend_from_slice(b",\"concurrency\":");
+    write_str(out, &set.concurrency);
     out.extend_from_slice(b",\"abi_contract_version\":");
     write_i64(out, set.abi_contract_version as i64);
     write_facts(out, &set.facts);
@@ -485,6 +489,7 @@ impl<'a> Reader<'a> {
         let mut target: Option<String> = None;
         let mut platform: Option<String> = None;
         let mut model_semantics: Option<String> = None;
+        let mut concurrency: Option<String> = None;
         let mut abi_contract_version: Option<u32> = None;
         let mut facts: Option<Facts> = None;
         let mut obligations: Option<Vec<Obligation>> = None;
@@ -511,6 +516,7 @@ impl<'a> Reader<'a> {
                 "target" => target = Some(self.parse_string()?),
                 "platform" => platform = Some(self.parse_string()?),
                 "model_semantics" => model_semantics = Some(self.parse_string()?),
+                "concurrency" => concurrency = Some(self.parse_string()?),
                 "abi_contract_version" => abi_contract_version = Some(self.parse_u64()? as u32),
                 "facts" => facts = Some(self.parse_facts()?),
                 "obligations" => obligations = Some(self.parse_obligations()?),
@@ -549,6 +555,10 @@ impl<'a> Reader<'a> {
             platform: platform.unwrap_or_default(),
             model_semantics: model_semantics
                 .unwrap_or_else(|| crate::model::MODEL_UNMODELED.to_string()),
+            // P15.1: `concurrency` is additive; a pre-P15 artifact carries
+            // the §Q14 honest default (services unmodeled).
+            concurrency: concurrency
+                .unwrap_or_else(|| crate::model::CONCURRENCY_UNMODELED.to_string()),
             abi_contract_version,
             facts,
             obligations,
@@ -1865,6 +1875,10 @@ fn write_report_modules(out: &mut Vec<u8>, modules: &[crate::report::ModuleAccou
         write_str(out, &m.target);
         out.extend_from_slice(b",\"model\":");
         write_str(out, &m.model);
+        // P15.1 (§Q14/P7.3): the module's concurrency-service modeling
+        // declaration (the report's leg of the statement relativism).
+        out.extend_from_slice(b",\"concurrency\":");
+        write_str(out, &m.concurrency);
         out.extend_from_slice(b",\"classes\":{");
         for (j, c) in m.classes.iter().enumerate() {
             if j != 0 {
@@ -1987,7 +2001,7 @@ mod tests {
         let bytes = encode_obl(&set).expect("encode");
         let text = String::from_utf8_lossy(&bytes);
         assert!(text.starts_with(
-            "{\"schema\":\"tyu.obl/v2\",\"semantics\":\"tyu.ir-sem/1.0\",\"stmt\":\"tyu.stmt/1.0\",\"module\":\"Bank\",\"target\":\"\",\"platform\":\"\",\"model_semantics\":\"unmodeled\",\"abi_contract_version\":2,\"facts\""
+            "{\"schema\":\"tyu.obl/v2\",\"semantics\":\"tyu.ir-sem/1.0\",\"stmt\":\"tyu.stmt/1.0\",\"module\":\"Bank\",\"target\":\"\",\"platform\":\"\",\"model_semantics\":\"unmodeled\",\"concurrency\":\"unmodeled\",\"abi_contract_version\":2,\"facts\""
         ));
         assert!(text
             .contains("\"obligations\":[{\"id\":\"Bank::clamp::subtype-range::0\",\"id_hash\":\""));

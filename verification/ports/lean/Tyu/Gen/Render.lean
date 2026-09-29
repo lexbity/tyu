@@ -2,6 +2,7 @@ import Tyu.Gen.Stmt
 import Tyu.Gen.Sha256
 import Tyu.Src
 import Tyu.Bundles
+import Tyu.Services
 import Tyu.Conformance.Json
 import Tyu.Conformance.Parse
 
@@ -232,6 +233,10 @@ structure Artifact where
   module : String
   target : String
   modelSemantics : String
+  -- P15.1: the bundle's concurrency-service modeling declaration
+  -- (`abstract-atomic` | `unmodeled`) — the statement relativism's
+  -- concurrency dimension (§Q14). Additive artifact member.
+  concurrency : String
   words : List WordFact
   obligations : List Obl
   predicates : List (String × List String × String)
@@ -339,6 +344,9 @@ def parseArtifact (input : String) : M Artifact :=
         let module := (j.field "module").bind Json.asStr |>.getD ""
         let target := (j.field "target").bind Json.asStr |>.getD ""
         let model := (j.field "model_semantics").bind Json.asStr |>.getD ""
+        -- P15.1: the concurrency declaration is additive; absent ⇒ the §Q14
+        -- honest default (services unmodeled).
+        let conc := (j.field "concurrency").bind Json.asStr |>.getD "unmodeled"
         let wordsList := ((j.field "facts").bind (fun f => (f.field "words").bind Json.asArr)) |>.getD []
         let predicatesList := ((j.field "facts").bind (fun f => (f.field "predicates").bind Json.asArr)) |>.getD []
         let words := wordsList.filterMap (fun w =>
@@ -351,7 +359,7 @@ def parseArtifact (input : String) : M Artifact :=
         let raw := (j.field "obligations").bind Json.asArr |>.getD []
         let obligations := raw.filterMap (fun o => (parseObligation o).toOption)
         if obligations.length ≠ raw.length then throw (.notOblDoc "an obligation failed to parse — fail closed")
-        else pure (Artifact.mk module target model words obligations predicates)
+        else pure (Artifact.mk module target model conc words obligations predicates)
 
 /-- The canonical statement bytes for an obligation (dispatches on the
 formula op — mirrors `stmt.rs::push_formula` byte-for-byte). Declared here
@@ -583,6 +591,180 @@ def renderBlocks (ir : String) : Option String :=
       "{ id := " ++ toString c ++ ", ops := [ " ++ String.intercalate ", " ops ++ " ] }"
 
 -- ---------------------------------------------------------------------
+-- Service classification + the static channel-trace lowering (P15)
+-- ---------------------------------------------------------------------
+
+/-- The canonical op-text of an obligation's word (from the artifact's
+`facts.words`; empty when the word is absent — a fails-closed "cannot bind"
+default the classifiers refuse on). Declared here (before the service
+surface) because the service classifiers consume it. -/
+def wordIrOf (a : Artifact) (o : Obl) : String :=
+  match a.words.find? (fun w => w.name == o.word) with
+  | some w => w.ir
+  | none => ""
+
+/-! ### The concurrency-service surface (PLAN-VERIFY-3 P15)
+
+A bundle's `[model] concurrency` declaration (`abstract-atomic` |
+`unmodeled`) is the statement relativism's concurrency dimension (`§Q14`).
+A word that USES platform services (calls `platform.channel.*`,
+`platform.task.*`, `platform.time.*`, … or carries `task_spawn`) is a
+*service-bearing* word. Its obligations render against the abstract-atomic
+services model (`Tyu.Services`, P15.2) only when the producing bundle
+declared `concurrency = "abstract-atomic"`; otherwise the statements fail
+closed open with the `service-unmodeled` reason — the `§Q14`
+"concurrency enabled + services unmodeled ⇒ unprovable" rule, surfaced as
+the gen.json omission reason and (through the pipeline) the verdicts'
+`witness.reason`.
+
+The SERVICE statement rendered here is the **static channel round-trip
+trace**: a word whose calls are exactly the modeled channel services and
+whose payloads are compile-time constants lowers to a `Tyu.Services.ServiceOp`
+trace whose output claim is `Tyu.Services.traceInRange`. -/
+
+/-- The modeled-service word set: the hosted bundle's service surface the
+abstract-atomic model covers (`§Q14`: channel IPC, task scheduler, time, log,
+critical sections). A call OUTSIDE this set on a service-bearing word keeps
+the word `calls-unmodeled` (the statement side cannot run arbitrary words). -/
+def SERVICE_WORDS : List String :=
+  [ "platform.channel.make", "platform.channel.send", "platform.channel.recv"
+  , "platform.task.spawn", "platform.task.yield", "platform.task.join"
+  , "platform.task.run", "platform.task.sleep-ms", "platform.task.sleep-us"
+  , "platform.time.now_ms", "platform.io.log"
+  , "platform.critical.enter", "platform.critical.exit" ]
+
+/-- The call targets of a word's IR (`call <name>` lines). -/
+def wordCalls (ir : String) : List String :=
+  (splitOnStr '\n' ir).filterMap (fun l =>
+    let t := trim l
+    match (dropPrefixStr "call " t) with
+    | some rest => (splitOnStr ' ' (trim rest)).head?
+    | none => none)
+
+/-- Whether a word's IR uses any modeled platform service (a call into the
+service set, or a `task_spawn` op). -/
+def wordUsesServices (ir : String) : Bool :=
+  let calls := wordCalls ir
+  let spawned := (splitOnStr '\n' ir).any (fun l => (trim l).startsWith "task_spawn ")
+  calls.any (fun c => SERVICE_WORDS.contains c) || spawned
+
+/-- The parse-stack atoms of the static channel-trace lowering (P15.2): a
+channel handle produced by `platform.channel.make`, a constant payload, or a
+dynamic (recv-determined) value. -/
+inductive SV where
+  | chan (id : Nat)
+  | val (v : Int)
+  | dyn
+  deriving DecidableEq, Repr
+
+/-- Lower a word's canonical op text to a channel service trace
+(`§Q14`/P15.2). The value stack tracks channel handles and constant payloads;
+`platform.channel.send` consumes a CONSTANT payload (the trace cannot vouch
+for a value the word computed at runtime — such words refuse), `recv` pushes
+a dynamic marker and DETERMINES the trace's output. From that point the
+subtype-check scaffolding the compiler inlines after the narrowed cast
+(`cast`/`dup`/`local_*`/`cmp_*`/`trap_if_false`/`not_bool`/`br*`) is
+absorbed — the trace's output value is fixed at the recv, and a further
+`make`/`send`/`recv` after it is refused (a second FIFO op would make the
+output claim ambiguous). `dup` duplicates the top (the `make dup` custody
+pattern), `cast` is value-level identity. Returns the ops and the FINAL parse
+stack; any op outside the grammar refuses (`none`). -/
+partial def parseServiceOps (ir : String) : Option (List Tyu.Services.ServiceOp × List SV) :=
+  let lines := (splitOnStr '\n' ir).map trim |>.filter (fun l => l ≠ "")
+  go lines [] 0 [] false
+where
+  go (rest : List String) (stack : List SV) (nextChan : Nat)
+      (acc : List Tyu.Services.ServiceOp) (determined : Bool)
+      : Option (List Tyu.Services.ServiceOp × List SV) :=
+    match rest with
+    | [] => some (acc.reverse, stack)
+    | line :: rest' =>
+        if (dropPrefixStr "block b" line).isSome then go rest' stack nextChan acc determined
+        else if line == "ret" then some (acc.reverse, stack)
+        else if determined then
+          -- Post-output scaffolding: absorb non-service ops; refuse any
+          -- further service op (the output claim is already fixed).
+          match line with
+          | "call platform.channel.make" | "call platform.channel.send"
+          | "call platform.channel.recv" => none
+          | _ => go rest' stack nextChan acc determined
+        else match line with
+          | "call platform.channel.make" =>
+              go rest' (SV.chan nextChan :: stack) (nextChan + 1)
+                  (Tyu.Services.ServiceOp.make nextChan :: acc) determined
+          | "call platform.channel.recv" =>
+              match stack with
+              | SV.chan c :: restStack =>
+                  go rest' (SV.dyn :: restStack) nextChan (Tyu.Services.ServiceOp.recv c :: acc) true
+              | _ => none
+          | "call platform.channel.send" =>
+              match stack with
+              | SV.val v :: SV.chan c :: restStack =>
+                  go rest' restStack nextChan (Tyu.Services.ServiceOp.send c v :: acc) determined
+              | _ => none
+          | _ =>
+              let starts (p : String) : Bool := line.startsWith p
+              if starts "dup" then
+                match stack with
+                | t :: restStack => go rest' (t :: t :: restStack) nextChan acc determined
+                | [] => none
+              else if starts "const_i64 " then
+                match (dropPrefixStr "const_i64 " line).bind (fun v => parseInt (trim v)) with
+                | some n => go rest' (SV.val n :: stack) nextChan acc determined
+                | none => none
+              else if starts "cast" then go rest' stack nextChan acc determined
+              else none
+
+/-- The service-statement Prop text for an obligation (P15.2): the
+`Tyu.Services.traceInRange` claim over the word's static channel trace, or
+`none` when the form cannot render truthfully. The obligation MUST be a
+subtype-range claim over `out.i` where the final parse stack's `i`-th entry
+is a trace-determined (recv) value. -/
+def renderServiceStatement (a : Artifact) (o : Obl) : Option String :=
+  if o.formulaOp ≠ "InRange" then none
+  else
+    match oelRoot o.oel with
+    | some ("out", i) =>
+        match parseServiceOps (wordIrOf a o) with
+        | some (ops, stack) =>
+            match stack.drop i |>.head? with
+            | some SV.dyn =>
+                some
+                  ("Tyu.Services.traceInRange " ++ renderServiceOps ops ++
+                   " (" ++ toString o.lo ++ ") (" ++ toString o.hi ++ ")")
+            | _ => none
+        | none => none
+    | _ => none
+where
+  renderServiceOps (ops : List Tyu.Services.ServiceOp) : String :=
+    "[ " ++ String.intercalate ", " (ops.map (fun op =>
+      match op with
+      | .make c => "(Tyu.Services.ServiceOp.make " ++ toString c ++ ")"
+      | .send c v => "(Tyu.Services.ServiceOp.send " ++ toString c ++ " " ++ toString v ++ ")"
+      | .recv c => "(Tyu.Services.ServiceOp.recv " ++ toString c ++ ")")) ++ " ]"
+
+/-- The service-surface classification (`§Q14` P15): `none` = the obligation
+renders a service statement; `some reason` = refused. A service-bearing word
+under a bundle WITHOUT concurrency modeling is `service-unmodeled` (fail
+closed — the statement cannot bind); under `abstract-atomic` the refusal is
+form-specific (contract claims on the service surface, an unparseable trace,
+an output that is not trace-determined). -/
+def serviceClassify (a : Artifact) (o : Obl) : Option String :=
+  if a.concurrency ≠ "abstract-atomic" then some "service-unmodeled"
+  else if o.formulaOp ≠ "InRange" then some "service-contract-unavailable"
+  else
+    match oelRoot o.oel with
+    | none => some "opaque-site"
+    | some (kind, i) =>
+        if kind == "in" then some "service-output-unmodeled"
+        else match parseServiceOps (wordIrOf a o) with
+          | some (ops, stack) =>
+              match stack.drop i |>.head? with
+              | some SV.dyn => none
+              | _ => some "service-output-unmodeled"
+          | none => some "service-trace-unmodeled"
+
+-- ---------------------------------------------------------------------
 -- Omission classification
 -- ---------------------------------------------------------------------
 
@@ -619,10 +801,14 @@ def contractClassify (a : Artifact) (o : Obl) : Option String :=
 /-- The statement form of an obligation: which Prop renderer it uses, or
 `none` when it must be omitted (with a reason). -/
 def classify (a : Artifact) (o : Obl) : Option String :=
-  let wcall := match a.words.find? (fun w => w.name == o.word) with
-    | some w => wordHasCall w.ir
-    | none => false
+  let ir := wordIrOf a o
+  let wcall := wordHasCall ir
   if o.kind == "stack-budget" then some "stack-budget-not-rendered"
+  -- P15 (§Q14): a service-bearing word's obligations are decided by the
+  -- bundle's concurrency modeling — an unmodeled-services bundle refuses
+  -- with `service-unmodeled` (fail closed), a modeled bundle renders the
+  -- service statement when the static channel trace lowers.
+  else if wordUsesServices ir then serviceClassify a o
   else if wcall then some "calls-unmodeled"
   else match o.kind with
     | "subtype-range" => if oelOpaque o.oel then some "opaque-site" else none
@@ -630,12 +816,6 @@ def classify (a : Artifact) (o : Obl) : Option String :=
         if o.formulaOp ≠ "OffsetLE" || o.off.isNone then some "dynamic-offset" else none
     | "contract-pre" | "contract-post" => contractClassify a o
     | _ => some "unknown-kind"
-
-/-- The word IR text of an obligation's word. -/
-def wordIrOf (a : Artifact) (o : Obl) : String :=
-  match a.words.find? (fun w => w.name == o.word) with
-  | some w => w.ir
-  | none => ""
 
 /-- The refinement context (P13.1, §Q13): `none` = NO context document was
 given (the bundle's refinement relativism is NOT bound); `some decls` = the
@@ -714,7 +894,12 @@ def renderStatement (a : Artifact) (ctx : RefinementContext) (o : Obl) : String 
   let hash := statementHash ctx' o
   let name := stmtName a.module o.word o.kind o.occurrence
   let w := wordName a o
-  let prop : String := match o.formulaOp with
+  let prop : String :=
+    -- P15 (§Q14): a service-bearing word under concurrency modeling renders
+    -- the abstract-atomic service statement (the static channel trace).
+    if wordUsesServices ir then
+      (renderServiceStatement a o).getD "True"
+    else match o.formulaOp with
     | "InRange" =>
         match oelRoot o.oel with
         | some ("in", i) => "Tyu.Gen.Stmt.inInputRange " ++ toString i ++ " (" ++ toString o.lo ++ ") (" ++ toString o.hi ++ ")"
@@ -882,7 +1067,7 @@ def renderModuleLean (a : Artifact) (ctx : RefinementContext) : String :=
   let header := "-- Generated by the Lean port's `gen` renderer (PLAN-VERIFY-3 P5).\n" ++
                 "-- DO NOT EDIT — regenerated from `tyu.obl/v2`; statement hashes are\n" ++
                 "-- the renderer↔encoder drift lock (crates/tooling-tests).\n\n" ++
-                "import Tyu.Gen.Stmt\nimport Tyu.Src\n\n" ++
+                "import Tyu.Gen.Stmt\nimport Tyu.Src\nimport Tyu.Services\n\n" ++
                 "namespace Tyu.Gen.Corpus." ++ ident a.module ++ "\n\n"
   let words := renderWordDefs a ctx
   let wordNames := a.obligations.filterMap (fun o =>
@@ -936,7 +1121,8 @@ def renderModuleMeta (a : Artifact) (ctx : RefinementContext) : String :=
     String.intercalate ", " (cycs.map (fun c =>
       "{ \"index\": " ++ toString c.1 ++ ", \"blocks\": [" ++ String.intercalate ", " (c.2.map (fun b => "\"b" ++ toString b ++ "\"")) ++ "] }")) ++ "] }")
   "{\n  \"schema\": \"tyu.gen/1\",\n  \"module\": \"" ++ jesc a.module ++ "\",\n  \"target\": \"" ++ jesc a.target ++
-    "\",\n  \"model_semantics\": \"" ++ jesc a.modelSemantics ++ "\",\n  \"statements\": [\n" ++
+    "\",\n  \"model_semantics\": \"" ++ jesc a.modelSemantics ++ "\",\n  \"concurrency\": \"" ++ jesc a.concurrency ++
+    "\",\n  \"statements\": [\n" ++
     String.intercalate ",\n" stmtRows ++ "\n  ],\n  \"words\": [\n" ++
     String.intercalate ",\n" wordRows ++ "\n  ]\n}\n"
 

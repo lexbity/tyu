@@ -1104,7 +1104,7 @@ pub fn assemble_for_deploy(
 
         // Obligation artifact `<out>/<Module>-<16hex>.obl.json` (exactly one).
         let obl = find_obl_artifact(args.out_dir, module)?;
-        let (target, model, obl_digest, claims, _statement_doc) = match &obl {
+        let (target, model, concurrency, obl_digest, claims, _statement_doc) = match &obl {
             Some(path) => {
                 let bytes = fs::read(path).map_err(TyuError::Io)?;
                 let set = verifier::codec::read_obl(&bytes).map_err(|e| {
@@ -1125,6 +1125,7 @@ pub fn assemble_for_deploy(
                 (
                     set.target.clone(),
                     set.model_semantics.clone(),
+                    set.concurrency.clone(),
                     sha256_hex(&bytes),
                     claims_from(&set),
                     doc,
@@ -1133,6 +1134,7 @@ pub fn assemble_for_deploy(
             None => (
                 spec.target.clone(),
                 spec.model.clone(),
+                verifier::model::CONCURRENCY_UNMODELED.to_string(),
                 String::new(),
                 Claims::default(),
                 String::new(),
@@ -1150,6 +1152,7 @@ pub fn assemble_for_deploy(
             &verify_env,
             &target,
             &model,
+            &concurrency,
         )?;
         let verdicts_bytes = verifier::verdict::encode_verdicts(
             "harvest",
@@ -1157,6 +1160,7 @@ pub fn assemble_for_deploy(
             verdicts.certifier.as_ref(),
             &verdicts.target,
             &verdicts.model_semantics,
+            &verdicts.concurrency,
             &verdicts.records,
             0,
             &verifier::verdict::EmittedChecksData {
@@ -1359,40 +1363,51 @@ fn module_verdicts(
     verify_env: &crate::proof::VerifyEnvKey,
     expect_target: &str,
     expect_model: &str,
+    expect_concurrency: &str,
 ) -> Result<verifier::verdict::Verdicts, crate::error::TyuError> {
-    // A verdicts doc whose identity pair differs from the consuming build's
+    // A verdicts doc whose identity triple differs from the consuming build's
     // is stale — fail-closed to empty (all obligations open), never silently
     // reused (§Q3; P12 finding 3 — the elision path enforces the same rule
-    // independently as E6421).
-    let reject_stale =
-        |v: verifier::verdict::Verdicts, src: &Path| -> verifier::verdict::Verdicts {
-            if v.target != expect_target || v.model_semantics != expect_model {
-                eprintln!(
-                "tyu: error[E6421]: verdicts '{}' stale: recorded ({}, {}) != build ({}, {}) — \
-                 verdicts ignored, obligations open (checks retained)",
-                src.display(),
-                v.target,
-                v.model_semantics,
-                expect_target,
-                expect_model
-            );
-                return verifier::verdict::Verdicts {
-                    semantics: verifier::semantics::SEMANTICS_VERSION.to_string(),
-                    stmt: verifier::stmt::STMT_SCHEMA.to_string(),
-                    certifier: None,
-                    target: expect_target.to_string(),
-                    model_semantics: expect_model.to_string(),
-                    records: Vec::new(),
-                };
-            }
-            v
-        };
+    // independently as E6421). P15.1 (§Q14): concurrency is the third
+    // identity dimension — a verdict rendered under a different services
+    // declaration is stale.
+    let reject_stale = |v: verifier::verdict::Verdicts,
+                        src: &Path|
+     -> verifier::verdict::Verdicts {
+        if v.target != expect_target
+            || v.model_semantics != expect_model
+            || v.concurrency != expect_concurrency
+        {
+            eprintln!(
+                    "tyu: error[E6421]: verdicts '{}' stale: recorded ({}, {}, {}) != build ({}, {}, {}) — \
+                     verdicts ignored, obligations open (checks retained)",
+                    src.display(),
+                    v.target,
+                    v.model_semantics,
+                    v.concurrency,
+                    expect_target,
+                    expect_model,
+                    expect_concurrency
+                );
+            return verifier::verdict::Verdicts {
+                semantics: verifier::semantics::SEMANTICS_VERSION.to_string(),
+                stmt: verifier::stmt::STMT_SCHEMA.to_string(),
+                certifier: None,
+                target: expect_target.to_string(),
+                model_semantics: expect_model.to_string(),
+                concurrency: expect_concurrency.to_string(),
+                records: Vec::new(),
+            };
+        }
+        v
+    };
     let empty = || verifier::verdict::Verdicts {
         semantics: verifier::semantics::SEMANTICS_VERSION.to_string(),
         stmt: verifier::stmt::STMT_SCHEMA.to_string(),
         certifier: None,
         target: expect_target.to_string(),
         model_semantics: expect_model.to_string(),
+        concurrency: expect_concurrency.to_string(),
         records: Vec::new(),
     };
     if let Some(obl) = obl_path {

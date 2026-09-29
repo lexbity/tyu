@@ -27,6 +27,7 @@ fn tyu_workspace_root() -> std::path::PathBuf {
 #[test]
 fn modeled_workspace_packs_lint_clean() {
     let root = tyu_workspace_root();
+    // The four bare-metal packs lint FULLY clean (model + pack surface).
     for name in [
         "x86_64-unknown-none",
         "armv7m-unknown-none",
@@ -47,39 +48,62 @@ fn modeled_workspace_packs_lint_clean() {
             outcome.warnings
         );
     }
-}
-
-/// P12.2/P13.2 gate: the unmodeled workspace packs carry the §Q15 model
-/// warning and **no model-pairing errors** (E5413–E5417). (rp2350 joined the
-/// modeled set in P13.2 — it carries a `[model]` section, a model artifact
-/// with a `[refinements]` manifest, and an evidence corpus.) The hosted
-/// runtime additionally carries a pre-existing, P12-orthogonal lint gap (the
-/// `[capabilities.gpio] glue` path `platform/gpio.def` does not exist in the
-/// hosted layout — a latent hosted-surface issue, tracked outside this
-/// phase) — the model surface is asserted independently of it.
-#[test]
-fn unmodeled_workspace_packs_warn_but_pass() {
-    let root = tyu_workspace_root();
-    // The hosted runtime carries P12-orthogonal, pre-existing lint gaps (the
-    // DS-geometry symbols are deliberately not exported — the documented
-    // fail-closed design pinned by `elide_two_pass::hosted_runtime_keeps_guards_fail_closed`
-    // — and the `[capabilities.gpio] glue` path is absent from the hosted
-    // layout), so its model surface is asserted under `all` (lint everything) —
-    // no model-pairing errors (E5413–E5417), §Q15 warning present.
+    // The hosted bundle (P15.1) joined the modeled set: its MODEL surface
+    // lints clean with no warnings. The P12-orthogonal, pre-existing
+    // packed-surface gap (the DS-geometry symbols are deliberately not
+    // exported by the hosted runtime — E5402 — the documented fail-closed
+    // design pinned by `run_qemu_hosted` / `elide_two_pass`) is asserted
+    // OUT of the model surface, exactly as the pre-P15 unmodeled test owned
+    // only its model surface.
     let hosted = lint_pack(&root, "linux-x86_64-hosted", true).unwrap();
     assert!(
         !hosted
             .errors
             .iter()
-            .any(|e| (5413..=5417).contains(&e.code)),
-        "hosted must have no model-pairing errors: {}",
+            .any(|e| (5413..=5419).contains(&e.code)),
+        "hosted model surface must lint clean: {}",
         format_lint_outcome(&hosted)
     );
     assert!(
-        hosted.warnings.iter().any(|w| w.contains("unmodeled")),
-        "hosted must carry the §Q15 warning: {:?}",
+        hosted.warnings.is_empty(),
+        "hosted bundle must not warn (modeled since P15): {:?}",
         hosted.warnings
     );
+}
+
+/// Every workspace pack is modeled since P15 (the hosted bundle joined the
+/// modeled set); lint everything (`all`) and assert the model surface of each
+/// carries zero pairing errors and zero §Q15 unmodeled warnings. The hosted
+/// runtime's P12-orthogonal, pre-existing lint gaps (the DS-geometry symbols
+/// and the `[capabilities.gpio] glue` path) remain out of scope here — the
+/// MODEL surface is what this test owns.
+#[test]
+fn workspace_packs_have_no_unmodeled_surface() {
+    let root = tyu_workspace_root();
+    for name in [
+        "x86_64-unknown-none",
+        "armv7m-unknown-none",
+        "riscv32-unknown-none",
+        "rp2350",
+        "linux-x86_64-hosted",
+    ] {
+        let outcome = lint_pack(&root, name, true).unwrap();
+        assert!(
+            !outcome
+                .errors
+                .iter()
+                .any(|e| (5413..=5419).contains(&e.code)),
+            "pack {} must have no model-pairing errors: {}",
+            name,
+            format_lint_outcome(&outcome)
+        );
+        assert!(
+            !outcome.warnings.iter().any(|w| w.contains("unmodeled")),
+            "pack {} must not carry the §Q15 unmodeled warning (all modeled): {:?}",
+            name,
+            outcome.warnings
+        );
+    }
 }
 
 fn x86_abi_hash_literal() -> String {
@@ -652,4 +676,104 @@ fn modeled_workspace_packs_pass_build_gate() {
         tyu::platform::ensure_model_pairing(pack)
             .unwrap_or_else(|e| panic!("{triple} must pass the build gate: {e}"));
     }
+}
+
+// ---------------------------------------------------------------------------
+// P15.1 concurrency-service pairing (E5418/E5419, §Q14/§6.7)
+// ---------------------------------------------------------------------------
+
+/// A model artifact with a `[services]` fragment.
+fn write_services_artifact(root: &Path, id: &str, services: &str) {
+    write_file(
+        &root.join("platforms/demo/model/model.toml"),
+        &format!("[model]\nid = \"{id}\"\n\n[services]\nids = [{services}]\n"),
+    );
+}
+
+/// `concurrency = "abstract-atomic"` on a bundle whose `model_semantics` is
+/// `"unmodeled"` ⇒ E5418 (an unmodeled bundle has no services model).
+#[test]
+fn abstract_atomic_on_unmodeled_bundle_is_5418() {
+    let root = fresh_root("conc_unmodeled_bundle");
+    let manifest =
+        manifest_with_model("model_semantics = \"unmodeled\"\nconcurrency = \"abstract-atomic\"");
+    write_pack(&root, &manifest);
+
+    let outcome = lint(&root);
+    assert!(
+        outcome.errors.iter().any(|e| e.code == 5418),
+        "{}",
+        format_lint_outcome(&outcome)
+    );
+    assert!(
+        outcome
+            .errors
+            .iter()
+            .any(|e| e.code == 5418 && e.detail.contains("abstract-atomic")),
+        "{:?}",
+        outcome.errors
+    );
+}
+
+/// `concurrency = "abstract-atomic"` without a `[services]` fragment in the
+/// model artifact ⇒ E5419 (the bundle claims a services model it did not
+/// declare).
+#[test]
+fn abstract_atomic_without_services_artifact_is_5419() {
+    let root = fresh_root("conc_no_services");
+    let manifest = manifest_with_model(&format!(
+        "model_semantics = \"{MODEL_ID}\"\nmmio = \"nondeterministic\"\nconcurrency = \"abstract-atomic\""
+    ));
+    write_pack(&root, &manifest);
+    write_model_artifact(&root, MODEL_ID);
+    write_evidence(&root);
+
+    let outcome = lint(&root);
+    assert!(
+        outcome.errors.iter().any(|e| e.code == 5419),
+        "{}",
+        format_lint_outcome(&outcome)
+    );
+}
+
+/// A `[services]` fragment under any concurrency OTHER than
+/// `abstract-atomic` ⇒ E5419 (a dead service model — the §6.7
+/// artifact-without-declaration pairing, applied to services).
+#[test]
+fn services_fragment_under_unmodeled_concurrency_is_5419() {
+    let root = fresh_root("conc_dead_services");
+    let manifest = manifest_with_model(&format!(
+        "model_semantics = \"{MODEL_ID}\"\nmmio = \"nondeterministic\"\nconcurrency = \"unmodeled\""
+    ));
+    write_pack(&root, &manifest);
+    write_services_artifact(&root, MODEL_ID, "\"channel\", \"task\", \"time\"");
+    write_evidence(&root);
+
+    let outcome = lint(&root);
+    assert!(
+        outcome.errors.iter().any(|e| e.code == 5419),
+        "{}",
+        format_lint_outcome(&outcome)
+    );
+}
+
+/// The full P15 hosted shape — `abstract-atomic` + a `[services]` artifact +
+/// evidence — lints clean with no warnings.
+#[test]
+fn abstract_atomic_with_services_artifact_is_clean() {
+    let root = fresh_root("conc_clean");
+    let manifest = manifest_with_model(&format!(
+        "model_semantics = \"{MODEL_ID}\"\nmmio = \"nondeterministic\"\nconcurrency = \"abstract-atomic\""
+    ));
+    write_pack(&root, &manifest);
+    write_services_artifact(&root, MODEL_ID, "\"channel\", \"task\", \"time\"");
+    write_evidence(&root);
+
+    let outcome = lint(&root);
+    assert!(
+        outcome.errors.is_empty(),
+        "{}",
+        format_lint_outcome(&outcome)
+    );
+    assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
 }

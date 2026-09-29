@@ -188,6 +188,7 @@ fn word_ir_cap_fails_closed() {
         target: String::new(),
         platform: String::new(),
         model_semantics: verifier::model::MODEL_UNMODELED.to_string(),
+        concurrency: verifier::model::CONCURRENCY_UNMODELED.to_string(),
         abi_contract_version: 2,
         facts: verifier::model::Facts {
             words: vec![verifier::model::WordFact {

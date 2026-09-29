@@ -1448,6 +1448,7 @@ fn compile_mod_pipeline(
         None,
         "",
         "",
+        "",
         &[],
         0,
         &verifier::verdict::EmittedChecksData::default(),

@@ -371,11 +371,15 @@ def store (m : MemModel) (addr : Interval) (val : Interval) : MemModel :=
   | _ => m
 
 /-- The scripted (refined) read for `place`, when the model declares one —
-mirrors `ApertureMem::script_read` (the refinement oracle seed). -/
+mirrors `ApertureMem::script_read` (the refinement oracle seed). RUST's
+script table keeps at most one entry per place (retain + push) — the LAST
+write wins; a corpus document that lists the same place twice must resolve
+to the LAST entry (review finding 4, fixed: search the reversed list, not
+`find?` — `find?` would silently answer the FIRST). -/
 def scriptedRead (m : MemModel) (place : String) : Option Interval :=
   match m with
   | .bundle _ _ _ scr =>
-      match scr.find? (fun s => s.1 == place) with
+      match scr.reverse.find? (fun s => s.1 == place) with
       | some (_, v) => some v
       | none => none
   | _ => none

@@ -214,6 +214,27 @@ if ! printf '%s\n' "$GEOM_OUT" | grep -q '"schema":"tyu.bind/1"'; then
     msg 1 "  port.sh: P12.2 bundle geometry report malformed"
     exit 1
 fi
+# --- PLAN-VERIFY-3 P15.2 — services conformance ---
+# The hosted bundle's `tyu.svcvec/1` corpus
+# (`sysroot/x86_64-unknown-linux-gnu/evidence/vectors.json`: scripted channel
+# programs, expected FIFO outputs) is replayed by `conformance --level
+# services` against the abstract-atomic model (`Tyu.Services`) and by the
+# Rust mirror (`crates/tooling-tests/tests/service_relativism.rs`) — three
+# surfaces (Lean model, Rust mirror, hosted runtime — the execution-test
+# leg) must all agree on the FIFO/atomicity semantics (R9 detection).
+SVC_CORPUS=("$ROOT/sysroot/x86_64-unknown-linux-gnu/evidence")
+msg 2 "  port.sh: P15.2 services conformance (${#SVC_CORPUS[@]} corpus)"
+SVC_OUT="$(.lake/build/bin/conformance --level services --corpus "${SVC_CORPUS[@]}")" || {
+    printf '%s\n' "$SVC_OUT"
+    msg 1 "  port.sh: P15.2 services corpus DIVERGED (Lean services model drift)"
+    exit 1
+}
+printf '%s\n' "$SVC_OUT"
+echo "$SVC_OUT" | grep -q "RESULT: services=.*mismatches=0" || {
+    msg 1 "  port.sh: P15.2 services conformance failed (nonzero mismatches)"
+    exit 1
+}
+msg 2 "  port.sh: P15.2 services conformance green (zero divergence)"
 msg 2 "  port.sh: P12.2 bundle conformance green (zero divergence; geometry report ok)"
 # --- PLAN-VERIFY-3 P5 — the statement renderer + Gen goldens (the drift lock) ---
 # The `gen` renderer (a pure function of the `tyu.obl/v2` artifacts → the
@@ -563,26 +584,25 @@ echo ""
 # engine makes (`trust: proof, method: rederive`, T-B-backed):
 #   1. `rederive --selfcheck` — the SHA-256 self-check (statement binding);
 #   2. `rederive --corpus` over the committed rederive corpus — the always-on
-#      differential pin (the generated programs' expectations, byte-exact);
-#   3. a generated-program differential over 20k programs against the in-tree
-#      engine (the full ≥10^5 run is `ci/differential.sh`, NFR-3 budgeted);
-#   4. the automation-only `proven` build (`proven_automation_only`): a
+#      differential pin (cast-site + bundle-model programs included,
+#      byte-exact);
+#   3. the automation-only `proven` build (`proven_automation_only`): a
 #      module discharged entirely by rederive — no developer proofs — builds
 #      under `--verify-policy=proven` (§Q12).
+# The big ≥10^5 differential is `ci/differential.sh` (NFR-3 budgeted), run
+# by integration.yml right after this gate — no smaller duplicate run here.
 msg 2 "  port.sh: P14 re-derivation gate (rederive, T-A/T-B)"
 (
     lake build rederive >/dev/null 2>&1 || exit 1
     .lake/build/bin/rederive --selfcheck || exit 1
     .lake/build/bin/rederive --corpus "$ROOT/crates/verifier/test-vectors/rederive" || exit 1
-    ( cd "$ROOT" && TYU_REDERIVE_E2E=1 TYU_REDERIVE_N=20000 \
-        cargo test -q -p verifier --test rederive_differential rederive_differential_exact_agreement 2>&1 | tail -2 ) || exit 1
     ( cd "$ROOT" && TYU_REDERIVE_E2E=1 \
         cargo test -q -p tooling-tests --test proven_automation_only 2>&1 | tail -2 ) || exit 1
 ) || {
     msg 1 "  port.sh: P14 re-derivation gate FAILED (T-A/T-B pin / proven_automation_only)"
     exit 1
 }
-msg 2 "  port.sh: P14 re-derivation gate green (rederive selfcheck + corpus + 20k differential + automation-only proven)"
+msg 2 "  port.sh: P14 re-derivation gate green (rederive selfcheck + corpus + automation-only proven)"
 
 echo ""
 msg 2 "  port.sh: PORT GATE GREEN (conformance + axiom audit + stackmeta + P9.3 fragment corpus + P5 gen drift + P6 pipeline + P7.1 harvest + P9 source surface + P10 automation + P12 bundles/bands + P13 refinement + P14 re-derivation)"

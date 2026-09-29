@@ -21,68 +21,14 @@ use std::process::Command;
 
 mod common;
 
-use common::{interval_text, intervals_text, json_esc, tri_name, workspace_root};
-use verifier::gen::{gen_program, MemDesc, Program, Rng, SUB_HI, SUB_ID, SUB_LO};
-use verifier::interp::{ApertureMem, FlatMem, Origin, Slot, State, SubtypeRange};
-use verifier::interval::{eval_in_range, Interval, Tri};
+use common::{abstract_verdict, interval_text, intervals_text, json_esc, tri_name, workspace_root};
+use verifier::gen::{gen_program, MemDesc, Program, Rng};
+use verifier::interval::{Interval, Tri};
 use verifier::target::TargetSpec;
 
 const REDERIVE_SCHEMA: &str = "tyu.vec/1";
 const SW_SEED: u64 = 0x5eed_0000_0000_0001;
 const COMMITTED_N: usize = 256;
-
-fn sr() -> &'static SubtypeRange<'static> {
-    &|tid: ir::TypeId| {
-        if tid.0 == SUB_ID {
-            Some((SUB_LO, SUB_HI))
-        } else {
-            None
-        }
-    }
-}
-
-/// The in-tree discharge of one generated program: `(tri, interval)` —
-/// seed the abstract stack from the input domains, run the transfer, capture
-/// the pre-cast value for cast-site programs, evaluate the target range.
-/// (Mirrors `soundness_differential::abstract_verdict`; the ONE in-tree
-/// semantics the port must reproduce.)
-fn abstract_verdict(prog: &Program) -> (Tri, Interval) {
-    let mut flat = FlatMem;
-    let mut ap: Option<ApertureMem> = None;
-    if prog.mem.ram.is_some() || !prog.mem.scripted.is_empty() {
-        let mut m = ApertureMem::new(prog.mem.ram.unwrap_or((0, 0)));
-        for &(k, v) in prog.mem.scripted.iter() {
-            m.script_read(&k, Interval::const_val(v));
-        }
-        ap = Some(m);
-    }
-    let mut st = State::callee_entry(prog.n_inputs(), 4);
-    st.stack.clear();
-    for &(lo, hi) in &prog.domains {
-        st.stack.push(Slot {
-            iv: Interval::Range { lo, hi },
-            origin: Origin::Arg(0),
-        });
-    }
-    let mut pre_cast: Option<Interval> = None;
-    for op in &prog.ops {
-        if matches!(op, ir::OpKind::Cast { to, .. } if to.0 == SUB_ID) {
-            pre_cast = Some(st.top_interval());
-        }
-        match &mut ap {
-            Some(m) => st.step(op, sr(), prog.spec, m),
-            None => st.step(op, sr(), prog.spec, &mut flat),
-        }
-    }
-    let (tri, val) = if prog.cast_site {
-        let v = pre_cast.unwrap_or(Interval::TOP);
-        (eval_in_range(v, prog.target.0, prog.target.1), v)
-    } else {
-        let v = st.top_interval();
-        (eval_in_range(v, prog.target.0, prog.target.1), v)
-    };
-    (tri, val)
-}
 
 /// Canonical op text of a program (block-less, exactly `parseOps`' input).
 fn prog_ops_text(prog: &Program) -> String {
@@ -245,11 +191,15 @@ fn generate(seed: u64, n: usize, mem: bool) -> Vec<Program> {
 }
 
 /// The always-on corpus surface: the committed file byte-matches
-/// regeneration (the generator is deterministic), covers all three
-/// discharge classes, and executes.
+/// regeneration (the generator is deterministic) and covers every engine
+/// surface the transfer table has: all three discharge classes, cast-site
+/// programs (the `castNarrow` row — the P14 review found the seed yielded
+/// zero cast sites, leaving the row differentially unexercised at
+/// always-on cadence), and bundle-model programs (the RAM + scripted-read
+/// memory paths).
 #[test]
 fn committed_rederive_corpus_matches_regeneration() {
-    let programs = generate(SW_SEED, COMMITTED_N, false);
+    let programs = generate(SW_SEED, COMMITTED_N, true);
     let doc = render_corpus(&programs);
     let dir = corpus_dir();
     let path = dir.join("index.json");
@@ -264,11 +214,21 @@ fn committed_rederive_corpus_matches_regeneration() {
             "rederive corpus drifted from the deterministic generator — regenerate + review"
         );
     }
-    // Class coverage: the corpus exhibits all of discharged/def-false/open.
+    // Coverage: all three discharge classes, plus at least one cast-site and
+    // one bundle-model program — a seed that misses a surface silently
+    // narrows what the always-on pin can catch.
     let mut discharged = 0;
     let mut failing = 0;
     let mut open = 0;
+    let mut cast_sites = 0;
+    let mut bundles = 0;
     for p in &programs {
+        if p.cast_site {
+            cast_sites += 1;
+        }
+        if p.mem.ram.is_some() || !p.mem.scripted.is_empty() {
+            bundles += 1;
+        }
         match abstract_verdict(p).0 {
             Tri::DefTrue => discharged += 1,
             Tri::DefFalse => failing += 1,
@@ -278,6 +238,8 @@ fn committed_rederive_corpus_matches_regeneration() {
     assert!(discharged > 0, "corpus produced no discharges");
     assert!(failing > 0, "corpus produced no provably-failing");
     assert!(open > 0, "corpus produced no open verdicts");
+    assert!(cast_sites > 0, "corpus produced no cast-site programs");
+    assert!(bundles > 0, "corpus produced no bundle-model programs");
 }
 
 /// The differential (env-gated): ≥ `TYU_REDERIVE_N` generated programs run by

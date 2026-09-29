@@ -26,26 +26,15 @@
 //! per-program identity (tri + final interval) across targets — the width
 //! parameterization must be a *no-op on the data domain*.
 
+mod common;
+
+use common::{abstract_verdict, sr};
 use ir::{Atom, BlockId, CmpKind, OpKind, Sig, Span, TypeId};
 use std::collections::HashMap;
 use verifier::gen::{gen_program, MemDesc, Program, Rng, SUB_HI, SUB_ID, SUB_LO};
-use verifier::interp::{
-    exit_state, run_cfg, ApertureMem, FlatMem, Origin, Slot, State, SubtypeRange,
-};
+use verifier::interp::{exit_state, run_cfg, FlatMem};
 use verifier::interval::{eval_in_range, Interval, Tri};
 use verifier::target::TargetSpec;
-
-fn subtype_range_lookup(tid: TypeId) -> Option<(i64, i64)> {
-    if tid.0 == SUB_ID {
-        Some((SUB_LO, SUB_HI))
-    } else {
-        None
-    }
-}
-
-fn sr() -> &'static SubtypeRange<'static> {
-    &subtype_range_lookup
-}
 
 // -------- Program model & enumeration ----------------------------------------
 
@@ -212,50 +201,9 @@ pub fn concrete_eval(prog: &Program, inputs: &[i64]) -> Option<i64> {
 
 // Abstract semantics ----------------------------------------------------------
 
-/// The discharge verdict of a program under a given target identity:
-/// `(tri_of_obligation, final_interval)`. For `cast_site` programs the
-/// obligation is on the PRE-cast value. The memory model is the program's
-/// [`MemDesc`]: `FlatMem` when no surface is enabled, else an `ApertureMem`
-/// carrying the program's RAM region and scripted MMIO reads (P2 — the
-/// differential steps the actual `(TargetSpec, MemModel)` pair, §Q3).
-pub fn abstract_verdict(prog: &Program) -> (Tri, Interval) {
-    let mut flat = FlatMem;
-    let mut ap: Option<ApertureMem> = None;
-    if prog.mem.ram.is_some() || !prog.mem.scripted.is_empty() {
-        let mut m = ApertureMem::new(prog.mem.ram.unwrap_or((0, 0)));
-        for &(k, v) in prog.mem.scripted.iter() {
-            m.script_read(&k, Interval::const_val(v));
-        }
-        ap = Some(m);
-    }
-    let mut st = State::callee_entry(prog.n_inputs(), 4);
-    // Seed the abstract inputs from the domains.
-    st.stack.clear();
-    for &(lo, hi) in &prog.domains {
-        st.stack.push(Slot {
-            iv: Interval::Range { lo, hi },
-            origin: Origin::Arg(0),
-        });
-    }
-    let mut pre_cast: Option<Interval> = None;
-    for op in &prog.ops {
-        if matches!(op, OpKind::Cast { to, .. } if to.0 == SUB_ID) {
-            pre_cast = Some(st.top_interval());
-        }
-        match &mut ap {
-            Some(m) => st.step(op, sr(), prog.spec, m),
-            None => st.step(op, sr(), prog.spec, &mut flat),
-        }
-    }
-    let (tri, val) = if prog.cast_site {
-        let v = pre_cast.unwrap_or(Interval::TOP);
-        (eval_in_range(v, prog.target.0, prog.target.1), v)
-    } else {
-        let v = st.top_interval();
-        (eval_in_range(v, prog.target.0, prog.target.1), v)
-    };
-    (tri, val)
-}
+// `abstract_verdict` and `sr` — the in-tree discharge oracle — live once in
+// `tests/common` (P14 review dedup); this suite and `rederive_differential`
+// must reference the SAME reference semantics, never a fork.
 
 /// The soundness property: `Discharged ⇒ no witness violates`.
 fn assert_discharge_sound(prog: &Program, tag: &str) {

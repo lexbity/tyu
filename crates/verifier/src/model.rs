@@ -44,6 +44,19 @@ pub const OBL_SCHEMA: &str = "tyu.obl/v2";
 /// (`§Q15`): loadable, runnable, testable — and uncertifiable.
 pub const MODEL_UNMODELED: &str = "unmodeled";
 
+/// The concurrency-service modeling declaration of a bundle that does NOT
+/// model its services (PLAN-VERIFY-3 §Q14/§6.7, P15.1): the `"unmodeled"`
+/// half of the closed set `{unmodeled, abstract-atomic}` carried by the
+/// statement relativism. Service-bearing words under this declaration are
+/// fail-closed `open` with the `service-unmodeled` witness (§Q14).
+pub const CONCURRENCY_UNMODELED: &str = "unmodeled";
+
+/// The concurrency-service modeling declaration of a bundle that models its
+/// services as **atomic abstract transitions** on an abstract global state
+/// (PLAN-VERIFY-3 §Q14 option (b), P15): channel FIFO maps, a task table,
+/// and a monotone clock — the `Tyu/Services.lean` model of the port.
+pub const CONCURRENCY_ABSTRACT_ATOMIC: &str = "abstract-atomic";
+
 /// Hard read-side cap for `.obl.json` artifacts (static-verification.md NFR-5;
 /// enforced at encode and at read).
 pub const OBL_ARTIFACT_MAX_BYTES: usize = 16 * 1024 * 1024;
@@ -444,6 +457,14 @@ pub struct OblSet {
     /// Model-semantics identity — `tyu.model/<…>/<ver>` or `"unmodeled"`
     /// (§Q15). Populated from the platform pack from P12 on.
     pub model_semantics: String,
+    /// The concurrency-service modeling declaration (§Q14, P15.1) — the
+    /// bundle's `[model] concurrency` value (`"abstract-atomic"` or
+    /// `"unmodeled"`). Part of the (target, model_semantics, concurrency)
+    /// statement relativism: a service-bearing word's obligations are
+    /// renderable against the services model only when the producing
+    /// bundle carried `"abstract-atomic"` (the §Q14 fail-closed `open` /
+    /// `service-unmodeled` rule otherwise). Additive member of `tyu.obl/v2`.
+    pub concurrency: String,
     pub abi_contract_version: u32,
     pub facts: Facts,
     pub obligations: Vec<Obligation>,
@@ -542,7 +563,10 @@ impl ExtractionCtx {
     }
 
     /// Create a fresh context with the full statement relativity identity
-    /// (`target`, `platform`, `model_semantics`; §Q3/§6.1).
+    /// (`target`, `platform`, `model_semantics`; §Q3/§6.1). Concurrency
+    /// defaults to `"unmodeled"` (§Q14: services unmodeled unless the hard
+    /// set); the driver overrides it via [`ExtractionCtx::set_concurrency`]
+    /// once the bundle's `[model] concurrency` declaration is resolved.
     pub fn new_with_identity(
         module: &[u8],
         target: &[u8],
@@ -558,6 +582,7 @@ impl ExtractionCtx {
                 target: utf8_lossy(target),
                 platform: utf8_lossy(platform),
                 model_semantics: utf8_lossy(model_semantics),
+                concurrency: CONCURRENCY_UNMODELED.to_string(),
                 abi_contract_version: ir::contract::ABI_CONTRACT_VERSION as u32,
                 facts: Facts {
                     words: Vec::new(),
@@ -587,6 +612,13 @@ impl ExtractionCtx {
             self.set.platform = utf8_lossy(platform);
         }
         self.set.model_semantics = utf8_lossy(model_semantics);
+    }
+
+    /// Set the bundle's concurrency-service modeling declaration (§Q14,
+    /// P15.1) — the `[model] concurrency` value (`abstract-atomic` or
+    /// `unmodeled`) carried by the artifact's statement relativism.
+    pub fn set_concurrency(&mut self, concurrency: &[u8]) {
+        self.set.concurrency = utf8_lossy(concurrency);
     }
 
     /// Start extracting for `word`: resets the per-word occurrence ordinals.

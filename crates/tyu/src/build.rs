@@ -189,6 +189,19 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
         None => verifier::model::MODEL_UNMODELED,
     };
 
+    // P15.1 (§Q14): the bundle's concurrency-service modeling declaration —
+    // the `[model] concurrency` value (`abstract-atomic` | `unmodeled`).
+    // Stamped on every langc invocation (the artifact's statement-relativism
+    // concurrency dimension) and folded into the verification-env cache key.
+    let concurrency: &str = match platform_selection.as_ref() {
+        Some(selection) => selection
+            .pack
+            .model()
+            .map(|m| m.concurrency_str())
+            .unwrap_or(verifier::model::CONCURRENCY_UNMODELED),
+        None => verifier::model::CONCURRENCY_UNMODELED,
+    };
+
     // §7.2 (P6 amendment): the verification-environment components of every
     // verdicts-cache slot — semantics, stmt, toolchain pin hash, model id,
     // proof-files hash. A proof-file edit, a toolchain change, or a bundle-
@@ -228,6 +241,7 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
             &out_dir,
             platform_selection.as_ref().map(|s| s.pack.pack_root()),
             model_semantics,
+            concurrency,
             feature_set,
         )?;
         let verdict = super::verify::elision_main_verdict(
@@ -300,6 +314,7 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
                 &out_dir,
                 platform_selection.as_ref().map(|s| s.pack.pack_root()),
                 model_semantics,
+                concurrency,
                 feature_set,
                 triple,
             )?;
@@ -368,6 +383,7 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
             &out_dir,
             platform_selection.as_ref().map(|s| s.pack.pack_root()),
             model_semantics,
+            concurrency,
             &mut cache,
             compiler_fp,
             inputs_fp,
@@ -1225,6 +1241,7 @@ fn compile_module(
     out_dir: &Path,
     platform_dir: Option<&Path>,
     model_semantics: &str,
+    concurrency: &str,
     cache: &mut BuildCache,
     compiler_fp: u64,
     inputs_fp: u64,
@@ -1352,6 +1369,9 @@ fn compile_module(
     // modeled pack and a bare build emit visibly different (triple, model)
     // identities.
     cmd.arg(format!("--model-semantics={}", model_semantics));
+    // P15.1 (§Q14): the concurrency-service modeling declaration (always
+    // forwarded; the honest §Q14 default for a bare build).
+    cmd.arg(format!("--concurrency={}", concurrency));
 
     for inc in include_dirs {
         cmd.arg("-I");
@@ -1475,6 +1495,7 @@ fn langc_obligations_command(
     sysroot: Option<&Path>,
     platform_dir: Option<&Path>,
     model_semantics: &str,
+    concurrency: &str,
     feature_set: FeatureSet,
     is_lib: bool,
     path: &Path,
@@ -1489,6 +1510,7 @@ fn langc_obligations_command(
         cmd.arg(format!("--platform={}", dir.display()));
     }
     cmd.arg(format!("--model-semantics={}", model_semantics));
+    cmd.arg(format!("--concurrency={}", concurrency));
     for inc in include_dirs {
         cmd.arg("-I");
         cmd.arg(inc);
@@ -1522,6 +1544,7 @@ fn extract_obligations_for_elision(
     out_dir: &Path,
     platform_dir: Option<&Path>,
     model_semantics: &str,
+    concurrency: &str,
     feature_set: FeatureSet,
 ) -> Result<Vec<(String, Option<verifier::model::OblSet>)>, TyuError> {
     let scratch = out_dir.join(format!(".tyu-elide-pass1-{}", std::process::id()));
@@ -1540,6 +1563,7 @@ fn extract_obligations_for_elision(
             sysroot,
             platform_dir,
             model_semantics,
+            concurrency,
             feature_set,
             module.is_lib,
             &module.path,
@@ -1602,6 +1626,7 @@ fn extract_module_artifacts(
     out_dir: &Path,
     platform_dir: Option<&Path>,
     model_semantics: &str,
+    concurrency: &str,
     feature_set: FeatureSet,
     triple: &str,
 ) -> Result<Vec<(String, PathBuf)>, TyuError> {
@@ -1616,6 +1641,7 @@ fn extract_module_artifacts(
             sysroot,
             platform_dir,
             model_semantics,
+            concurrency,
             feature_set,
             module.is_lib,
             &module.path,
@@ -1782,6 +1808,7 @@ fn ensure_verdicts_cache_file(slot: &Path) -> Result<PathBuf, TyuError> {
         "tyu",
         env!("CARGO_PKG_VERSION"),
         None,
+        "",
         "",
         "",
         &[],

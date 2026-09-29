@@ -1,6 +1,7 @@
 import Tyu.Sound
 import Tyu.Gen.Stmt
 import Tyu.Automation.Cycle
+import Tyu.Services
 
 /-! The P4.2 axiom-audit surface: every registry theorem must depend only
 on the permitted axioms {propext, Quot.sound, Classical.choice}. Unproven
@@ -80,6 +81,15 @@ to appear in this audit. Keep the two lists in the same commit. -/
 #print axioms Tyu.Sound.TA.tri_or_sound
 #print axioms Tyu.Sound.TA.tri_not_sound
 #print axioms Tyu.Sound.TB.discharge_sound
+#print axioms Tyu.Services.send_then_recv_value
+#print axioms Tyu.Services.send_then_recv_empty
+#print axioms Tyu.Services.fifo_order
+#print axioms Tyu.Services.roundtrip_other_unchanged
+#print axioms Tyu.Services.chanOps_clock_monotone
+#print axioms Tyu.Services.timeAdvance_monotone
+#print axioms Tyu.Services.trace_send_recv_output
+#print axioms Tyu.Services.trace_send_recv_in_range
+#print axioms Tyu.Services.fifo_roundtrip
 #print axioms Tyu.Gen.Stmt.Word.runBlockOps_eq
 #print axioms Tyu.Gen.Stmt.Word.runFrom_is_runWord
 #print axioms Tyu.Gen.Stmt.inputAt_eq_src

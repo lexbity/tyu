@@ -409,6 +409,11 @@ pub struct Verdicts {
     pub certifier: Option<Certifier>,
     pub target: String,
     pub model_semantics: String,
+    /// P15.1 (§Q14): the file-level concurrency-service modeling declaration
+    /// the statements were rendered under (`abstract-atomic` | `unmodeled`).
+    /// Part of the FR-5 statement-binding identity consumed by langc — a
+    /// verdict produced under a different concurrency declaration is stale.
+    pub concurrency: String,
     pub records: Vec<VerdictRecord>,
 }
 
@@ -515,6 +520,7 @@ pub fn encode_verdicts(
     certifier: Option<&Certifier>,
     target: &str,
     model_semantics: &str,
+    concurrency: &str,
     records: &[VerdictRecord],
     stale_verdicts: u32,
     emitted: &EmittedChecksData,
@@ -552,6 +558,9 @@ pub fn encode_verdicts(
     push_str_json(&mut out, target);
     out.extend_from_slice(b",\"model_semantics\":");
     push_str_json(&mut out, model_semantics);
+    // P15.1 (§Q14): the concurrency-service modeling declaration.
+    out.extend_from_slice(b",\"concurrency\":");
+    push_str_json(&mut out, concurrency);
     out.extend_from_slice(b",\"verdicts\":[");
     for (i, r) in records.iter().enumerate() {
         if i != 0 {
@@ -685,6 +694,7 @@ pub fn encode_echo(
     tool_version: &str,
     target: &str,
     model_semantics: &str,
+    concurrency: &str,
     records: &[VerdictRecord],
     stale_verdicts: u32,
     emitted: &EmittedChecksData,
@@ -709,6 +719,7 @@ pub fn encode_echo(
         Some(&certifier),
         target,
         model_semantics,
+        concurrency,
         records,
         stale_verdicts,
         emitted,
@@ -913,6 +924,7 @@ impl<'a> VReader<'a> {
         let mut certifier: Option<Certifier> = None;
         let mut target: Option<String> = None;
         let mut model_semantics: Option<String> = None;
+        let mut concurrency: Option<String> = None;
         let mut records: Option<Vec<VerdictRecord>> = None;
         let mut stale_verdicts: Option<u32> = None;
         let mut emitted: Option<EmittedChecksData> = None;
@@ -942,6 +954,7 @@ impl<'a> VReader<'a> {
                 "certifier" => certifier = self.parse_certifier()?,
                 "target" => target = Some(self.parse_string()?),
                 "model_semantics" => model_semantics = Some(self.parse_string()?),
+                "concurrency" => concurrency = Some(self.parse_string()?),
                 "verdicts" => records = Some(self.parse_records(surface)?),
                 // Echo extras (P4/P5): parsed here so tyu's report composition
                 // can read them back; the strict `read_verdicts` input path
@@ -971,6 +984,8 @@ impl<'a> VReader<'a> {
                 certifier,
                 target: target.unwrap_or_default(),
                 model_semantics: model_semantics.unwrap_or_default(),
+                concurrency: concurrency
+                    .unwrap_or_else(|| crate::model::CONCURRENCY_UNMODELED.to_string()),
                 records,
             },
             stale_verdicts: stale_verdicts.unwrap_or(0),

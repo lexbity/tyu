@@ -318,6 +318,7 @@ pub fn write_module_summaries(
                 certifier: None,
                 target: target.clone(),
                 model_semantics: model.clone(),
+                concurrency: set.concurrency.clone(),
                 records: Vec::new(),
             },
         };
@@ -366,6 +367,7 @@ mod tests {
             target: ART_TARGET.to_string(),
             platform: ART_TARGET.to_string(),
             model_semantics: ART_MODEL.to_string(),
+            concurrency: verifier::model::CONCURRENCY_UNMODELED.to_string(),
             abi_contract_version: ir::contract::ABI_CONTRACT_VERSION as u32,
             facts: verifier::model::Facts {
                 words: Vec::new(),
@@ -385,6 +387,7 @@ mod tests {
             None,
             target,
             model,
+            "unmodeled",
             &[],
             0,
             &verifier::verdict::EmittedChecksData {
@@ -416,6 +419,7 @@ mod tests {
             &dir,
             ART_MODEL,
             crate::proof::refinements_hash_for_model(ART_MODEL),
+            crate::proof::concurrency_hash_for_model(ART_MODEL),
         );
         verdicts_for_module(&dir, "Main", &obl, &env)
             .unwrap()

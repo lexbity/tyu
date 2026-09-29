@@ -4,6 +4,7 @@
 
 import Tyu.Gen.Stmt
 import Tyu.Src
+import Tyu.Services
 
 namespace Tyu.Gen.Corpus.EventLoop
 

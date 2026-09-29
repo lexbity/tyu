@@ -246,10 +246,17 @@ pub(crate) fn compose(
             Some(set) => (set.target.clone(), set.model_semantics.clone()),
             None => (String::new(), String::new()),
         };
+        // P15.1 (§Q14/P7.3): the concurrency-service modeling declaration —
+        // the report's leg of the artifact's statement relativism.
+        let concurrency = match set.as_ref() {
+            Some(set) => set.concurrency.clone(),
+            None => verifier::model::CONCURRENCY_UNMODELED.to_string(),
+        };
         report.modules.push(ModuleAccounting {
             name: name.clone(),
             target,
             model,
+            concurrency,
             classes,
             trust,
             methods,
@@ -1051,6 +1058,7 @@ mod tests {
             None,
             "",
             "",
+            "",
             &[rec],
             0,
             &verifier::verdict::EmittedChecksData::default(),
@@ -1081,6 +1089,7 @@ mod tests {
             "test",
             "0",
             None,
+            "",
             "",
             "",
             &[tampered],

@@ -24,6 +24,20 @@ linker = ""
 # (stack-bound-analysis.md §13).
 isr_stack_slots = 32   # N_isr; ISRs are masked (no nesting) so one grant covers all handlers
 
+[model]
+# P15.1 (§Q14/§6.7): the hosted bundle's model identity. The model artifact
+# carrier lives in the sysroot next to the services it models
+# (`sysroot/x86_64-unknown-linux-gnu/model.toml`, PLAN-VERIFY-3 §9) — the
+# lint resolves it there for this bundle. `concurrency = "abstract-atomic"`
+# declares the §Q14 model: channel IPC + the task scheduler + the monotone
+# clock are ATOMIC ABSTRACT TRANSITIONS on an abstract global state
+# (`Tyu/Services.lean`), which the statement pipeline requires before it
+# renders any service-bearing word's statements (the `service-unmodeled`
+# fail-closed reason over the statement relativism's concurrency dimension).
+model_semantics = "tyu.model/linux-x86_64-hosted/1"
+mmio = "nondeterministic"
+concurrency = "abstract-atomic"
+
 [capabilities.gpio]
 glue = "platform/gpio"
 

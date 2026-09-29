@@ -326,6 +326,10 @@ pub fn emit_obj_driver(
     // P12.1 (§6.7): the bundle's model-semantics id (§Q15 default
     // `unmodeled`) — the artifact's `(triple, model_semantics)` identity.
     model_semantics: &[u8],
+    // P15.1 (§Q14): the bundle's concurrency-service modeling declaration
+    // (`abstract-atomic` | `unmodeled`; the §Q14 default). The statement
+    // relativism's concurrency dimension.
+    concurrency: &[u8],
     // P13.1 (§Q13): the bundle's `[refinements]` context — relativizes the
     // FR-5 statement-binding recompute (a certificate bound under a
     // refinement binds only when the consuming build carries it).
@@ -346,6 +350,9 @@ pub fn emit_obj_driver(
     // a direct langc run without a bundle stays `unmodeled` (§Q15).
     if let Some(ctx) = extract_ctx.as_mut() {
         ctx.set_identity(target.triple(), target.triple(), model_semantics);
+        // P15.1 (§Q14): the concurrency-service modeling declaration (the
+        // `[model] concurrency` value; §Q14's honest default unmodeled).
+        ctx.set_concurrency(concurrency);
     }
     let mut path_buf = [0u8; 512];
     let asm_path = match join_path(&mut path_buf, out_dir, module_name, b".asm") {
@@ -757,6 +764,7 @@ pub fn emit_obj_driver(
             "0.1.0",
             &ctx.set().target,
             &ctx.set().model_semantics,
+            &ctx.set().concurrency,
             &records,
             stale,
             &emitted,
@@ -810,6 +818,8 @@ pub fn emit_obl_driver(
     // P12.1 (§6.7): the bundle's model-semantics id (§Q15 default
     // `unmodeled`).
     model_semantics: &[u8],
+    // P15.1 (§Q14): the bundle's concurrency-service modeling declaration.
+    concurrency: &[u8],
 ) -> i32 {
     let module_name = slice_span(src, module.name);
     let mut obl_buf = [0u8; 512];
@@ -841,6 +851,8 @@ pub fn emit_obl_driver(
     // §Q3/§Q15 + P12.1: identity arrives from the resolved pack (see
     // emit_obj_driver); a direct run without a bundle stays `unmodeled`.
     ctx.set_identity(target.triple(), target.triple(), model_semantics);
+    // P15.1 (§Q14): the concurrency-service modeling declaration.
+    ctx.set_concurrency(concurrency);
     match semantics::typecheck::for_each_ir_word(
         module,
         src,

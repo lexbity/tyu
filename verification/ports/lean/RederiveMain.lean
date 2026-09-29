@@ -7,11 +7,18 @@ Usage:
     rederive --corpus <dir...>            (the differential pin: re-run
                                            `tyu.vec/1` program corpora)
     rederive --obl <artifact...> --out <file> [--toolchain <pin>]
+             [--refinements <tyu.refinements/1 doc>]
 
-Fail-closed: an artifact that fails to parse, a corpus mismatch, or any
-unknown form exits nonzero. The `--obl` output is a `tyu.verdicts/v2`
-document: `trust: proof`, `method: rederive`, `proof.kind: rederive`,
-statement-bound — the automation layer's `proven`-admissible upgrade. -/
+Fail-closed: an artifact that fails to parse, a corpus mismatch, a missing
+word / unparseable blocks / out-of-range cast occurrence (each FAILS the
+module loudly), or any unknown form exits nonzero. The `--obl` output is a
+`tyu.verdicts/v2` document: `trust: proof`, `method: rederive`,
+`proof.kind: rederive`, statement-bound — the automation layer's
+`proven`-admissible upgrade. Per-cast subtype ranges come from the
+artifact's `facts.subtypes`; the word width is derived from the `target`
+triple; refined-read words under a modeled bundle require the
+`--refinements` context (else `open`/`refined-read-unbound`, never a
+silent default). -/
 
 /-- Split `args` at the first `marker`: (before, after). -/
 def splitAt (marker : String) (args : List String) : List String × List String :=
@@ -51,33 +58,51 @@ def corpusMain (dirs : List String) : IO UInt32 := do
   IO.println s!"RESULT: rederive programs={total} divergences={failures}"
   if failures == 0 then return 0 else return 1
 
-def oblMain (files : List String) (out : Option String) (toolchain : String) : IO UInt32 := do
+def oblMain (files : List String) (out : Option String) (toolchain : String)
+    (refinements : Option String) : IO UInt32 := do
   if files.isEmpty then
-    IO.println "usage: rederive --obl <artifact...> --out <verdicts.json> [--toolchain <pin>]"
+    IO.println "usage: rederive --obl <artifact...> --out <verdicts.json> [--toolchain <pin>] [--refinements <doc>]"
     return 2
-  let mut failures := 0
-  for f in files do
-    let doc ←
-      try
-        IO.FS.readFile f
-      catch _ =>
-        pure ""
-    if doc == "" then
-      IO.println s!"FAIL: {f} unreadable"
-      failures := failures + 1
-      continue
-    match Tyu.Rederive.rederiveArtifact doc toolchain with
-    | Except.error e =>
-        IO.println s!"FAIL: {f}: {e}"
+  let refCtx ←
+    match refinements with
+    | none => pure (Except.ok none)
+    | some doc => do
+        let content ←
+          try
+            IO.FS.readFile doc
+          catch _ =>
+            pure ""
+        pure (match Tyu.Gen.Render.parseRefinements content with
+          | Except.ok decls => Except.ok (some decls)
+          | Except.error e => Except.error (Tyu.Rederive.renderErrMsg e))
+  match refCtx with
+  | Except.error e =>
+      IO.println s!"FAIL: refinements context unreadable: {e}"
+      return 1
+  | Except.ok ctx => do
+    let mut failures := 0
+    for f in files do
+      let doc ←
+        try
+          IO.FS.readFile f
+        catch _ =>
+          pure ""
+      if doc == "" then
+        IO.println s!"FAIL: {f} unreadable"
         failures := failures + 1
-    | Except.ok verdicts =>
-        match out with
-        | none => IO.println verdicts
-        | some path => do
-            IO.FS.writeFile path verdicts
-            IO.println s!"OK: {f} → {path}"
-  IO.println s!"RESULT: rederive modules={files.length - failures} failures={failures}"
-  if failures == 0 then return 0 else return 1
+        continue
+      match Tyu.Rederive.rederiveArtifact doc toolchain ctx with
+      | Except.error e =>
+          IO.println s!"FAIL: {f}: {e}"
+          failures := failures + 1
+      | Except.ok verdicts =>
+          match out with
+          | none => IO.println verdicts
+          | some path => do
+              IO.FS.writeFile path verdicts
+              IO.println s!"OK: {f} → {path}"
+    IO.println s!"RESULT: rederive modules={files.length - failures} failures={failures}"
+    if failures == 0 then return 0 else return 1
 
 def selfcheckMain : IO UInt32 := do
   -- SHA-256 self-check (the statement binding relies on the port SHA-256).
@@ -95,11 +120,12 @@ def main (args : List String) : IO UInt32 := do
       let dirs := rest.filter (fun a => a ≠ "--" && a ≠ "--corpus")
       corpusMain dirs
   | "--obl" :: rest =>
-      -- rest: <files...> [--toolchain <pin>] [--out <file>]
+      -- rest: <files...> [--toolchain <pin>] [--refinements <doc>] [--out <file>]
       let (preOut, outPart) := splitAt "--out" rest
-      let (files, tcPart) := splitAt "--toolchain" preOut
+      let (preRef, refPart) := splitAt "--refinements" preOut
+      let (files, tcPart) := splitAt "--toolchain" preRef
       let toolchain := match tcPart with | t :: _ => t | [] => "lean4:4.27.0+unpinned"
-      oblMain (files.filter (fun a => a ≠ "--obl")) (outPart.head?) toolchain
+      oblMain (files.filter (fun a => a ≠ "--obl")) (outPart.head?) toolchain (refPart.head?)
   | _ =>
-      IO.println "usage: rederive --selfcheck | --corpus <dir...> | --obl <artifacts...> --out <file> [--toolchain <pin>]"
+      IO.println "usage: rederive --selfcheck | --corpus <dir...> | --obl <artifacts...> --out <file> [--toolchain <pin>] [--refinements <doc>]"
       return 2

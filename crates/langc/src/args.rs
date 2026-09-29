@@ -8,7 +8,7 @@ pub const HELP: &[u8] = b"langc (tyu_lang) v0.1.0\n\nUSAGE:\n  langc [options] <
   --verify-policy=proven      P7.3 trust gate (default open-ok): only proof-class or
                               exact-method checked discharges close a site\n  --bind-obl=<path>           P7.3: bind statement hashes against this pre-computed
                               tyu.obl/v2 artifact (the artifact the proofs were
-                              certified against) instead of the live lowering\n  --elide-ds-guards           Slice P7: omit the per-push x86 data-stack overflow\n                              guards (C8). A per-image codegen input - tyu forwards\n                              it only when the image-level stack-budget verdict is\n                              discharged (two-pass, --elide-stack-guards); the\n                              __lang_ds_high observability update is kept\n  --allow-raw-casts           Enable raw pointer casts\n  --features=<csv>            Image features to enable (default: all) [concurrency, module-loading]\n  --no-default-features       Start from empty feature set\n  --sysroot=<path>            Sysroot root directory\n  --out-dir=<path>            Output directory (--emit=obj / --emit=obligations)\n  --platform=<dir>            Platform pack directory; the compiled descriptor\n                              at <dir>/platform.desc sources MMIO aperture facts\n  --model-semantics=<id>      P12: the bundle's model-semantics identity\n                              (tyu.model/<bundle>/<ver> or \"unmodeled\"; the\n                              default for a direct run without a bundle)\n  --refinements=<path>        P13: a tyu.refinements/1 context document (the\n                              bundle's device-refinement manifest) - relativizes\n                              the FR-5 statement-binding recompute\n  --target=<triple>           Target triple, required for --emit=obj\n                              Supported: x86_64-unknown-linux-gnu\n                                         x86_64-unknown-none\n                                         armv7m-unknown-none\n                                         riscv32-unknown-none\n\n";
+                              certified against) instead of the live lowering\n  --elide-ds-guards           Slice P7: omit the per-push x86 data-stack overflow\n                              guards (C8). A per-image codegen input - tyu forwards\n                              it only when the image-level stack-budget verdict is\n                              discharged (two-pass, --elide-stack-guards); the\n                              __lang_ds_high observability update is kept\n  --allow-raw-casts           Enable raw pointer casts\n  --features=<csv>            Image features to enable (default: all) [concurrency, module-loading]\n  --no-default-features       Start from empty feature set\n  --sysroot=<path>            Sysroot root directory\n  --out-dir=<path>            Output directory (--emit=obj / --emit=obligations)\n  --platform=<dir>            Platform pack directory; the compiled descriptor\n                              at <dir>/platform.desc sources MMIO aperture facts\n  --model-semantics=<id>      P12: the bundle's model-semantics identity\n                              (tyu.model/<bundle>/<ver> or \"unmodeled\"; the\n                              default for a direct run without a bundle)\n  --concurrency=<value>       P15: the bundle\'s concurrency-service modeling\n                              declaration (\"abstract-atomic\" or \"unmodeled\";\n                              the default for a direct run without a bundle)\n  --refinements=<path>        P13: a tyu.refinements/1 context document (the\n                              bundle's device-refinement manifest) - relativizes\n                              the FR-5 statement-binding recompute\n  --target=<triple>           Target triple, required for --emit=obj\n                              Supported: x86_64-unknown-linux-gnu\n                                         x86_64-unknown-none\n                                         armv7m-unknown-none\n                                         riscv32-unknown-none\n\n";
 
 /// Validated compiler configuration.
 pub struct Config<'a> {
@@ -38,6 +38,13 @@ pub struct Config<'a> {
     /// (direct langc runs without a bundle) keeps the §Q15 honest default:
     /// `unmodeled`.
     pub model_semantics: Option<&'a [u8]>,
+    /// P15.1 (§Q14): `--concurrency=<value>` — the bundle's concurrency-
+    /// service modeling declaration (`abstract-atomic` | `unmodeled`),
+    /// forwarded by `tyu build` from the resolved pack's
+    /// `[model] concurrency`. It stamps the statement relativism's
+    /// concurrency dimension on the obligation artifact and the verdicts
+    /// echo. `None` keeps the §Q14 honest default: `unmodeled`.
+    pub concurrency: Option<&'a [u8]>,
     /// P4: `--verdicts=<path>` — a `tyu.verdicts/v2` file consumed under
     /// `--checks=undischarged` (E6402 when that mode lacks one).
     pub verdicts: Option<&'a [u8]>,
@@ -134,6 +141,7 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]], emit_diagnostics: bool) -> (Parse
     let mut target: Option<Target> = None;
     let mut platform_dir: Option<&[u8]> = None;
     let mut model_semantics: Option<&[u8]> = None;
+    let mut concurrency: Option<&[u8]> = None;
     let mut verdicts: Option<&[u8]> = None;
     let mut refinements: Option<&[u8]> = None;
     let mut elide_ds_guards = false;
@@ -341,6 +349,20 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]], emit_diagnostics: bool) -> (Parse
             i += 1;
             continue;
         }
+        if a.starts_with(b"--concurrency=") {
+            let v = &a[b"--concurrency=".len()..];
+            if v.is_empty() || (v != b"unmodeled" && v != b"abstract-atomic") {
+                maybe_emit_error(
+                    emit_diagnostics,
+                    1006,
+                    b"--concurrency must be one of: unmodeled, abstract-atomic",
+                );
+                return (ParseResult::Error(2), true);
+            }
+            concurrency = Some(v);
+            i += 1;
+            continue;
+        }
         if a.starts_with(b"--target=") {
             let triple = &a[b"--target=".len()..];
             target = match Target::parse(triple) {
@@ -476,6 +498,7 @@ fn parse_args_from_iter<'a>(args: &[&'a [u8]], emit_diagnostics: bool) -> (Parse
             features,
             platform_dir,
             model_semantics,
+            concurrency,
             verdicts,
             refinements,
             elide_ds_guards,

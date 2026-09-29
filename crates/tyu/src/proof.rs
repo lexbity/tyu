@@ -109,6 +109,12 @@ pub struct VerifyEnvKey {
     /// a manifest change rotates every verdicts slot, which (through the
     /// cache-hit verdicts gate below) rotates every cached object too.
     refinements_hash: u64,
+    /// P15.1 (§Q14): FNV-1a over the bundle's `[model] concurrency`
+    /// declaration (`abstract-atomic` | `unmodeled`) — a cache key; a
+    /// concurrency-modeling change rotates every verdicts slot exactly like a
+    /// refinement change does (the statement relativism's concurrency
+    /// dimension).
+    concurrency_hash: u64,
     proof_files_hash: u64,
 }
 
@@ -144,7 +150,12 @@ impl VerifyEnvKey {
     /// supplied (and the refinement hash is derived from it — the same pack
     /// resolution the renderer context uses), and the proof-files hash covers
     /// the developer-owned `proofs/` directory. Total: never fails.
-    pub(crate) fn compute(project_root: &Path, model_id: &str, refinements_hash: u64) -> Self {
+    pub(crate) fn compute(
+        project_root: &Path,
+        model_id: &str,
+        refinements_hash: u64,
+        concurrency_hash: u64,
+    ) -> Self {
         let pin = crate::platform::workspace_root()
             .join(PORT_DIR_REL)
             .join("lean-toolchain");
@@ -155,6 +166,7 @@ impl VerifyEnvKey {
             toolchain_hash: cache::fnv1a_u64(&pin_bytes),
             model_id: model_id.to_string(),
             refinements_hash,
+            concurrency_hash,
             proof_files_hash: proof_files_hash(&project_root.join(PROOFS_DIR)),
         }
     }
@@ -170,21 +182,31 @@ impl VerifyEnvKey {
     pub(crate) fn for_build(model_id: &str) -> Result<Self, TyuError> {
         let root = project_root_for(None)?;
         let refinements_hash = refinements_hash_for_model(model_id);
-        Ok(Self::compute(&root, model_id, refinements_hash))
+        // P15.1: the concurrency declaration is derived from the SAME pack
+        // resolution as the refinements (the model id names the bundle) — so
+        // every consumer derives the identical key for the identical build.
+        let concurrency_hash = concurrency_hash_for_model(model_id);
+        Ok(Self::compute(
+            &root,
+            model_id,
+            refinements_hash,
+            concurrency_hash,
+        ))
     }
 
     /// The sanitized filename slug:
-    /// `-sem-…-stmt-…-tc-…-model-…-ref-…-proofs-…` (slashes → `_`; the
-    /// dash-sentinel `-sem-` cannot occur in a module name, which makes the
-    /// slot name parse unambiguous).
+    /// `-sem-…-stmt-…-tc-…-model-…-ref-…-conc-…-proofs-…` (slashes → `_`;
+    /// the dash-sentinel `-sem-` cannot occur in a module name, which makes
+    /// the slot name parse unambiguous).
     fn slug(&self) -> String {
         format!(
-            "-sem-{}-stmt-{}-tc-{:016x}-model-{}-ref-{:016x}-proofs-{:016x}",
+            "-sem-{}-stmt-{}-tc-{:016x}-model-{}-ref-{:016x}-conc-{:016x}-proofs-{:016x}",
             sanitize_component(&self.semantics),
             sanitize_component(&self.stmt),
             self.toolchain_hash,
             sanitize_component(&self.model_id),
             self.refinements_hash,
+            self.concurrency_hash,
             self.proof_files_hash
         )
     }
@@ -201,10 +223,36 @@ pub(crate) fn refinements_hash_for_model(model_id: &str) -> u64 {
         crate::platform::discover_platforms()
             .ok()
             .and_then(|packs| packs.into_iter().find(|p| p.model_semantics() == model_id))
-            .map(|pack| crate::platform::model_artifact_refinements(pack.pack_root()))
+            .map(|pack| {
+                let root = crate::platform::workspace_root();
+                // P15.1: the pack-aware accessor routes the hosted bundle's
+                // artifact from the sysroot.
+                crate::platform::model_artifact_refinements_for_pack(&root, &pack)
+            })
             .unwrap_or_default()
     };
     cache::fnv1a_u64(&refinement_decls_serialization(&decls))
+}
+
+/// The FNV-1a over the bundle's `[model] concurrency` declaration —
+/// derived from the model id via the SAME pack resolution as
+/// [`refinements_hash_for_model`] (the model id names the bundle). Cache
+/// key, never an integrity digest.
+pub(crate) fn concurrency_hash_for_model(model_id: &str) -> u64 {
+    let value: String = if model_id == verifier::model::MODEL_UNMODELED {
+        verifier::model::CONCURRENCY_UNMODELED.to_string()
+    } else {
+        crate::platform::discover_platforms()
+            .ok()
+            .and_then(|packs| packs.into_iter().find(|p| p.model_semantics() == model_id))
+            .map(|pack| {
+                pack.model()
+                    .map(|m| m.concurrency_str().to_string())
+                    .unwrap_or_else(|| verifier::model::CONCURRENCY_UNMODELED.to_string())
+            })
+            .unwrap_or_else(|| verifier::model::CONCURRENCY_UNMODELED.to_string())
+    };
+    cache::fnv1a_u64(value.as_bytes())
 }
 
 /// The full slot file name for `(module, inputs_fp)` under an environment.
@@ -831,8 +879,10 @@ pub fn refinement_context(artifacts: &[PathBuf]) -> Result<Option<Vec<Refinement
     }
     for pack in crate::platform::discover_platforms()? {
         if pack.model_semantics() == set.model_semantics {
-            return Ok(Some(crate::platform::model_artifact_refinements(
-                pack.pack_root(),
+            let root = crate::platform::workspace_root();
+            // P15.1: the pack-aware accessor (hosted routing).
+            return Ok(Some(crate::platform::model_artifact_refinements_for_pack(
+                &root, &pack,
             )));
         }
     }
@@ -1489,6 +1539,7 @@ const fn vendored_port_files() -> &'static [&'static str] {
         "Tyu/Step.lean",
         "Tyu/Sound.lean",
         "Tyu/Stackmeta.lean",
+        "Tyu/Services.lean",
         "Tyu/Conformance/Cfg.lean",
         "Tyu/Conformance/Interval.lean",
         "Tyu/Conformance/IntervalLaws.lean",
@@ -1507,6 +1558,11 @@ const fn vendored_port_files() -> &'static [&'static str] {
         "Tyu/Gen/Stmt.lean",
         "Tyu/Gen/Render.lean",
         "Tyu/Verdicts/Harvest.lean",
+        // `Tyu.lean` imports the automation tactic library — the vendored
+        // package cannot elaborate without it (same packaging-bug class the
+        // port gate caught for `Tyu/Abs.lean` in P14).
+        "Tyu/Automation/Auto.lean",
+        "Tyu/Automation/Cycle.lean",
     ]
 }
 
@@ -2469,8 +2525,18 @@ mod tests {
         let h0 = cache::fnv1a_u64(&refinement_decls_serialization(&empty));
         let h1 = cache::fnv1a_u64(&refinement_decls_serialization(std::slice::from_ref(&a)));
         assert_ne!(h0, h1, "a declared refinement must change the derived hash");
-        let key0 = VerifyEnvKey::compute(&root, "tyu.model/rp2350/1", h0);
-        let key1 = VerifyEnvKey::compute(&root, "tyu.model/rp2350/1", h1);
+        let key0 = VerifyEnvKey::compute(
+            &root,
+            "tyu.model/rp2350/1",
+            h0,
+            crate::proof::concurrency_hash_for_model("tyu.model/rp2350/1"),
+        );
+        let key1 = VerifyEnvKey::compute(
+            &root,
+            "tyu.model/rp2350/1",
+            h1,
+            crate::proof::concurrency_hash_for_model("tyu.model/rp2350/1"),
+        );
         assert_eq!(key0.model_id, key1.model_id);
         assert_ne!(
             key0, key1,
@@ -2482,7 +2548,12 @@ mod tests {
             "the verdicts slot name must rotate"
         );
         // Same manifest bytes ⇒ the same key (stability across runs).
-        let key1b = VerifyEnvKey::compute(&root, "tyu.model/rp2350/1", h1);
+        let key1b = VerifyEnvKey::compute(
+            &root,
+            "tyu.model/rp2350/1",
+            h1,
+            crate::proof::concurrency_hash_for_model("tyu.model/rp2350/1"),
+        );
         assert_eq!(key1, key1b);
         let _ = fs::remove_dir_all(&root);
     }
@@ -3117,6 +3188,7 @@ mod tests {
             toolchain_hash: 0x1234_5678_9abc_def0,
             model_id: verifier::model::MODEL_UNMODELED.to_string(),
             refinements_hash: 0,
+            concurrency_hash: 0,
             proof_files_hash: 0x0bad_cafe_0bad_cafe,
         }
     }

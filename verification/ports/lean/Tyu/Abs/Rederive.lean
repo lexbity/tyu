@@ -24,10 +24,20 @@ Two modes:
   - `--obl <artifacts> --out <verdicts>` — the product path: re-derive a
     `tyu.obl/v2` artifact's obligations (subtype-range cast sites and
     top-of-stack returns) into `tyu.verdicts/v2` records with
-    `trust: proof, method: rederive` + the statement binding. Soundness of
-    every discharge: the entry sig is inferred conservatively (over-open for
-    input-dependent casts — never a wrong discharge; exact where the word is
-    input-free or the value is input-independent). -/
+    `trust: proof, method: rederive` + the statement binding.
+
+SOUNDNESS (review finding 1, fixed): the analysis context is NOT hardcoded.
+The artifact's `facts.subtypes` table is threaded per CAST — a cast to a
+declared subtype narrows against THAT subtype's declared range
+(`InRange(Cast, lo, hi)` is evaluated against the obligation's own range,
+but the ABSTRACT FLOW after a cast must narrow against the cast's REAL
+range, or a value fresh out of a different subtype's band could wrongly
+flow on). `[--obl …] WORD WIDTH` is derived from the artifact's `target`
+triple, and a missing word/empty block/out-of-range cast index FAILS the
+module loudly (never a silent drop). Refined-read words under a modeled
+bundle are marked `open` with `refined-read-unbound` unless a
+`--refinements` context names them (the §Q13/§Q5 relativization — never a
+silent default hash). -/
 
 namespace Tyu.Rederive
 
@@ -39,50 +49,91 @@ def renderErrMsg (e : Tyu.Gen.Render.RenderErr) : String :=
   | .notOblDoc m => m
   | .unknownForm m => m
 
+/-- The word width of a triple (the §Q3 data domain is full-i64 on every
+target; the width threads only the address/aperture surfaces). -/
+def wordBitsOf (target : String) : Nat :=
+  if target.startsWith "x86_64" then 64
+  else if target.startsWith "armv7m" || target.startsWith "riscv32" then 32
+  else 64
 
-/-- The subtype range the corpus casts use (`percent`, mirrors
-`Tyu.Abs.percentRange`). -/
-def subtypeRange (o : Obl) : Option (Int × Int) :=
-  match o.formulaOp with
-  | "InRange" => some (o.lo, o.hi)
-  | _ => none
-
-/-- The artifact's declared subtype names (from `facts.subtypes[].name`). A
-real lowering emits `cast <TypeName>` (e.g. `cast Percent`), which the raw
-corpus parser only flags for the lowercase `cast percent` synthetic word —
-the re-derivation recognizes any cast whose target is a declared subtype. -/
-def subtypeNamesOf (doc : String) : List String :=
+/-- The artifact's declared subtypes: `(name, lo, hi)`. -/
+def subtypeTableOf (doc : String) : List (String × Int × Int) :=
   match parseJson doc with
   | none => []
   | some j =>
       let subs := ((j.field "facts").bind (fun f => (f.field "subtypes").bind Json.asArr)) |>.getD []
-      subs.filterMap (fun s => (s.field "name").bind Json.asStr)
+      subs.filterMap (fun s =>
+        match (s.field "name").bind Json.asStr, (s.field "lo").bind Json.asInt,
+              (s.field "hi").bind Json.asInt with
+        | some n, some lo, some hi => some (n, lo, hi)
+        | _, _, _ => none)
 
-/-- A subtype-aware cast parser: the synthetic `cast percent` (corpus) and
-the real `cast <TypeName>` (langc lowering) both flag `subtypeCast`. -/
+/-- The declared range of a subtype name. -/
+def subtypeRangeOf (table : List (String × Int × Int)) (name : String) : Option (Int × Int) :=
+  match table.find? (fun s => s.1 == name) with
+  | some (_, lo, hi) => some (lo, hi)
+  | none => none
+
+/-- The cast target token of an op line (`cast <TypeName>`). -/
 def castTargetOf (line : String) : Option String :=
   let toks := (splitOnStr ' ' (trim line)).filter (fun t => t ≠ "")
   match toks with
   | "cast" :: [ty] => some ty
   | _ => none
 
-namespace BlockSuccs
+/-- One re-derivation op: the parsed instance plus the cast target's
+subtype range (when it is a declared subtype; otherwise `none` — the cast
+is treated as identity, mirroring `verifier::interp`'s `sr(to) = None`).
+The range is attached per cast at parse time, so a word with casts to
+DIFFERENT subtypes narrows each cast against its own declared band. -/
+structure ROp where
+  inst : OpInst
+  range : Option (Int × Int)
+  deriving Repr
 
--- Successor routing (mirrors `Tyu.Conformance.parseBlocks`' local).
-def of (ops : List OpInst) : List Nat :=
+/-- The re-derivation transfer: the `.cast` row narrows against the op's OWN
+range; every other row delegates to the shared abstract `stepOp` with
+`sr = none` (the shared transfer's `sr` exists for casts only — none is the
+identity there, so delegation is exact for the non-cast rows). -/
+def rStep (op : ROp) (st : State) (widthBits : Nat) (mem : MemModel) : MemModel × State :=
+  match op.inst.form with
+  | .cast =>
+      let (st1, v) := State.popVal' st
+      let iv := match op.range with
+        | some (lo, hi) => if op.inst.subtypeCast then Interval.castNarrow v.iv lo hi else v.iv
+        | none => v.iv
+      (mem, st1.push' (Slot.computed iv))
+  | _ => stepOp op.inst st none widthBits mem
+
+/-- The straight-line RD run. -/
+def runOpsRD (ops : List ROp) (st : State) (widthBits : Nat) (mem : MemModel) : MemModel × State :=
+  ops.foldl (fun (acc : MemModel × State) o =>
+    let (m, s) := acc
+    rStep o s widthBits m) (mem, st)
+
+/-- A CFG block of RD ops. -/
+structure RBlock where
+  id : Nat
+  ops : List ROp
+  succs : List Nat
+  deriving Repr, Inhabited
+
+/-- The successor routing (mirrors `Tyu.Conformance.parseBlocks`). -/
+def rSuccsOf (ops : List ROp) : List Nat :=
   match ops.getLast? with
-  | some o => (match o.form, o.brTgt, o.brIfTgts with
+  | some o => (match o.inst.form, o.inst.brTgt, o.inst.brIfTgts with
       | .br, some t, _ => [t]
       | .br_if, _, some (t, e) => [t, e]
       | _, _, _ => [])
   | none => []
 
-end BlockSuccs
-
-def parseBlocksSub (subs : List String) (text : String) : List Block :=
+/-- Parse the canonical CFG text into RD ops (per-cast subtype ranges, and
+`subtypeCast` flagging for every declared-subtype cast — including the real
+lowering's capitalized `cast Percent`). -/
+def parseBlocksRD (table : List (String × Int × Int)) (text : String) : List RBlock :=
   let lines := splitOnStr '\n' text
   let (acc, curId, curOps) := lines.foldl
-    (fun (acc : List Block × Option Nat × List OpInst) line =>
+    (fun (acc : List RBlock × Option Nat × List ROp) line =>
       let (blks, cid, cops) := acc
       let t := trim line
       if t == "" then acc
@@ -92,7 +143,7 @@ def parseBlocksSub (subs : List String) (text : String) : List Block :=
             match parseNat rest with
             | some i =>
                 let blksFinal := match cid with
-                  | some id => (Block.mk id cops.reverse (BlockSuccs.of cops.reverse)) :: blks
+                  | some id => ({ id := id, ops := cops.reverse, succs := rSuccsOf cops.reverse } : RBlock) :: blks
                   | none => blks
                 (blksFinal, some i, [])
             | none => acc
@@ -100,38 +151,89 @@ def parseBlocksSub (subs : List String) (text : String) : List Block :=
       else match parseOp t with
         | some o =>
             let o' := match castTargetOf t with
-              | some ty => if subs.any (fun s => s == ty) then o.setSubtypeCast true else o
-              | none => o
+              | some ty =>
+                  match subtypeRangeOf table ty with
+                  | some rng => { inst := o.setSubtypeCast true, range := some rng }
+                  | none => { inst := o, range := none }
+              | none => { inst := o, range := none }
             (blks, cid, o' :: cops)
         | none => acc)
     ([], none, [])
   let final := match curId with
-    | some id => (Block.mk id curOps.reverse (BlockSuccs.of curOps.reverse)) :: acc
+    | some id => ({ id := id, ops := curOps.reverse, succs := rSuccsOf curOps.reverse } : RBlock) :: acc
     | none => acc
   final.reverse
 
+-- ---------------------------------------------------------------------------
+-- The RD fixpoint (mirrors `Tyu.Conformance.runCfg`/`exitState` exactly,
+-- with the per-op transfer): worklist to fixpoint, back-edge widening. The
+-- state-level combinators (merge/widen/mapIdx) are the shared ones — the RD
+-- engine owns only the ROp transfer, never a second copy of a state rule.
+-- ---------------------------------------------------------------------------
 
+def runCfgLoopRD (blocks : List RBlock) (sigOut : Nat) (widthBits : Nat) (mem : MemModel)
+    (states : List State) (worklist : List Nat) (visits : List Nat) (fuel : List Nat) : MemModel × List State :=
+  match fuel with
+  | [] => (mem, states)
+  | _ :: frest =>
+      match worklist with
+      | [] => (mem, states)
+      | bid :: rest =>
+        let block := blocks.getD bid (RBlock.mk 0 [] [])
+        let (mem', flow) := runOpsRD block.ops (states.getD bid (State.fresh 64)) widthBits mem
+        let visits' := mapIdxN visits (fun i v => if i == bid then v + 1 else v)
+        let (states', worklist', visits'') :=
+          block.succs.foldl
+            (fun (acc : List State × List Nat × List Nat) (tgt : Nat) =>
+              let (st, wl, vs) := acc
+              let wasSeen := vs.getD tgt 0 > 0
+              let st' := if wasSeen
+                then mapIdxN st (fun i s => if i == tgt then widenState (st.getD tgt (State.fresh 64)) flow sigOut else s)
+                else mapIdxN st (fun i s => if i == tgt then mergeFirstVisit (st.getD tgt (State.fresh 64)) flow else s)
+              (st', tgt :: wl, vs))
+            (states, rest, visits')
+        runCfgLoopRD blocks sigOut widthBits mem' states' worklist' visits'' frest
 
-/-- Run a word's block list from a callee-entry state and return the per-block
-pre-cast intervals of narrowing casts (CFG order — mirrors
-`verifier::interp::discharge_word`'s `seen_casts`). -/
-def castPresOf (blocks : List Block) (states : List State) (sr : Option (Int × Int))
-    (wb : Nat) (mem : MemModel) : List Interval :=
+/-- The RD worklist fixpoint (bit-for-bit the shared engine's control flow:
+the back-edge widening `∇` keeps `old` when `new ⊑ old`, else `⊤`. -/
+def runCfgRD (blocks : List RBlock) (sigIn sigOut : Nat) (widthBits : Nat) (mem : MemModel) : MemModel × List State :=
+  let nblocks := max blocks.length 1
+  let initStates : List State := List.ofFn (fun i : Fin nblocks => if i.1 == 0 then State.calleeEntry sigIn 64 else State.fresh 64)
+  let budget0 := nblocks * 4 + 2
+  runCfgLoopRD blocks sigOut widthBits mem initStates [0] (List.replicate nblocks 0) (List.range budget0)
+
+/-- The RD exit state (the join of every ret-block's stepped state). -/
+def exitStateRD (blocks : List RBlock) (cf : List State) (widthBits : Nat) (mem : MemModel) : State :=
+  let retBlocks := blocks.filter (fun b => (b.ops.getLast? |>.map (fun o => o.inst.form == Tyu.IR.OpForm.ret)).getD false)
+  let (_, acc) := retBlocks.foldl (fun (acc : MemModel × Option State) b =>
+    let (m, accSt) := acc
+    let (m', flow) := runOpsRD b.ops (cf.getD b.id (State.fresh 1)) widthBits m
+    (m', some (match accSt with
+      | none => flow
+      | some a => mergeFirstVisit a flow)))
+    (mem, none)
+  acc.getD (State.fresh 1)
+
+/-- Pre-cast collection (review finding 4, fixed): Rust's `discharge_word`
+captures each block's narrowing-cast pre-cast values by re-running the block
+from `State::fresh(1)` — not from the CFG fixpoint entry. This mirrors that
+EXACTLY (per-block empty entry, one local), so the `--obl` path's cast-site
+discharges are behaviorally identical to the in-tree engine's, with each
+cast narrowed against ITS declared subtype range. -/
+def castPresRD (blocks : List RBlock) (widthBits : Nat) (mem : MemModel) : List Interval :=
   let (pres, _, _) := blocks.foldl
     (fun (acc : List Interval × MemModel × State) b =>
       let (pre, m, _) := acc
-      -- start from the block's fixpoint entry state
-      let st0 := states.getD b.id (State.fresh 64)
       let (pre', m', _) := b.ops.foldl
         (fun (acc2 : List Interval × MemModel × State) o =>
           let (p2, m2, s2) := acc2
-          let preNow := if o.form == Tyu.IR.OpForm.cast && o.subtypeCast then some s2.topInterval
+          let preNow := if o.inst.form == Tyu.IR.OpForm.cast && o.inst.subtypeCast then some s2.topInterval
                         else none
-          let (m3, s3) := stepOp o s2 sr wb m2
+          let (m3, s3) := rStep o s2 widthBits m2
           (match preNow with | some iv => p2 ++ [iv] | none => p2, m3, s3))
-        (pre, m, st0)
-      (pre', m', st0))
-    ([], mem, State.fresh 64)
+        (pre, m, State.fresh 1)
+      (pre', m', State.fresh 1))
+    ([], mem, State.fresh 1)
   pres
 
 /-- Infer the word's signature from its obligations: `sig_in` is one past the
@@ -158,7 +260,9 @@ structure Decision where
   deriving Repr
 
 /-- Re-derive one obligation of a word. `casts` are the word's pre-cast
-intervals (CFG order); `exit` is the fold of the ret-blocks. -/
+intervals (per-block, CFG order); `exit` is the fold of the ret-blocks. The
+`out.i` resolution is the exit's TOP element — Rust's `discharge_word`
+resolves every `out.i` to `top_n_intervals(out_len).next()` (the top). -/
 def dischargeObl (o : Obl) (casts : List Interval) (exit : State) : Decision :=
   match o.formulaOp with
   | "InRange" =>
@@ -173,15 +277,27 @@ def dischargeObl (o : Obl) (casts : List Interval) (exit : State) : Decision :=
       | Tri.top => Decision.mk false iv ("interval top " ++ toText iv ++ " vs [" ++ toString o.lo ++ ", " ++ toString o.hi ++ "]")
   | _ => Decision.mk false Interval.top "not-rederivable"
 
-/-- The `Ctx` for statement binding (mirrors `GenMain`'s per-obligation ctx). -/
-def ctxOf (a : Artifact) (o : Obl) (ir : String) : Ctx :=
+/-- Does the word's IR read any MMIO register place? (For the
+§Q13/§Q15 refined-read relativism.) -/
+def readsMmio (ir : String) : Bool :=
+  let lines := (splitOnStr '\n' ir).map trim |>.filter (fun l => l ≠ "")
+  lines.any (fun l =>
+    let toks := (splitOnStr ' ' l).filter (fun t => t ≠ "")
+    match toks with
+    | "vol_load" :: _ | "vol_store" :: _ | "vol_load_field" :: _ | "vol_store_field" :: _ => true
+    | _ => false)
+
+/-- The `Ctx` for statement binding (mirrors `GenMain`'s per-obligation ctx;
+the refinement name, when a context document is given, is bound exactly like
+the renderer does — `refinementOf`, §Q13). -/
+def ctxOf (a : Artifact) (o : Obl) (ir : String) (ref : Option String) : Ctx :=
   { target := a.target, model := a.modelSemantics, module := a.module,
     word := o.word, wordIrHash := wordIrHash ir, kind := o.kind,
-    occurrence := o.occurrence, refinement := none }
+    occurrence := o.occurrence, refinement := ref }
 
 /-- `statement_hash` of an obligation (§6.2). -/
-def hashOf (a : Artifact) (o : Obl) (ir : String) : String :=
-  statementHash (ctxOf a o ir) o
+def hashOf (a : Artifact) (o : Obl) (ir : String) (ref : Option String) : String :=
+  statementHash (ctxOf a o ir ref) o
 
 /-- The certifier identity this port signs re-derivation productions with. -/
 def certifier (toolchain : String) : String :=
@@ -193,51 +309,88 @@ def certifier (toolchain : String) : String :=
 
 /-- One verdict record (a re-derived discharge: `trust: proof`,
 `method: rederive`, `proof.kind: rederive`, T-B statement). -/
-def recordOf (a : Artifact) (o : Obl) (dec : Decision) (ir : String) : String :=
+def recordOf (a : Artifact) (o : Obl) (dec : Decision) (ir : String) (ref : Option String) : String :=
   let proof := jobj [ ("kind", jstr "rederive"), ("statement", jstr "T-B") ]
-  let base := jobj [ ("id", jstr o.id), ("id_hash", jstr o.idHash),
-                     ("statement_hash", jstr (hashOf a o ir)),
-                     ("proof", proof) ]
   if dec.discharged then
     jobj [ ("id", jstr o.id), ("id_hash", jstr o.idHash),
            ("status", jstr "discharged"), ("trust", jstr "proof"),
-           ("method", jstr "rederive"), ("statement_hash", jstr (hashOf a o ir)),
+           ("method", jstr "rederive"), ("statement_hash", jstr (hashOf a o ir ref)),
            ("proof", proof) ]
   else
     let witness := jobj [ ("reason", jstr dec.reason) ]
     let note := jobj [ ("id", jstr o.id), ("id_hash", jstr o.idHash),
                        ("status", jstr "open"), ("trust", jstr "open"),
+                       ("statement_hash", jstr (hashOf a o ir ref)),
                        ("witness", witness) ]
     note
 
-/-- Re-derive a whole `tyu.obl/v2` artifact into a `tyu.verdicts/v2` document. -/
-def rederiveArtifact (doc : String) (toolchain : String) : Except String String :=
+/-- Re-derive a whole `tyu.obl/v2` artifact into a `tyu.verdicts/v2` document.
+Fail-closed (review finding 1): an obligation whose word is missing from the
+facts, whose block parse yields nothing, or whose cast occurrence is outside
+the captured pre-cast list is a HARD ERROR — never a silent drop (a dropped
+obligation would read as `open` by absence, hiding the gap; worse, a
+mis-indexed cast could read the WRONG cast's value). -/
+def rederiveArtifact (doc : String) (toolchain : String) (refCtx : Option (List RefinementDecl)) : Except String String :=
   match parseArtifact doc with
   | Except.error e => Except.error (renderErrMsg e)
   | Except.ok a =>
-      let subs := subtypeNamesOf doc
-      let records : List String := a.obligations.filterMap (fun o =>
-        match a.words.find? (fun w => w.name == o.word) with
-        | none => none
-        | some wr =>
-            match parseBlocksSub subs wr.ir with
-            | [] => none
-            | blocks =>
-                let (sin, sout) := inferSig (a.obligations.filter (fun x => x.word == o.word))
-                let (_, cf) := runCfg blocks sin sout (some (0, 100)) 64 MemModel.flat
-                let exit := exitState blocks cf (some (0, 100)) 64 MemModel.flat
-                let casts := castPresOf blocks cf (some (0, 100)) 64 MemModel.flat
-                let dec := dischargeObl o casts exit
-                some (recordOf a o dec wr.ir))
-      let body := "{\"schema\":" ++ jstr "tyu.verdicts/v2"
-        ++ ",\"certifier\":" ++ certifier toolchain
-        ++ ",\"semantics\":" ++ jstr "tyu.ir-sem/1.0"
-        ++ ",\"stmt\":" ++ jstr "tyu.stmt/1.0"
-        ++ ",\"target\":" ++ jstr a.target
-        ++ ",\"model_semantics\":" ++ jstr a.modelSemantics
-        ++ ",\"verdicts\":[" ++ String.intercalate "," records ++ "]"
-        ++ "}"
-      Except.ok body
+      let table := subtypeTableOf doc
+      let wb := wordBitsOf a.target
+      let refOf : String → Option String :=
+        match refCtx with
+        | none => fun _ => none
+        | some decls => fun ir => refinementOf decls ir
+      let rederiveWord (o : Obl) (wr : WordFact) : Except String String :=
+        let blocks := parseBlocksRD table wr.ir
+        if blocks.isEmpty then
+          Except.error ("obligation " ++ o.id ++ ": word '" ++ o.word ++ "' has no parseable blocks")
+        else if blocks.length > 16 then
+          Except.error ("obligation " ++ o.id ++ ": word '" ++ o.word ++ "' exceeds 16 blocks")
+        else
+          let (sin, sout) := inferSig (a.obligations.filter (fun x => x.word == o.word))
+          let (_, cf) := runCfgRD blocks sin sout wb MemModel.flat
+          let exit := exitStateRD blocks cf wb MemModel.flat
+          let casts := castPresRD blocks wb MemModel.flat
+          let refinedOpen : Option Decision :=
+            if a.modelSemantics ≠ "unmodeled" && readsMmio wr.ir then
+              match refOf wr.ir with
+              | some _ => none
+              | none => some (Decision.mk false Interval.top "refined-read-unbound")
+            else none
+          let dec := match refinedOpen with
+            | some d => d
+            | none => dischargeObl o casts exit
+          match o.oel with
+          | .castArg _ _ _ =>
+              if o.occurrence < casts.length then Except.ok (recordOf a o dec wr.ir (refOf wr.ir))
+              else Except.error ("obligation " ++ o.id ++ ": cast occurrence " ++ toString o.occurrence
+                                 ++ " outside the captured pre-cast list (length " ++ toString casts.length ++ ")")
+          | _ => Except.ok (recordOf a o dec wr.ir (refOf wr.ir))
+      let rec go : List Obl → Except String (List String) → Except String (List String)
+        | [], acc => acc
+        | o :: rest, acc =>
+            match acc with
+            | Except.error e => Except.error e
+            | Except.ok accL =>
+                match a.words.find? (fun w => w.name == o.word) with
+                | none => Except.error ("obligation " ++ o.id ++ ": referenced word '" ++ o.word ++ "' missing from facts.words")
+                | some wr =>
+                    match rederiveWord o wr with
+                    | Except.error e => Except.error e
+                    | Except.ok rec => go rest (Except.ok (rec :: accL))
+      match go a.obligations (Except.ok []) with
+      | Except.error e => Except.error e
+      | Except.ok recordsReversed =>
+          let records := recordsReversed.reverse
+          let body := "{\"schema\":" ++ jstr "tyu.verdicts/v2"
+            ++ ",\"certifier\":" ++ certifier toolchain
+            ++ ",\"semantics\":" ++ jstr "tyu.ir-sem/1.0"
+            ++ ",\"stmt\":" ++ jstr "tyu.stmt/1.0"
+            ++ ",\"target\":" ++ jstr a.target
+            ++ ",\"model_semantics\":" ++ jstr a.modelSemantics
+            ++ ",\"verdicts\":[" ++ String.intercalate "," records ++ "]"
+            ++ "}"
+          Except.ok body
 
 /-- The differential mode: re-run a `tyu.vec/1` program corpus with THIS
 engine and return `(programs, mismatches)` (`runVecFile` is the absorbed

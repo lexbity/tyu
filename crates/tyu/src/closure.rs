@@ -338,6 +338,7 @@ pub fn apply_harvest_closure(
             v.certifier.as_ref(),
             &v.target,
             &v.model_semantics,
+            &v.concurrency,
             recs,
             0,
             &Default::default(),

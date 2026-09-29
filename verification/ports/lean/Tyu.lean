@@ -16,6 +16,7 @@ import Tyu.Mem
 import Tyu.Bundles
 import Tyu.Src
 import Tyu.Step
+import Tyu.Services
 import Tyu.Sound
 -- P10: the automation library (tactics + cycle instantiation). The
 -- measurement executables (automation_rate, fill) live in their mains.

@@ -97,6 +97,11 @@ pub struct ModuleAccounting {
     /// (§Q15); under `proven` an unmodeled module fails the build (E6510).
     pub target: String,
     pub model: String,
+    /// P15.1 (§Q14/P7.3): the module's concurrency-service modeling
+    /// declaration (`abstract-atomic` | `unmodeled`) — the report's leg of
+    /// the artifact's statement relativism (bound by the FR-5 verdict
+    /// identity).
+    pub concurrency: String,
     pub classes: Vec<ClassAccounting>,
     /// P7.3: the v2 trust split across this module's obligations.
     pub trust: TrustAccounting,

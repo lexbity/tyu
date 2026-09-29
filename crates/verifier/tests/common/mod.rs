@@ -130,3 +130,68 @@ pub fn tri_name(t: verifier::interval::Tri) -> &'static str {
 pub fn iv_range(lo: i64, hi: i64) -> verifier::interval::Interval {
     verifier::interval::Interval::Range { lo, hi }
 }
+
+// --- the in-tree discharge oracle (P14 review dedup: one home) ------------
+//
+// Both differential suites (`soundness_differential`, `rederive_differential`)
+// compute the in-tree engine's verdict for a generated program; the oracle
+// below is that ONE implementation, not a per-file fork.
+
+use verifier::gen::{SUB_HI, SUB_ID, SUB_LO};
+use verifier::interp::{ApertureMem, FlatMem, Origin, Slot, State, SubtypeRange};
+use verifier::interval::{eval_in_range, Tri};
+
+/// The analysis subtype context both engines share: the generator's
+/// `percent`-shaped subtype (`SUB_ID` → `[SUB_LO, SUB_HI]`); every other
+/// type id is unrange.
+pub fn sr() -> &'static SubtypeRange<'static> {
+    &|tid: ir::TypeId| {
+        if tid.0 == SUB_ID {
+            Some((SUB_LO, SUB_HI))
+        } else {
+            None
+        }
+    }
+}
+
+/// The in-tree discharge of one generated program: `(tri, interval)` —
+/// seed the abstract stack from the input domains, run the transfer over the
+/// program's `(TargetSpec, MemModel)` pair, capture the pre-cast value for
+/// cast-site programs, evaluate the target range.
+pub fn abstract_verdict(prog: &verifier::gen::Program) -> (Tri, verifier::interval::Interval) {
+    let mut flat = FlatMem;
+    let mut ap: Option<ApertureMem> = None;
+    if prog.mem.ram.is_some() || !prog.mem.scripted.is_empty() {
+        let mut m = ApertureMem::new(prog.mem.ram.unwrap_or((0, 0)));
+        for &(k, v) in prog.mem.scripted.iter() {
+            m.script_read(&k, verifier::interval::Interval::const_val(v));
+        }
+        ap = Some(m);
+    }
+    let mut st = State::callee_entry(prog.n_inputs(), 4);
+    st.stack.clear();
+    for &(lo, hi) in &prog.domains {
+        st.stack.push(Slot {
+            iv: verifier::interval::Interval::Range { lo, hi },
+            origin: Origin::Arg(0),
+        });
+    }
+    let mut pre_cast: Option<verifier::interval::Interval> = None;
+    for op in &prog.ops {
+        if matches!(op, OpKind::Cast { to, .. } if to.0 == SUB_ID) {
+            pre_cast = Some(st.top_interval());
+        }
+        match &mut ap {
+            Some(m) => st.step(op, sr(), prog.spec, m),
+            None => st.step(op, sr(), prog.spec, &mut flat),
+        }
+    }
+    let (tri, val) = if prog.cast_site {
+        let v = pre_cast.unwrap_or(verifier::interval::Interval::TOP);
+        (eval_in_range(v, prog.target.0, prog.target.1), v)
+    } else {
+        let v = st.top_interval();
+        (eval_in_range(v, prog.target.0, prog.target.1), v)
+    };
+    (tri, val)
+}

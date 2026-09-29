@@ -1,0 +1,24 @@
+# The linux-x86_64-hosted bundle model (PLAN-VERIFY-3 P15.1, §Q14).
+#
+# The model-semantics identity `tyu.model/linux-x86_64-hosted/1` must be
+# declared verbatim in `runtime/linux-x86_64-hosted.platform.toml
+# [model] model_semantics` (§6.7). Unlike the bare-metal platform packs, the
+# HOSTED bundle's model identity carrier lives HERE — in the sysroot, next to
+# the platform modules it models (sysroot/x86_64-unknown-linux-gnu/
+# platform/{channel,linux,mem,testio,gpio}.def/.mod) — per PLAN-VERIFY-3 §9
+# ("sysroot/ | hosted bundle model identity carrier (model.toml) for
+# services", P15); the lint resolves the hosted pack's artifact from this
+# directory.
+#
+# There is no `[memory]` geometry: the hosted bundle models SERVICES, not a
+# RAM window (the `abstract-atomic` concurrency semantics, §Q14). The
+# `[services]` fragment declares the modeled service set — the §Q14 set the
+# abstract-atomic model covers (channel IPC, the task scheduler, and time) —
+# which the lint pairs against the manifest's `[model] concurrency`
+# declaration (E5419 on a mismatch).
+
+[model]
+id = "tyu.model/linux-x86_64-hosted/1"
+
+[services]
+ids = ["channel", "task", "time"]

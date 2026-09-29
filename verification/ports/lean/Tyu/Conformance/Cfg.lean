@@ -2,13 +2,10 @@ import Tyu.Conformance.Step
 
 namespace Tyu.Conformance
 
-/-- `mapIdx` (local to Cfg; `Step.mapIdx` exists too but Cfg should not
-depend on Step's leaf for a three-line helper). -/
+/-- `mapIdxN` is `Tyu.Abs.mapIdx` (the P14 consolidation: one index-map
+helper; the name stays for the conformance runner's call sites). -/
 def mapIdxN {α : Type} (l : List α) (f : Nat → α → α) : List α :=
-  let rec go : Nat → List α → List α
-    | _, [] => []
-    | i, x :: xs => f i x :: go (i + 1) xs
-  go 0 l
+  Tyu.Abs.mapIdx l f
 
 
 /-- One block of the word CFG: its id, op list, and terminator successors. -/
@@ -25,11 +22,10 @@ def empty : Block := { id := 0, ops := [], succs := [] }
 end Block
 
 /-- Run `ops` through a state (the per-block transfer); the updated model
-rides along (`store`/`load` mutate and consult it, P12.2). -/
+rides along (`store`/`load` mutate and consult it, P12.2). Delegates to the
+absorbed `Tyu.Abs.absRun` — the ONE straight-line abstract run. -/
 def runOps (ops : List OpInst) (st : State) (sr : Option (Int × Int)) (widthBits : Nat) (mem : MemModel) : MemModel × State :=
-  ops.foldl (fun (acc : MemModel × State) o =>
-    let (m, s) := acc
-    stepOp o s sr widthBits m) (mem, st)
+  Tyu.Abs.absRun ops st sr widthBits mem
 
 /-- The two-state hull join (`verifier::interp::hull_state`): per-index join
 of stack positions up to `stackLen`; locals everywhere; stack beyond
@@ -56,18 +52,19 @@ def mergeFirstVisit (old incoming : State) : State :=
   { stack := stack, locals := locals }
 
 /-- Back-edge widening (`verifier::interp::widen_state`): per slot, keep the
-old value when the new is a subset of it, else widen to top. -/
+old value when the new is a subset of it, else widen to top — the leaf is
+`Interval.widenOld`, the `∇` the `TA.widen_sound` theorem justifies. -/
 def widenState (header bodyEnd : State) (stackLen : Nat) : State :=
   let n := min stackLen (min header.stack.length bodyEnd.stack.length)
   let stack := List.ofFn (fun i : Fin n =>
     let old := header.stack.getD i.1 Slot.top
     let new := bodyEnd.stack.getD i.1 Slot.top
-    Slot.computed (if new.iv.subsetOf old.iv then old.iv else Interval.top))
+    Slot.computed (Interval.widenOld old.iv new.iv))
   let cap := max header.locals.length bodyEnd.locals.length
   let locals := List.ofFn (fun i : Fin cap =>
     let old := header.locals.getD i.1 Slot.top
     let new := bodyEnd.locals.getD i.1 Slot.top
-    Slot.computed (if new.iv.subsetOf old.iv then old.iv else Interval.top))
+    Slot.computed (Interval.widenOld old.iv new.iv))
   { stack := stack, locals := locals }
 
 /-- The worklist fixpoint body (`verifier::interp::run_cfg`'s loop): structurally

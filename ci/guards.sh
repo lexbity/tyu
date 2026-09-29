@@ -1834,6 +1834,36 @@ fi
 [ "$g48_fail" -eq 0 ] && msg $GREEN "  G48: P14 re-derivation surface present (Tyu/Abs consolidation, T-A/T-B theorems, rederive exe, differential + tests)"
 failures=$((failures + g48_fail))
 
+# --- G49: PLAN-VERIFY-3 P15 — the services + concurrency-relativism surface ---
+# The P15 slice's contract in the regular Rust CI: the abstract-atomic
+# services model with its FIFO laws (axiom-audited via the port gate), the
+# hosted bundle's model identity carrier + service corpus, the concurrency
+# threading in the artifact/verdicts/report codecs, and the two e2e gates
+# (the service-relativism tooling test + the hosted runtime leg).
+g49_fail=0
+if [ ! -f verification/ports/lean/Tyu/Services.lean ]; then
+    msg $RED "  G49 FAIL: the abstract-atomic services model missing (Tyu/Services.lean)"
+    g49_fail=1
+fi
+if [ ! -f sysroot/x86_64-unknown-linux-gnu/model.toml ]; then
+    msg $RED "  G49 FAIL: the hosted bundle model identity carrier missing (sysroot/.../model.toml)"
+    g49_fail=1
+fi
+if [ ! -f sysroot/x86_64-unknown-linux-gnu/evidence/vectors.json ]; then
+    msg $RED "  G49 FAIL: the hosted bundle service-vector corpus missing (evidence/vectors.json)"
+    g49_fail=1
+fi
+if [ ! -f crates/tooling-tests/tests/service_relativism.rs ]; then
+    msg $RED "  G49 FAIL: the service-relativism gate test missing (service_relativism.rs)"
+    g49_fail=1
+fi
+if [ ! -f crates/execution-tests/fixtures/conc_roundtrip.mod ]; then
+    msg $RED "  G49 FAIL: the concurrency template fixture missing (conc_roundtrip.mod)"
+    g49_fail=1
+fi
+[ "$g49_fail" -eq 0 ] && msg $GREEN "  G49: P15 services surface present (Tyu.Services model, hosted identity + corpus, concurrency threading, gate tests)"
+failures=$((failures + g49_fail))
+
 echo ""
 msg $GREEN "============================================"
 msg $GREEN "Per-package test counts:"

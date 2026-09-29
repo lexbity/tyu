@@ -117,6 +117,10 @@ impl ModelSection {
     pub const MMIO_VALUES: &'static [&'static str] = &["nondeterministic"];
     /// The supported `concurrency` values (§Q14).
     pub const CONCURRENCY_VALUES: &'static [&'static str] = &["unmodeled", "abstract-atomic"];
+    /// `concurrency = "abstract-atomic"` — the bundle models its services as
+    /// atomic abstract transitions (P15.1, `Tyu/Services.lean`). REQUIRES a
+    /// modeled `model_semantics` (E5418 on the contradiction).
+    pub const CONCURRENCY_ABSTRACT_ATOMIC: &'static str = "abstract-atomic";
 
     /// The effective `mmio` value (declared, or the v1 default).
     pub fn mmio_str(&self) -> &str {

@@ -3,6 +3,7 @@
   "module": "Post",
   "target": "x86_64-unknown-linux-gnu",
   "model_semantics": "unmodeled",
+  "concurrency": "unmodeled",
   "statements": [
   { "id": "Post::pct-in-range::subtype-range::0", "id_hash": "20f2c2530711d7b0", "def": "stmt_Post_pct_in_range_subtype_range_0", "omitted": false, "statement_hash": "e424e424af101dec76c89aa2859eeee39f2d16e5d2e5544e50bd9d90e2b281bd" },
   { "id": "Post::pct-in-range::subtype-range::1", "id_hash": "20f2c3530711d963", "def": "stmt_Post_pct_in_range_subtype_range_1", "omitted": false, "statement_hash": "70492b3ca9a6eb281870aa69e9d6b8860615aa9f0e3e1a2929f475fdec09c9ef" },

@@ -800,6 +800,12 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
                                     .extraction
                                     .as_ref()
                                     .map(|ctx| ctx.set().model_semantics.clone())
+                                    .unwrap_or_default()
+                            || v.concurrency
+                                != self
+                                    .extraction
+                                    .as_ref()
+                                    .map(|ctx| ctx.set().concurrency.clone())
                                     .unwrap_or_default();
                         let mut bind_hash: Option<String> = None;
                         // P7.3 (FR-5): the hash THIS build recomputes for a

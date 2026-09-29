@@ -3,6 +3,7 @@
   "module": "LoopSub",
   "target": "x86_64-unknown-linux-gnu",
   "model_semantics": "unmodeled",
+  "concurrency": "unmodeled",
   "statements": [
   { "id": "LoopSub::bounded-count::subtype-range::0", "id_hash": "53452fe26a49d0a4", "omitted": true, "reason": "opaque-site", "statement_hash": "" },
   { "id": "LoopSub::bounded-count::subtype-range::1", "id_hash": "534530e26a49d257", "def": "stmt_LoopSub_bounded_count_subtype_range_1", "omitted": false, "statement_hash": "7b39d69ca3d8b207faaf92565999aff51c58a1b4e4093045e4e24099c0e6cb66" }

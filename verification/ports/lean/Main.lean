@@ -1,12 +1,14 @@
 import Tyu.Conformance.Runner
 import Tyu.Conformance.Fragment
 import Tyu.Conformance.IntervalLaws
+import Tyu.Conformance.Services
 import Tyu.Stackmeta
 import Tyu.IR.Semantics
 import Tyu.Bundles
 
 open Tyu.Conformance
 open Tyu.Stackmeta
+open Tyu.ServicesConformance
 
 /-- The conformance replay (P3.2): every `tyu.vec/1` vector reproduced
 byte-exactly by the abstract transfer. -/
@@ -168,6 +170,43 @@ def main (args : List String) : IO UInt32 := do
                 IO.println s!"FRAG-DIVERGE: {f.triple} [{m.id}]: got {m.got}; want {m.want}"
               failures := failures + mismatches.length
       IO.println s!"RESULT: fragment={total} mismatches={failures}"
+      if failures == 0 then return 0 else return 1
+  | "--level" :: "services" :: rest =>
+      -- The `tyu.svcvec/1` service corpus (P15.2): the abstract-atomic
+      -- services model's scripted channel programs, replayed by the port
+      -- (and — zero divergence — by the Rust mirror + the hosted runtime
+      -- leg). Reads `<dir>/vectors.json` from each corpus dir.
+      let dirs := rest.filter fun a => a ≠ "--corpus" && a ≠ "--"
+      if dirs.isEmpty then
+        IO.println "usage: conformance --level services --corpus <dir>..."
+        return 1
+      let mut total := 0
+      let mut failures := 0
+      for dir in dirs do
+        let path := dir ++ "/vectors.json"
+        let content ←
+          try
+            IO.FS.readFile path
+          catch _ =>
+            pure ""
+        if content == "" then
+          IO.println s!"FAIL: {path}: unreadable or empty (not a tyu.svcvec/1 corpus)"
+          failures := failures + 1
+          continue
+        match parseSvcVecFile content with
+        | none =>
+            IO.println s!"FAIL: {path}: not a valid tyu.svcvec/1 document (schema/malformed)"
+            failures := failures + 1
+        | some f =>
+            let mismatches := runFile f
+            total := total + f.scripts.length
+            if mismatches.isEmpty then
+              IO.println s!"PASS: {path} ({f.triple}): {f.scripts.length} service scripts, zero divergence"
+            else
+              for m in mismatches do
+                IO.println s!"SVC-DIVERGE: {f.triple} {m}"
+              failures := failures + mismatches.length
+      IO.println s!"RESULT: services={total} mismatches={failures}"
       if failures == 0 then return 0 else return 1
   | "--level" :: "bundles" :: _ =>
       -- P12.2: the bundle-instance geometry report (no corpus needed).

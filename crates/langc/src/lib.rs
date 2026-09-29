@@ -58,6 +58,13 @@ pub unsafe fn run(argc: isize, argv: *const *const hosted::c::c_char) -> i32 {
         .model_semantics
         .unwrap_or(verifier::model::MODEL_UNMODELED.as_bytes());
 
+    // P15.1 (§Q14): the bundle's concurrency-service modeling declaration.
+    // tyu forwards the resolved pack's `[model] concurrency`; a direct langc
+    // run without a bundle keeps the honest default (`unmodeled`).
+    let concurrency: &[u8] = cfg
+        .concurrency
+        .unwrap_or(verifier::model::CONCURRENCY_UNMODELED.as_bytes());
+
     let buf = match fs::read_file(cfg.input) {
         Ok(b) => b,
         Err(_) => {
@@ -264,6 +271,7 @@ pub unsafe fn run(argc: isize, argv: *const *const hosted::c::c_char) -> i32 {
                 cfg.verify_policy_proven,
                 bind_obl.as_ref(),
                 model_semantics,
+                concurrency,
                 refinements.as_slice(),
             )
         }
@@ -279,6 +287,7 @@ pub unsafe fn run(argc: isize, argv: *const *const hosted::c::c_char) -> i32 {
                 descriptor,
                 out_dir,
                 model_semantics,
+                concurrency,
             )
         }
     }

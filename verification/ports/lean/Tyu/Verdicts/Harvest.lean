@@ -237,7 +237,7 @@ class — axiom/tamper) that propagates as a nonzero exit. The second list is
 the axiom-audit evidence rows (theorem, sorted axioms) for
 `tyu.axiom-audit/1`. -/
 def harvestModule (inputs : Inputs) (document : String) :
-    CommandElabM (Except String (String × String × String × List String ×
+    CommandElabM (Except String (String × String × String × String × List String ×
                                  List (String × List String))) := do
   let a ← match Tyu.Gen.Render.parseArtifact document with
     | .error e => return .error ("artifact parse: " ++ renderErrString e)
@@ -300,7 +300,7 @@ def harvestModule (inputs : Inputs) (document : String) :
   let sorted := sortBy (fun s => s) ids
   let byId := fun id => (records.filter (fun p => Prod.fst p == id))
   let final := sorted.flatMap (fun id => byId id |>.map Prod.snd)
-  pure (.ok (a.module, a.target, a.modelSemantics, final, auditRows))
+  pure (.ok (a.module, a.target, a.modelSemantics, a.concurrency, final, auditRows))
 
 -- --------------------------------------------------------------------------
 -- The `#eval!` runner
@@ -319,13 +319,14 @@ harvested theorem with its transitive axiom set, next to the permitted set
 it was checked against (§Q11 item 2 — the `evidence/axiom_audit.json`
 shape, per module; tyu re-homes it to
 `.tyu-verify/harvest/<Module>.axiom_audit.json`). -/
-def auditDoc (module target model : String)
+def auditDoc (module target concurrency model : String)
     (rows : List (String × List String)) : String :=
   let thms := jarrOf ((sortByFst rows).map (fun (name, axs) =>
     jobjOf [ ("axioms", jarrOf (axs.map (fun a => Tyu.Gen.Render.jstr a)))
            , ("theorem", Tyu.Gen.Render.jstr name) ]))
   jobjOf
-    [ ("module", Tyu.Gen.Render.jstr module)
+    [ ("concurrency", Tyu.Gen.Render.jstr concurrency)
+    , ("module", Tyu.Gen.Render.jstr module)
     , ("model_semantics", Tyu.Gen.Render.jstr model)
     , ("permitted_axioms", jarrOf (permittedAxioms.map (fun p => Tyu.Gen.Render.jstr p.toString)))
     , ("schema", Tyu.Gen.Render.jstr "tyu.axiom-audit/1")
@@ -342,7 +343,7 @@ def certifierJson : String :=
     , ("toolchain", Tyu.Gen.Render.jstr "lean4:4.27.0") ]
 
 /-- The full `tyu.verdicts/v2` document. -/
-def makeDocument (target model : String) (records : List String) : String :=
+def makeDocument (target model concurrency : String) (records : List String) : String :=
   jobjOf
     [ ("schema", Tyu.Gen.Render.jstr "tyu.verdicts/v2")
     , ("certifier", certifierJson)
@@ -350,6 +351,7 @@ def makeDocument (target model : String) (records : List String) : String :=
     , ("stmt", Tyu.Gen.Render.jstr "tyu.stmt/1.0")
     , ("target", Tyu.Gen.Render.jstr target)
     , ("model_semantics", Tyu.Gen.Render.jstr model)
+    , ("concurrency", Tyu.Gen.Render.jstr concurrency)
     , ("verdicts", jarrOf records) ]
 
 unsafe def run : CommandElabM Unit := do
@@ -366,10 +368,10 @@ unsafe def run : CommandElabM Unit := do
         ("{\"schema\":\"tyu.harvest-error/1\",\"message\":" ++ Tyu.Gen.Render.jstr err ++ "}")
       liftIO (IO.eprintln ("harvest: " ++ err))
       liftIO (IO.Process.exit 1)
-  | .ok (module, target, model, records, auditRows) =>
-      let doc := makeDocument target model records
+  | .ok (module, target, model, concurrency, records, auditRows) =>
+      let doc := makeDocument target model concurrency records
       liftIO $ IO.FS.writeFile inputs.out doc
       liftIO $ IO.FS.writeFile (inputs.out ++ ".audit.json")
-        (auditDoc module target model auditRows)
+        (auditDoc module target concurrency model auditRows)
 
 end Tyu.Verdicts.Harvest

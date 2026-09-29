@@ -77,6 +77,16 @@ const E_PACK_MODEL_EVIDENCE_MISSING: u16 = 5416;
 /// 32-byte atom limit, a width outside the closed set {8, 16, 32, 64}, or a
 /// duplicate register (a register has exactly one refinement).
 const E_PACK_MODEL_REFINEMENT_INVALID: u16 = 5417;
+/// P15.1 (§Q14/§6.7): `[model] concurrency = "abstract-atomic"` declared on
+/// a bundle whose `model_semantics` is `"unmodeled"` — the contradiction:
+/// an unmodeled bundle has no services model, so claiming an abstract-atomic
+/// services semantics would certify service statements it cannot ground.
+const E_PACK_MODEL_CONCURRENCY_MISPAIRED: u16 = 5418;
+/// P15.1 (§Q14/§6.7): the `[services]` declared by `model/model.toml` does
+/// not pair with the `[model] concurrency` declaration — an `abstract-atomic`
+/// bundle whose artifact declares no services, or a non-abstract-atomic
+/// bundle whose artifact declares a (dead) service model.
+const E_PACK_MODEL_SERVICES_MISPAIRED: u16 = 5419;
 
 pub fn lint_pack(root: &Path, name: &str, all: bool) -> Result<LintOutcome, TyuError> {
     let manifest_path = find_pack_manifest_path(root, name)
@@ -537,7 +547,7 @@ fn lint_pack_manifest(
     }
 
     let mut warnings = Vec::new();
-    lint_model_section(pack_root, manifest, &mut errors, &mut warnings);
+    lint_model_section(root, pack, &mut errors, &mut warnings);
     if !all && !errors.is_empty() {
         return Ok(LintOutcome {
             pack: pack_name,
@@ -563,21 +573,31 @@ fn lint_pack_manifest(
 ///   E5413 (the contradiction is a pairing violation, not a silent pass);
 /// - `model/model.toml` artifact without any declared `[model]` ⇒ E5414;
 /// - a `[model]` value outside its closed set ⇒ E5415;
+/// - P15.1: `concurrency = "abstract-atomic"` on an `"unmodeled"` bundle ⇒
+///   E5418 (an unmodeled bundle has no services model to certify service
+///   statements against);
 /// - a `[model]` section under a schema < 3 ⇒ E5400 (the schema gate);
 /// - `evidence/vectors.json` absent iff modeled ⇒ E5416 (the *corpus file*
 ///   specifically — `evidence/*.md` docs do not satisfy it, finding 4a);
 /// - neither declared ⇒ warning only (§Q15: unmodeled is honest, not wrong).
-fn model_pairing(pack_root: &Path, manifest: &PlatformManifest) -> (Vec<LintError>, Vec<String>) {
+///
+/// The artifact + evidence paths resolve through the pack (P15.1): in-tree
+/// platform packs carry `model/model.toml` + `evidence/vectors.json` under
+/// the pack root; the HOSTED bundle's model identity carrier lives in the
+/// `sysroot` next to the services it models (PLAN-VERIFY-3 §9 — P15), so the
+/// hosted pack resolves both from `sysroot/<triple>/`.
+fn model_pairing(root: &Path, pack: &PlatformPack) -> (Vec<LintError>, Vec<String>) {
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
+    let manifest = &pack.manifest;
     let model = match &manifest.model {
         None => {
-            if model_artifact_declared_id(pack_root).is_some() {
+            if model_artifact_declared_id_at(root, pack).is_some() {
                 errors.push(LintError::new(
                     E_PACK_MODEL_UNDECLARED_ARTIFACT,
                     format!(
                         "model artifact '{}' declares an id but the manifest has no [model] section",
-                        model_artifact_path(pack_root).display()
+                        model_artifact_path_at(root, pack).display()
                     ),
                 ));
             } else {
@@ -627,6 +647,58 @@ fn model_pairing(pack_root: &Path, manifest: &PlatformManifest) -> (Vec<LintErro
             ),
         ));
     }
+    // P15.1 (§Q14/§6.7): an abstract-atomic concurrency declaration requires
+    // a MODELED bundle — `"unmodeled"` + `"abstract-atomic"` is the
+    // contradiction the gate must never pass silently.
+    if model.concurrency_str() == crate::platform::ModelSection::CONCURRENCY_ABSTRACT_ATOMIC
+        && model.model_semantics == verifier::model::MODEL_UNMODELED
+    {
+        errors.push(LintError::new(
+            E_PACK_MODEL_CONCURRENCY_MISPAIRED,
+            "[model] declares concurrency = \"abstract-atomic\" but model_semantics = \
+             \"unmodeled\" — an unmodeled bundle has no services model to certify service \
+             statements against; declare a modeled model-semantics id or set \
+             concurrency = \"unmodeled\"",
+        ));
+    }
+
+    // P15.1 (§Q14/§6.7): the artifact's `[services]` declaration must pair
+    // with the concurrency declaration — an `abstract-atomic` bundle claims
+    // the §Q14 service set and MUST carry it in the artifact; a services
+    // artifact under any other concurrency value is a dead service model
+    // (the §6.7 artifact-without-declaration pairing, applied to services).
+    let declared_services: Vec<String> = parse_model_artifact_at(root, pack)
+        .map(|info| info.services)
+        .unwrap_or_default();
+    if model.concurrency_str() == crate::platform::ModelSection::CONCURRENCY_ABSTRACT_ATOMIC
+        && declared_services.is_empty()
+    {
+        errors.push(LintError::new(
+            E_PACK_MODEL_SERVICES_MISPAIRED,
+            format!(
+                "[model] declares concurrency = \"abstract-atomic\" but the model artifact '{}' \
+                 declares no [services] — the bundle claims a services model it has not \\
+                 declared; add [services] ids = [\"channel\", \"task\", \"time\"] or set \
+                 concurrency = \"unmodeled\"",
+                model_artifact_path_at(root, pack).display()
+            ),
+        ));
+    }
+    if model.concurrency_str() != crate::platform::ModelSection::CONCURRENCY_ABSTRACT_ATOMIC
+        && !declared_services.is_empty()
+    {
+        errors.push(LintError::new(
+            E_PACK_MODEL_SERVICES_MISPAIRED,
+            format!(
+                "model artifact '{}' declares [services] {} but concurrency = \"{}\" — the \
+                 service model would be dead; set concurrency = \"abstract-atomic\" or remove \
+                 the [services] fragment",
+                model_artifact_path_at(root, pack).display(),
+                declared_services.join(", "),
+                model.concurrency_str()
+            ),
+        ));
+    }
 
     if model.model_semantics == verifier::model::MODEL_UNMODELED {
         // Declared-unmodeled: honest tier — no model required, no evidence
@@ -634,7 +706,7 @@ fn model_pairing(pack_root: &Path, manifest: &PlatformManifest) -> (Vec<LintErro
         // declaration (it would silently be dead — §6.7's
         // artifact-without-declaration pairing, applied to the unmodeled
         // declaration). An artifact declaring `id = "unmodeled"` is fine.
-        if let Some(artifact_id) = model_artifact_declared_id(pack_root) {
+        if let Some(artifact_id) = model_artifact_declared_id_at(root, pack) {
             if artifact_id != verifier::model::MODEL_UNMODELED {
                 errors.push(LintError::new(
                     E_PACK_MODEL_ARTIFACT_MISSING,
@@ -643,7 +715,7 @@ fn model_pairing(pack_root: &Path, manifest: &PlatformManifest) -> (Vec<LintErro
                          (contradicts the unmodeled declaration; remove the artifact or declare \
                          model_semantics = \"{}\")",
                         verifier::model::MODEL_UNMODELED,
-                        model_artifact_path(pack_root).display(),
+                        model_artifact_path_at(root, pack).display(),
                         artifact_id,
                         artifact_id
                     ),
@@ -656,8 +728,8 @@ fn model_pairing(pack_root: &Path, manifest: &PlatformManifest) -> (Vec<LintErro
     // Declared modeled: the model artifact must exist and declare the same id
     // (§6.7: "MUST match a model artifact directory (model/) with a model.toml
     // declaring the same id").
-    let toml_path = model_artifact_path(pack_root);
-    match model_artifact_declared_id(pack_root) {
+    let toml_path = model_artifact_path_at(root, pack);
+    match model_artifact_declared_id_at(root, pack) {
         Some(artifact_id) => {
             if artifact_id != model.model_semantics {
                 errors.push(LintError::new(
@@ -689,13 +761,13 @@ fn model_pairing(pack_root: &Path, manifest: &PlatformManifest) -> (Vec<LintErro
     // any other file in `evidence/` (docs, QEMU harness notes) does not
     // satisfy the requirement (P12 finding 4a: `evidence/*.md` alone must
     // lint as missing).
-    if !pack_root.join("evidence").join("vectors.json").is_file() {
+    if !model_evidence_path_at(root, pack).is_file() {
         errors.push(LintError::new(
             E_PACK_MODEL_EVIDENCE_MISSING,
             format!(
                 "modeled bundle ({}) requires the evidence/vectors.json vector corpus (missing '{}')",
                 model.model_semantics,
-                pack_root.join("evidence").join("vectors.json").display()
+                model_evidence_path_at(root, pack).display()
             ),
         ));
     }
@@ -704,7 +776,7 @@ fn model_pairing(pack_root: &Path, manifest: &PlatformManifest) -> (Vec<LintErro
     // manifest is malformed regardless of the declared section — the
     // refinement manifest is part of the model artifact and the statement
     // context binds to it.
-    errors.extend(validate_refinements(pack_root));
+    errors.extend(validate_refinements_at(root, pack));
     (errors, warnings)
 }
 
@@ -713,8 +785,14 @@ fn model_pairing(pack_root: &Path, manifest: &PlatformManifest) -> (Vec<LintErro
 /// limit), a non-empty whitespace-free refinement id, a width in the closed
 /// set {8, 16, 32, 64}, and registers are unique (a register has exactly one
 /// refinement). Absent/malformed artifact: no refinement rows to validate.
-fn validate_refinements(pack_root: &Path) -> Vec<LintError> {
-    let Some(text) = std::fs::read_to_string(model_artifact_path(pack_root)).ok() else {
+/// The pack-aware form of the §6.7 `[refinements]` manifest validation
+/// (P15.1: routes the hosted bundle's artifact from the sysroot).
+fn validate_refinements_at(root: &Path, pack: &PlatformPack) -> Vec<LintError> {
+    validate_refinements_text(&model_artifact_path_at(root, pack))
+}
+
+fn validate_refinements_text(artifact_path: &Path) -> Vec<LintError> {
+    let Some(text) = std::fs::read_to_string(artifact_path).ok() else {
         return Vec::new();
     };
     let Ok(raw) = toml::from_str::<ModelArtifactFile>(&text) else {
@@ -796,14 +874,15 @@ fn validate_refinements(pack_root: &Path) -> Vec<LintError> {
     errors
 }
 
-/// The lint form of the §6.7 model matrix.
+/// The lint form of the §6.7 model matrix (pack-aware — the hosted bundle's
+/// model identity + evidence resolve from the sysroot, P15.1).
 fn lint_model_section(
-    pack_root: &Path,
-    manifest: &PlatformManifest,
+    root: &Path,
+    pack: &PlatformPack,
     errors: &mut Vec<LintError>,
     warnings: &mut Vec<String>,
 ) {
-    let (e, w) = model_pairing(pack_root, manifest);
+    let (e, w) = model_pairing(root, pack);
     errors.extend(e);
     warnings.extend(w);
 }
@@ -815,7 +894,7 @@ fn lint_model_section(
 /// is the structural protection for third-party packs: a pack cannot build as
 /// "modeled" while its model is unanchored.
 pub fn ensure_model_pairing(pack: &PlatformPack) -> Result<(), TyuError> {
-    let (errors, _warnings) = model_pairing(pack.pack_root(), &pack.manifest);
+    let (errors, _warnings) = model_pairing(&pack.root, pack);
     match errors.first() {
         None => Ok(()),
         Some(first) => Err(TyuError::Platform(format!(
@@ -829,15 +908,64 @@ pub fn ensure_model_pairing(pack: &PlatformPack) -> Result<(), TyuError> {
 
 /// The pack's `model/model.toml` path (the P12.2 model artifact: the `id`
 /// the lint pairs with the declaration, plus the `[memory]` geometry that
-/// the corpus generator and both bundle instances consume).
+/// the corpus generator and both bundle instances consume). The classic
+/// pack-root form.
 fn model_artifact_path(pack_root: &Path) -> PathBuf {
     pack_root.join("model").join("model.toml")
 }
 
-/// The `id` declared by `model/model.toml`, when the artifact exists and
-/// parses.
-fn model_artifact_declared_id(pack_root: &Path) -> Option<String> {
-    parse_model_artifact(pack_root).map(|info| info.id)
+/// P15.1: whether `pack` is the HOSTED bundle — its manifest lives directly
+/// under `runtime/` (the flat `runtime/<name>.platform.toml` layout), and
+/// its model identity carrier + evidence are carried in the `sysroot` next
+/// to the services it models (PLAN-VERIFY-3 §9: "sysroot/ | hosted bundle
+/// model identity carrier (model.toml) for services").
+fn is_hosted_pack(root: &Path, pack: &PlatformPack) -> bool {
+    pack.manifest_path.starts_with(root.join("runtime"))
+}
+
+/// The hosted bundle's default ISA triple (the sysroot directory its model
+/// lives in).
+fn hosted_isa_triple(pack: &PlatformPack) -> &str {
+    pack.manifest
+        .platform
+        .isa
+        .first()
+        .map(|i| i.triple.as_str())
+        .unwrap_or("")
+}
+
+/// The pack-aware model-artifact path (P15.1): in-tree platform packs carry
+/// `model/model.toml` under the pack root; the hosted bundle carries it in
+/// the sysroot (`sysroot/<triple>/model.toml`).
+fn model_artifact_path_at(root: &Path, pack: &PlatformPack) -> PathBuf {
+    if is_hosted_pack(root, pack) {
+        root.join("sysroot")
+            .join(hosted_isa_triple(pack))
+            .join("model.toml")
+    } else {
+        model_artifact_path(pack.pack_root())
+    }
+}
+
+/// The pack-aware evidence-corpus path (`evidence/vectors.json`): in-tree
+/// packs keep it under the pack root; the hosted bundle's service vectors
+/// live in the sysroot evidence dir next to its model.
+fn model_evidence_path_at(root: &Path, pack: &PlatformPack) -> PathBuf {
+    if is_hosted_pack(root, pack) {
+        root.join("sysroot")
+            .join(hosted_isa_triple(pack))
+            .join("evidence")
+            .join("vectors.json")
+    } else {
+        pack.pack_root().join("evidence").join("vectors.json")
+    }
+}
+
+/// The pack-aware declared-id probe (the artifact path routes the hosted
+/// bundle to the sysroot, P15.1).
+fn model_artifact_declared_id_at(root: &Path, pack: &PlatformPack) -> Option<String> {
+    let text = std::fs::read_to_string(model_artifact_path_at(root, pack)).ok()?;
+    parse_model_artifact_text(&text).map(|info| info.id)
 }
 
 /// The `model/model.toml` artifact shape (P12.1: identity; P12.2: the
@@ -861,6 +989,12 @@ struct ModelArtifactFile {
     #[allow(dead_code)]
     #[serde(default)]
     refinements: Option<ModelArtifactRefinements>,
+    // The `[services]` fragment (P15.1): the modeled-services declaration of
+    // an abstract-atomic bundle (`services.ids = [...]`). Parsed strictly
+    // (unknown fields rejected); paired by the lint (E5419).
+    #[allow(dead_code)]
+    #[serde(default)]
+    services: Option<ModelArtifactServices>,
 }
 
 #[derive(serde::Deserialize)]
@@ -926,6 +1060,21 @@ struct ModelArtifactRefinements {
     device: Vec<ModelRefinementDecl>,
 }
 
+/// The `[services]` fragment of a modeled bundle's model artifact (P15.1,
+/// §Q14/§6.7): the modeled-services declaration (`services.ids = ["channel",
+/// "task", "time"]`). A bundle that declares `[model] concurrency =
+/// "abstract-atomic"` MUST carry a model artifact listing the §Q14 service
+/// set (the abstract-atomic model covers channel IPC, the task scheduler,
+/// and time); an artifact that declares services under any OTHER concurrency
+/// value is a dead service model (the pairing violation E5419). Additive;
+/// absent ⇒ no services declared.
+#[derive(serde::Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct ModelArtifactServices {
+    #[serde(default)]
+    ids: Vec<String>,
+}
+
 /// One `[[refinements.device]]` declaration (P13.1/P13.2).
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -955,6 +1104,11 @@ pub struct ModelArtifactInfo {
     /// manifest (P13.1), in declared order. Empty for the P12.2 empty-manifest
     /// shape and for unmodeled bundles.
     pub refinements: Vec<verifier::refinements::Refinement>,
+    /// The modeled-services declaration of the `[services]` fragment (P15.1):
+    /// the §Q14 service set (`["channel", "task", "time"]`) an
+    /// `abstract-atomic` bundle models. Empty when absent or when the bundle
+    /// does not model services.
+    pub services: Vec<String>,
 }
 
 /// Parse the pack's `model/model.toml` artifact. `None` when the artifact is
@@ -962,7 +1116,12 @@ pub struct ModelArtifactInfo {
 /// the caller decides the error code).
 pub fn parse_model_artifact(pack_root: &Path) -> Option<ModelArtifactInfo> {
     let text = std::fs::read_to_string(model_artifact_path(pack_root)).ok()?;
-    let raw: ModelArtifactFile = toml::from_str(&text).ok()?;
+    parse_model_artifact_text(&text)
+}
+
+/// The text-level artifact parse both path forms share.
+fn parse_model_artifact_text(text: &str) -> Option<ModelArtifactInfo> {
+    let raw: ModelArtifactFile = toml::from_str(text).ok()?;
     let refinements = raw
         .refinements
         .map(|r| {
@@ -978,10 +1137,20 @@ pub fn parse_model_artifact(pack_root: &Path) -> Option<ModelArtifactInfo> {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    // P15.1: the modeled-services declaration (`[services] ids`).
+    let services = raw.services.map(|s| s.ids).unwrap_or_default();
     Some(ModelArtifactInfo {
         id: raw.model.id,
         refinements,
+        services,
     })
+}
+
+/// The pack-aware artifact parse (P15.1: the hosted bundle's carrier lives in
+/// the sysroot).
+fn parse_model_artifact_at(root: &Path, pack: &PlatformPack) -> Option<ModelArtifactInfo> {
+    let text = std::fs::read_to_string(model_artifact_path_at(root, pack)).ok()?;
+    parse_model_artifact_text(&text)
 }
 
 /// The named device refinements a modeled pack declares (P13.1) — the
@@ -989,9 +1158,21 @@ pub fn parse_model_artifact(pack_root: &Path) -> Option<ModelArtifactInfo> {
 /// no model artifact or declares none. This is the identity that flows to
 /// the renderer's refinement context (the `tyu.refinements/1` document) and
 /// to the Rust statement-digest verifier — the two sides bind the same
-/// statements (P13.1's context plumbing).
+/// statements (P13.1's context plumbing). The classic pack-root form.
 pub fn model_artifact_refinements(pack_root: &Path) -> Vec<verifier::refinements::Refinement> {
     parse_model_artifact(pack_root)
+        .map(|info| info.refinements)
+        .unwrap_or_default()
+}
+
+/// The pack-aware form of [`model_artifact_refinements`] — resolves the
+/// hosted bundle's artifact from the sysroot (P15.1). Exported for the
+/// verification-environment key derivation (`proof.rs`).
+pub fn model_artifact_refinements_for_pack(
+    root: &Path,
+    pack: &PlatformPack,
+) -> Vec<verifier::refinements::Refinement> {
+    parse_model_artifact_at(root, pack)
         .map(|info| info.refinements)
         .unwrap_or_default()
 }
@@ -1000,7 +1181,7 @@ pub fn model_artifact_refinements(pack_root: &Path) -> Vec<verifier::refinements
 /// ram`), when present — the geometry the bundle instances consume. Sourced
 /// from the SINGLE parser (`verifier::bundle::model_memory_ram`), so the
 /// tyu accessor, the corpus header, and the verifier suite cannot disagree
-/// (cleanup item 3).
+/// (cleanup item 3). The classic pack-root form.
 pub fn model_artifact_ram(pack_root: &Path) -> Option<(u64, u64)> {
     let text = std::fs::read_to_string(model_artifact_path(pack_root)).ok()?;
     verifier::bundle::model_memory_ram(&text)

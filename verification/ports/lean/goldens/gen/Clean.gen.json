@@ -3,6 +3,7 @@
   "module": "Clean",
   "target": "x86_64-unknown-linux-gnu",
   "model_semantics": "unmodeled",
+  "concurrency": "unmodeled",
   "statements": [
 
   ],

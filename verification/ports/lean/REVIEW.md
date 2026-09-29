@@ -32,6 +32,9 @@
 | T-A (triAnd, P14.1) | the concrete `&&` result is within the abstract `triAnd` interval | `Tyu.Sound.TA.tri_and_sound` | proven, axiom-audited |
 | T-A (triOr, P14.1) | the concrete `||` result is within the abstract `triOr` interval | `Tyu.Sound.TA.tri_or_sound` | proven, axiom-audited |
 | T-A (triNot, P14.1) | the concrete `not` result is within the abstract `triNot` interval | `Tyu.Sound.TA.tri_not_sound` | proven, axiom-audited |
+| §Q14 FIFO (round-trip, P15) | the abstract-atomic channel semantics: send-then-recv on a make-local channel observes exactly the sent payload, and the round trip leaves the FIFO empty (atomicity: the op pair touches only its own channel, tasks, and clock are untouched) | `Tyu.Services.send_then_recv_value`, `Tyu.Services.send_then_recv_empty`, `Tyu.Services.roundtrip_other_unchanged`, `Tyu.Services.chanOps_clock_monotone`, `Tyu.Services.timeAdvance_monotone` | proven, axiom-audited |
+| §Q14 FIFO (order, P15) | two sends then two recvs return the values in order — the semantics is a FIFO, never LIFO or reordered | `Tyu.Services.fifo_order` | proven, axiom-audited |
+| §Q14 trace (P15.2) | the service-op trace is the word's sequential reasoning surface: `[make 0, send 0 v, recv 0]` leaves `v` on the stack (the FIFO law composed over the trace), and the bounded in-range transport + the registry `fifo_roundtrip` statement make the renderer's `traceInRange` form provable | `Tyu.Services.trace_send_recv_output`, `Tyu.Services.trace_send_recv_in_range`, `Tyu.Services.fifo_roundtrip` | proven, axiom-audited |
 | T-B (discharge, P14.2) | the discharge bridge: `eval_in_range` answering `defTrue` for an interval means every concretization satisfies the target bounds — the lemma the `rederive` method composes (a `⊤`/`⊥` interval can never reach `defTrue`) | `Tyu.Sound.TB.discharge_sound` | proven, axiom-audited |
 | T-CL (transitive) | the assumption-closure registry statement (§Q7 rule 2): on a well-closed verdict set, every closed obligation's entire assumption graph (walked through closed nodes) terminates on obligations that are closed or `runtime-check` terminals | `Tyu.Sound.AssumptionClosure.transitive_closure_sound` | proven, axiom-audited |
 | T-CL (cycle) | a closed obligation reachable from itself — a cycle — contradicts well-closedness (cycles are E6419-malformed) | `Tyu.Sound.AssumptionClosure.cyclic_not_well_closed` | proven, axiom-audited |
@@ -164,6 +167,15 @@ Tyu.Sound.TA.tri_and_sound
 Tyu.Sound.TA.tri_or_sound
 Tyu.Sound.TA.tri_not_sound
 Tyu.Sound.TB.discharge_sound
+Tyu.Services.send_then_recv_value
+Tyu.Services.send_then_recv_empty
+Tyu.Services.fifo_order
+Tyu.Services.roundtrip_other_unchanged
+Tyu.Services.chanOps_clock_monotone
+Tyu.Services.timeAdvance_monotone
+Tyu.Services.trace_send_recv_output
+Tyu.Services.trace_send_recv_in_range
+Tyu.Services.fifo_roundtrip
 ```
 
 Permitted axiom set: `{propext, Quot.sound, Classical.choice}` — anything
