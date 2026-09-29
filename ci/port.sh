@@ -312,6 +312,37 @@ msg 2 "  port.sh: P6 developer-proof pipeline e2e (build_verify_integration tier
 }
 msg 2 "  port.sh: P6 developer-proof pipeline e2e green"
 
+# --- PLAN-VERIFY-3 P15 — the service-relativism + hosted service gates ---
+# P15.1's relativism gate (`service_relativism`: the abstract-atomic render
+# decision, the template harvest `proof`, the E6421 concurrency staleness,
+# the codec consensus) and P15.2's HOSTED runtime leg (the svcvec wire
+# fixtures compiled + executed natively). The port gate ALWAYS has the Lean
+# toolchain, so both run FORCED (env-gated skips become failures here).
+msg 2 "  port.sh: P15.1 service-relativism gate (service_relativism, FORCED)"
+(
+    cd "$ROOT"
+    if [ ! -f target/debug/tyu ]; then
+        cargo build -q -p tyu -p langc
+    fi
+    TYU_SERVICE_E2E=1 cargo test -q -p tooling-tests --test service_relativism 2>&1 | tail -4
+) || {
+    msg 1 "  port.sh: P15.1 service-relativism gate FAILED"
+    exit 1
+}
+msg 2 "  port.sh: P15.1 service-relativism gate green"
+msg 2 "  port.sh: P15.2 hosted service-conformance leg (executes the svcvec wire fixtures)"
+(
+    cd "$ROOT"
+    if [ ! -f target/debug/tyu ]; then
+        cargo build -q -p tyu -p langc
+    fi
+    cargo test -q -p execution-tests --test hosted 2>&1 | tail -4
+) || {
+    msg 1 "  port.sh: P15.2 hosted service-conformance leg FAILED"
+    exit 1
+}
+msg 2 "  port.sh: P15.2 hosted service-conformance leg green"
+
 # --- PLAN-VERIFY-3 P7.1 — the harvest gate ---
 # The harvest fixture demonstrates the kernel-checked path end to end:
 # statement binding (E6420 when a statement's def is missing), the type-level

@@ -54,6 +54,7 @@ pub mod report;
 pub mod semantics;
 pub mod src_interp;
 pub mod stmt;
+pub mod svcvec;
 pub mod target;
 /// Test-fixture builders (`test-util` feature only; `#[doc(hidden)]`).
 #[cfg(feature = "test-util")]

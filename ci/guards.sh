@@ -1861,7 +1861,17 @@ if [ ! -f crates/execution-tests/fixtures/conc_roundtrip.mod ]; then
     msg $RED "  G49 FAIL: the concurrency template fixture missing (conc_roundtrip.mod)"
     g49_fail=1
 fi
-[ "$g49_fail" -eq 0 ] && msg $GREEN "  G49: P15 services surface present (Tyu.Services model, hosted identity + corpus, concurrency threading, gate tests)"
+for svc_fix in svc_fifo_send_recv svc_fifo_order svc_fifo_two_channels svc_fifo_deep_isolation; do
+    if [ ! -f "crates/execution-tests/fixtures/${svc_fix}.mod" ]; then
+        msg $RED "  G49 FAIL: the hosted wire fixture missing (${svc_fix}.mod)"
+        g49_fail=1
+    fi
+done
+if [ ! -f crates/verifier/src/svcvec.rs ]; then
+    msg $RED "  G49 FAIL: the tyu.svcvec/1 codec missing (verifier/svcvec.rs)"
+    g49_fail=1
+fi
+[ "$g49_fail" -eq 0 ] && msg $GREEN "  G49: P15 services surface present (Tyu.Services model, hosted identity + corpus, svcvec codec, wire fixtures, gate tests)"
 failures=$((failures + g49_fail))
 
 echo ""

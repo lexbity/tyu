@@ -1,9 +1,15 @@
 [fixtures]
-# `conc_roundtrip.mod` is the P15.2 concurrency template — a DATA fixture
-# consumed directly by the hosted execution leg (`hosted.rs`) and the
-# service-relativism gate (`tooling-tests`), not a `tyu test` matrix fixture
-# (it needs the hosted bundle's concurrency modeling, not the harness axes).
-ignore = ["conc_roundtrip.mod"]
+# P15.2 data fixtures consumed directly by the hosted execution leg
+# (`hosted.rs`), the service-relativism gate (`tooling-tests`), and the
+# svcvec source-generator pin — not `tyu test` matrix fixtures (they need the
+# hosted bundle's concurrency modeling + the corpus pairing).
+ignore = [
+  "conc_roundtrip.mod",
+  "svc_fifo_send_recv.mod",
+  "svc_fifo_order.mod",
+  "svc_fifo_two_channels.mod",
+  "svc_fifo_deep_isolation.mod",
+]
 
 [[fixture]]
 name = "arithmetic"

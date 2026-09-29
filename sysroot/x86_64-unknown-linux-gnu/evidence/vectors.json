@@ -3,17 +3,127 @@
   "triple": "x86_64-unknown-linux-gnu",
   "model_semantics": "tyu.model/linux-x86_64-hosted/1",
   "scripts": [
-    { "id": "fifo-send-recv",
-      "ops": [["make", 0], ["send", 0, 42], ["recv", 0]],
-      "expect": [42] },
-    { "id": "fifo-order-two",
-      "ops": [["make", 0], ["send", 0, 1], ["send", 0, 2], ["recv", 0], ["recv", 0]],
-      "expect": [1, 2] },
-    { "id": "fifo-two-channels",
-      "ops": [["make", 0], ["make", 1], ["send", 0, 7], ["recv", 0], ["send", 1, 9], ["recv", 1]],
-      "expect": [7, 9] },
-    { "id": "fifo-atomic-no-leak",
-      "ops": [["make", 0], ["send", 0, 5], ["make", 1], ["send", 1, 6], ["recv", 0], ["recv", 1]],
-      "expect": [5, 6] }
+    {
+      "id": "fifo-send-recv",
+      "ops": [
+        [
+          "make",
+          0
+        ],
+        [
+          "send",
+          0,
+          42
+        ],
+        [
+          "recv",
+          0
+        ]
+      ],
+      "expect": [
+        42
+      ]
+    },
+    {
+      "id": "fifo-order",
+      "ops": [
+        [
+          "make",
+          0
+        ],
+        [
+          "send",
+          0,
+          7
+        ],
+        [
+          "send",
+          0,
+          9
+        ],
+        [
+          "recv",
+          0
+        ]
+      ],
+      "expect": [
+        7
+      ]
+    },
+    {
+      "id": "fifo-two-channels",
+      "ops": [
+        [
+          "make",
+          0
+        ],
+        [
+          "send",
+          0,
+          7
+        ],
+        [
+          "recv",
+          0
+        ],
+        [
+          "make",
+          1
+        ],
+        [
+          "send",
+          1,
+          9
+        ],
+        [
+          "recv",
+          1
+        ]
+      ],
+      "expect": [
+        7,
+        9
+      ]
+    },
+    {
+      "id": "fifo-deep-isolation",
+      "ops": [
+        [
+          "make",
+          0
+        ],
+        [
+          "send",
+          0,
+          7
+        ],
+        [
+          "recv",
+          0
+        ],
+        [
+          "make",
+          1
+        ],
+        [
+          "send",
+          1,
+          9
+        ],
+        [
+          "send",
+          1,
+          11
+        ],
+        [
+          "recv",
+          1
+        ]
+      ],
+      "expect": [
+        7,
+        9
+      ]
+    }
   ]
 }

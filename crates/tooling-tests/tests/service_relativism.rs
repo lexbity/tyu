@@ -199,83 +199,25 @@ fn echo_stale(dir: &Path) -> u32 {
     }
 }
 
-/// The Rust mirror of the abstract-atomic services trace (P15.2): a minimal
-/// FIFO interpreter over the same `tyu.svcvec/1` corpus the Lean
-/// `conformance --level services` replays. Zero divergence is the consensus.
-mod rust_mirror {
-    #[derive(Clone, Debug, PartialEq)]
-    pub enum Op {
-        Make(u64),
-        Send(u64, i64),
-        Recv(u64),
-    }
-
-    pub struct Mirror {
-        pub channels: std::collections::BTreeMap<u64, Vec<i64>>,
-    }
-
-    impl Mirror {
-        pub fn run(&mut self, ops: &[Op]) -> Option<Vec<i64>> {
-            let mut outputs: Vec<i64> = Vec::new();
-            for op in ops {
-                match op {
-                    Op::Make(c) => {
-                        self.channels.entry(*c).or_default();
-                    }
-                    Op::Send(c, v) => {
-                        self.channels.get_mut(c)?.push(*v);
-                    }
-                    Op::Recv(c) => {
-                        let buf = self.channels.get_mut(c)?;
-                        let v = buf.first().copied()?;
-                        buf.remove(0);
-                        outputs.push(v);
-                    }
-                }
-            }
-            Some(outputs)
-        }
-    }
-}
-
-/// Replay the hosted bundle's committed `tyu.svcvec/1` corpus with the Rust
-/// mirror; returns divergences (empty = consensus).
+/// The Rust mirror of the abstract-atomic services trace is the codec's
+/// `verifier::svcvec::run_trace` (the hand-rolled, schema-checked,
+/// size-capped `tyu.svcvec/1` reader — same discipline as `tyu.vec/1` /
+/// `tyu.fragvec/1`). Replay the committed corpus; returns divergences.
 fn rust_svc_corpus(root: &Path) -> Vec<String> {
     let text =
         fs::read_to_string(root.join("sysroot/x86_64-unknown-linux-gnu/evidence/vectors.json"))
             .unwrap();
-    let json: serde_json::Value = serde_json::from_str(&text).expect("svcvec parses");
+    let file =
+        verifier::svcvec::parse_svcvec(text.as_bytes()).expect("svcvec corpus parses schema-exact");
     let mut divergences = Vec::new();
-    for script in json["scripts"].as_array().into_iter().flatten() {
-        let id = script["id"].as_str().unwrap_or("?");
-        let mut ops: Vec<rust_mirror::Op> = Vec::new();
-        for op in script["ops"].as_array().into_iter().flatten() {
-            let arr = op.as_array().unwrap();
-            match arr[0].as_str().unwrap() {
-                "make" => ops.push(rust_mirror::Op::Make(arr[1].as_u64().unwrap())),
-                "send" => ops.push(rust_mirror::Op::Send(
-                    arr[1].as_u64().unwrap(),
-                    arr[2].as_i64().unwrap(),
-                )),
-                "recv" => ops.push(rust_mirror::Op::Recv(arr[1].as_u64().unwrap())),
-                other => panic!("unknown svcvec op {other}"),
-            }
-        }
-        let expect: Vec<i64> = script["expect"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_i64().unwrap())
-            .collect();
-        let mut m = rust_mirror::Mirror {
-            channels: Default::default(),
-        };
-        match m.run(&ops) {
-            Some(got) if got == expect => {}
+    for script in &file.scripts {
+        match verifier::svcvec::run_trace(&script.ops) {
+            Some(got) if got == script.expect => {}
             Some(got) => divergences.push(format!(
-                "script '{id}': got {got:?} want {expect:?} (Rust mirror)"
+                "script '{}': got {got:?} want {:?} (Rust mirror)",
+                script.id, script.expect
             )),
-            None => divergences.push(format!("script '{id}': blocked (Rust mirror)")),
+            None => divergences.push(format!("script '{}': blocked (Rust mirror)", script.id)),
         }
     }
     divergences
@@ -307,6 +249,53 @@ fn lean_svc_result(root: &Path) -> String {
         .find(|l| l.starts_with("RESULT: services="))
         .unwrap_or_default()
         .to_string()
+}
+
+/// Build a hosted-source generator↔fixture byte-pin: every corpus script
+/// must lower to the committed wire fixture EXACTLY
+/// (`verifier::svcvec::render_hosted_source` — the deterministic source a
+/// developer can write, which the hosted leg compiles and runs). The map
+/// mirrors the execution-test's (script id → fixture file).
+fn hosted_fixture_pin(root: &Path) -> Result<(), String> {
+    const FIXTURES: &[(&str, &str)] = &[
+        ("fifo-send-recv", "svc_fifo_send_recv.mod"),
+        ("fifo-order", "svc_fifo_order.mod"),
+        ("fifo-two-channels", "svc_fifo_two_channels.mod"),
+        ("fifo-deep-isolation", "svc_fifo_deep_isolation.mod"),
+    ];
+    let text =
+        fs::read_to_string(root.join("sysroot/x86_64-unknown-linux-gnu/evidence/vectors.json"))
+            .map_err(|e| e.to_string())?;
+    let corpus = verifier::svcvec::parse_svcvec(text.as_bytes()).map_err(|e| format!("{e:?}"))?;
+    let mut problems = Vec::new();
+    for script in &corpus.scripts {
+        // Every committed script must be hostable (the shared-fn refusal is
+        // the loud boundary — no script silently lacks a hosted counterpart).
+        let generated = verifier::svcvec::render_hosted_source(script).ok_or_else(|| {
+            format!(
+                "script '{}' has no hosted source (refused by render_hosted_source)",
+                script.id
+            )
+        })?;
+        let fixture = FIXTURES
+            .iter()
+            .find(|(id, _)| *id == script.id)
+            .map(|(_, f)| root.join(format!("crates/execution-tests/fixtures/{f}")))
+            .ok_or_else(|| format!("script '{}' has no committed fixture mapping", script.id))?;
+        let committed = fs::read_to_string(&fixture).map_err(|e| e.to_string())?;
+        if committed != generated {
+            problems.push(format!(
+                "script '{}': committed fixture '{}' ≠ render_hosted_source output",
+                script.id,
+                fixture.display()
+            ));
+        }
+    }
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(problems.join("\n"))
+    }
 }
 
 #[test]
@@ -488,9 +477,13 @@ fn service_relativism_and_template_harvest() {
         "the stale record must be counted"
     );
 
-    // 5. Service conformance consensus (P15.2): the Rust mirror and the
-    // port's `--level services` replay replay the committed svcvec corpus
-    // with ZERO divergence (FIFO/atomicity asserted on two surfaces).
+    // 5. Service conformance consensus (P15.2): the Rust codec mirror and the
+    // port's `--level services` replay the committed svcvec corpus with ZERO
+    // divergence (FIFO/atomicity asserted on two surfaces), the codec's
+    // schema check fails closed on a renamed schema, and every corpus script
+    // lowers EXACTLY to its committed hosted fixture (the wire-form the
+    // execution-test hosted leg compiles + runs — direct script⇄runtime
+    // differentials, not transitive agreement).
     let rust_div = rust_svc_corpus(&root);
     assert!(
         rust_div.is_empty(),
@@ -502,4 +495,19 @@ fn service_relativism_and_template_harvest() {
         lean_result.contains("mismatches=0"),
         "Lean services conformance must be zero-divergence: {lean_result}"
     );
+    // A renamed schema is rejected (the codec checks it — the ad-hoc parser
+    // the old mirror used could not).
+    let svc_text =
+        fs::read_to_string(root.join("sysroot/x86_64-unknown-linux-gnu/evidence/vectors.json"))
+            .unwrap();
+    let renamed = svc_text.replace("tyu.svcvec/1", "tyu.svcvec/9");
+    assert_eq!(
+        verifier::svcvec::parse_svcvec(renamed.as_bytes()),
+        Err(verifier::svcvec::SvCodecError::SchemaVersion {
+            found: "tyu.svcvec/9".to_string()
+        }),
+        "a renamed svcvec schema must fail closed"
+    );
+    hosted_fixture_pin(&root)
+        .unwrap_or_else(|e| panic!("hosted-source generator ↔ committed fixture pin: {e}"));
 }
