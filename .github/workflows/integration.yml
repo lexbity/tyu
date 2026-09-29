@@ -1,0 +1,240 @@
+# Integration — heavy corpus tests (not per-commit).
+#
+# Runs the full tooling-test and loader-test suites, the diagnostic/
+# effect/encryption corpus, and cross-architecture module loading tests.
+# Triggered on push to main or manually.
+#
+# Every job exports TYU_BIN_DIR so all e2e suites consume the same
+# release binary that CI built — never a stale debug binary.
+
+name: Integration
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CI: "1"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Tooling tests — langc phases, negative corpus, equivalence, loader
+  # ---------------------------------------------------------------------------
+  tooling:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            fasm \
+            qemu-system-x86_64 \
+            gcc-arm-none-eabi \
+            qemu-system-arm \
+            gcc-riscv64-unknown-elf \
+            qemu-system-riscv32 \
+            ld
+      - name: Build (release)
+        run: cargo build --release -p langc -p tyu -p lmod-pack -p lmod-encrypt -p lmod-sign
+      - name: Tooling tests (all)
+        run: cargo test --release -p tooling-tests
+        env:
+          TYU_BIN_DIR: ${{ github.workspace }}/target/release
+
+  # ---------------------------------------------------------------------------
+  # Loader tests — dynamic loading, encryption, signing, ARM/RISC-V load
+  # ---------------------------------------------------------------------------
+  loader:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            gcc-arm-none-eabi \
+            qemu-system-arm \
+            gcc-riscv64-unknown-elf \
+            qemu-system-riscv32
+      - name: Build (release)
+        run: cargo build --release -p langc -p tyu -p lmod-pack -p lmod-encrypt -p lmod-sign
+      - name: Loader tests (all)
+        run: cargo test --release -p tooling-tests
+        env:
+          TYU_BIN_DIR: ${{ github.workspace }}/target/release
+
+  # ---------------------------------------------------------------------------
+  # Diagnostic & effect corpus — asserts correct trap codes and slot values
+  # ---------------------------------------------------------------------------
+  corpus:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            fasm \
+            qemu-system-x86_64 \
+            ld
+      - name: Build (release)
+        run: cargo build --release -p langc -p tyu
+      - name: Diagnostic & effect corpus
+        run: cargo test --release -p tooling-tests
+        env:
+          TYU_BIN_DIR: ${{ github.workspace }}/target/release
+      # phase14_acquisition and feature_gate are subsumed by the full
+      # tooling-tests run above.
+
+  # ---------------------------------------------------------------------------
+  # Port gate — the Lean verification port (PLAN-VERIFY-3 P3.2 … P14)
+  # ---------------------------------------------------------------------------
+  # The Lean 4 port (conformance corpus, axiom audit over the registry
+  # theorems, stackmeta/fragment/bundle/refinement/rederive gates) and the
+  # re-derivation differential (≥10^5 generated programs, port vs in-tree
+  # engine byte-agreement). These are the scripts FR-13's "per CI run"
+  # refers to — wired HERE (heavy: installs the pinned Lean toolchain).
+  port:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq fasm qemu-system-x86_64 ld
+      - name: Install the pinned Lean toolchain (elan)
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o /tmp/elan-init.sh
+          sh /tmp/elan-init.sh -y --default-toolchain none >/dev/null
+          ~/.elan/bin/elan toolchain install "$(cat verification/ports/lean/lean-toolchain)" >/dev/null
+      - name: Port gate (conformance + axiom audit + P14 re-derivation)
+        run: PATH="$HOME/.elan/bin:$PATH" bash ci/port.sh
+      - name: Re-derivation differential (≥10^5 programs, exact agreement)
+        run: PATH="$HOME/.elan/bin:$PATH" bash ci/differential.sh
+      - name: P15 service-relativism gate (FORCED — a Lean-less skip is a failure here)
+        run: |
+          cargo build -q -p langc -p tyu
+          TYU_SERVICE_E2E=1 cargo test -p tooling-tests --test service_relativism
+      - name: P15 hosted service-conformance leg (executes the svcvec wire fixtures)
+        run: cargo test -p execution-tests --test hosted
+
+  # ---------------------------------------------------------------------------
+  # RSP integration — ARM and RISC-V gdbstub register/memory parity tests
+  # ---------------------------------------------------------------------------
+  rsp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            qemu-system-arm \
+            gcc-arm-none-eabi \
+            qemu-system-riscv32 \
+            gcc-riscv64-unknown-elf
+      - name: Build (release)
+        run: cargo build --release -p rsp-client
+      - name: ARM RSP read register and memory
+        run: cargo test --release -p rsp-client -- arm_qemu_read_register_and_memory
+      - name: RISC-V RSP read register and memory
+        run: cargo test --release -p rsp-client -- riscv_qemu_read_register_and_memory
+
+  # ---------------------------------------------------------------------------
+  # Concurrency e2e — ARM and RISC-V task spawn under QEMU
+  # ---------------------------------------------------------------------------
+  concurrency:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            qemu-system-arm \
+            gcc-arm-none-eabi \
+            qemu-system-riscv32 \
+            gcc-riscv64-unknown-elf \
+            fasm \
+            qemu-system-x86_64 \
+            ld
+      - name: Build (release)
+        run: cargo build --release -p langc -p tyu
+      - name: ARM concurrency test
+        run: cargo test --release -p execution-tests --test arm -- trap_emits_framed_d_record
+      - name: RISC-V concurrency test
+        run: cargo test --release -p execution-tests --test riscv -- trap_emits_framed_d_record
+      - name: x86_64 concurrency gate test (subsumed by tooling-tests above)
+        run: cargo test --release -p tooling-tests --test feature_gate
+        env:
+          TYU_BIN_DIR: ${{ github.workspace }}/target/release
+
+  # ---------------------------------------------------------------------------
+  # E2E — end-to-end module packaging, signing, encryption, deployment
+  # ---------------------------------------------------------------------------
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            fasm \
+            qemu-system-x86_64 \
+            gcc-arm-none-eabi \
+            qemu-system-arm \
+            gcc-riscv64-unknown-elf \
+            qemu-system-riscv32 \
+            ld
+      - name: Build (release)
+        run: cargo build --release -p langc -p tyu -p lmod-pack -p lmod-encrypt -p lmod-sign
+      - name: E2E tests (all)
+        run: cargo test --release -p tyu
+        env:
+          TYU_BIN_DIR: ${{ github.workspace }}/target/release
+      - name: E2E load tests (phase 8)
+        run: cargo test --release -p tooling-tests --test phase8_end_to_end_load
+        env:
+          TYU_BIN_DIR: ${{ github.workspace }}/target/release
+
+  # ---------------------------------------------------------------------------
+  # Acceptance — the PLAN-VERIFY-3 §11 matrix (P16.3): every criterion maps to
+  # a named gate; this job runs the always-run legs and reports the port-tier
+  # legs as skips (the `port` job above owns those).
+  # ---------------------------------------------------------------------------
+  acceptance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            fasm \
+            qemu-system-x86_64 \
+            ld
+      - name: Build (debug — the acceptance e2e gates resolve the in-tree bins)
+        run: cargo build -p langc -p tyu
+      - name: Acceptance matrix (P16.3, §11.1–§11.10)
+        run: bash ci/acceptance.sh
+        env:
+          TYU_BIN_DIR: ${{ github.workspace }}/target/debug
+
+  # ---------------------------------------------------------------------------
+  # Fuzz PR-smoke — the three decode targets with their tracked seeds (P16.3,
+  # §11 criterion 8). The 24h nightly is the extend-this-job out-of-band run.
+  # ---------------------------------------------------------------------------
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install nightly + cargo-fuzz
+        run: |
+          rustup toolchain install nightly --profile minimal
+          cargo +nightly install cargo-fuzz --locked
+      - name: Fuzz decode targets (seeded smoke)
+        run: bash ci/fuzz.sh --seconds 20
