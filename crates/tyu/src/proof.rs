@@ -1480,6 +1480,7 @@ fn package_fingerprint(
 const fn vendored_port_files() -> &'static [&'static str] {
     &[
         "Tyu.lean",
+        "Tyu/Abs.lean",
         "Tyu/IR/Op.lean",
         "Tyu/IR/Semantics.lean",
         "Tyu/IR/Target.lean",

@@ -1,6 +1,7 @@
 import Tyu.Step
 import Tyu.Src
 import Tyu.Bundles
+import Tyu.Abs
 
 /-! T-C: the stack algebra (PLAN-VERIFY-3 P4.2) — the first registry
 theorem, proved against the concrete step semantics of `Tyu.Step` and over
@@ -1216,9 +1217,9 @@ theorem aperture_width_bound {w : Nat} (hw : 0 < w) (hw64 : w < 64) :
     by_cases h : w = 0
     · exact False.elim (hz h)
     · simp [h]
-  have hd : Tyu.Conformance.wordDomain w =
+  have hd : Tyu.Abs.wordDomain w =
       some (-((2 : Int) ^ (w - 1)), ((2 : Int) ^ (w - 1)) - 1) := by
-    simp [Tyu.Conformance.wordDomain, hb, hw64]
+    simp [Tyu.Abs.wordDomain, hb, hw64]
   simp [BundleMem.apertureRead, hd]
 
 /-- T-D (aperture width bound, full domain): a ≥ 64-bit register read is
@@ -1231,8 +1232,8 @@ theorem aperture_width_bound_full {w : Nat} (hw64 : 64 ≤ w) :
     by_cases h : w = 0
     · exact False.elim (hz h)
     · simp [h]
-  have hd : Tyu.Conformance.wordDomain w = none := by
-    simp [Tyu.Conformance.wordDomain, hb, hw64]
+  have hd : Tyu.Abs.wordDomain w = none := by
+    simp [Tyu.Abs.wordDomain, hb, hw64]
   simp [BundleMem.apertureRead, hd]
 
 /-! The per-bundle instances (their windows must equal the model artifacts'
@@ -1290,7 +1291,7 @@ the §Q13 width-bounded default (the generic law over any datasheet mask). -/
 theorem uartfr_band_domain (mask : Int) (h0 : 0 ≤ mask) (hm : mask ≤ 2147483647) :
     BundleMem.apertureReadRefined mask 32 = IntervalVal.range 0 mask := by
   have hd : Tyu.Conformance.wordDomain 32 = some (-2147483648, 2147483647) := by
-    unfold Tyu.Conformance.wordDomain
+    unfold Tyu.Conformance.wordDomain Tyu.Abs.wordDomain
     decide
   rw [BundleMem.apertureReadRefined, hd]
   have hmax : max (-2147483648) 0 = 0 := by omega
@@ -1321,7 +1322,7 @@ theorem band_within_width_domain (w : Nat) (mask : Int) (hw : 0 < w) (hw64 : w <
     · exact False.elim (hz h)
     · simp [h]
   have hd : Tyu.Conformance.wordDomain w = some (-((2 : Int) ^ (w - 1)), ((2 : Int) ^ (w - 1)) - 1) := by
-    simp [Tyu.Conformance.wordDomain, hb, hw64]
+    simp [Tyu.Abs.wordDomain, hb, hw64]
   unfold BundleMem.apertureReadRefined
   rw [hd]
 
@@ -1442,5 +1443,685 @@ theorem bundle_load_agrees (lo hi : Int) (cells : List (Int × Tyu.Conformance.I
   Tyu.Bundles.load_agrees lo hi cells a w
 
 end TD
+
+/-! ## T-A/T-B: abstraction soundness + discharge soundness (PLAN-VERIFY-3 P14)
+
+The registry statements that justify the **re-derivation** method
+(`method: rederive, trust: proof`, §Q12/§Q16; the `rederive` exe re-runs the
+abstract interpreter `Tyu.Abs` — this section proves that interpreter
+*means* something):
+
+  - **T-A (abstraction soundness)**: every abstract transfer over the
+    interval domain over-approximates the corresponding concrete value
+    transfer — `Contains iv x` reads "the abstract interval `iv` represents
+    the concrete value `x`", and each `*_sound` theorem shows that the
+    abstract result interval of an op contains every concrete result of its
+    concretizations. The i64-with-wrap→⊤ rule is the soundness of `top`:
+    an overflowed bound computation is `⊤`, which represents everything.
+  - **T-B (discharge soundness, the T-A corollary)**: `evalInRange` returning
+    `defTrue` exactly on `iv ⊆ [lo, hi]`, so any concretization `x ∈ iv`
+    satisfies `lo ≤ x ∧ x ≤ hi` — the discharge bridge.
+
+The four named **wrap-boundary examples** (P14.1, machine-checked): the
+`i64::MAX`/`i64::MIN` add/sub/mul overflow cases plus the word-domain
+`±1` boundary facts per target width (the §Q13 width-relative register
+domain) — all `by decide`. -/
+namespace TA
+
+open Tyu.Abs
+
+/-- A concrete value is "represented" by its interval: `lo ≤ x ≤ hi` for a
+range; `top` represents everything; `bottom` (unreachable) represents
+nothing. -/
+def Contains (iv : Interval) (x : Int) : Prop :=
+  match iv with
+  | .bottom => False
+  | .top => True
+  | .range lo hi => lo ≤ x ∧ x ≤ hi
+
+theorem range_contains {lo hi x : Int} (hlo : lo ≤ x) (hhi : x ≤ hi) :
+    Contains (.range lo hi) x := by
+  simp [Contains]
+  exact And.intro hlo hhi
+
+theorem top_contains (x : Int) : Contains .top x := by simp [Contains]
+
+theorem bottom_contains_none (x : Int) : ¬ Contains .bottom x := by simp [Contains]
+
+/-- A constant's singleton is its own concretization. -/
+theorem const_sound (v : Int) : Contains (.range v v) v := by
+  exact range_contains (by omega) (by omega)
+
+/-- A concrete 0/1 result is within the abstract bool interval of `top`. -/
+theorem contains_0_1_of_bool (b : Bool) : Contains (.range 0 1) (if b then 1 else 0) := by
+  by_cases hb : b
+  · simp [Contains, hb]
+  · simp [Contains, hb]
+
+/-- A decide-coerced proposition result is within the abstract bool interval
+of `top` (the `if p then 1 else 0` shape the `cmp_*` rows produce). -/
+theorem contains_0_1_of_decide (p : Prop) [Decidable p] :
+    Contains (.range 0 1) (if p then 1 else 0) := by
+  by_cases hp : p
+  · simp [Contains, hp]
+  · simp [Contains, hp]
+
+/-- (T-A, bool extraction) `decide (a = k) = true` pins `a = k` — the bridge
+between the definitional `==` conditions of `triFromBoolIv`/`triCmp` and
+the arithmetic facts. -/
+theorem beq_eq_true_of {a b : Int} (h : (a == b) = true) : a = b := by
+  exact decide_eq_true_eq.mp (by simpa using h)
+
+/-- (T-A, bool extraction) `(a && b) = true` splits. -/
+theorem and_true_pair {a b : Bool} (h : (a && b) = true) : a = true ∧ b = true :=
+  (Eq.mp (Bool.and_eq_true a b)) h
+
+/-- (T-A, bool extraction) `(a || b) = true` splits. -/
+theorem or_true_pair {a b : Bool} (h : (a || b) = true) : a = true ∨ b = true :=
+  (Eq.mp (Bool.or_eq_true a b)) h
+
+/-- The top absorption rules of the interval transfer (a `⊤` operand absorbs
+every op to `⊤` — the soundness side of the wrap→⊤ rule). -/
+theorem join_top_left (b : Interval) : Interval.join Interval.top b = Interval.top := by
+  cases b <;> rfl
+theorem join_top_right (a : Interval) : Interval.join a Interval.top = Interval.top := by
+  cases a <;> rfl
+
+/-- T-A (add): the interval add contains the concrete sum of any
+concretizations. An overflowed bound computation (`Interval.inI64Domain`)
+fails is `⊤`, which contains everything — the wrap→⊤ rule, proven sound. -/
+theorem add_sound {a b : Interval} {x y : Int} (hx : Contains a x) (hy : Contains b y) :
+    Contains (a.add b) (x + y) := by
+  unfold Contains at hx hy
+  cases a with
+  | bottom => exact False.elim hx
+  | top =>
+      cases b with
+      | bottom => exact False.elim hy
+      | top =>
+          have ht : Interval.add Interval.top Interval.top = Interval.top := by rfl
+          simp [ht, Contains]
+      | range c d =>
+          have ht : Interval.add Interval.top (Interval.range c d) = Interval.top := by rfl
+          simp [ht, Contains]
+  | range a1 a2 =>
+      cases b with
+      | bottom => exact False.elim hy
+      | top =>
+          have ht : Interval.add (Interval.range a1 a2) Interval.top = Interval.top := by rfl
+          simp [ht, Contains]
+      | range b1 b2 =>
+          cases hx with | intro hx1 hx2 =>
+          cases hy with | intro hy1 hy2 =>
+          by_cases hd : Interval.inI64Domain (a1 + b1) && Interval.inI64Domain (a2 + b2)
+          · have h1 : a1 + b1 ≤ x + y := by omega
+            have h2 : x + y ≤ a2 + b2 := by omega
+            simp [Interval.add, hd, Contains, h1, h2]
+          · simp [Interval.add, hd, Contains]
+
+/-- T-A (sub). -/
+theorem sub_sound {a b : Interval} {x y : Int} (hx : Contains a x) (hy : Contains b y) :
+    Contains (a.sub b) (x - y) := by
+  unfold Contains at hx hy
+  cases a with
+  | bottom => exact False.elim hx
+  | top =>
+      cases b with
+      | bottom => exact False.elim hy
+      | top =>
+          have ht : Interval.sub Interval.top Interval.top = Interval.top := by rfl
+          simp [ht, Contains]
+      | range c d =>
+          have ht : Interval.sub Interval.top (Interval.range c d) = Interval.top := by rfl
+          simp [ht, Contains]
+  | range a1 a2 =>
+      cases b with
+      | bottom => exact False.elim hy
+      | top =>
+          have ht : Interval.sub (Interval.range a1 a2) Interval.top = Interval.top := by rfl
+          simp [ht, Contains]
+      | range b1 b2 =>
+          cases hx with | intro hx1 hx2 =>
+          cases hy with | intro hy1 hy2 =>
+          by_cases hd : Interval.inI64Domain (a1 - b2) && Interval.inI64Domain (a2 - b1)
+          · have h1 : a1 - b2 ≤ x - y := by omega
+            have h2 : x - y ≤ a2 - b1 := by omega
+            simp [Interval.sub, hd, Contains, h1, h2]
+          · simp [Interval.sub, hd, Contains]
+
+/-- Helper: `x*c` over `x ∈ [a,b]` stays between the endpoint products
+(linear-in-`x` monotonicity, case-split on the sign of `c`). -/
+theorem linear_mul_bound {a b c x : Int} (hax : a ≤ x) (hxb : x ≤ b) :
+    min (a * c) (b * c) ≤ x * c ∧ x * c ≤ max (a * c) (b * c) := by
+  by_cases hc : 0 ≤ c
+  · have h1 : a * c ≤ x * c := Int.mul_le_mul_of_nonneg_right hax hc
+    have h2 : x * c ≤ b * c := Int.mul_le_mul_of_nonneg_right hxb hc
+    constructor
+    · by_cases hz : a * c ≤ b * c
+      · rw [Int.min_eq_left hz]
+        exact h1
+      · have hba : b * c ≤ a * c := by omega
+        rw [Int.min_eq_right hba]
+        exact Int.le_trans hba h1
+    · by_cases hz : a * c ≤ b * c
+      · rw [Int.max_eq_right hz]
+        exact h2
+      · have hba : b * c ≤ a * c := by omega
+        rw [Int.max_eq_left hba]
+        exact Int.le_trans h2 hba
+  · have hc' : c ≤ 0 := by omega
+    have h1 : x * c ≤ a * c := Int.mul_le_mul_of_nonpos_right hax hc'
+    have h2 : b * c ≤ x * c := Int.mul_le_mul_of_nonpos_right hxb hc'
+    constructor
+    · exact Int.le_trans (Int.min_le_right (a * c) (b * c)) h2
+    · exact Int.le_trans h1 (Int.le_max_left (a * c) (b * c))
+
+/-- Helper: `x*y` over `y ∈ [c,d]` stays between the endpoint products
+(linear-in-`y` monotonicity, case-split on the sign of `x`). -/
+theorem linear_mul_bound2 {c d x y : Int} (hcy : c ≤ y) (hyd : y ≤ d) :
+    min (x * c) (x * d) ≤ x * y ∧ x * y ≤ max (x * c) (x * d) := by
+  by_cases hx : 0 ≤ x
+  · have h1 : x * c ≤ x * y := Int.mul_le_mul_of_nonneg_left hcy hx
+    have h2 : x * y ≤ x * d := Int.mul_le_mul_of_nonneg_left hyd hx
+    constructor
+    · by_cases hz : x * c ≤ x * d
+      · rw [Int.min_eq_left hz]
+        exact h1
+      · have hba : x * d ≤ x * c := by omega
+        rw [Int.min_eq_right hba]
+        exact Int.le_trans hba h1
+    · by_cases hz : x * c ≤ x * d
+      · rw [Int.max_eq_right hz]
+        exact h2
+      · have hba : x * d ≤ x * c := by omega
+        rw [Int.max_eq_left hba]
+        exact Int.le_trans h2 hba
+  · have hx' : x ≤ 0 := by omega
+    have h1 : x * y ≤ x * c := Int.mul_le_mul_of_nonpos_left hx' hcy
+    have h2 : x * d ≤ x * y := Int.mul_le_mul_of_nonpos_left hx' hyd
+    constructor
+    · exact Int.le_trans (Int.min_le_right (x * c) (x * d)) h2
+    · exact Int.le_trans h1 (Int.le_max_left (x * c) (x * d))
+
+/-- T-A (mul): the four-corner tableau bound over-approximates the concrete
+product. `⊤` (an overflowing corner) contains everything. -/
+theorem mul_sound {a b : Interval} {x y : Int} (hx : Contains a x) (hy : Contains b y) :
+    Contains (a.mul b) (x * y) := by
+  unfold Contains at hx hy
+  cases a with
+  | bottom => exact False.elim hx
+  | top =>
+      cases b with
+      | bottom => exact False.elim hy
+      | top =>
+          have ht : Interval.mul Interval.top Interval.top = Interval.top := by rfl
+          simp [ht, Contains]
+      | range c d =>
+          have ht : Interval.mul Interval.top (Interval.range c d) = Interval.top := by rfl
+          simp [ht, Contains]
+  | range a1 a2 =>
+      cases b with
+      | bottom => exact False.elim hy
+      | top =>
+          have ht : Interval.mul (Interval.range a1 a2) Interval.top = Interval.top := by rfl
+          simp [ht, Contains]
+      | range b1 b2 =>
+          cases hx with | intro hx1 hx2 =>
+          cases hy with | intro hy1 hy2 =>
+          by_cases hd : Interval.inI64Domain (a1 * b1) && Interval.inI64Domain (a1 * b2)
+                        && Interval.inI64Domain (a2 * b1) && Interval.inI64Domain (a2 * b2)
+          · have hb1 := linear_mul_bound hx1 hx2 (c := b1)
+            have hb2 := linear_mul_bound hx1 hx2 (c := b2)
+            have hxlin := linear_mul_bound2 hy1 hy2 (x := x)
+            have hLo : min (min (a1 * b1) (a2 * b1)) (min (a1 * b2) (a2 * b2)) ≤ x * y := by
+              have hl12 : min (min (a1 * b1) (a2 * b1)) (min (a1 * b2) (a2 * b2)) ≤
+                          min (x * b1) (x * b2) := by omega
+              exact Int.le_trans hl12 hxlin.1
+            have hUp : x * y ≤ max (max (a1 * b1) (a2 * b1)) (max (a1 * b2) (a2 * b2)) := by
+              have hu12 : max (x * b1) (x * b2) ≤
+                          max (max (a1 * b1) (a2 * b1)) (max (a1 * b2) (a2 * b2)) := by omega
+              exact Int.le_trans hxlin.2 hu12
+            have hLo' : min (min (a1 * b1) (a1 * b2)) (min (a2 * b1) (a2 * b2)) ≤ x * y := by
+              omega
+            have hUp' : x * y ≤ max (max (a1 * b1) (a1 * b2)) (max (a2 * b1) (a2 * b2)) := by
+              omega
+            simpa [Interval.mul, hd, Contains] using (range_contains hLo' hUp')
+          · simp [Interval.mul, hd, Contains]
+
+/-- T-A (narrowing cast): the intersection with the target range still
+contains the in-range concretizations (an out-of-range concretization traps
+on the concrete cast — the run shrinks to `none` and T-B's premise excludes
+it). -/
+theorem cast_narrow_sound {iv : Interval} {x lo hi : Int}
+    (hx : Contains iv x) (hlo : lo ≤ x) (hhi : x ≤ hi) :
+    Contains (iv.castNarrow lo hi) x := by
+  unfold Contains at hx
+  cases iv with
+  | bottom => exact False.elim hx
+  | top => simp [Interval.castNarrow, Contains, hlo, hhi]
+  | range a b =>
+      cases hx with | intro hxa hxb =>
+      have h1 : max a lo ≤ x := by omega
+      have h2 : x ≤ min b hi := by omega
+      by_cases hs : max a lo ≤ min b hi
+      · simp [Interval.castNarrow, hs, Contains, h1, h2]
+      · exfalso
+        exact hs (Int.le_trans h1 h2)
+
+/-- T-A (hull join): a concretization of either join operand is a
+concretization of the hull. -/
+theorem join_sound {a b : Interval} {x : Int} (hx : Contains a x ∨ Contains b x) :
+    Contains (a.join b) x := by
+  cases hx with
+  | inl h => cases a with
+      | bottom => exact False.elim h
+      | top =>
+          have htop : Interval.join Interval.top b = Interval.top := join_top_left b
+          simp [htop, Contains]
+      | range a1 a2 =>
+          cases b <;> simp [Interval.join, Contains] at h ⊢ <;> omega
+  | inr h => cases b with
+      | bottom => exact False.elim h
+      | top =>
+          have htop : Interval.join a Interval.top = Interval.top := join_top_right a
+          simp [htop, Contains]
+      | range b1 b2 =>
+          cases a <;> simp [Interval.join, Contains] at h ⊢ <;> omega
+
+/-- T-A (widening `∇`): widening only grows — `old ∇ new` still represents
+every concretization of `old` (the soundness that makes loop-carried `⊤`
+safe: a discharge over the widened value is a discharge over the
+pre-widening value). -/
+theorem widen_sound {old new : Interval} {x : Int} (hx : Contains old x) :
+    Contains (old.widenOld new) x := by
+  unfold Interval.widenOld
+  by_cases hs : new.subsetOf old
+  · simpa [hs] using hx
+  · simp [hs, top_contains]
+
+/-- T-A (comparison): the abstract comparison's bool interval contains the
+concrete comparison result of any concretization (defTrue/defFalse/`⊤` are
+each sound for their defining order relationship). -/
+theorem tri_cmp_sound (kind : String) {a b : Interval} {x y : Int}
+    (hx : Contains a x) (hy : Contains b y) :
+    Contains (boolIv (triCmp a b kind)) (if concreteCmp kind x y then 1 else 0) := by
+  unfold Contains at hx hy
+  cases a with
+  | bottom => exact False.elim hx
+  | top =>
+      cases b with
+      | bottom => exact False.elim hy
+      | _ => simp [triCmp, boolIv, Contains]; exact contains_0_1_of_bool (concreteCmp kind x y)
+  | range a1 a2 =>
+      cases b with
+      | bottom => exact False.elim hy
+      | top => simp [triCmp, boolIv, Contains]; exact contains_0_1_of_bool (concreteCmp kind x y)
+      | range b1 b2 =>
+          cases hx with | intro hx1 hx2 =>
+          cases hy with | intro hy1 hy2 =>
+          by_cases h1 : kind = "cmp_lt"
+          · rw [h1]
+            by_cases hlt : a2 < b1
+            · have hxy : x < y := by omega
+              simp [triCmp, hlt, concreteCmp, Contains, boolIv, hxy]
+            · by_cases hge : a1 ≥ b2
+              · have hxy : ¬ x < y := by omega
+                simp [triCmp, hlt, hge, concreteCmp, Contains, boolIv, hxy]
+              · simp [triCmp, hlt, hge, concreteCmp, boolIv]
+                exact contains_0_1_of_decide (x < y)
+          · by_cases h2 : kind = "cmp_le"
+            · rw [h2]
+              by_cases hle : a2 ≤ b1
+              · have hxy : x ≤ y := by omega
+                simp [triCmp, hle, concreteCmp, Contains, boolIv, hxy]
+              · by_cases hgt : a1 > b2
+                · have hxy : ¬ x ≤ y := by omega
+                  simp [triCmp, hle, hgt, concreteCmp, Contains, boolIv, hxy]
+                · simp [triCmp, hle, hgt, concreteCmp, boolIv]
+                  exact contains_0_1_of_decide (x ≤ y)
+            · by_cases h3 : kind = "cmp_gt"
+              · rw [h3]
+                by_cases hgt : a1 > b2
+                · have hxy : x > y := by omega
+                  simp [triCmp, hgt, concreteCmp, Contains, boolIv, hxy]
+                · by_cases hle : a2 ≤ b1
+                  · have hxy : ¬ x > y := by omega
+                    simp [triCmp, hgt, hle, concreteCmp, Contains, boolIv, hxy]
+                  · simp [triCmp, hgt, hle, concreteCmp, boolIv]
+                    exact contains_0_1_of_decide (x > y)
+              · by_cases h4 : kind = "cmp_ge"
+                · rw [h4]
+                  by_cases hge : a1 ≥ b2
+                  · have hxy : x ≥ y := by omega
+                    simp [triCmp, hge, concreteCmp, Contains, boolIv, hxy]
+                  · by_cases hlt : a2 < b1
+                    · have hxy : ¬ x ≥ y := by omega
+                      simp [triCmp, hge, hlt, concreteCmp, Contains, boolIv, hxy]
+                    · simp [triCmp, hge, hlt, concreteCmp, boolIv]
+                      exact contains_0_1_of_decide (x ≥ y)
+                · by_cases h5 : kind = "cmp_eq"
+                  · rw [h5]
+                    by_cases hpt : a1 == a2 && b1 == b2 && a1 == b1
+                    · have ha12 : a1 = a2 ∧ b1 = b2 ∧ a1 = b1 := by
+                        have hand1 : ((a1 == a2 && b1 == b2) = true) ∧ (a1 == b1) = true :=
+                          (Eq.mp (Bool.and_eq_true (a1 == a2 && b1 == b2) (a1 == b1))) hpt
+                        have hand2 : (a1 == a2) = true ∧ (b1 == b2) = true :=
+                          (Eq.mp (Bool.and_eq_true (a1 == a2) (b1 == b2))) hand1.1
+                        exact ⟨beq_eq_true_of hand2.1, beq_eq_true_of hand2.2, beq_eq_true_of hand1.2⟩
+                      have hxyeq : x = y := by omega
+                      simp [triCmp, hpt, concreteCmp, Contains, boolIv, hxyeq]
+                    · by_cases hdis : a2 < b1 || a1 > b2
+                      · have hnxy : ¬ x = y := by
+                          intro hxy
+                          have hd1 : (decide (a2 < b1)) = true ∨ (decide (a1 > b2)) = true :=
+                            or_true_pair hdis
+                          rcases hd1 with hlt | hgt
+                          · have hlt' : a2 < b1 := decide_eq_true_eq.mp hlt
+                            omega
+                          · have hgt' : a1 > b2 := decide_eq_true_eq.mp hgt
+                            omega
+                        simp [triCmp, hpt, hdis, concreteCmp, Contains, boolIv, hnxy]
+                      · simp [triCmp, hpt, hdis, concreteCmp, boolIv]
+                        by_cases hxy : x = y <;> simp [Contains, hxy]
+                  · by_cases h6 : kind = "cmp_ne"
+                    · rw [h6]
+                      by_cases hpt : a1 == a2 && b1 == b2 && a1 == b1
+                      · have ha12 : a1 = a2 ∧ b1 = b2 ∧ a1 = b1 := by
+                          have hand1 : ((a1 == a2 && b1 == b2) = true) ∧ (a1 == b1) = true :=
+                            (Eq.mp (Bool.and_eq_true (a1 == a2 && b1 == b2) (a1 == b1))) hpt
+                          have hand2 : (a1 == a2) = true ∧ (b1 == b2) = true :=
+                            (Eq.mp (Bool.and_eq_true (a1 == a2) (b1 == b2))) hand1.1
+                          exact ⟨beq_eq_true_of hand2.1, beq_eq_true_of hand2.2, beq_eq_true_of hand1.2⟩
+                        have hxyeq : x = y := by omega
+                        simp [triCmp, hpt, concreteCmp, Contains, boolIv, hxyeq]
+                      · by_cases hdis : a2 < b1 || a1 > b2
+                        · have hnxy : ¬ x = y := by
+                            intro hxy
+                            have hd1 : (decide (a2 < b1)) = true ∨ (decide (a1 > b2)) = true :=
+                              or_true_pair hdis
+                            rcases hd1 with hlt | hgt
+                            · have hlt' : a2 < b1 := decide_eq_true_eq.mp hlt
+                              omega
+                            · have hgt' : a1 > b2 := decide_eq_true_eq.mp hgt
+                              omega
+                          simp [triCmp, hpt, hdis, concreteCmp, Contains, boolIv, hnxy]
+                        · simp [triCmp, hpt, hdis, concreteCmp, boolIv]
+                          by_cases hxy : x = y <;> simp [Contains, hxy]
+                    · -- any other kind: the abstract comparison is the `⊤` row
+                      -- and the concrete result is a 0/1 — `[0,1]` contains it.
+                      have htri : triCmp (Interval.range a1 a2) (Interval.range b1 b2) kind = Tri.top := by
+                        unfold triCmp
+                        simp [h1, h2, h3, h4, h5, h6]
+                      by_cases hb : concreteCmp kind x y <;> simp [hb, htri, boolIv, Contains]
+
+/-- wrap-boundary 1: `i64::MAX - 1` + 1 overflows i64 → `⊤`. -/
+example : Interval.add (Interval.range (Interval.i64Max - 1) Interval.i64Max)
+    (Interval.range 1 1) = Interval.top := by decide
+
+/-- wrap-boundary 2: `i64::MIN + 1` − 4 underflows i64 → `⊤`. -/
+example : Interval.sub (Interval.range (Interval.i64Min + 1) Interval.i64Min)
+    (Interval.range 2 4) = Interval.top := by decide
+
+/-- wrap-boundary 3: `i64::MAX - 1` × 2 overflows i64 → `⊤`. -/
+example : Interval.mul (Interval.range (Interval.i64Max - 1) Interval.i64Max)
+    (Interval.range 2 2) = Interval.top := by decide
+
+/-- wrap-boundary 4: `i64::MIN` × −1 overflows i64 → `⊤`. -/
+example : Interval.mul (Interval.range Interval.i64Min Interval.i64Min)
+    (Interval.range (-1) (-1)) = Interval.top := by decide
+
+/-- The 32-bit word domain (`word_domain 32 = ±2^31`, the §Q13 register
+domain), machine-checked. -/
+example : wordDomain 32 = some (-2147483648, 2147483647) := by decide
+
+/-- The 64-bit word domain is the full i64 domain. -/
+example : wordDomain 64 = none := by decide
+
+/-- The `+1` boundary of the 32-bit word domain is representable in i64
+(the abstract data domain is full-i64 on every target, §Q3). -/
+example : Interval.inI64Domain 2147483648 = true := by decide
+
+/-- The `−1` boundary below the 32-bit word domain is representable in i64. -/
+example : Interval.inI64Domain (-2147483649) = true := by decide
+
+/-- The `+1` above `2^31 − 1` wraps on a 32-bit register but NOT in the i64
+data domain — the interval engine answers the concrete `[2^31, 2^31]`, never
+a manufactured `⊤` (§Q3's implementation finding). -/
+example : Interval.add (Interval.range 2147483647 2147483647) (Interval.range 1 1)
+    = Interval.range 2147483648 2147483648 := by decide
+
+/-- The word-domain pair is width-relative: at 32 bits the read answers
+`[-2^31, 2^31-1]` (pinned by the `boundary/aperture-read-width-domain`
+vector; the port gate re-checks it byte-exactly). -/
+example : wordDomain 32 = some (-(2 ^ (32 - 1)), 2 ^ (32 - 1) - 1) := by decide
+
+/-- The `±1` word-domain pair at 64 bits sits inside the full i64 domain:
+both dedicated endpoints remain representable (the data domain never widens
+to `⊤` on a representable value). -/
+example : wordDomain 64 = none ∧ Interval.inI64Domain 9223372036854775807 = true
+    ∧ Interval.inI64Domain (-9223372036854775808) = true := by decide
+
+/-- The abstract bool of a bool-typed interval, with its 0/1
+concretization — the premise of the bool-op soundness theorems (the
+typechecker guarantees bool-typed operands at `&&`/`||`/`not` sites). -/
+def BoolConcr (iv : Interval) (x : Int) : Prop :=
+  Contains iv x ∧ (x = 0 ∨ x = 1)
+
+/-- A `defTrue` abstract bool interval pins its concretization to 1. -/
+theorem tri_def_true_pins_one {iv : Interval} {x : Int}
+    (ht : triFromBoolIv iv = Tri.defTrue) (hx : BoolConcr iv x) : x = 1 := by
+  have hv : Contains iv x := hx.1
+  unfold Contains at hv
+  cases iv with
+  | bottom | top => simp [triFromBoolIv] at ht
+  | range a b =>
+      cases hv with | intro hva hvb =>
+      by_cases h00 : a == 0 && b == 0
+      · simp [triFromBoolIv, h00] at ht
+      · by_cases h11 : a == 1 && b == 1
+        · have ha1 : a = 1 := beq_eq_true_of (and_true_pair h11).1
+          have hb1 : b = 1 := beq_eq_true_of (and_true_pair h11).2
+          omega
+        · simp [triFromBoolIv, h00, h11] at ht
+
+/-- A `defFalse` abstract bool interval pins its concretization to 0. -/
+theorem tri_def_false_pins_zero {iv : Interval} {x : Int}
+    (hf : triFromBoolIv iv = Tri.defFalse) (hx : BoolConcr iv x) : x = 0 := by
+  have hv : Contains iv x := hx.1
+  unfold Contains at hv
+  cases iv with
+  | bottom | top => simp [triFromBoolIv] at hf
+  | range a b =>
+      cases hv with | intro hva hvb =>
+      by_cases h00 : a == 0 && b == 0
+      · have ha0 : a = 0 := beq_eq_true_of (and_true_pair h00).1
+        have hb0 : b = 0 := beq_eq_true_of (and_true_pair h00).2
+        omega
+      · by_cases h11 : a == 1 && b == 1
+        · simp [triFromBoolIv, h00, h11] at hf
+        · simp [triFromBoolIv, h00, h11] at hf
+
+/-- The trichotomy of an abstract bool result (the complement of the two
+`defTrue`/`defFalse` negations). -/
+theorem tri_trichotomy (t : Tri) :
+    t = Tri.defTrue ∨ t = Tri.defFalse ∨ t = Tri.top := by
+  cases t <;> simp
+
+/-- T-A (triFromBoolIv): the abstract bool interval contains its 0/1
+concretizations (non-point ranges collapse to `⊤ = [0,1]`, which contains
+both; point ranges pin the value). -/
+theorem tri_from_bool_iv_sound {iv : Interval} {v : Int}
+    (hv : BoolConcr iv v) :
+    Contains (boolIv (triFromBoolIv iv)) v := by
+  have hv01 : v = 0 ∨ v = 1 := hv.2
+  have hvd : Contains iv v := hv.1
+  by_cases ht : triFromBoolIv iv = Tri.defTrue
+  · have hv1 : v = 1 := tri_def_true_pins_one ht hv
+    simp [ht, boolIv, Contains, hv1]
+  · by_cases hf : triFromBoolIv iv = Tri.defFalse
+    · have hv0 : v = 0 := tri_def_false_pins_zero hf hv
+      simp [hf, boolIv, Contains, hv0]
+    · have ht' : triFromBoolIv iv = Tri.top := by
+        rcases (tri_trichotomy (triFromBoolIv iv)) with hT | hF | hTop
+        · exact False.elim (ht hT)
+        · exact False.elim (hf hF)
+        · exact hTop
+      simp [ht', boolIv, Contains]
+      cases hv01 with
+      | inl hv0 => simp [hv0]
+      | inr hv1 => simp [hv1]
+
+/-- The abstract AND truth-table: `defTrue` iff both sides `defTrue`. -/
+theorem tri_and_defTrue {t1 t2 : Tri} :
+    triAnd t1 t2 = Tri.defTrue → t1 = Tri.defTrue ∧ t2 = Tri.defTrue := by
+  intro h
+  cases t1 <;> cases t2 <;> simp [triAnd] at h ⊢ <;> contradiction
+
+/-- The abstract AND truth-table: `defFalse` iff either side `defFalse`. -/
+theorem tri_and_defFalse {t1 t2 : Tri} :
+    triAnd t1 t2 = Tri.defFalse → t1 = Tri.defFalse ∨ t2 = Tri.defFalse := by
+  intro h
+  cases t1 <;> cases t2 <;> simp [triAnd] at h ⊢ <;> contradiction
+
+/-- The abstract OR truth-table: `defTrue` iff either side `defTrue`. -/
+theorem tri_or_defTrue {t1 t2 : Tri} :
+    triOr t1 t2 = Tri.defTrue → t1 = Tri.defTrue ∨ t2 = Tri.defTrue := by
+  intro h
+  cases t1 <;> cases t2 <;> simp [triOr] at h ⊢ <;> contradiction
+
+/-- The abstract OR truth-table: `defFalse` iff both sides `defFalse`. -/
+theorem tri_or_defFalse {t1 t2 : Tri} :
+    triOr t1 t2 = Tri.defFalse → t1 = Tri.defFalse ∧ t2 = Tri.defFalse := by
+  intro h
+  cases t1 <;> cases t2 <;> simp [triOr] at h ⊢ <;> contradiction
+
+/-- T-A (triAnd): the concrete `&&` result is within the abstract `triAnd`
+interval (non-bool concretizations collapse to `⊤ = [0,1]`, which contains
+every bool result). -/
+theorem tri_and_sound {ia ib : Interval} {x y : Int}
+    (hx : BoolConcr ia x) (hy : BoolConcr ib y) :
+    Contains (boolIv (triAnd (triFromBoolIv ia) (triFromBoolIv ib)))
+             (if x != 0 && y != 0 then 1 else 0) := by
+  by_cases ht : triAnd (triFromBoolIv ia) (triFromBoolIv ib) = Tri.defTrue
+  · have hx1 : x = 1 := tri_def_true_pins_one (tri_and_defTrue ht).1 hx
+    have hy1 : y = 1 := tri_def_true_pins_one (tri_and_defTrue ht).2 hy
+    simp [Contains, ht, boolIv, hx1, hy1]
+  · by_cases hf : triAnd (triFromBoolIv ia) (triFromBoolIv ib) = Tri.defFalse
+    · have hx0 : x = 0 ∨ y = 0 := by
+        rcases (tri_and_defFalse hf) with t1 | t2
+        · left; exact tri_def_false_pins_zero t1 hx
+        · right; exact tri_def_false_pins_zero t2 hy
+      simp [hf, boolIv, Contains]
+      by_cases hx0' : x = 0
+      · simp [hx0']
+      · have hy0' : y = 0 := by omega
+        simp [hy0']
+    · have ht' : triAnd (triFromBoolIv ia) (triFromBoolIv ib) = Tri.top := by
+        have htri := tri_trichotomy (triAnd (triFromBoolIv ia) (triFromBoolIv ib))
+        rcases htri with hT | hF | hTop
+        · exact False.elim (ht hT)
+        · exact False.elim (hf hF)
+        · exact hTop
+      simp [ht', boolIv, Contains]
+      by_cases hc : ¬x = 0 ∧ ¬y = 0 <;> simp [hc]
+
+/-- T-A (triOr): the concrete `||` result is within the abstract `triOr`
+interval. -/
+theorem tri_or_sound {ia ib : Interval} {x y : Int}
+    (hx : BoolConcr ia x) (hy : BoolConcr ib y) :
+    Contains (boolIv (triOr (triFromBoolIv ia) (triFromBoolIv ib)))
+             (if x != 0 || y != 0 then 1 else 0) := by
+  by_cases ht : triOr (triFromBoolIv ia) (triFromBoolIv ib) = Tri.defTrue
+  · have hx1 : x = 1 ∨ y = 1 := by
+      rcases (tri_or_defTrue ht) with t1 | t2
+      · left; exact tri_def_true_pins_one t1 hx
+      · right; exact tri_def_true_pins_one t2 hy
+    simp [Contains, ht, boolIv]
+    by_cases hx1' : x = 1
+    · simp [hx1']
+    · have hy1' : y = 1 := by omega
+      simp [hy1']
+  · by_cases hf : triOr (triFromBoolIv ia) (triFromBoolIv ib) = Tri.defFalse
+    · have hx0 : x = 0 ∧ y = 0 := by
+        rcases (tri_or_defFalse hf) with ⟨t1, t2⟩
+        exact ⟨tri_def_false_pins_zero t1 hx, tri_def_false_pins_zero t2 hy⟩
+      simp [hf, boolIv, Contains, hx0.1, hx0.2]
+    · have ht' : triOr (triFromBoolIv ia) (triFromBoolIv ib) = Tri.top := by
+        have htri := tri_trichotomy (triOr (triFromBoolIv ia) (triFromBoolIv ib))
+        rcases htri with hT | hF | hTop
+        · exact False.elim (ht hT)
+        · exact False.elim (hf hF)
+        · exact hTop
+      simp [ht', boolIv, Contains]
+      by_cases hc : ¬x = 0 ∨ ¬y = 0 <;> simp [hc]
+
+/-- T-A (triNot): the concrete `not` result is within the abstract `triNot`
+interval. -/
+theorem tri_not_sound {iv : Interval} {x : Int}
+    (hx : BoolConcr iv x) :
+    Contains (boolIv (triNot (triFromBoolIv iv))) (if x = 0 then 1 else 0) := by
+  by_cases ht : triFromBoolIv iv = Tri.defTrue
+  · have hx1 : x = 1 := tri_def_true_pins_one ht hx
+    simp [triNot, ht, boolIv, Contains, hx1]
+  · by_cases hf : triFromBoolIv iv = Tri.defFalse
+    · have hx0 : x = 0 := tri_def_false_pins_zero hf hx
+      simp [triNot, hf, boolIv, Contains, hx0]
+    · have ht' : triFromBoolIv iv = Tri.top := by
+        rcases (tri_trichotomy (triFromBoolIv iv)) with hT | hF | hTop
+        · exact False.elim (ht hT)
+        · exact False.elim (hf hF)
+        · exact hTop
+      simp [triNot, ht', boolIv, Contains]
+      exact contains_0_1_of_decide (x = 0)
+
+end TA
+
+/-! ### T-B: discharge soundness (the T-A corollary, PLAN-VERIFY-3 P14.2)
+
+The registry statement the `rederive` method rests on: an obligation whose
+abstract interpretation discharges (`evalInRange = defTrue`) holds for every
+concrete execution that is a concretization of the abstract entry — the
+check can be elided. It composes T-A's `Contains`-soundness with the
+`eval_in_range` semantics: `⊤`/`⊥` can never discharge. -/
+namespace TB
+
+open Tyu.Abs
+
+/-- T-B (the discharge bridge): `eval_in_range` answering `defTrue` for an
+interval means it is a non-empty subset of `[lo, hi]`; every concretization
+`x ∈ iv` therefore satisfies the target bounds. This is the single lemma
+the whole re-derive discharge path composes from (a `⊤`/`⊥` interval can
+never reach `defTrue`). -/
+theorem discharge_sound {iv : Interval} {x lo hi : Int}
+    (hx : Tyu.Sound.TA.Contains iv x) (hd : evalInRange iv lo hi = Tri.defTrue) :
+    lo ≤ x ∧ x ≤ hi := by
+  unfold Tyu.Sound.TA.Contains at hx
+  unfold evalInRange at hd
+  cases iv with
+  | bottom => exact False.elim hx
+  | top => simp at hd
+  | range a b =>
+      cases hx with | intro hxa hxb =>
+      cases hcond : (decide (a ≥ lo) && decide (b ≤ hi))
+      · -- the interval is NOT wholly inside [lo, hi]: the range can answer
+        -- only defFalse/top — contradict the defTrue hypothesis. The
+        -- `&&`-driven outer if and the `||`-driven inner if are the same
+        -- shapes `evalInRange` decides.
+        exfalso
+        simp [evalInRange, hcond] at hd
+        by_cases hc2 : b < lo ∨ hi < a
+        · simp [hc2] at hd
+        · have hc2' : ¬ (b < lo ∨ hi < a) := hc2
+          simp [hc2'] at hd
+      · -- the interval IS inside [lo, hi]: extract the bounds and close.
+        have hand : (decide (a ≥ lo)) = true ∧ (decide (b ≤ hi)) = true :=
+          (Eq.mp (Bool.and_eq_true (decide (a ≥ lo)) (decide (b ≤ hi)))) hcond
+        have hlo : lo ≤ a := by
+          exact decide_eq_true_eq.mp hand.1
+        have hhi : b ≤ hi := by
+          exact decide_eq_true_eq.mp hand.2
+        constructor <;> omega
+
+end TB
 
 end Tyu.Sound

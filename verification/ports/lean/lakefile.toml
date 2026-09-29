@@ -34,3 +34,8 @@ root = "AutomationMain"
 name = "fill"
 srcDir = "."
 root = "FillMain"
+
+[[lean_exe]]
+name = "rederive"
+srcDir = "."
+root = "RederiveMain"

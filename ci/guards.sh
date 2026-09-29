@@ -1759,7 +1759,12 @@ for thm in Tyu.Sound.TD.store_load Tyu.Sound.TD.frame_law Tyu.Sound.TD.aperture_
     grep -q "$thm" verification/ports/lean/REVIEW.md || { msg $RED "  G47 FAIL: $thm not in REVIEW.md §3"; g47_fail=1; }
 done
 # Conformance runner carries the bundle model + the file-fallback reader.
-grep -q "| bundle (ramLo" verification/ports/lean/Tyu/Conformance/Step.lean || { msg $RED "  G47 FAIL: conformance lacks the bundle model"; g47_fail=1; }
+# (P14 consolidation: the single abstract model lives in `Tyu/Abs.lean` —
+# the P12.2 `.bundle` constructor is the absorbed home; `Conformance/Step.lean`
+# re-exports it by `abbrev`.)
+grep -q "| bundle (ramLo" verification/ports/lean/Tyu/Abs.lean || { msg $RED "  G47 FAIL: the abstract model lacks the bundle constructor (Tyu/Abs.lean)"; g47_fail=1; }
+grep -q "| bundle (ramLo" verification/ports/lean/Tyu/Conformance/Step.lean \
+    && { msg $RED "  G47 FAIL: Conformance/Step.lean still carries a duplicated bundle model (P14 consolidation)"; g47_fail=1; }
 grep -q "vectors.json" verification/ports/lean/Main.lean || { msg $RED "  G47 FAIL: conformance lacks the vectors.json fallback"; g47_fail=1; }
 # Rust×Lean conformance suite + the port gate wiring.
 [ -f "crates/verifier/tests/bundle_instance_conformance.rs" ] || { msg $RED "  G47 FAIL: missing bundle_instance_conformance"; g47_fail=1; }
@@ -1773,6 +1778,61 @@ grep -q "ensure_model_pairing(selection.pack)\|ensure_model_pairing(&selection.p
 grep -q "stale_harvest_under_another_model_is_rejected" crates/tyu/src/vm_summary.rs || { msg $RED "  G47 FAIL: missing the model-only stale test"; g47_fail=1; }
 [ "$g47_fail" -eq 0 ] && msg $GREEN "  G47: P12.2 bundle model instances (model artifacts + evidence corpora + Lean Tyu.Bundles + T-D registry + Rust×Lean conformance)"
 failures=$((failures + g47_fail))
+
+# --- G48: PLAN-VERIFY-3 P14 — the re-derivation surface (T-A/T-B) ---
+# The P14 slice's contract in the regular Rust CI: the single interval
+# implementation (`Tyu/Abs.lean`), the conformance re-export shims (no
+# duplicated interval code), the T-A/T-B registry theorems, the `rederive`
+# exe, the differential tests, and the gate script. Behavior is verified by
+# `ci/port.sh` / `ci/differential.sh` (with the pinned toolchain); this gate
+# pins the surface so a P14 regression cannot silently shed a piece.
+g48_fail=0
+PORT_DIR=verification/ports/lean
+if [ ! -f "$PORT_DIR/Tyu/Abs.lean" ]; then
+    msg $RED "  G48 FAIL: $PORT_DIR/Tyu/Abs.lean missing (the single interval implementation)"
+    g48_fail=1
+fi
+# The consolidation: Conformance/Interval.lean + Step.lean are re-export shims
+# (the duplicated defs are GONE — the implementation lives once in Tyu.Abs).
+for shim in Tyu/Conformance/Interval.lean Tyu/Conformance/Step.lean; do
+    if grep -q "def add : Interval\|def stepOp (op : OpInst)" "$PORT_DIR/$shim" 2>/dev/null; then
+        msg $RED "  G48 FAIL: $shim still carries a duplicated interval definition (P14 consolidation)"
+        g48_fail=1
+    fi
+done
+# The registry theorems (present as theorems, proved + axiom-audited by the
+# port gate).
+for thm in "theorem add_sound" "theorem sub_sound" "theorem mul_sound" \
+           "theorem tri_cmp_sound" "theorem tri_and_sound" "theorem tri_or_sound" \
+           "theorem tri_not_sound" "theorem discharge_sound"; do
+    if ! grep -q "$thm" "$PORT_DIR/Tyu/Sound.lean"; then
+        msg $RED "  G48 FAIL: T-A/T-B theorem '$thm' missing from Tyu/Sound.lean"
+        g48_fail=1
+    fi
+done
+# The `rederive` exe + the differential test + the gate script.
+if [ ! -f "$PORT_DIR/RederiveMain.lean" ] || ! grep -q '"rederive"' "$PORT_DIR/lakefile.toml"; then
+    msg $RED "  G48 FAIL: the rederive exe surface missing (RederiveMain.lean / lakefile)"
+    g48_fail=1
+fi
+if [ ! -f crates/verifier/tests/rederive_differential.rs ]; then
+    msg $RED "  G48 FAIL: the re-derivation differential test missing (rederive_differential.rs)"
+    g48_fail=1
+fi
+if [ ! -f ci/differential.sh ]; then
+    msg $RED "  G48 FAIL: ci/differential.sh missing (the ≥10^5 differential gate)"
+    g48_fail=1
+fi
+if [ ! -f crates/tooling-tests/tests/proven_automation_only.rs ]; then
+    msg $RED "  G48 FAIL: the automation-only proven test missing (proven_automation_only.rs)"
+    g48_fail=1
+fi
+if [ ! -f crates/verifier/test-vectors/rederive/index.json ]; then
+    msg $RED "  G48 FAIL: the committed rederive corpus missing (test-vectors/rederive/index.json)"
+    g48_fail=1
+fi
+[ "$g48_fail" -eq 0 ] && msg $GREEN "  G48: P14 re-derivation surface present (Tyu/Abs consolidation, T-A/T-B theorems, rederive exe, differential + tests)"
+failures=$((failures + g48_fail))
 
 echo ""
 msg $GREEN "============================================"

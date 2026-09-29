@@ -165,7 +165,7 @@ equals the denotational window proposition. -/
 theorem bundle_inRam_iff (lo hi a : Int) (cells : List (Int × Tyu.Conformance.Interval)) :
     Tyu.Conformance.MemModel.inRam (Tyu.Conformance.MemModel.bundle lo hi cells []) a = true
       ↔ lo ≤ a ∧ a ≤ hi := by
-  simp [Tyu.Conformance.MemModel.inRam, decide_eq_true_eq]
+  simp [Tyu.Abs.MemModel.inRam, decide_eq_true_eq]
 
 /-! ## T-D consolidation equivalence (P12 cleanup, item 1)
 
@@ -183,10 +183,10 @@ theorem aperture_read_agrees (lo hi : Int)
     (cells : List (Int × Tyu.Conformance.Interval)) (w : Nat) :
     Tyu.Conformance.MemModel.apertureRead (Tyu.Conformance.MemModel.bundle lo hi cells []) "" w
       = toConformance (BundleMem.apertureRead w) := by
-  unfold Tyu.Conformance.MemModel.apertureRead BundleMem.apertureRead
+  unfold Tyu.Conformance.MemModel.apertureRead Tyu.Abs.MemModel.apertureRead BundleMem.apertureRead
   -- the unscripted bundle answers no scripted read: the aperture path is
   -- exactly the width domain
-  simp [Tyu.Conformance.MemModel.scriptedRead]
+  simp [Tyu.Abs.MemModel.scriptedRead]
   cases hp : Tyu.Conformance.wordDomain w with
   | none => simp [toConformance, hp]
   | some p => simp [toConformance, hp]
@@ -209,30 +209,27 @@ theorem load_agrees (lo hi : Int) (cells : List (Int × Tyu.Conformance.Interval
   · -- in-window: both mirrors flow the recorded cell through.
     have hin : (ofCells lo hi cells).inRam a := (ofCells_inRam_iff lo hi cells a).2 ⟨h1, h2⟩
     have hwinb : Tyu.Conformance.MemModel.inRam (Tyu.Conformance.MemModel.bundle lo hi cells []) a = true := by
-      simpa [Tyu.Conformance.MemModel.inRam, decide_eq_true_eq] using (And.intro h1 h2)
-    rw [hload, if_pos hin, hcell, to_from_conformance, Tyu.Conformance.MemModel.load]
-    simp [hwinb]
+      simpa [Tyu.Abs.MemModel.inRam, decide_eq_true_eq] using (And.intro h1 h2)
+    rw [hload, if_pos hin, hcell, to_from_conformance]
+    simp [Tyu.Abs.MemModel.load, hwinb]
   · -- below the window: both mirrors read top.
     have hout : ¬ (ofCells lo hi cells).inRam a := by
       intro h
       exact h2 ((ofCells_inRam_iff lo hi cells a).1 h).2
     rw [hload, if_neg hout]
-    rw [Tyu.Conformance.MemModel.load]
-    simp [Tyu.Conformance.MemModel.inRam, toConformance, h1, h2, decide_eq_false, decide_eq_true_eq]
+    simp [Tyu.Abs.MemModel.load, Tyu.Abs.MemModel.inRam, toConformance, h1, h2, decide_eq_false, decide_eq_true_eq]
   · -- above the window: both mirrors read top.
     have hout : ¬ (ofCells lo hi cells).inRam a := by
       intro h
       exact h1 ((ofCells_inRam_iff lo hi cells a).1 h).1
     rw [hload, if_neg hout]
-    rw [Tyu.Conformance.MemModel.load]
-    simp [Tyu.Conformance.MemModel.inRam, toConformance, h1, h2, decide_eq_false, decide_eq_true_eq]
+    simp [Tyu.Abs.MemModel.load, Tyu.Abs.MemModel.inRam, toConformance, h1, h2, decide_eq_false, decide_eq_true_eq]
   · -- neither: both mirrors read top.
     have hout : ¬ (ofCells lo hi cells).inRam a := by
       intro h
       exact h1 ((ofCells_inRam_iff lo hi cells a).1 h).1
     rw [hload, if_neg hout]
-    rw [Tyu.Conformance.MemModel.load]
-    simp [Tyu.Conformance.MemModel.inRam, toConformance, h1, h2, decide_eq_false, decide_eq_true_eq]
+    simp [Tyu.Abs.MemModel.load, Tyu.Abs.MemModel.inRam, toConformance, h1, h2, decide_eq_false, decide_eq_true_eq]
 
 /-- The bundle model as the generated `Tyu.Mem.MemModel` interface. The
 interface is the statement-relativism surface (§Q3) — its `store`/write

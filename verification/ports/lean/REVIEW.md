@@ -21,6 +21,18 @@
 | T-C (monoid) | §13.2 stack algebra: associativity, identity, wf preservation | `Tyu.Sound.Bound.compose_assoc`, `compose_id_left`, `compose_id_right`, `Bound.compose_wf` | proven, axiom-audited |
 | T-C (loops) | net-zero cycle repetition: net unchanged, depth unchanged | `Tyu.Sound.repeat_net_zero`, `Tyu.Sound.repeat_net_exact` | proven, axiom-audited |
 | T-C (fold) | depth/peak fold coherence: `seq_net_exact`, `seq_peak_envelope`, `walk_net`, `walk_peak` | same names in `Tyu.Sound` | proven, axiom-audited |
+| T-A (add, P14.1) | interval add over-approximates the concrete sum of any concretizations (the wrap→⊤ rule proven sound: an overflowed bound computation is `⊤`, which contains everything) | `Tyu.Sound.TA.add_sound` | proven, axiom-audited |
+| T-A (sub, P14.1) | interval sub over-approximates the concrete difference | `Tyu.Sound.TA.sub_sound` | proven, axiom-audited |
+| T-A (mul, P14.1) | the four-corner tableau over-approximates the concrete product | `Tyu.Sound.TA.mul_sound` | proven, axiom-audited |
+| T-A (cast, P14.1) | the narrowing-cast meet still contains in-range concretizations (out-of-range concretizations trap on the concrete cast) | `Tyu.Sound.TA.cast_narrow_sound` | proven, axiom-audited |
+| T-A (join, P14.1) | a concretization of either join operand is a concretization of the hull | `Tyu.Sound.TA.join_sound` | proven, axiom-audited |
+| T-A (widen, P14.1) | the back-edge widening `∇` only grows — a discharge over the widened value is a discharge over every pre-widening value | `Tyu.Sound.TA.widen_sound` | proven, axiom-audited |
+| T-A (comparison, P14.1) | the abstract comparison's bool interval contains the concrete comparison result of any concretization (defTrue/defFalse/`⊤` each sound) | `Tyu.Sound.TA.tri_cmp_sound` | proven, axiom-audited |
+| T-A (triFromBoolIv, P14.1) | the abstract bool of a bool-typed interval contains its 0/1 concretizations | `Tyu.Sound.TA.tri_from_bool_iv_sound` | proven, axiom-audited |
+| T-A (triAnd, P14.1) | the concrete `&&` result is within the abstract `triAnd` interval | `Tyu.Sound.TA.tri_and_sound` | proven, axiom-audited |
+| T-A (triOr, P14.1) | the concrete `||` result is within the abstract `triOr` interval | `Tyu.Sound.TA.tri_or_sound` | proven, axiom-audited |
+| T-A (triNot, P14.1) | the concrete `not` result is within the abstract `triNot` interval | `Tyu.Sound.TA.tri_not_sound` | proven, axiom-audited |
+| T-B (discharge, P14.2) | the discharge bridge: `eval_in_range` answering `defTrue` for an interval means every concretization satisfies the target bounds — the lemma the `rederive` method composes (a `⊤`/`⊥` interval can never reach `defTrue`) | `Tyu.Sound.TB.discharge_sound` | proven, axiom-audited |
 | T-CL (transitive) | the assumption-closure registry statement (§Q7 rule 2): on a well-closed verdict set, every closed obligation's entire assumption graph (walked through closed nodes) terminates on obligations that are closed or `runtime-check` terminals | `Tyu.Sound.AssumptionClosure.transitive_closure_sound` | proven, axiom-audited |
 | T-CL (cycle) | a closed obligation reachable from itself — a cycle — contradicts well-closedness (cycles are E6419-malformed) | `Tyu.Sound.AssumptionClosure.cyclic_not_well_closed` | proven, axiom-audited |
 | T-CL (open edge) | an assumption edge leaving a closed obligation to an open obligation contradicts well-closedness (the dependent resolves `assumption-unresolved`) | `Tyu.Sound.AssumptionClosure.open_edge_not_well_closed` | proven, axiom-audited |
@@ -64,14 +76,19 @@ Helper lemmas (not registry entries, reviewed definitions): `id_wf`,
 | `Tyu.Bundles.BundleMem` (functional bundle-memory model) + the `x86_64`/`armv7m`/`riscv32` instances | `Tyu/Bundles/` | **P12 (T-D):** the abstract memory state of a modeled bundle — `cell : Int → IntervalVal` plus the RAM window; loads honor only point stores inside the window, stores replace the cell (newest wins), MMIO reads answer the width-bounded nondeterministic domain. This is the denotational shape the Rust `verifier::mem::ApertureMem` (list-of-cells) implements; the two are pinned to agree by the committed `tyu.vec/1` bundle corpora (Rust `bundle_instance_conformance` suite + the port's `conformance` exe = zero divergence) and by the `--level bundles` geometry report against `model/model.toml`. Reviewed against `verifier::mem` and §Q13. |
 | `Tyu.Bundles.rp2350` (the rp2350 board instance) + `uartFrBand` (0xF9) / `uartFrMode` (ro) + `BundleMem.apertureReadRefined` / `refinedOf` + `AccessMode` (the refinement surface) | `Tyu/Bundles/Bundle.lean`, `Tyu/Bundles/Rp2350.lean` | **P13.2 (T-D completion + refinements):** the rp2350 modeled bundle — SRAM window `[0x20000000, 0x2000FFFF]` (pinned mechanically against `model/model.toml` by the Rust suite), the one `[refinements]` device (`UARTFR` → `rp2350.uart-fr`, datasheet band `mask = 0xF9` — the SIX modeled flag bits of the RP2350's UARTFR, DS2 §12.1, NOT the full-PL011 0xFF8 — and access-mode `ro`, both transcribed in the manifest and pinned against the Lean instance by `--level bands`), `AccessMode` (the closed source-level access set `{ro, wo, rw, w1c, w1s, rc}`), `apertureReadRefined` (the §Q13 width-bounded read narrowed to the refinement's band), and `refinedOf` (mode-gated: ro ⇒ the band, write-capable ⇒ the §Q13 default, writes inert). Registry entries §3: the geometry/inram laws + the width/mask (instanced at the device), access-mode (ro/write-capable/writes), and volatility trace laws. |
 | `Tyu.Conformance.MemModel.bundle` (operational bundle model in the abstract transfer) | `Tyu/Conformance/Step.lean` | **P12.2:** the conformance runner's operational mirror of the bundle instance — `store` mutates the recorded cells, `load` consults them, `apertureRead` answers the width domain (the single `Tyu.Conformance.wordDomain`, shared with `Bundles.BundleMem.apertureRead`). Behavior-preserving for the shared corpora (all 236 pre-existing vectors re-pass unchanged); bundle corpora exercise the new flavor. **Do not re-implement the bundle rules here**: the denotational twin is `Tyu.Bundles.BundleMem`, and the two mirrors' agreement is a **registry theorem** (`Tyu.Sound.TD.bundle_aperture_agrees` / `bundle_load_agrees`, §3) — a change to one mirror without the other fails those lemmas. |
+| `Tyu.Abs` (the single abstract interval implementation + `stepOp` + `widenOld` + `Contains`) | `Tyu/Abs.lean` | **P14 (T-A/T-B):** the port's ONE interval layer (absorbing `Conformance/Interval.lean` + the `Conformance/Step.lean` transfer; the conformance files are re-export shims — P4-audit consolidation, 2026-09-28). Mirrors `verifier::interval`/`verifier::interp::State::step`: the lattice, the wrap→⊤ arithmetic, the `∇` back-edge widening, the abstract bool/comparison transfer, and the `Contains` concretization predicate the soundness theorems are stated over. `stepOp` matches the generated `OpForm` wildcard-free (a semantics row without an abstract arm is a compile error). The corpus re-ran byte-exact; soundness is the §3 T-A/T-B family. |
 | `Tyu.Gen.Sha256` (port SHA-256) | `Tyu/Gen/Sha256.lean` | FIPS 180-4, known-answer vectors pinned in `gen --selfcheck`; FR-14 (the only digest). |
 | `Tyu.Gen.Golden` / `goldens/` (statement goldens) | `Tyu/Gen/Golden/*.lean`, `goldens/gen/*.gen.json`, `goldens/obl/*.obl.json` | P5: the committed generated statements, elaborated by the port gate; byte-stable; `ci/port.sh` rediffs them against the live `gen` output. |
 
-**Known consolidation point (P14, locked in the plan):** the abstract
-interval layer currently lives in `Tyu/Conformance/Interval.lean` +
-`Tyu/Conformance/Step.lean`; when P14 lands `Tyu/Abs.lean`, it MUST absorb
-`Conformance/Interval.lean` and re-point the conformance runner — the port
-must not carry two interval implementations.
+**P14 consolidation (discharged, 2026-09-28):** the abstract interval layer
+now lives ONCE in `Tyu/Abs.lean` (namespace `Tyu.Abs` — the lattice, the
+abstract state/transfer `stepOp`/`absRun`, the `widenOld` `∇` operator, and
+the `Contains` concretization predicate). `Tyu/Conformance/Interval.lean`
+and `Tyu/Conformance/Step.lean` are re-export shims (`export`/`abbrev`) —
+the runner, the stackmeta path, the bundle instances, and the fragment
+corpus all execute the single implementation. The T-A/T-B registry
+statements (`Tyu.Sound.TA`/`Tyu.Sound.TB`) prove its soundness; the
+conformance corpus re-ran byte-exact against the absorbed definitions.
 
 ## 3. Axiom-audited theorems (machine-consumed block — keep in sync with AxiomAudit.lean)
 
@@ -135,6 +152,18 @@ Tyu.Sound.TD.runBlockTrace_eq_runBlock
 Tyu.Sound.TD.two_reads_trace
 Tyu.Sound.TD.bundle_aperture_agrees
 Tyu.Sound.TD.bundle_load_agrees
+Tyu.Sound.TA.add_sound
+Tyu.Sound.TA.sub_sound
+Tyu.Sound.TA.mul_sound
+Tyu.Sound.TA.cast_narrow_sound
+Tyu.Sound.TA.join_sound
+Tyu.Sound.TA.widen_sound
+Tyu.Sound.TA.tri_cmp_sound
+Tyu.Sound.TA.tri_from_bool_iv_sound
+Tyu.Sound.TA.tri_and_sound
+Tyu.Sound.TA.tri_or_sound
+Tyu.Sound.TA.tri_not_sound
+Tyu.Sound.TB.discharge_sound
 ```
 
 Permitted axiom set: `{propext, Quot.sound, Classical.choice}` — anything
