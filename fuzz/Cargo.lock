@@ -269,6 +269,7 @@ name = "ir"
 version = "0.1.0"
 dependencies = [
  "frontend",
+ "lmod",
 ]
 
 [[package]]
@@ -314,9 +315,6 @@ dependencies = [
 [[package]]
 name = "lmod"
 version = "0.1.0"
-dependencies = [
- "ir",
-]
 
 [[package]]
 name = "lmod-encrypt"

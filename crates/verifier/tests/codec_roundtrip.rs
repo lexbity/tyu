@@ -329,3 +329,30 @@ fn golden_key_order_is_schema_order() {
         pos += idx + needle.len();
     }
 }
+
+/// P16.3 fuzz regression: an invalid UTF-8 *lead* byte (0xA1) inserted into a
+/// JSON string made `read_obl` livelock — `utf8_seq_len(0xA1) == 0`, so the
+/// string reader consumed a zero-width "sequence" and never advanced. The
+/// reader must fail closed (E6401) in constant time, never hang.
+#[test]
+fn invalid_utf8_lead_byte_in_string_fails_closed_not_hangs() {
+    // A structurally-valid artifact whose final `predicates` key carries an
+    // invalid lead byte in the middle of the word (the libFuzzer artifact
+    // `timeout-39f39…` class).
+    let mut bytes = encode_obl(&sample_set()).expect("encode");
+    let hay = bytes
+        .windows(10)
+        .position(|w| w == b"predicates")
+        .expect("key present");
+    // Corrupt the lead byte of the key's first character.
+    bytes[hay] = 0xA1;
+    let start = std::time::Instant::now();
+    match verifier::codec::read_obl(&bytes) {
+        Ok(_) => panic!("malformed UTF-8 must not parse"),
+        Err(e) => assert_eq!(e.code(), 6401, "fail-closed code: {e:?}"),
+    }
+    assert!(
+        start.elapsed() < std::time::Duration::from_millis(200),
+        "must fail closed immediately, never livelock"
+    );
+}

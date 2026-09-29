@@ -23,6 +23,7 @@ fuzz_target!(|data: &[u8]| {
                 v.certifier.as_ref(),
                 &v.target,
                 &v.model_semantics,
+                &v.concurrency,
                 &v.records,
                 0,
                 &Default::default(),

@@ -20,6 +20,7 @@ codegen-riscv = { path = "../codegen-riscv" }
 codegen-x86_64 = { path = "../codegen-x86_64" }
 frontend = { path = "../frontend" }
 ir = { path = "../ir" }
+verifier = { path = "../verifier" }
 serde_json = "1"
 
 [[test]]
@@ -36,4 +37,12 @@ harness = true
 
 [[test]]
 name    = "riscv"
+harness = true
+
+[[test]]
+name    = "proven_anchor"
+harness = true
+
+[[test]]
+name    = "mutation_elision"
 harness = true

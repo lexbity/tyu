@@ -224,6 +224,7 @@ dependencies = [
  "loader-core",
  "serde_json",
  "tyu",
+ "verifier",
 ]
 
 [[package]]

@@ -1874,6 +1874,49 @@ fi
 [ "$g49_fail" -eq 0 ] && msg $GREEN "  G49: P15 services surface present (Tyu.Services model, hosted identity + corpus, svcvec codec, wire fixtures, gate tests)"
 failures=$((failures + g49_fail))
 
+# G50: PLAN-VERIFY-3 P16.1/P16.2 — the QEMU anchor + the blame surface.
+# The hardware anchor surfaces must exist as test binaries (proven_anchor,
+# mutation_elision), the report's open[] intent/subject blame fields must be
+# live (report.rs model + codec writer + verify.rs population + the E6410
+# rendering), and the blame-surface rendering goldens test must exist.
+g50_fail=0
+for t in crates/execution-tests/tests/proven_anchor.rs crates/execution-tests/tests/mutation_elision.rs; do
+    [ -f "$t" ] || { msg $RED "  G50 FAIL: $t missing (P16.1 anchor)"; g50_fail=1; }
+done
+for entry in proven_anchor mutation_elision; do
+    grep -q "name *= *\"$entry\"" crates/execution-tests/Cargo.toml || { msg $RED "  G50 FAIL: execution-tests lacks [[test]] $entry"; g50_fail=1; }
+done
+grep -q "pub intent: Option<String>" crates/verifier/src/report.rs || { msg $RED "  G50 FAIL: OpenObligation.intent missing (blame surface)"; g50_fail=1; }
+grep -q '\\"intent\\":' crates/verifier/src/codec.rs || { msg $RED "  G50 FAIL: report writer omits open[].intent"; g50_fail=1; }
+grep -q "intent_of" crates/tyu/src/verify.rs || { msg $RED "  G50 FAIL: the closure intent lookup missing (verify.rs)"; g50_fail=1; }
+grep -q "— intent:" crates/tyu/src/verify.rs || { msg $RED "  G50 FAIL: the E6410 intent rendering missing"; g50_fail=1; }
+grep -q "(witness:" crates/tyu/src/verify.rs || { msg $RED "  G50 FAIL: the E6410 witness rendering missing"; g50_fail=1; }
+[ -f crates/tooling-tests/tests/blame_surface.rs ] || { msg $RED "  G50 FAIL: blame_surface rendering-goldens test missing"; g50_fail=1; }
+grep -q "read_declared_high" crates/execution-tests/tests/proven_anchor.rs || { msg $RED "  G50 FAIL: the anchor's measured ≤ declared channel missing"; g50_fail=1; }
+[ "$g50_fail" -eq 0 ] && msg $GREEN "  G50: P16.1/P16.2 — QEMU anchor (proven_anchor/mutation_elision) + E6410 blame surface (witness + intent)"
+failures=$((failures + g50_fail))
+
+# G51: PLAN-VERIFY-3 P16.3 — acceptance matrix, fuzz closeout, NFR numbers.
+# The acceptance runner, its mapping doc, the seeded fuzz smoke, the NFR
+# measurer, and the tracked seeds (all three decode targets ≥ 1 seed each)
+# must exist. Also pins the P16.3 fuzz finding (the codec livelock) as a
+# regression test in the tree.
+g51_fail=0
+for f in ci/acceptance.sh ci/ACCEPTANCE.md ci/fuzz.sh ci/nfr.sh ci/fuzz-seeds; do
+    [ -e "$f" ] || { msg $RED "  G51 FAIL: $f missing (P16.3 surface)"; g51_fail=1; }
+done
+for t in obl_v2_decode verdicts_v2_decode cert_index_decode; do
+    n=$(find ci/fuzz-seeds/$t -type f 2>/dev/null | wc -l)
+    if [ "$n" -lt 1 ]; then msg $RED "  G51 FAIL: no tracked seeds for $t"; g51_fail=1; fi
+    grep -q "name = \"$t\"" fuzz/Cargo.toml || { msg $RED "  G51 FAIL: fuzz target $t unregistered"; g51_fail=1; }
+    [ -f fuzz/fuzz_targets/$t.rs ] || { msg $RED "  G51 FAIL: fuzz harness $t.rs missing"; g51_fail=1; }
+done
+grep -q "invalid_utf8_lead_byte_in_string_fails_closed_not_hangs" crates/verifier/tests/codec_roundtrip.rs || { msg $RED "  G51 FAIL: the P16.3 codec livelock regression test missing"; g51_fail=1; }
+grep -q 'len == 0 || start + len > self.b.len()' crates/verifier/src/codec.rs || { msg $RED "  G51 FAIL: the codec zero-width-sequence guard missing"; g51_fail=1; }
+grep -q "SUPERSEDED" devdocs/tyu-research/formal-verification.md || { msg $RED "  G51 FAIL: the PLAN-VERIFY-2 superseded banner missing"; g51_fail=1; }
+[ "$g51_fail" -eq 0 ] && msg $GREEN "  G51: P16.3 — acceptance matrix (acceptance.sh + ACCEPTANCE.md), seeded fuzz smoke, NFR measurer, codec-livelock fix + regression"
+failures=$((failures + g51_fail))
+
 echo ""
 msg $GREEN "============================================"
 msg $GREEN "Per-package test counts:"

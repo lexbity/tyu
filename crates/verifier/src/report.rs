@@ -156,6 +156,15 @@ pub struct OpenObligation {
     /// vs target [0, 100]"`), when one was recorded. Omitted by the writer
     /// when `None` (schema-stable).
     pub reason: Option<String>,
+    /// P16.2 (§Q17): the developer-facing claim surface — the obligation's
+    /// intent label (authored `intent "…"` or the synthesized per-kind
+    /// default), copied from the artifact at report-composition time so the
+    /// E6410 diagnostics can render "what is being proved", not just where
+    /// the proof failed. `None` when the artifact carried none.
+    pub intent: Option<String>,
+    /// P16.2 (§Q17): the intent's subject (a contract predicate name, the
+    /// declaration a formula ranges over), when identifiable.
+    pub subject: Option<String>,
 }
 
 /// One assumed obligation (`assumed` list in §6.5, slice P4): a human

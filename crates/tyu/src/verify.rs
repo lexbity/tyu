@@ -323,6 +323,10 @@ pub(crate) fn compose(
                     site: format!("{}.{}", u.word, u.occurrence),
                     line: u.line,
                     reason: Some(crate::closure::unresolved_witness(&u.dependency)),
+                    // P16.2 (§Q17): the unresolved dependency's intent, looked
+                    // up from the artifact it was extracted from.
+                    intent: intent_of(&closure_modules, &u.id).map(str::to_string),
+                    subject: subject_of(&closure_modules, &u.id).map(str::to_string),
                 });
             }
         }
@@ -736,8 +740,45 @@ fn collect_open(set: &OblSet, echo: Option<&Echo>, module: &str, out: &mut Vec<O
             site: format!("{}.{}", o.site.word, o.site.occurrence),
             line: o.site.span.line,
             reason,
+            // P16.2 (§Q17): the developer-facing claim surface rides into the
+            // report so E6410 can render what was being proved, not just where
+            // the proof failed — intent label + subject from the artifact.
+            intent: Some(o.intent.label.clone()),
+            subject: if o.intent.subject.is_empty() {
+                None
+            } else {
+                Some(o.intent.subject.clone())
+            },
         });
     }
+}
+
+/// P16.2 (§Q17): the intent label of the closure-forced-open obligation,
+/// looked up from the merged (artifact, echo) pairs the closure ran over.
+fn intent_of<'a>(
+    closure_modules: &'a [(String, Option<OblSet>, Option<Echo>)],
+    id: &str,
+) -> Option<&'a str> {
+    closure_modules
+        .iter()
+        .filter_map(|(_, set, _)| set.as_ref())
+        .filter_map(|s| s.obligations.iter().find(|o| o.id == id))
+        .next()
+        .map(|o| o.intent.label.as_str())
+}
+
+/// P16.2 (§Q17): the intent subject of a closure-forced-open obligation.
+fn subject_of<'a>(
+    closure_modules: &'a [(String, Option<OblSet>, Option<Echo>)],
+    id: &str,
+) -> Option<&'a str> {
+    closure_modules
+        .iter()
+        .filter_map(|(_, set, _)| set.as_ref())
+        .filter_map(|s| s.obligations.iter().find(|o| o.id == id))
+        .next()
+        .filter(|o| !o.intent.subject.is_empty())
+        .map(|o| o.intent.subject.as_str())
 }
 
 /// Every interval-proven out-of-range site lands in the report's
@@ -873,8 +914,25 @@ fn enforce_policy(report: &VerifyReport, policy: VerifyPolicy) -> Result<(), Tyu
                 );
                 for o in report.open.iter().take(64) {
                     eprintln!(
-                        "  {} — {}::{}.{} line {}",
-                        o.kind, o.module, o.word, o.site, o.line
+                        "  {} — {}::{}.{} line {}{}{}",
+                        o.kind,
+                        o.module,
+                        o.word,
+                        o.site,
+                        o.line,
+                        // P16.2 (§Q17/§7.3): the blame surface — the declared
+                        // claim (intent) and the witness (interval residue /
+                        // opaque-provenance / DefFalse endpoint). A developer
+                        // sees *what was being proved* and *why it was open*,
+                        // not just a location.
+                        o.intent
+                            .as_ref()
+                            .map(|i| format!(" — intent: \"{i}\""))
+                            .unwrap_or_default(),
+                        o.reason
+                            .as_ref()
+                            .map(|r| format!(" (witness: {r})"))
+                            .unwrap_or_default(),
                     );
                 }
                 if report.open.len() > 64 {

@@ -1432,7 +1432,11 @@ impl<'a> Reader<'a> {
                     let start = self.i - 1;
                     let b0 = self.b[start];
                     let len = utf8_seq_len(b0);
-                    if start + len > self.b.len() {
+                    // `len == 0` is an invalid *lead* byte (e.g. 0xA1): a
+                    // zero-width "sequence" would loop forever on this byte —
+                    // fail closed instead. (P16.3 fuzz finding: malformed
+                    // `"pre\xa1..."` inside a string hung `read_obl`.)
+                    if len == 0 || start + len > self.b.len() {
                         return self.err();
                     }
                     match core::str::from_utf8(&self.b[start..start + len]) {
@@ -1757,6 +1761,14 @@ fn write_report_bytes(r: &crate::report::VerifyReport) -> Vec<u8> {
         if let Some(reason) = &o.reason {
             out.extend_from_slice(b",\"reason\":");
             write_str(&mut out, reason);
+        }
+        if let Some(intent) = &o.intent {
+            out.extend_from_slice(b",\"intent\":");
+            write_str(&mut out, intent);
+        }
+        if let Some(subject) = &o.subject {
+            out.extend_from_slice(b",\"subject\":");
+            write_str(&mut out, subject);
         }
         out.push(b'}');
     }
