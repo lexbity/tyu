@@ -1,0 +1,178 @@
+#!/usr/bin/env bash
+# PLAN-WASM-1 CI gates — G52–G56 (declared here, NOT in ci/guards.sh).
+#
+# The existing `ci/guards.sh` registry ends at G51 (§Q10). The WASM REPL
+# plan's new gates live in this file so the flat G1–G51 registry is not
+# renumbered/interleaved:
+#
+#   G52  Fork ↔ `src_interp` fragvec corpus trace agreement            (P1)
+#   G53  Interpreter ↔ native execution goldens (+IR render parity)    (P2/P6)
+#   G54  codegen-wasm: wasmtime validate + run, trace parity            (P7/P8)
+#   G55  Browser bundle budgets, artifact hashes, now_ms grep, smoke    (P5)
+#   G56  REPL session goldens byte-exact                                (P3)
+#
+# Usage:
+#   bash ci/wasm.sh            run every gate defined so far
+#   bash ci/wasm.sh --selftest run every gate's red-path demo and require
+#                              each to FAIL (AC-9 — a gate that cannot be
+#                              demonstrated red is not a gate)
+#
+# Runs standalone on a fresh clone with only the documented toolchain (AC-1).
+# `ci/guards.sh` carries a pointer comment for G52–G56 and no gate edits.
+
+set -euo pipefail
+
+RED=1; GREEN=2; YELLOW=3; NC=0
+failures=0
+
+msg() {
+    local c=$1; shift
+    tput setaf "$c" 2>/dev/null || true
+    echo "  $*"
+    tput sgr0 2>/dev/null || true
+}
+
+fail() {
+    msg $RED "FAIL: $*"
+    failures=$((failures + 1))
+}
+
+# ---------------------------------------------------------------------------
+# G52 (P1): the fork (`crates/wasm-repl/src/frag.rs`) is pinned to the frozen
+# `verifier::src_interp` over the ENTIRE committed `tyu.fragvec/1` corpus.
+# The corpus (crates/verifier/test-vectors/fragment/index.json) is the
+# rendezvous point: the fork's live run must reproduce the committed traces
+# AND agree with the frozen upstream's live run on the same canonical text.
+# ---------------------------------------------------------------------------
+
+g52_green() {
+    msg $YELLOW "G52: fork ↔ src_interp fragvec corpus trace agreement"
+
+    # FR-1 / I-6 preamble: the fork must build on the host. `cargo build`
+    # alone cannot detect an *added* dependency (it would build fine), so the
+    # dep-graph allowlist check below is the load-bearing FR-1 gate; this
+    # build proves the crate still compiles no_std on the host toolchain.
+    if cargo build -p wasm-repl --release > /tmp/wasm-repl-build.log 2>&1; then
+        msg $GREEN "  G52: host build of wasm-repl (no_std, forbid(unsafe_code) — FR-1)"
+    else
+        fail "wasm-repl host build (see /tmp/wasm-repl-build.log)"
+    fi
+
+    # FR-1 / I-6, load-bearing check: the fork's NORMAL dependency graph must
+    # be exactly the in-tree R-A allowlist (today: ir → frontend → lmod; the
+    # plan grows this by in-tree crates only — frontend/semantics/ir/verifier/
+    # codegen-core). Any registry crate (a new external dep, even one that
+    # compiles cleanly) appears in `cargo tree` output, fails the filter, and
+    # reds the gate. `-e normal` excludes dev-deps (the G52 differential's
+    # verifier+serde_json dev-deps are legitimate and not part of this proof).
+    local tree
+    tree=$(cargo tree -p wasm-repl -e normal --prefix none 2>/dev/null || true)
+    if [ -z "$tree" ]; then
+        fail "cargo tree -p wasm-repl failed (FR-1 dep-graph check could not run)"
+    elif printf '%s\n' "$tree" | grep -vE '^(wasm-repl|ir|frontend|lmod) v' | grep -q .; then
+        fail "wasm-repl normal dep graph has a crate outside the in-tree R-A allowlist (FR-1, I-6)"
+    else
+        msg $GREEN "  G52: wasm-repl normal dep graph is the in-tree allowlist only (FR-1, I-6)"
+    fi
+
+    # The differential itself.
+    if cargo test -p wasm-repl --test frag_parity --release > /tmp/g52-parity.log 2>&1; then
+        msg $GREEN "  G52: fragvec corpus differential green (fork = corpus = frozen upstream)"
+    else
+        fail "fragvec differential (see /tmp/g52-parity.log)"
+    fi
+
+    # FR-15 / D-2: `src_interp` is cfg-gated behind the verifier's `test-util`
+    # feature, and the featureless production build of verifier contains NO
+    # fragment engine symbols.
+    if grep -B1 "pub mod src_interp;" crates/verifier/src/lib.rs | grep -q 'cfg(feature = "test-util")'; then
+        msg $GREEN "  G52: src_interp is test-util-gated in crates/verifier/src/lib.rs (FR-15)"
+    else
+        fail "src_interp is not test-util-gated in crates/verifier/src/lib.rs (FR-15)"
+    fi
+
+    # The symbol-absence proof builds into an ISOLATED target dir: the shared
+    # target/release/deps accumulates multiple libverifier-<hash>.rlib
+    # artifacts (test-util and featureless variants coexist across builds), so
+    # picking one blind can select a stale test-util rlib and spuriously fail
+    # the proof. In the isolated dir every libverifier rlib is a product of
+    # the featureless build below; checking ALL of them is sound (the dir is
+    # only ever written by this gate). Gitignored via the `target` entry.
+    if CARGO_TARGET_DIR="$PWD/target/g52-prod" cargo build -p verifier --release \
+        > /tmp/verifier-prod-build.log 2>&1; then
+        if ! command -v nm >/dev/null 2>&1; then
+            msg $YELLOW "  G52: (nm unavailable; symbol-absence check skipped)"
+        else
+            local r found=0 sym_hit=0
+            for r in target/g52-prod/release/deps/libverifier-*.rlib; do
+                [ -f "$r" ] || continue
+                found=1
+                if nm "$r" 2>/dev/null | grep -q "src_interp"; then
+                    sym_hit=1
+                fi
+            done
+            if [ "$found" -eq 0 ]; then
+                fail "no libverifier rlib under target/g52-prod (build layout changed?)"
+            elif [ "$sym_hit" -eq 1 ]; then
+                fail "featureless verifier build contains src_interp symbols (nm under target/g52-prod, FR-15)"
+            else
+                msg $GREEN "  G52: production 'cargo build -p verifier' contains no src_interp symbols (FR-15)"
+            fi
+        fi
+    else
+        fail "featureless production build of verifier (see /tmp/verifier-prod-build.log)"
+    fi
+
+    # The verifier's OWN corpus gates must still pass with the feature on
+    # (the gating must not have orphaned the upstream tests).
+    if cargo test -p verifier --features test-util \
+        --test cross_surface --test fragment_vectors --release > /tmp/g52-verifier.log 2>&1; then
+        msg $GREEN "  G52: upstream cross_surface + fragment_vectors green under --features test-util"
+    else
+        fail "upstream fragment gates under --features test-util (see /tmp/g52-verifier.log)"
+    fi
+}
+
+g52_selftest() {
+    # Red-path demo (AC-9): corrupt `add_i64` → `Sub` under `wasm-selftest` and
+    # REQUIRE the differential to fail. A green result here means the G52 gate
+    # cannot see a broken mnemonic mapping — i.e. the gate is not a gate.
+    #
+    # Scope note: the differential is G52's primary property, so this is the
+    # red path AC-9 requires. The structural sub-checks (FR-1 dep allowlist,
+    # FR-15 cfg gate + symbol absence) fail trivially on their violations (an
+    # added registry crate, a removed cfg line, leaked symbols) and are
+    # asserted green in run mode — not mutation-demonstrated.
+    msg $YELLOW "G52 selftest: corrupted 'add_i64' mapping must red the differential"
+    if cargo test -p wasm-repl --features wasm-selftest --test frag_parity --release \
+        > /tmp/g52-selftest.log 2>&1; then
+        fail "selftest: the corrupted mnemonic mapping PASSED the gate (G52 blind)"
+    else
+        msg $GREEN "  G52 selftest: corrupted mapping correctly failed (red path demonstrated)"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Dispatch
+# ---------------------------------------------------------------------------
+
+mode="${1:-run}"
+case "$mode" in
+    run)
+        g52_green
+        ;;
+    --selftest)
+        g52_selftest
+        ;;
+    *)
+        msg $RED "unknown mode '$mode' (run | --selftest)"
+        exit 2
+        ;;
+esac
+
+echo ""
+if [ "$failures" -gt 0 ]; then
+    msg $RED "ci/wasm.sh ($mode): $failures gate(s) failed — see the FAIL lines above"
+    exit 1
+fi
+msg $GREEN "ci/wasm.sh ($mode): all PLAN-WASM-1 gates defined so far passed."

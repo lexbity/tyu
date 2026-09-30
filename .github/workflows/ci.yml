@@ -79,6 +79,14 @@ jobs:
         run: RUSTFLAGS="-D dead_code" cargo build --release -p semantics
       - name: Workspace unit tests (all crates, default features)
         run: cargo test --workspace --release
+      - name: WASM REPL gates (PLAN-WASM-1, ci/wasm.sh)
+        # G52 (fork ↔ src_interp fragvec differential + FR-1/FR-15 proofs) runs
+        # on every commit from P1; the run is host-only today (no wasm32 target
+        # needed). The --selftest pass proves the gate's red path in CI (AC-9).
+        # The job grows G53–G56 per slice and moves to a wasm-tooled job in P5.
+        run: |
+          bash ci/wasm.sh
+          bash ci/wasm.sh --selftest
       - name: Golden codegen corpus
         run: cargo test --release -p langc --test golden_codegen
       - name: Encryption feature tests

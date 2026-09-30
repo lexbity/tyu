@@ -1917,6 +1917,16 @@ grep -q "SUPERSEDED" devdocs/tyu-research/formal-verification.md || { msg $RED "
 [ "$g51_fail" -eq 0 ] && msg $GREEN "  G51: P16.3 — acceptance matrix (acceptance.sh + ACCEPTANCE.md), seeded fuzz smoke, NFR measurer, codec-livelock fix + regression"
 failures=$((failures + g51_fail))
 
+# ----------------------------------------------------------------------
+# G52-G56: defined in ci/wasm.sh (PLAN-WASM-1 §Q10).
+#
+# The WASM REPL plan adds gates G52 (fragvec parity), G53 (interpreter ↔
+# native goldens), G54 (codegen-wasm ↔ interpreter), G55 (browser bundles /
+# hashes / smoke), G56 (REPL session goldens). They live in `ci/wasm.sh`
+# so this flat registry is not renumbered or interleaved; run them with
+# `bash ci/wasm.sh` (and `bash ci/wasm.sh --selftest` for the red paths).
+# ----------------------------------------------------------------------
+
 echo ""
 msg $GREEN "============================================"
 msg $GREEN "Per-package test counts:"

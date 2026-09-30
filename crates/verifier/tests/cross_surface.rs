@@ -4,6 +4,10 @@
 //! *transcribed* ops — with observable-trace agreement (the Rust analogue of
 //! the T-S theorem `Tyu.Src.transcription_run`).
 //!
+//! `verifier::src_interp` is gated behind the `test-util` feature (PLAN-WASM-1
+//! D-2, FR-15): run this file with `cargo test -p verifier --features test-util`.
+#![cfg(feature = "test-util")]
+//!
 //! Two layers:
 //!
 //! 1. The hand-built agreement tests below (the fragment program shapes the

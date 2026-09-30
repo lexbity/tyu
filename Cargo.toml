@@ -25,6 +25,7 @@ members = [
   "crates/tyu",
   "crates/lmod-encrypt",
   "crates/lmod-sign",
+  "crates/wasm-repl",
 ]
 exclude = [
   "crates/device-loader-archive",

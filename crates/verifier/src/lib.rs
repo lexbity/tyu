@@ -52,6 +52,14 @@ pub mod model;
 pub mod refinements;
 pub mod report;
 pub mod semantics;
+/// The source-fragment interpreter (`test-util` feature only): the frozen
+/// progenitor of `crates/wasm-repl` (PLAN-WASM-1 DEC-1, §Q1). It is a
+/// documented test-only surface like `testutil`; nothing in the production
+/// pipeline consumes it, and it must not compile into a production build.
+/// Its tests live in `tests/cross_surface.rs` and `tests/fragment_vectors.rs`
+/// and are likewise `test-util`-gated — run them with
+/// `cargo test -p verifier --features test-util`.
+#[cfg(feature = "test-util")]
 pub mod src_interp;
 pub mod stmt;
 pub mod svcvec;

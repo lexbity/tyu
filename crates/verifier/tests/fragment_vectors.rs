@@ -1,5 +1,9 @@
 //! Fragment-vector conformance corpus (PLAN-VERIFY-3 P9.3).
 //!
+//! `verifier::src_interp` is gated behind the `test-util` feature (PLAN-WASM-1
+//! D-2, FR-15): run this file with `cargo test -p verifier --features test-util`.
+#![cfg(feature = "test-util")]
+//!
 //! The pure-fragment *source* surface (`Tyu/Src.lean` ↔ `verifier::src_interp`)
 //! had no mechanical Lean↔Rust pin: each side was internally drift-locked
 //! (Lean: the T-S theorems; Rust: `cross_surface.rs` + the transcription

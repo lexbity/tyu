@@ -14,10 +14,16 @@ hosted-rt = { path = "../hosted-rt" }
 loader-core = { path = "../loader-core" }
 lmod = { path = "../lmod" }
 tyu = { path = "../tyu" }
-verifier = { path = "../verifier", features = ["test-util"] }
 lmod-pack = { path = "../lmod-pack" }
 sha2 = { version = "0.10", default-features = false }
 serde_json = "1"
+
+[dev-dependencies]
+# PLAN-WASM-1 D-2/FR-15: `verifier::src_interp` must not compile into
+# production builds, so the verifier `test-util` feature is enabled only from
+# dev-dependencies (this crate is a test-only crate with no `src/` — all of
+# its `verifier::` usage sits in `tests/`).
+verifier = { path = "../verifier", features = ["test-util"] }
 
 [features]
 default = []

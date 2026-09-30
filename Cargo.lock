@@ -1169,6 +1169,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasm-repl"
+version = "0.1.0"
+dependencies = [
+ "ir",
+ "serde_json",
+ "verifier",
+]
+
+[[package]]
 name = "wasmparser"
 version = "0.244.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
