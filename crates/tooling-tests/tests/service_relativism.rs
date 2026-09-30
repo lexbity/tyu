@@ -24,7 +24,8 @@
 //!      `trace_send_recv_output` law with the subtype bound); harvest binds
 //!      `trust: proof`, `method: certificate`, the recomputed statement hash.
 //!      The opaque `$top` cast obligation (`::0`) stays `open` with
-//!      `service-output-unmodeled` — the honest refusal.
+//!      `opaque-site` — the honest refusal (the renderer's classification
+//!      for an obligation with no oel root, Render.lean `serviceClassify`).
 //!   3. **FR-5 consumption + concurrency staleness**: langc consuming the
 //!      verdicts with `--concurrency=abstract-atomic` discharges the proven
 //!      site; consuming the SAME verdicts under `--concurrency=unmodeled` is
@@ -338,7 +339,7 @@ fn service_relativism_and_template_harvest() {
         "the service statement must be over the abstract-atomic model:\n{lean_text}"
     );
     assert!(
-        meta.contains("\"omitted\": true, \"reason\": \"service-output-unmodeled\""),
+        meta.contains("\"omitted\": true, \"reason\": \"opaque-site\""),
         "the opaque $top cast obligation must refuse honestly:\n{meta}"
     );
     // The Rust encoder's hash for the proven obligation (statement context is
@@ -430,7 +431,7 @@ fn service_relativism_and_template_harvest() {
     assert!(opaque.status.is_open());
     assert_eq!(
         opaque.witness_reason.as_deref(),
-        Some("service-output-unmodeled")
+        Some("opaque-site")
     );
 
     // 4. FR-5 consumption: the same provenance concurrency declaration

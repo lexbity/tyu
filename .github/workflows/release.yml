@@ -110,6 +110,7 @@ jobs:
             fasm \
             qemu-system-x86 \
             qemu-system-arm \
+            qemu-system-riscv \
             qemu-system-misc \
             gcc-arm-none-eabi \
             gcc-riscv64-unknown-elf \

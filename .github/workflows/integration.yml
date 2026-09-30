@@ -14,8 +14,9 @@
 #
 # Install-tool apt names are for the ubuntu-26.04 image (baseline; container-proven):
 # package qemu-system-x provides /usr/bin/qemu-system-x86_64, package
-# qemu-system-misc provides /usr/bin/qemu-system-riscv32 (and riscv64),
-# and package binutils provides /usr/bin/ld.
+# qemu-system-riscv provides /usr/bin/qemu-system-riscv32 (and riscv64 — on
+# 26.04 qemu-system-misc does NOT carry the riscv binaries), and package
+# binutils provides /usr/bin/ld.
 
 name: Integration
 
@@ -175,7 +176,7 @@ jobs:
           sudo apt-get install -y -qq \
             qemu-system-arm \
             gcc-arm-none-eabi \
-            qemu-system-misc \
+            qemu-system-riscv \
             gcc-riscv64-unknown-elf
       - name: Bootstrap bare-metal targets + loader archives
         # Single provisioning path for every job (targets, ARM signing

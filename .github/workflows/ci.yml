@@ -13,8 +13,9 @@
 #
 # Install-tool apt names are for the ubuntu-26.04 image (baseline; container-proven):
 # package qemu-system-x provides /usr/bin/qemu-system-x86_64, package
-# qemu-system-misc provides /usr/bin/qemu-system-riscv32 (and riscv64),
-# and package binutils provides /usr/bin/ld.
+# qemu-system-riscv provides /usr/bin/qemu-system-riscv32 (and riscv64 — on
+# 26.04 qemu-system-misc does NOT carry the riscv binaries), and package
+# binutils provides /usr/bin/ld.
 #
 # Runs the full test matrix on every push/PR, including the poison
 # corpus, debug-mode (`.lang.debug`) leg, hermetic RSP client, and
@@ -74,6 +75,7 @@ jobs:
             fasm \
             qemu-system-x86 \
             qemu-system-arm \
+            qemu-system-riscv \
             qemu-system-misc \
             gcc-arm-none-eabi \
             gcc-riscv64-unknown-elf \
