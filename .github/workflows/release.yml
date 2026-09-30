@@ -1,0 +1,378 @@
+# Release gate (PLAN-RELEASE-1 S9, FR-18) — the §Q7 gate in order, fail-fast,
+# DRAFT-ONLY. This workflow NEVER publishes a release and CI NEVER holds a
+# private signing key (Q6): the tag/tarball signatures are produced on the
+# maintainer's machine by ci/cut-release.sh; this pipeline re-runs every gate
+# from the tagged SHA and validates artifact well-formedness (tarball ↔
+# checksum ↔ signature ↔ tag), leaving the draft for a human to read and
+# publish.
+#
+# Owner: repository maintainer. Fail-forward triage (Q1):
+#   gh run view <run-id> --log-failed
+#
+# Gate order (§Q7, all blocking on the three QEMU ISA platforms):
+#   1 verify      tag form (FR-7) + CHANGELOG section + verify-tag REPORT
+#   2 guards      ci/guards.sh (G-items incl. the dated-pin G54 and the
+#                 tag-form G55) + ci-lint.sh (actionlint/shellcheck/grep gates)
+#   3 matrix-*    the ci.yml x86_64 / arm / riscv legs, re-run from the tag
+#   4 port        ci/port.sh (Lean conformance + axiom audit — BLOCKING, Q7)
+#   5 differential ci/differential.sh (≥10^5 re-derivation agreement — BLOCKING)
+#   6 acceptance  ci/acceptance.sh (§11 acceptance matrix)
+#   7 artifacts   draft existence + §6.4 attachments + tarball↔checksum↔signature
+#   summary       gate results table + lab-status line + "publish is manual"
+#
+# Fuzz smoke (ci/fuzz.sh) is intentionally NON-blocking here: it ran blocking
+# in the pre-tag Integration workflow for the tagged SHA.
+#
+# Parallelism note (NFR-5 2h budget): the three arch legs run in parallel;
+# port/differential/acceptance run after guards in parallel with them (each is
+# independent of the arch builds) — `artifacts` waits on EVERY gate, so a red
+# leg anywhere leaves the draft unpublished.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read   # releases + repo contents (artifact verification)
+  actions: read    # ci/report-labs.sh: `gh run list` for the FR-24 lab line
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CI: "1"
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Gate 1 — tag identity (first, cheapest; fails fast on a malformed ref)
+  # ---------------------------------------------------------------------------
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Verify the release tag (FR-7 form + CHANGELOG + signature report)
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          rc=0
+          bash ci/release-verify-tag.sh "${{ github.ref_name }}" \
+            > "$RUNNER_TEMP/tag-verify.txt" 2>&1 || rc=$?
+          {
+            echo "### Tag verification"
+            echo ""
+            echo '```text'
+            cat "$RUNNER_TEMP/tag-verify.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
+      - name: Manual-dispatch note (not a tag ref)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          {
+            echo "### Tag verification"
+            echo ""
+            echo "Manual dispatch on \`${{ github.ref_name }}\` — not a tag ref. Tag-specific gates (verify/artifacts) are skipped; push a \`v*\` tag for a full §Q7 gate."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # Gate 2 — repo invariants + lint surface
+  # ---------------------------------------------------------------------------
+  guards:
+    runs-on: ubuntu-latest
+    needs: verify
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Repo invariants (G-items; the tag-form G55 runs because this is a v* tag ref)
+        run: bash ci/guards.sh
+      - name: Lint surface (actionlint + shellcheck + NFR-8 pin gates)
+        run: bash ci-lint.sh
+
+  # ---------------------------------------------------------------------------
+  # Gate 3 — the ci.yml arch legs, re-run from the tagged SHA
+  # ---------------------------------------------------------------------------
+  matrix-x86_64:
+    runs-on: ubuntu-latest
+    needs: guards
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install tools (x86_64)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            fasm \
+            qemu-system-x86 \
+            qemu-system-arm \
+            qemu-system-misc \
+            gcc-arm-none-eabi \
+            gcc-riscv64-unknown-elf \
+            binutils
+      - name: Build langc (goldens prerequisite, debug)
+        run: cargo build -p langc
+      - name: Statement goldens (PLAN-VERIFY-3 P1.3, blocking gate)
+        run: |
+          TYU_REGEN_STATEMENT_GOLDENS=1 cargo test --release -p tooling-tests --test statement_goldens
+          TYU_REGEN_STATEMENT_GOLDENS=1 cargo test --release -p tooling-tests --test statement_goldens
+          cargo test --release -p tooling-tests --test statement_goldens
+          test "$(find test-goldens/statements/x86_64-unknown-none -name '*.stmt.json' | wc -l)" -eq 6
+      - name: Bootstrap bare-metal targets + loader archives
+        run: bash ci/bootstrap-loaders.sh
+      - name: Test-delivery guard
+        run: bash ci/guards.sh
+      - name: Build (release)
+        run: cargo build --release -p langc -p tyu -p lmod-pack -p lmod-encrypt -p lmod-sign
+      - name: Platform QEMU matrix
+        run: |
+          ./target/release/tyu platform lint x86_64-unknown-none
+          ./target/release/tyu platform lint armv7m-unknown-none
+          ./target/release/tyu platform lint riscv32-unknown-none
+          ./target/release/tyu platform lint rp2350
+          ./target/release/tyu test --all-platforms --manifest=crates/execution-tests/fixtures/manifest.toml
+        env:
+          TYU_BIN_DIR: ${{ github.workspace }}/target/release
+      - name: Dead-code gate (effect/context consolidation, S13)
+        run: RUSTFLAGS="-D dead_code" cargo build --release -p semantics
+      - name: Workspace unit tests (all crates, default features)
+        run: cargo test --workspace --release
+        env:
+          TYU_BIN_DIR: ${{ github.workspace }}/target/release
+      - name: Golden codegen corpus
+        run: cargo test --release -p langc --test golden_codegen
+      - name: Encryption feature tests
+        run: cargo test --release -p loader-core --features encryption
+      - name: diag-core std feature tests
+        run: cargo test --release -p diag-core --features std
+      - name: Poison corpus
+        run: cargo test --release -p tyu --test poison
+      - name: Escalation test
+        run: cargo test --release -p tyu --test escalate
+      - name: Hang classification
+        run: cargo test --release -p tyu --test hang
+      - name: Stack witness
+        run: cargo test --release -p tyu --test stack_witness
+      - name: Debug-mode leg (with .lang.debug)
+        run: |
+          cargo test --release -p execution-tests --test x86_64_none -- trap_emits_framed_d_record
+      - name: RSP client integration (hermetic, no gdb needed)
+        run: cargo test --release -p rsp-client -- qemu_read_register_and_memory
+
+  matrix-arm:
+    runs-on: ubuntu-latest
+    needs: guards
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install tools (ARM)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            gcc-arm-none-eabi \
+            qemu-system-arm \
+            fasm \
+            binutils
+      - name: Bootstrap bare-metal targets + loader archives
+        run: bash ci/bootstrap-loaders.sh
+      - name: Test-delivery guard
+        run: bash ci/guards.sh
+      - name: Build langc
+        run: cargo build --release -p langc -p tyu
+      - name: ARM codegen unit tests
+        run: cargo test --release -p codegen-arm
+      - name: ARM runtime symbol export test
+        run: cargo test --release -p execution-tests --test arm -- runtime_exports_required_symbols
+      - name: ARM memory/MMIO codegen test
+        run: cargo test --release -p execution-tests --test arm -- arm_memory_load_store_asm arm_mmio_field_round_trip_asm
+      - name: ARM QEMU execution (trap, overflow)
+        run: cargo test --release -p execution-tests --test arm -- trap_emits_framed_d_record trap_overflow_emits_trap_code_10
+
+  matrix-riscv:
+    runs-on: ubuntu-latest
+    needs: guards
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install tools (RISC-V)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            gcc-riscv64-unknown-elf \
+            qemu-system-misc \
+            fasm \
+            binutils
+      - name: Bootstrap bare-metal targets + loader archives
+        run: bash ci/bootstrap-loaders.sh
+      - name: Test-delivery guard
+        run: bash ci/guards.sh
+      - name: Build langc
+        run: cargo build --release -p langc -p tyu
+      - name: RISC-V codegen unit tests
+        run: cargo test --release -p codegen-riscv
+      - name: RISC-V runtime symbol export test
+        run: cargo test --release -p execution-tests --test riscv -- runtime_exports_required_symbols
+      - name: RISC-V QEMU execution (trap, overflow)
+        run: cargo test --release -p execution-tests --test riscv -- trap_emits_framed_d_record trap_overflow_emits_trap_code_10
+
+  # ---------------------------------------------------------------------------
+  # Gate 4/5 — the Lean port gate (BLOCKING, Q7) then the re-derivation
+  # differential (BLOCKING). Sequential by design: the differential builds and
+  # runs the port's rederive exe. Both need the pinned Lean toolchain — elan
+  # installs it and the scripts resolve the pin themselves.
+  # ---------------------------------------------------------------------------
+  port:
+    runs-on: ubuntu-latest
+    needs: guards
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq fasm qemu-system-x86 binutils
+      - name: Install the pinned Lean toolchain (elan)
+        run: |
+          bash ci/retry.sh -- curl -fsSL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o /tmp/elan-init.sh
+          sh /tmp/elan-init.sh -y --default-toolchain none >/dev/null
+          ~/.elan/bin/elan toolchain install "$(cat verification/ports/lean/lean-toolchain)" >/dev/null
+      - name: Port gate (conformance + axiom audit, BLOCKING — Q7)
+        run: PATH="$HOME/.elan/bin:$PATH" bash ci/port.sh
+
+  differential:
+    runs-on: ubuntu-latest
+    needs: port
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq fasm qemu-system-x86 binutils
+      - name: Install the pinned Lean toolchain (elan)
+        run: |
+          bash ci/retry.sh -- curl -fsSL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o /tmp/elan-init.sh
+          sh /tmp/elan-init.sh -y --default-toolchain none >/dev/null
+          ~/.elan/bin/elan toolchain install "$(cat verification/ports/lean/lean-toolchain)" >/dev/null
+      - name: Re-derivation differential (≥10^5 programs, exact agreement, BLOCKING — Q7)
+        run: PATH="$HOME/.elan/bin:$PATH" bash ci/differential.sh
+
+  # ---------------------------------------------------------------------------
+  # Gate 6 — the §11 acceptance matrix. Runs WITHOUT --all: the toolchain-tier
+  # gates (port conformance, differential) are OWNED by the `port` and
+  # `differential` jobs above and report SKIP here (no triple-running the Lean
+  # gates — the acceptance-skip mechanic is exactly this ownership split).
+  # ---------------------------------------------------------------------------
+  acceptance:
+    runs-on: ubuntu-latest
+    needs: guards
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            fasm \
+            qemu-system-x86 \
+            binutils
+      - name: Bootstrap bare-metal targets + loader archives
+        run: bash ci/bootstrap-loaders.sh
+      - name: Build (debug — the acceptance e2e gates resolve the in-tree bins)
+        run: cargo build -p langc -p tyu
+      - name: Acceptance matrix (P16.3, §11.1–§11.10)
+        run: bash ci/acceptance.sh
+        env:
+          TYU_BIN_DIR: ${{ github.workspace }}/target/debug
+
+  # ---------------------------------------------------------------------------
+  # Gate 7 — artifact well-formedness (draft + §6.4 tarball/checksum/signature)
+  # ---------------------------------------------------------------------------
+  artifacts:
+    runs-on: ubuntu-latest
+    needs: [verify, guards, matrix-x86_64, matrix-arm, matrix-riscv, port, differential, acceptance]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Verify the draft artifacts (tarball ↔ checksum ↔ signature ↔ tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          set -o pipefail
+          bash ci/release-verify-artifacts.sh "${{ github.repository }}" "${{ github.ref_name }}" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Manual-dispatch note (artifacts verification needs a tag ref)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          {
+            echo "Artifact verification skipped — \`${{ github.ref_name }}\` is not a tag ref (no draft release to verify)."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Record the verification snippet for the release notes
+        if: always()
+        run: |
+          {
+            echo "Consumer verification (see SECURITY.md):"
+            echo '```sh'
+            echo "ssh-keygen -Y verify -f docs/release-signing-key.asc -I <principal> -n git -s tyu-<VER>.tar.gz.sig < tyu-<VER>.tar.gz"
+            echo "sha256sum -c tyu-<VER>.tar.gz.sha256"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # Advisory gate — fuzz smoke (Q7): ci/fuzz.sh over the tracked seeds runs
+  # NON-BLOCKING here (it runs blocking in integration.yml for the same SHA).
+  # continue-on-error keeps a red fuzz leg from failing the run; the summary
+  # still reports it so a persistent fuzz regression is visible, not hidden.
+  # ---------------------------------------------------------------------------
+  fuzz-smoke:
+    runs-on: ubuntu-latest
+    needs: guards
+    continue-on-error: true
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install pinned nightly + cargo-fuzz
+        run: |
+          bash ci/retry.sh -- rustup toolchain install nightly-2026-09-29 --profile minimal
+          bash ci/retry.sh -- cargo +nightly-2026-09-29 install cargo-fuzz --locked
+      - name: Decode targets with tracked seeds (P16.3, §11 criterion 8 — advisory)
+        run: bash ci/fuzz.sh --seconds 60
+
+  # ---------------------------------------------------------------------------
+  # Summary — gate results table + lab-status line (FR-24, reporting only) +
+  # the "publish is manual" notice. Runs ALWAYS so a red gate still renders.
+  # ---------------------------------------------------------------------------
+  summary:
+    runs-on: ubuntu-latest
+    needs: [verify, guards, matrix-x86_64, matrix-arm, matrix-riscv, port, differential, acceptance, artifacts, fuzz-smoke]
+    if: always()
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Release gate summary
+        run: |
+          row() { printf '| %s | %s |\n' "$1" "$2"; }
+          {
+            echo "## Release gate summary — ${{ github.ref_name }}"
+            echo ""
+            echo "| Gate (§Q7 order) | Result |"
+            echo "|---|---|"
+            row verify "${{ needs.verify.result }}"
+            row guards "${{ needs.guards.result }}"
+            row matrix-x86_64 "${{ needs.matrix-x86_64.result }}"
+            row matrix-arm "${{ needs.matrix-arm.result }}"
+            row matrix-riscv "${{ needs.matrix-riscv.result }}"
+            row port "${{ needs.port.result }}"
+            row differential "${{ needs.differential.result }}"
+            row acceptance "${{ needs.acceptance.result }}"
+            row artifacts "${{ needs.artifacts.result }}"
+            row "fuzz-smoke (advisory)" "${{ needs.fuzz-smoke.result }}"
+            echo ""
+            echo "Lab status (non-gating, FR-24): $(bash ci/report-labs.sh "${{ github.sha }}")"
+            echo ""
+            echo "**Publish is MANUAL** — read the draft, then \`gh release publish ${{ github.ref_name }}\`."
+            echo "A red gate leaves the draft unpublished (delete the tag or mark it \`do-not-install\` — §Q7)."
+          } >> "$GITHUB_STEP_SUMMARY"

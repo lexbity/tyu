@@ -46,6 +46,10 @@
 #   G53 PLAN-RELEASE-1 S2: every workflow job declares `timeout-minutes`.
 #   G54 PLAN-RELEASE-1 S3: the toolchain pin is a dated nightly
 #       (nightly-YYYY-MM-DD), not a floating `nightly`.
+#   G55 PLAN-RELEASE-1 S9 (FR-7): a v* tag ref must be the canonical
+#       three-component zero-patch form (vMAJOR.MINOR.0) with a changelog
+#       section — delegated to ci/release-verify-tag.sh, the single
+#       implementation of the tag-format check.
 #
 # Escape hatch: add `# guards: allow-no-tests` as a comment in the
 # package's Cargo.toml to suppress G1/G2 for that package.  This is
@@ -1082,11 +1086,22 @@ failures=$((failures + g40_fail))
 # the check itself — mechanical, zero judgement, no bypass path short of
 # editing this gate.
 g28_fail=0
-if ! cargo fmt --check >/dev/null 2>&1; then
-    msg $RED "  G28 FAIL: rustfmt drift — run 'cargo fmt' (workspace bar, §P0)"
-    cargo fmt --check 2>&1 | grep "^Diff in" | head -5 | while read -r d; do
-        msg $RED "    $d"
-    done
+fmt_out="$(cargo fmt --check 2>&1 || true)"
+if [ -n "$fmt_out" ]; then
+    if printf '%s\n' "$fmt_out" | grep -q "^Diff in"; then
+        msg $RED "  G28 FAIL: rustfmt drift — run 'cargo fmt' (workspace bar, §P0)"
+        printf '%s\n' "$fmt_out" | grep "^Diff in" | head -5 | while read -r d; do
+            msg $RED "    $d"
+        done
+    else
+        # Not drift — a broken fmt invocation (e.g. a missing component on a
+        # minimal-profile toolchain). Show it: a guard that cannot explain
+        # its failure is a diagnosis hole.
+        msg $RED "  G28 FAIL: cargo fmt errored (not drift):"
+        printf '%s\n' "$fmt_out" | head -3 | while read -r d; do
+            msg $RED "    $d"
+        done
+    fi
     g28_fail=1
 fi
 [ "$g28_fail" -eq 0 ] && msg $GREEN "  G28: rustfmt clean (workspace bar)"
@@ -1936,12 +1951,16 @@ failures=$((failures + g51_fail))
 # the state this release-engineering plan exists to retire. This guard makes
 # it impossible for the `.gitignore` line to return (or the workflows to go
 # missing) without a deliberate, recorded change.
+#
+# The complete shipped workflow surface (kept in one list; G52 and G53 share
+# it so the "must exist" and "must timeout" invariants cannot drift apart).
+TRACKED_WORKFLOWS=".github/workflows/ci.yml .github/workflows/integration.yml .github/workflows/install-verify.yml .github/workflows/release.yml"
 g52_fail=0
 if grep -qx '.github' .gitignore 2>/dev/null; then
     msg $RED "  G52 FAIL: .gitignore ignores .github — the CI evidence surface must stay tracked (PLAN-RELEASE-1 S1)"
     g52_fail=1
 fi
-for wf in .github/workflows/ci.yml .github/workflows/integration.yml; do
+for wf in $TRACKED_WORKFLOWS; do
     if [ ! -f "$wf" ]; then
         msg $RED "  G52 FAIL: $wf missing — the tracked workflow surface is incomplete (PLAN-RELEASE-1 S1)"
         g52_fail=1
@@ -1955,8 +1974,9 @@ failures=$((failures + g52_fail))
 # job unkillable; the NFR-1 wall-clock budgets are only enforceable because
 # every leg is bounded.
 g53_fail=0
-for wf in .github/workflows/ci.yml .github/workflows/integration.yml; do
-    jobs=$(awk '/^jobs:/{in_jobs=1; next} in_jobs && /^  [a-zA-Z0-9_]+:/{c++} END{print c+0}' "$wf")
+for wf in $TRACKED_WORKFLOWS; do
+    [ -f "$wf" ] || continue
+    jobs=$(awk '/^jobs:/{in_jobs=1; next} in_jobs && /^  [a-zA-Z0-9_-]+:/{c++} END{print c+0}' "$wf")
     timeouts=$(grep -c "timeout-minutes:" "$wf")
     if [ "$timeouts" -lt "$jobs" ]; then
         msg $RED "  G53 FAIL: $wf has $jobs jobs but only $timeouts timeout-minutes"
@@ -1983,6 +2003,38 @@ case "$pin" in
 esac
 [ "$g54_fail" -eq 0 ] && msg $GREEN "  G54: toolchain pin is a dated nightly ($pin)"
 failures=$((failures + g54_fail))
+
+# G55: PLAN-RELEASE-1 S9 (FR-7) — a v* tag ref must be the canonical
+# three-component zero-patch form (`vMAJOR.MINOR.0`) with a changelog section.
+# Enforced by delegating to ci/release-verify-tag.sh — the SINGLE
+# implementation of the tag-format check (shared with release.yml's `verify`
+# gate), so the regex cannot drift between the fail-fast gate and this
+# repo-invariant. Non-tag refs (every branch/PR run, and local dev) are
+# vacuously green — the invariant only bites when a v* tag ref is actually
+# being processed (the release gate runs guards.sh on the tag ref).
+g55_fail=0
+g55_tag=""
+case "${GITHUB_REF:-}" in
+    refs/tags/*) g55_tag="${GITHUB_REF#refs/tags/}" ;;
+    *)
+        # local/branch run: enforce only when HEAD is exactly a v* tag
+        g55_head="$(git describe --tags --exact-match HEAD 2>/dev/null || true)"
+        case "$g55_head" in
+            v*) g55_tag="$g55_head" ;;
+        esac
+        ;;
+esac
+if [ -n "$g55_tag" ]; then
+    if bash ci/release-verify-tag.sh "$g55_tag" >/dev/null 2>&1; then
+        msg $GREEN "  G55: $g55_tag is a canonical vMAJOR.MINOR.0 release tag (FR-7)"
+    else
+        msg $RED "  G55 FAIL: $g55_tag is not a canonical vMAJOR.MINOR.0 release tag (FR-7 / §Q2 — real patch tags are forbidden; the SHA is the patch identity)"
+        g55_fail=1
+    fi
+else
+    msg $GREEN "  G55: no release-tag ref — tag-form invariant vacuous"
+fi
+failures=$((failures + g55_fail))
 
 echo ""
 msg $GREEN "============================================"

@@ -13,6 +13,27 @@ statement band rule that makes a version policy load-bearing.
 Toolchain pin for all releases: `rust-toolchain.toml`
 (`nightly-2026-09-29`; a pin-date bump must be noted here).
 
+## The release pipeline (S9 — the runbook)
+
+1. `cargo test --workspace --release` and `bash ci-lint.sh` are green on
+   `main`; `gh run list --workflow CI`/`Integration` for the release commit
+   show `success`.
+2. **Cut and sign on this machine** (never in CI — Q6):
+   `bash ci/cut-release.sh v0.1.0` — bumps crate versions, commits
+   `release: vX.Y.0`, creates the annotated SSH-signed tag, archives
+   `tyu-X.Y.0.tar.gz` (+ `.sha256`, `.sig`), and opens a **DRAFT** release.
+   Preview mechanics with `bash ci/cut-release.sh --dry-run v0.1.0`.
+3. Push the tag: `git push origin vX.Y.0`.
+4. `.github/workflows/release.yml` runs the §Q7 gate from the tagged SHA
+   (verify → guards → arch matrix → port → differential → acceptance →
+   artifacts) and renders the gate table + lab status in the run summary.
+   It never publishes.
+5. Read the draft, verify it per SECURITY.md, then publish manually
+   (`gh release publish vX.Y.0`).
+
+Branch protection on `main` (PR + green CI) and tag protection on `v*` are
+runbook prerequisites (see SECURITY.md §Supply chain).
+
 ## Policy
 
 * **MAJOR** — proof-migration release. Statement encodings may break;
@@ -38,20 +59,7 @@ cut — the version must be MINOR with a migration map instead.
 * Fingerprint: `SHA256:b90QFv2z8+MccQj3+IvxSRS9ITKA9XmxZ3sD+y7OmDc`
 * Signatures are produced on the maintainer's machine, never in CI (Q6).
   CI validates artifact well-formedness only.
-* Consumer verification (per asset):
-  ```sh
-  # tag: ssh-keygen -Y verify reads the signed message from stdin
-  git -c gpg.format=ssh \
-      -c gpg.ssh.allowedSignersFile=docs/release-signing-key.asc \
-      tag -v vX.Y.0
-  # tarball detached signature (data is read from stdin)
-  ssh-keygen -Y verify \
-      -f docs/release-signing-key.asc   # file contains the signer principal line
-      -I liuprestin@gmail.com -n git \
-      -s tyu-X.Y.0.tar.gz.sig < tyu-X.Y.0.tar.gz
-  # checksum
-  sha256sum -c tyu-X.Y.0.tar.gz.sha256
-  ```
-  (Side note: OpenSSH 9.x `-Y sign` emits the signature on stdout; OpenSSH
-  10.x writes `<file>.sig` itself. Verification is identical; `-Y verify`
-  always reads the data from stdin.)
+* Consumer verification is **SECURITY.md §Verifying a release** — the same
+  `ssh-keygen -Y verify` / `checksum` / `git archive` commands the release
+  gate (`ci/release-verify-artifacts.sh`) executes; the key file doubles as
+  the allowed-signers file.

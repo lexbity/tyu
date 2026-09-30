@@ -33,6 +33,11 @@ This repository is a documentation-heavy systems workspace. The main enforcement
 - Releases are cut with `ci/cut-release.sh vX.Y.0` — never by hand. The
   script refuses a cut on a dirty tree, a missing changelog section, an
   existing tag, or a previous gate that is red.
+- Pushing a `v*` tag runs the release gate (`.github/workflows/release.yml`):
+  the §Q7 gates in order (verify → guards → arch matrix → port → differential
+  → acceptance → artifacts), fail-fast and DRAFT-only — CI never publishes
+  and never holds the signing key (Q6). `SECURITY.md` documents signature
+  verification and key-loss recovery.
 - A red CI run is a diagnostic, not a reason to remove CI: triage it
   fix-forward with `gh run view <run-id> --log-failed`, classify the
   failure (environment vs code vs workflow), fix, and push. Disabling or

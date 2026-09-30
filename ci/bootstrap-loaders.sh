@@ -26,6 +26,14 @@ cd "$ROOT"
 
 msg() { echo "bootstrap: $*"; }
 
+# --- 0. workspace bar components on the pinned toolchain -------------------
+# A runner's rustup auto-provisions the rust-toolchain.toml pin under ITS OWN
+# profile — GitHub runners set `rustup set profile minimal`, which omits
+# rustfmt and clippy. The workspace bar (G28 fmt / G29 clippy) then fails
+# with "'cargo-fmt' is not installed" (S9 audit finding). Provision the bar
+# explicitly. Network steps — retried per ci/retry.sh.
+bash "$ROOT/ci/retry.sh" -- rustup component add rustfmt clippy
+
 # --- 1. precompiled-std bare-metal targets ---------------------------------
 # network step — retried per ci/retry.sh (build steps below stay fail-closed)
 bash "$ROOT/ci/retry.sh" -- rustup target add x86_64-unknown-none thumbv7m-none-eabi

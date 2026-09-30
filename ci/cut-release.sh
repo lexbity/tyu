@@ -233,7 +233,11 @@ if ! git -c gpg.format=ssh -c user.signingkey="$SIGNING_KEY" tag -s "$TAG" -m "t
     die "SSH-signed tag creation failed — is the key in your agent or reachable by path?"
 fi
 say "   tag created: $(git rev-parse --short "$TAG")"
-if git cat-file -p "$TAG" | grep -q '^gpgsig'; then
+# An annotated TAG object carries its SSH signature inline in the body
+# (-----BEGIN SSH SIGNATURE-----) — the `gpgsig` header pattern is for
+# COMMIT objects and false-negatives here (S9 audit finding: a correctly
+# signed tag was reported MISSING).
+if git cat-file -p "$TAG" | grep -q 'BEGIN SSH SIGNATURE'; then
     say "   tag signature present (SSH)"
 else
     say "   tag signature MISSING"

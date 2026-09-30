@@ -29,6 +29,13 @@ fn ensure_langc() {
 }
 
 fn tool_available(name: &str) -> bool {
+    // Workspace binaries (langc, lmod-*) resolve through the shared chain
+    // (TYU_BIN_DIR / target dirs) — a bare `which` cannot see them under CI,
+    // where they live only in the built release dir. `which` stays the
+    // fallback for non-workspace tools (fasm, qemu-system-*).
+    if common::bin::try_resolve(name).is_some() {
+        return true;
+    }
     Command::new("which")
         .arg(name)
         .output()

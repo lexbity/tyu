@@ -1,5 +1,10 @@
 # Tyu programming language
 
+[![CI](https://github.com/lexbity/tyu/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/lexbity/tyu/actions/workflows/ci.yml)
+[![Integration](https://github.com/lexbity/tyu/actions/workflows/integration.yml/badge.svg?branch=main&event=push)](https://github.com/lexbity/tyu/actions/workflows/integration.yml)
+[![Install verify](https://github.com/lexbity/tyu/actions/workflows/install-verify.yml/badge.svg)](https://github.com/lexbity/tyu/actions/workflows/install-verify.yml)
+[![Release](https://github.com/lexbity/tyu/actions/workflows/release.yml/badge.svg)](https://github.com/lexbity/tyu/actions/workflows/release.yml)
+
 Tyu is a concatenative, stack-based systems language for embedded and simulation targets. This repository contains the compiler, loader, module tooling, runtime assembly, sysroot sources, and test suites.
 
 ## Core idea

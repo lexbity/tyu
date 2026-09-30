@@ -76,7 +76,7 @@ fi
 # --- build ----------------------------------------------------------------
 cd "$PORT_DIR"
 msg 2 "  port.sh: lake build (Tyu + conformance)"
-lake build Tyu conformance
+lake build Tyu conformance gen
 
 # --- conformance ----------------------------------------------------------
 VECTOR_CORPUS=(
