@@ -1,0 +1,23 @@
+# labs/ch08/manifest.toml — the chapter's QEMU fixture manifest
+[fixtures]
+ignore = [
+  "red-01-unknown-instance.mod",
+  "red-02-row-mismatch.mod",
+  "red-03-misaligned.mod",
+  "red-04-bitfield-addressable.mod",
+  "red-05-needs-descriptor.mod",
+]
+
+[[fixture]]
+name = "scratch_rt"
+file = "green-01-scratch-roundtrip.mod"
+axes = ["mmio"]
+targets = ["x86_64-unknown-none"]
+requires = []
+
+[[fixture]]
+name = "mmio_strategies_x86"
+file = "green-02-strategies.mod"
+axes = ["mmio"]
+targets = ["x86_64-unknown-none"]
+requires = []

@@ -1,0 +1,5 @@
+# labs/ch10/red-02/Math.def — Lab 10.4 (red): the interface, honest
+module Math;
+export { double };
+: double ( i64 -- i64 ) ;
+end;

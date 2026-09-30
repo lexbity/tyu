@@ -1,0 +1,6 @@
+# labs/ch10/red-03/E.def — Lab 10.5 (red): the interface declares an
+# effect the implementation does not have
+module E;
+export { fx };
+: fx ( -- ) performs {alloc} ;
+end;
