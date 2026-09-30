@@ -41,6 +41,8 @@
 #       guard form).
 #   G23 NFR-10 doc gates: README doc map, ch03 both-policies example, ch04
 #       contract obligations/elision, error-registry E6410/E6413.
+#   G52 PLAN-RELEASE-1 S1: `.github` must stay tracked — the CI evidence
+#       surface is repository truth, never an ignore line.
 #
 # Escape hatch: add `# guards: allow-no-tests` as a comment in the
 # package's Cargo.toml to suppress G1/G2 for that package.  This is
@@ -872,18 +874,18 @@ if ! grep -q "ir-op-semantics" README.md \
     msg $RED "  G23 FAIL: README doc map must register the verification design docs"
     g23_fail=1
 fi
-if ! grep -q 'E6410' devdocs/book_v3/appendix-b-error-registry.md \
-   || ! grep -q 'E6413' devdocs/book_v3/appendix-b-error-registry.md; then
+if ! grep -q 'E6410' docs/book/appendix-b-error-registry.md \
+   || ! grep -q 'E6413' docs/book/appendix-b-error-registry.md; then
     msg $RED "  G23 FAIL: error-registry appendix must carry E6410/E6413"
     g23_fail=1
 fi
-if ! grep -q "Compile-time discharge" devdocs/book_v3/ch03-types.md \
-   || ! grep -q "no-open" devdocs/book_v3/ch03-types.md; then
+if ! grep -q "Compile-time discharge" docs/book/ch03-types.md \
+   || ! grep -q "no-open" docs/book/ch03-types.md; then
     msg $RED "  G23 FAIL: ch03 must teach the both-policies compile-time-discharge example"
     g23_fail=1
 fi
-if ! grep -q "Contract obligations and elision" devdocs/book_v3/ch04-contracts.md \
-   || ! grep -q "module-loading" devdocs/book_v3/ch04-contracts.md; then
+if ! grep -q "Contract obligations and elision" docs/book/ch04-contracts.md \
+   || ! grep -q "module-loading" docs/book/ch04-contracts.md; then
     msg $RED "  G23 FAIL: ch04 must teach contract obligations and dynamic-export retention"
     g23_fail=1
 fi
@@ -1347,7 +1349,7 @@ for s in verification/ports/lean/tests/tamper/run-delete-theorem.sh \
     fi
 done
 for code in 6416 6417 6418 6419 6420 6421; do
-    if ! grep -q "E$code" devdocs/book_v3/appendix-b-error-registry.md; then
+    if ! grep -q "E$code" docs/book/appendix-b-error-registry.md; then
         msg $RED "  G36 FAIL: appendix-b error registry missing E$code (P6/P7 allocation, §6.9)"
         g36_fail=1
     fi
@@ -1668,7 +1670,7 @@ if [ ! -f fuzz/fuzz_targets/cert_index_decode.rs ]; then
 fi
 # Error-registry rows (65xx band).
 for code in E6500 E6501 E6502 E6503 E6504 E6510; do
-    if ! grep -q "$code" devdocs/book_v3/appendix-b-error-registry.md; then
+    if ! grep -q "$code" docs/book/appendix-b-error-registry.md; then
         msg $RED "  G45 FAIL: appendix-b error registry missing $code"
         g45_fail=1
     fi
@@ -1913,9 +1915,37 @@ for t in obl_v2_decode verdicts_v2_decode cert_index_decode; do
 done
 grep -q "invalid_utf8_lead_byte_in_string_fails_closed_not_hangs" crates/verifier/tests/codec_roundtrip.rs || { msg $RED "  G51 FAIL: the P16.3 codec livelock regression test missing"; g51_fail=1; }
 grep -q 'len == 0 || start + len > self.b.len()' crates/verifier/src/codec.rs || { msg $RED "  G51 FAIL: the codec zero-width-sequence guard missing"; g51_fail=1; }
-grep -q "SUPERSEDED" devdocs/tyu-research/formal-verification.md || { msg $RED "  G51 FAIL: the PLAN-VERIFY-2 superseded banner missing"; g51_fail=1; }
+# The PLAN-VERIFY-2 superseded banner lives in the gitignored scratchpad
+# (devdocs/, PLAN-RELEASE-1 §8 — its versioning is out of scope). It can
+# never exist on a CI checkout, so the check is enforced when the scratchpad
+# file is present locally and skips — never fails — when it is absent.
+if [ -f devdocs/tyu-research/formal-verification.md ]; then
+    grep -q "SUPERSEDED" devdocs/tyu-research/formal-verification.md || { msg $RED "  G51 FAIL: the PLAN-VERIFY-2 superseded banner missing"; g51_fail=1; }
+else
+    echo "  G51: PLAN-VERIFY-2 superseded banner: skipped (devdocs/tyu-research/formal-verification.md absent — gitignored scratchpad, no evidence to enforce)"
+fi
 [ "$g51_fail" -eq 0 ] && msg $GREEN "  G51: P16.3 — acceptance matrix (acceptance.sh + ACCEPTANCE.md), seeded fuzz smoke, NFR measurer, codec-livelock fix + regression"
 failures=$((failures + g51_fail))
+
+# G52: PLAN-RELEASE-1 S1 — the repo's own delivery path is evidence.
+# `.github` MUST be tracked: a gitignored CI surface is an evidence-deletion
+# anti-pattern for a fail-closed-verification toolchain, and it is exactly
+# the state this release-engineering plan exists to retire. This guard makes
+# it impossible for the `.gitignore` line to return (or the workflows to go
+# missing) without a deliberate, recorded change.
+g52_fail=0
+if grep -qx '.github' .gitignore 2>/dev/null; then
+    msg $RED "  G52 FAIL: .gitignore ignores .github — the CI evidence surface must stay tracked (PLAN-RELEASE-1 S1)"
+    g52_fail=1
+fi
+for wf in .github/workflows/ci.yml .github/workflows/integration.yml; do
+    if [ ! -f "$wf" ]; then
+        msg $RED "  G52 FAIL: $wf missing — the tracked workflow surface is incomplete (PLAN-RELEASE-1 S1)"
+        g52_fail=1
+    fi
+done
+[ "$g52_fail" -eq 0 ] && msg $GREEN "  G52: .github tracked — the CI evidence surface is repository truth"
+failures=$((failures + g52_fail))
 
 echo ""
 msg $GREEN "============================================"

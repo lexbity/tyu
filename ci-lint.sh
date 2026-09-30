@@ -294,25 +294,31 @@ check_50xx_corpus() {
 }
 
 # --- 9. M4 borrow exclusivity survey ---
+# devdocs/ is a gitignored scratchpad (PLAN-RELEASE-1 §8 — its versioning is
+# explicitly out of scope). The survey script lives there and never existed
+# in git; demanding it on a fresh checkout (CI, where devdocs/ is absent)
+# reds the lint gate on every run. The check stays LIVE when the scratchpad
+# script is present (local maintainer runs), and skips — it must not fail —
+# when the script is absent. A scratchpad absence is not a code defect.
 check_m4_survey() {
     local rc=0
     if [ -f "devdocs/handoff/m4-survey.sh" ]; then
         bash devdocs/handoff/m4-survey.sh --ci || rc=1
     else
-        msg $RED "  M4 SURVEY: devdocs/handoff/m4-survey.sh not found"
-        rc=1
+        echo "  M4 SURVEY: skipped (devdocs/handoff/m4-survey.sh absent — gitignored scratchpad, no evidence to enforce)"
     fi
     return $rc
 }
 
 # --- 10. Syntax decisions survey ---
+# Same scratchpad rule as check_m4_survey: the script is gitignored by
+# design; its absence must skip, never red, the evidence surface.
 check_syntax_survey() {
     local rc=0
     if [ -f "devdocs/handoff/syntax-survey.sh" ]; then
         bash devdocs/handoff/syntax-survey.sh --ci || rc=1
     else
-        msg $RED "  SYNTAX SURVEY: devdocs/handoff/syntax-survey.sh not found"
-        rc=1
+        echo "  SYNTAX SURVEY: skipped (devdocs/handoff/syntax-survey.sh absent — gitignored scratchpad, no evidence to enforce)"
     fi
     return $rc
 }

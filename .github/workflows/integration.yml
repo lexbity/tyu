@@ -1,8 +1,13 @@
 # Integration — heavy corpus tests (not per-commit).
 #
-# Runs the full tooling-test and loader-test suites, the diagnostic/
-# effect/encryption corpus, and cross-architecture module loading tests.
-# Triggered on push to main or manually.
+# Owner: repository maintainer. Heavy suites: tooling-test and loader-test
+# corpora, the diagnostic/effect/encryption corpus, cross-architecture
+# module loading, the Lean port gate, and the re-derivation differential.
+# Triggered on push to any branch, on PRs to main, and manually.
+#
+# Evidence-surface discipline (PLAN-RELEASE-1 Q1): a red run is triaged
+# fix-forward with `gh run view <run-id> --log-failed`; disabling a job
+# without an inline justification comment is a review-blocking change.
 #
 # Every job exports TYU_BIN_DIR so all e2e suites consume the same
 # release binary that CI built — never a stale debug binary.
@@ -11,8 +16,17 @@ name: Integration
 
 on:
   push:
+    branches: ["**"]
+  pull_request:
     branches: [main]
   workflow_dispatch:
+
+# Cancel superseded runs for the same ref; bound every job (PLAN-RELEASE-1
+# FR-2 / NFR-1: integration ≤ 90 min — the port job's 90-min timeout
+# reflects the Lean elaboration + differential budget).
+concurrency:
+  group: workflows-${{ github.ref }}-integration
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -24,6 +38,7 @@ jobs:
   # ---------------------------------------------------------------------------
   tooling:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - name: Install tools
@@ -49,6 +64,7 @@ jobs:
   # ---------------------------------------------------------------------------
   loader:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Install tools
@@ -71,6 +87,7 @@ jobs:
   # ---------------------------------------------------------------------------
   corpus:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Install tools
@@ -99,6 +116,7 @@ jobs:
   # refers to — wired HERE (heavy: installs the pinned Lean toolchain).
   port:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - name: Install tools
@@ -126,6 +144,7 @@ jobs:
   # ---------------------------------------------------------------------------
   rsp:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - name: Install tools
@@ -148,6 +167,7 @@ jobs:
   # ---------------------------------------------------------------------------
   concurrency:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - name: Install tools
@@ -177,6 +197,7 @@ jobs:
   # ---------------------------------------------------------------------------
   e2e:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Install tools
@@ -208,6 +229,7 @@ jobs:
   # ---------------------------------------------------------------------------
   acceptance:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Install tools
@@ -230,6 +252,7 @@ jobs:
   # ---------------------------------------------------------------------------
   fuzz:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Install nightly + cargo-fuzz
