@@ -498,7 +498,8 @@ RF_TMP="$(mktemp -d)"
     #    "source"`, `relies: ["T-S"]`, refined hash), and asserts the langc
     #    discharge/open fail-closed stances (`--verify-policy=proven`
     #    included).
-    ( cd "$ROOT" && TYU_REFINED_E2E=1 cargo test -q -p tooling-tests --test refined_proof_e2e 2>&1 | tail -3 ) || exit 1
+    ( cd "$ROOT" && TYU_REFINED_E2E=1 cargo test -q -p tooling-tests --test refined_proof_e2e 2>&1 \
+        | tee /tmp/port-p13.log | tail -30 ) || exit 1
     cp "$RF/Uart7.obl.json" "$RF_TMP/"
     # 1. THE REFUSAL (shell-native): without the context, the modeled
     #    bundle's MMIO-word statements are omitted (`refined-read-unbound`)
