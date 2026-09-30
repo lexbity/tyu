@@ -1,0 +1,10 @@
+# defs-then-fault — definitions from a compiled submission commit even when
+# its phrase then faults (transactions #1/#2, §7.3): the dictionary survives.
+:fuel 100000
+: f ( i64 -- i64 ) dup + ;
+1 f
+:stack
+: trap-now ( -- ) recurse ; : recurse ( -- ) recurse ; trap-now
+:stack
+1 f
+:stack

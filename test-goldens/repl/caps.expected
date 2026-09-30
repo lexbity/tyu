@@ -1,0 +1,28 @@
+tyu.repl-transcript/1
+spec x86_64-unknown-linux-gnu
+---
+:fuel 100000
+fuel: 100000
+---
+: flood ( -- ) @repeat 4100 [1 ] @repeat 4100 [drop ] ;
+status: compile-error E3905
+stack: -
+diag: E3905 @228..229 typecheck error E3905
+---
+flood
+status: compile-error E3200
+stack: -
+diag: E3200 @23..34 typecheck error E3200
+---
+: huge ( -- ) @repeat 17000 [0 ] @repeat 17000 [drop ] ;
+status: compile-error E9154
+stack: -
+diag: E9154 @0..0 session source exceeds the 64 KiB cap
+---
+:stack
+stack: -
+---
+:ir
+ir: none
+---
+submits: 3

@@ -6,12 +6,16 @@
 //! (`ir::Module` structs). It is a product, not a test surface (DEC-1, §Q1).
 //!
 //! P1 shipped the fork's provenance ([`frag`], pinned to the frozen upstream
-//! by the G52 differential). P2 ships the production engine: [`compile`]
+//! by the G52 differential). P2 shipped the production engine: [`compile`]
 //! (source → `build_ir` → `ir::Module` through the [`SourceTable`] seam),
 //! [`engine`] (the exhaustive concrete `OpKind` interpreter), [`heap`]
 //! (the §6.7 region arena), [`builtins`] (`testio.*` + the region ABI),
 //! plus [`value`]/[`fuel`]/[`trace`]/[`diag`]/[`periph`]. Byte-parity with
-//! hosted native is the G53 differential (`tests/exec_parity.rs`).
+//! hosted native is the G53 differential (`tests/exec_parity.rs`). P3 adds
+//! the REPL **session** layer — [`ReplSession`] with persistent stack/heap,
+//! transactional phrases (rollback via the [`journal`], DEC-4..DEC-6),
+//! phrase signature inference ([`phrase`]), and the byte-pinned session
+//! goldens (`test-goldens/repl/`, G56).
 //!
 //! Discipline (FR-1, I-6): `#![no_std]` + `alloc`, in-tree dependencies only
 //! (R-A), `#![forbid(unsafe_code)]`.
@@ -34,7 +38,10 @@ pub mod diag;
 pub mod engine;
 pub mod fuel;
 pub mod heap;
+pub mod journal;
 pub mod periph;
+pub mod phrase;
+pub mod session;
 pub mod trace;
 pub mod value;
 
@@ -42,11 +49,14 @@ pub use compile::{compile, Compiled, DictTarget, SourceTable, X86_64_LINUX_SPEC}
 pub use diag::Diag;
 pub use engine::{Engine, ExecState, Outcome};
 pub use fuel::Fuel;
+pub use journal::{Effect, Journal};
 /// The canonical `--emit=ir` renderer (DEC-13): the IR pane and the G53-b
 /// parity tests render through this — the SAME bytes `langc --emit=ir` prints.
 pub use semantics::typecheck::render_ir;
+pub use session::{ReplSession, SessionOpts, StackCell, Status, SubmitResult};
+pub use trace::Trace;
 
 /// Engine surface version (PLAN-WASM-1 §10): bumped on any change to the
 /// REPL's execution semantics. The browser exposes it for bug reports; the
 /// wasm artifact hash plus this version identify a page's engine exactly.
-pub const ENGINE_VERSION: u32 = 2;
+pub const ENGINE_VERSION: u32 = 3;

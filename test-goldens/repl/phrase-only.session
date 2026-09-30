@@ -1,0 +1,7 @@
+# phrase-only — a submission with no definitions is a phrase compiled against
+# the accumulated buffer (§7.2); the dictionary persists across submits.
+:fuel 100000
+: double ( i64 -- i64 ) dup + ;
+21 double
+42 double
+:stack

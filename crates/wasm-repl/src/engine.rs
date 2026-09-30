@@ -25,8 +25,8 @@ use crate::builtins::{Builtin, BuiltinSignal};
 use crate::compile::{Compiled, DictTarget};
 use crate::fuel::{Fuel, CALL_DEPTH_CAP, STACK_CAP};
 use crate::heap::RegionHeap;
+use crate::journal::{Effect, Journal};
 use crate::periph::Peripheral;
-use crate::trace::{Event, Trace};
 use crate::value::{Slot, Value};
 
 // ---------------------------------------------------------------------------
@@ -80,8 +80,11 @@ pub struct ExecState {
     pub out: Vec<u8>,
     /// Op budget (DEC-10).
     pub fuel: Fuel,
-    /// The `tyu.trace/1` event trace (§7.4).
-    pub trace: Trace,
+    /// The undo journal / trace skeleton (§5, §7.3).
+    pub journal: Journal,
+    /// L1 guard elision (§Q4): when set, `TrapIfFalse` runs as a no-op (the
+    /// emitted guard is skipped); L2/L3 are never affected.
+    pub elide_guards: bool,
     /// Interned `ConstStr` addresses: `(span.start, addr)`.
     strings: Vec<(u32, u64)>,
     /// Resource-place storage: `(place bytes, addr)`.
@@ -116,10 +119,68 @@ impl ExecState {
             heap,
             out: Vec::new(),
             fuel: Fuel::new(crate::fuel::DEFAULT_FUEL),
-            trace: Trace::new(),
+            journal: Journal::new(),
+            elide_guards: false,
             strings,
             resources: Vec::new(),
         }
+    }
+
+    /// A state seeded with the session's persistent stack + heap for one
+    /// phrase run (the session holds the committed baseline; §7.3).
+    pub fn in_session(
+        stack: Vec<Slot>,
+        heap: RegionHeap,
+        fuel: Fuel,
+        elide_guards: bool,
+    ) -> ExecState {
+        ExecState {
+            stack,
+            frames: Vec::new(),
+            heap,
+            out: Vec::new(),
+            fuel,
+            journal: Journal::new(),
+            elide_guards,
+            strings: Vec::new(),
+            resources: Vec::new(),
+        }
+    }
+
+    /// Re-intern this compiled module's `ConstStr`s into the *current* heap
+    /// (the session's persistent heap). Deterministic per `Compiled`.
+    pub fn intern_compiled(&mut self, compiled: &Compiled) {
+        for w in compiled.module.words.iter() {
+            for b in w.blocks.iter() {
+                for op in b.ops.iter() {
+                    if let OpKind::ConstStr(span) = op.kind {
+                        if self.strings.iter().any(|(s, _)| *s == span.start as u32) {
+                            continue;
+                        }
+                        let bytes = compiled.src.get(span.start..span.end).unwrap_or(&[]);
+                        if let Ok(addr) = self.heap.intern(bytes) {
+                            self.strings.push((span.start as u32, addr));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Record a diagnostic-channel write in the journal (trace-only).
+    pub fn record_output(&mut self, len: u32) {
+        if len == 0 {
+            return;
+        }
+        let start: u32 = self
+            .journal
+            .iter()
+            .filter_map(|e| match e {
+                Effect::Output { len, .. } => Some(*len),
+                _ => None,
+            })
+            .sum();
+        self.journal.push(Effect::Output { start, len });
     }
 
     /// Address of an interned `ConstStr` (interned at construction).
@@ -221,14 +282,12 @@ impl<'c> Engine<'c> {
             match self.step(cur, state, periph) {
                 StepResult::Continue(next) => cur = next,
                 StepResult::Done => {
-                    state.trace.record(Event::Done { exit: 0 });
                     return Outcome::Ok {
                         out: core::mem::take(&mut state.out),
                         exit_stack: state.stack.clone(),
                     };
                 }
                 StepResult::Trap(code, span) => {
-                    state.trace.record(Event::Trap { code });
                     return Outcome::Trap {
                         code,
                         span,
@@ -236,7 +295,6 @@ impl<'c> Engine<'c> {
                     };
                 }
                 StepResult::Exit(code) => {
-                    state.trace.record(Event::Done { exit: code });
                     return Outcome::Exited {
                         code,
                         out: core::mem::take(&mut state.out),
@@ -464,20 +522,21 @@ impl<'c> Engine<'c> {
                         block: cur.block,
                         op: cur.op + 1,
                     };
-                    if let Some(f) = state.frames.last_mut() {
-                        f.ret = Some(caller);
-                    }
+                    let depth_before = state.frames.len() as u16;
                     state.frames.push(Frame {
                         word: callee,
                         locals: self.locals_for(callee),
-                        ret: None,
+                        // A frame's `ret` is the address to resume after THIS
+                        // frame returns; the entry frame's is `None` (its
+                        // return completes the run).
+                        ret: Some(caller),
                     });
-                    // Call trace event (depth-bounded rendering is the
-                    // consumer's job, §7.4).
+                    // Journal the call (trace-only; the depth-bounded render
+                    // is the §7.4 normalization's job).
                     let name = self.compiled.module.words[callee].name.as_bytes().to_vec();
-                    state.trace.record(Event::Call {
-                        word: alloc::string::String::from_utf8_lossy(&name).into_owned(),
-                        depth: state.frames.len() as u16,
+                    state.journal.push(Effect::Call {
+                        word: name,
+                        depth_before,
                     });
                     StepResult::Continue(Cursor {
                         word: callee,
@@ -502,10 +561,20 @@ impl<'c> Engine<'c> {
                 let _ = periph;
                 StepResult::Fault
             }
-            OpKind::TrapIfFalse { code } => match state.stack.pop() {
-                Some(slot) if slot.val.truthy() => StepResult::Continue(next_op),
-                _ => StepResult::Trap(code, op.span),
-            },
+            OpKind::TrapIfFalse { code } => {
+                let v = state.stack.pop();
+                if state.elide_guards {
+                    // L1 elision (§Q4): the emitted guard is skipped — the
+                    // bool is consumed, control falls through. L2/L3
+                    // interpreter invariants are unaffected.
+                    StepResult::Continue(next_op)
+                } else {
+                    match v {
+                        Some(slot) if slot.val.truthy() => StepResult::Continue(next_op),
+                        _ => StepResult::Trap(code, op.span),
+                    }
+                }
+            }
             OpKind::Br { target } => match self.block_index(word, target) {
                 Some(b) => StepResult::Continue(Cursor {
                     word: cur.word,
@@ -551,6 +620,9 @@ impl<'c> Engine<'c> {
                     .scoped_enter(base, u64::from(len))
                     .map_err(|_| ())?;
                 state.stack.push(Slot::ptr(ty, addr));
+                // Journal the descriptor allocation so a rollback drops its
+                // live range (§7.3).
+                state.journal.push(Effect::ScopedEnter { addr });
                 Ok(())
             }
             Some(ir::TypeClass::RegionRef | ir::TypeClass::RegionRefMut) => {
@@ -615,7 +687,10 @@ impl<'c> Engine<'c> {
         let width = bits_to_width(bits);
         let v = pop_int(state).map_err(|_| ())?;
         let addr = pop_ptr(state).map_err(|_| ())?;
-        state.heap.store(addr, width, v as u64).map_err(|_| ())
+        let old = state.heap.store(addr, width, v as u64).map_err(|_| ())?;
+        // Journal the store's old bytes — the transaction's heap undo (§7.3).
+        state.journal.push(Effect::Store { addr, width, old });
+        Ok(())
     }
 
     fn call_builtin(&self, b: Builtin, state: &mut ExecState) -> Result<(), BuiltinSignal> {

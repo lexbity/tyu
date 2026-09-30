@@ -1,0 +1,24 @@
+tyu.repl-transcript/1
+spec x86_64-unknown-linux-gnu
+---
+:fuel 100000
+fuel: 100000
+---
+: double ( i64 -- i64 ) dup + ;
+status: ok
+stack: -
+---
+21 double
+status: ok
+stack: i64:0x000000000000002a
+trace: C{double:1}D0
+---
+42 double
+status: ok
+stack: i64:0x000000000000002a i64:0x0000000000000054
+trace: C{double:1}D0
+---
+:stack
+stack: i64:0x000000000000002a i64:0x0000000000000054
+---
+submits: 3

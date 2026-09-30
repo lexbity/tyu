@@ -12,6 +12,14 @@ description = "Tyu console interpreter fork (PLAN-WASM-1): the concrete fuel-met
 # in a production build. The default (featureless) build is byte-identical in
 # behavior to the frozen upstream `verifier::src_interp` (§Q1).
 wasm-selftest = []
+# The host CLI test instrument (src/bin/repl-cli.rs); the lib stays `no_std`.
+# Enabled only where the driver is built (G56, manual smoke).
+cli = []
+
+[[bin]]
+name = "repl-cli"
+path = "src/bin/repl-cli.rs"
+required-features = ["cli"]
 
 [dependencies]
 # The engine's runtime dependencies (R-A; I-6): `ir`, plus the host-agnostic

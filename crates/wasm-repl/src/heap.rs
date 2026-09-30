@@ -68,10 +68,19 @@ struct Region {
 
 /// A live byte range the access checker consults (region bodies + scoped
 /// descriptors).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct LiveRange {
     start: u32,
     end: u32,
+}
+
+/// The pre-destroy state of a region slot (PLAN-WASM-1 §Q3/DEC-5): the undo
+/// payload for a `platform.mem.region-destroy` journal effect.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RegionSaved {
+    pub base: u32,
+    pub size: u32,
+    pub off: u32,
 }
 
 /// The concrete heap. `bytes` is the flat arena (layout-shared with the wasm
@@ -166,7 +175,9 @@ impl RegionHeap {
     }
 
     /// `platform.mem.region-alloc ( Region usize -- ptr_mut )`.
-    pub fn region_alloc(&mut self, handle: u64, size: u64) -> Result<u64, HeapFault> {
+    /// Returns `(base + old_off, old_off)` so the caller can journal the
+    /// cursor move (DEC-5 rollback).
+    pub fn region_alloc(&mut self, handle: u64, size: u64) -> Result<(u64, u64), HeapFault> {
         let slot = self.slot(handle)?;
         if size == 0 {
             return Err(HeapFault::BadArgument);
@@ -180,34 +191,42 @@ impl RegionHeap {
         if new_off > u64::from(region.size) {
             return Err(HeapFault::Exhausted);
         }
-        let ptr = u64::from(region.base) + u64::from(region.off);
+        let old_off = region.off;
+        let ptr = u64::from(region.base) + u64::from(old_off);
         region.off = new_off as u32;
-        Ok(ptr)
+        Ok((ptr, u64::from(old_off)))
     }
 
     /// `platform.mem.region-reset ( Region -- )`.
-    pub fn region_reset(&mut self, handle: u64) -> Result<(), HeapFault> {
+    /// Returns the previous cursor so the caller can journal the move (DEC-5).
+    pub fn region_reset(&mut self, handle: u64) -> Result<u64, HeapFault> {
         let slot = self.slot(handle)?;
+        let old = self.regions[slot].off;
         self.regions[slot].off = 0;
-        Ok(())
+        Ok(u64::from(old))
     }
 
     /// `platform.mem.region-destroy ( Region -- )`.
-    pub fn region_destroy(&mut self, handle: u64) -> Result<(), HeapFault> {
+    /// Returns the slot's pre-destroy state — the journal's undo payload for
+    /// a rolled-back destroy (the region is restored, §7.3).
+    pub fn region_destroy(&mut self, handle: u64) -> Result<RegionSaved, HeapFault> {
         let slot = self.slot(handle)?;
-        let base = self.regions[slot].base;
-        let size = self.regions[slot].size;
+        let saved = RegionSaved {
+            base: self.regions[slot].base,
+            size: self.regions[slot].size,
+            off: self.regions[slot].off,
+        };
         // Remove the live range entry; the arena bytes stay (a destroyed
         // region's stale pointer is not live; a *new* region reuses the slot).
         self.live
-            .retain(|r| !(r.start == base && r.end == base + size));
+            .retain(|r| !(r.start == saved.base && r.end == saved.base + saved.size));
         self.regions[slot] = Region {
             base: 0,
             size: 0,
             off: 0,
             alive: false,
         };
-        Ok(())
+        Ok(saved)
     }
 
     fn slot(&self, handle: u64) -> Result<usize, HeapFault> {
@@ -265,13 +284,19 @@ impl RegionHeap {
     }
 
     /// Bounds-checked write of the low `width` bytes of `val` at `addr`.
-    pub fn store(&mut self, addr: u64, width: u8, val: u64) -> Result<(), HeapFault> {
+    /// Returns the **previous** contents (the journal's undo payload, §7.3 —
+    /// DEC-5 rolls a store back by writing the old bytes).
+    pub fn store(&mut self, addr: u64, width: u8, val: u64) -> Result<u64, HeapFault> {
         self.range(addr, width)?;
         let a = addr as usize;
+        let mut old = 0u64;
+        for (i, b) in self.bytes[a..a + width as usize].iter().enumerate() {
+            old |= u64::from(*b) << (8 * i);
+        }
         for (i, b) in self.bytes[a..a + width as usize].iter_mut().enumerate() {
             *b = ((val >> (8 * i)) & 0xFF) as u8;
         }
-        Ok(())
+        Ok(old)
     }
 
     /// The access must be entirely within one live range (a region body or a
@@ -305,5 +330,71 @@ impl RegionHeap {
             end: base + 8 + bytes.len() as u32,
         });
         Ok(u64::from(base))
+    }
+
+    // -- journal compensation (DEC-5 §Q3): the undo actions -------------------
+    //
+    // Each method inverts ONE journal effect; the session walks the journal
+    // in reverse (§7.3). Compensations never re-check bounds (the reverted
+    // access was in-bounds at record time) and never journal themselves.
+
+    /// Undo an `Effect::Store`: rewrite the old bytes.
+    pub fn compensate_store(&mut self, addr: u64, width: u8, old: u64) {
+        let a = addr as usize;
+        for (i, b) in self.bytes[a..a + width as usize].iter_mut().enumerate() {
+            *b = ((old >> (8 * i)) & 0xFF) as u8;
+        }
+    }
+
+    /// Undo an `Effect::RegionAlloc`/`RegionReset`: restore the cursor.
+    pub fn compensate_cursor(&mut self, handle: u64, old_off: u32) {
+        if let Some(r) = self.regions.get_mut(handle as usize) {
+            r.off = old_off;
+        }
+    }
+
+    /// Undo an `Effect::RegionCreate`: mark the slot free and drop its live
+    /// range (the arena bytes stay — the arena is monotonic and stale bytes
+    /// are unreachable once the range is gone).
+    pub fn compensate_region_create(&mut self, handle: u64) {
+        if let Some(r) = self.regions.get_mut(handle as usize) {
+            if r.alive {
+                self.live
+                    .retain(|lr| !(lr.start == r.base && lr.end == r.base + r.size));
+            }
+            *r = Region {
+                base: 0,
+                size: 0,
+                off: 0,
+                alive: false,
+            };
+        }
+    }
+
+    /// Undo an `Effect::RegionDestroy`: restore the slot and its live range
+    /// (a rolled-back destroy leaves the region exactly as it was).
+    pub fn compensate_region_destroy(&mut self, handle: u64, saved: RegionSaved) {
+        if let Some(r) = self.regions.get_mut(handle as usize) {
+            *r = Region {
+                base: saved.base,
+                size: saved.size,
+                off: saved.off,
+                alive: true,
+            };
+            if saved.size > 0 {
+                self.live.push(LiveRange {
+                    start: saved.base,
+                    end: saved.base + saved.size,
+                });
+            }
+        }
+    }
+
+    /// Undo an `Effect::ScopedEnter`: drop the descriptor's live range
+    /// (the descriptor's arena bytes stay, unreachable).
+    pub fn compensate_scoped(&mut self, addr: u64) {
+        let start = addr as u32;
+        self.live
+            .retain(|lr| !(lr.start == start && lr.end == start + 16));
     }
 }

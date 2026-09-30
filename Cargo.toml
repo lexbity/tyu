@@ -44,6 +44,11 @@ exclude = [
 # panic=unwind regardless, so error-propagation tests work in the test suite.
 [profile.dev]
 panic = "abort"
+# opt-level 1: debug builds must stay within the 2 MiB default test-thread
+# stack. At opt-level 0 the pipeline's unoptimized frames (ModuleAst-sized
+# literals, the arena array) need ~8 MiB, so the CI/QA debug legs could not
+# compile even trivial modules. This is the root-cause fix (P3).
+opt-level = 1
 
 [profile.release]
 panic = "abort"

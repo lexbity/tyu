@@ -52,59 +52,52 @@ fn subtype_value_returned_as_base_passes_ir_verification() {
     let (env, len) = builtin_env();
     let dbs = Dbs::new().with_subtype(b"R", b"i64", 0, 100);
     let body = "as R".to_string();
-    std::thread::Builder::new()
-        .stack_size(8 << 20)
-        .spawn(move || {
-            let (decl, src) = make_decl(&body);
-            let s = sig(&[b"i64"], &[b"i64"]);
-            let mut arena = arena::ArenaAllocator::new();
-            let mmio = MmioDb {
-                maps: FixedVec::new(),
-                instances: FixedVec::new(),
-                reg_meta: FixedVec::new(),
-            };
-            let resources = ResourceDb {
-                items: FixedVec::new(),
-            };
-            let nominals = NominalDb {
-                structs: FixedVec::new(),
-                enums: FixedVec::new(),
-            };
-            let iso = IsoDb {
-                types: FixedVec::new(),
-            };
-            let mut obs = NullObserver;
-            let out = build_ir_word(
-                verifier::target::TargetSpec::X86_64,
-                &decl,
-                &src,
-                &env[..len],
-                &dbs.subtypes,
-                &mmio,
-                None,
-                &resources,
-                &nominals,
-                &iso,
-                ChecksMode::All,
-                false,
-                &s,
-                &mut arena,
-                None,
-                None,
-                false,
-                false, // proven_gate (tests: off)
-                None,  // bind_obl (tests: off)
-                &[],
-                &mut obs,
-            )
-            .expect("typecheck should accept subtype flowing to base");
-            ir::verify_word(out.word)
-                .map_err(|e| e.code())
-                .expect("IR must verify: subtype returned as base (BUG-007)");
-        })
-        .unwrap()
-        .join()
-        .unwrap();
+    let (decl, src) = make_decl(&body);
+    let s = sig(&[b"i64"], &[b"i64"]);
+    let mut arena = arena::ArenaAllocator::new();
+    let mmio = MmioDb {
+        maps: FixedVec::new(),
+        instances: FixedVec::new(),
+        reg_meta: FixedVec::new(),
+    };
+    let resources = ResourceDb {
+        items: FixedVec::new(),
+    };
+    let nominals = NominalDb {
+        structs: FixedVec::new(),
+        enums: FixedVec::new(),
+    };
+    let iso = IsoDb {
+        types: FixedVec::new(),
+    };
+    let mut obs = NullObserver;
+    let out = build_ir_word(
+        verifier::target::TargetSpec::X86_64,
+        &decl,
+        &src,
+        &env[..len],
+        &dbs.subtypes,
+        &mmio,
+        None,
+        &resources,
+        &nominals,
+        &iso,
+        ChecksMode::All,
+        false,
+        &s,
+        &mut arena,
+        None,
+        None,
+        false,
+        false, // proven_gate (tests: off)
+        None,  // bind_obl (tests: off)
+        &[],
+        &mut obs,
+    )
+    .expect("typecheck should accept subtype flowing to base");
+    ir::verify_word(out.word)
+        .map_err(|e| e.code())
+        .expect("IR must verify: subtype returned as base (BUG-007)");
 }
 
 /// The same BUG-007 subsumption must hold for a subtype passed as an argument
@@ -114,66 +107,59 @@ fn subtype_argument_to_base_param_passes_ir_verification() {
     let (env, len) = builtin_env();
     let dbs = Dbs::new().with_subtype(b"R", b"i64", 0, 100);
     let body = "as R take".to_string();
-    std::thread::Builder::new()
-        .stack_size(8 << 20)
-        .spawn(move || {
-            let (decl, src) = make_decl(&body);
-            let mut envw: Vec<WordEntry> = env[..len].to_vec();
-            envw.push(WordEntry {
-                name: TypeAtom::new(b"take").unwrap(),
-                sig: sig(&[b"i64"], &[b"i64"]),
-                performs: EffectSet::empty(),
-                requires: CapSet::empty(),
-                bound: StackBound::ID,
-                contract_hash: 0,
-            });
-            let s = sig(&[b"i64"], &[b"i64"]);
-            let mut arena = arena::ArenaAllocator::new();
-            let mmio = MmioDb {
-                maps: FixedVec::new(),
-                instances: FixedVec::new(),
-                reg_meta: FixedVec::new(),
-            };
-            let resources = ResourceDb {
-                items: FixedVec::new(),
-            };
-            let nominals = NominalDb {
-                structs: FixedVec::new(),
-                enums: FixedVec::new(),
-            };
-            let iso = IsoDb {
-                types: FixedVec::new(),
-            };
-            let mut obs = NullObserver;
-            let out = build_ir_word(
-                verifier::target::TargetSpec::X86_64,
-                &decl,
-                &src,
-                &envw,
-                &dbs.subtypes,
-                &mmio,
-                None,
-                &resources,
-                &nominals,
-                &iso,
-                ChecksMode::All,
-                false,
-                &s,
-                &mut arena,
-                None,
-                None,
-                false,
-                false, // proven_gate (tests: off)
-                None,  // bind_obl (tests: off)
-                &[],
-                &mut obs,
-            )
-            .expect("typecheck should accept subtype argument to base param");
-            ir::verify_word(out.word)
-                .map_err(|e| e.code())
-                .expect("IR must verify: subtype argument to base param (BUG-007)");
-        })
-        .unwrap()
-        .join()
-        .unwrap();
+    let (decl, src) = make_decl(&body);
+    let mut envw: Vec<WordEntry> = env[..len].to_vec();
+    envw.push(WordEntry {
+        name: TypeAtom::new(b"take").unwrap(),
+        sig: sig(&[b"i64"], &[b"i64"]),
+        performs: EffectSet::empty(),
+        requires: CapSet::empty(),
+        bound: StackBound::ID,
+        contract_hash: 0,
+    });
+    let s = sig(&[b"i64"], &[b"i64"]);
+    let mut arena = arena::ArenaAllocator::new();
+    let mmio = MmioDb {
+        maps: FixedVec::new(),
+        instances: FixedVec::new(),
+        reg_meta: FixedVec::new(),
+    };
+    let resources = ResourceDb {
+        items: FixedVec::new(),
+    };
+    let nominals = NominalDb {
+        structs: FixedVec::new(),
+        enums: FixedVec::new(),
+    };
+    let iso = IsoDb {
+        types: FixedVec::new(),
+    };
+    let mut obs = NullObserver;
+    let out = build_ir_word(
+        verifier::target::TargetSpec::X86_64,
+        &decl,
+        &src,
+        &envw,
+        &dbs.subtypes,
+        &mmio,
+        None,
+        &resources,
+        &nominals,
+        &iso,
+        ChecksMode::All,
+        false,
+        &s,
+        &mut arena,
+        None,
+        None,
+        false,
+        false, // proven_gate (tests: off)
+        None,  // bind_obl (tests: off)
+        &[],
+        &mut obs,
+    )
+    .expect("typecheck should accept subtype argument to base param");
+    ir::verify_word(out.word)
+        .map_err(|e| e.code())
+        .expect("IR must verify: subtype argument to base param (BUG-007)");
 }

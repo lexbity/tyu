@@ -16,36 +16,39 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use wasm_repl::compile::SourceTable;
+use common::sysroot_search;
 use wasm_repl::{compile, Engine, ExecState, Outcome, X86_64_LINUX_SPEC};
+
+mod common;
 
 // ---------------------------------------------------------------------------
 // Paths / tools
 // ---------------------------------------------------------------------------
 
-fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .to_path_buf()
+fn workspace_root() -> std::path::PathBuf {
+    common::workspace_root()
 }
 
 fn fixtures_dir() -> PathBuf {
-    workspace_root().join("crates/execution-tests/fixtures")
+    common::fixtures_dir()
 }
 
 fn sysroot_dir() -> PathBuf {
-    workspace_root().join("sysroot")
+    common::sysroot_dir()
 }
 
 fn langc_exe() -> PathBuf {
-    workspace_root().join("target").join("debug").join("langc")
+    common::workspace_root()
+        .join("target")
+        .join("debug")
+        .join("langc")
 }
 
 fn tyu_exe() -> PathBuf {
-    workspace_root().join("target").join("debug").join("tyu")
+    common::workspace_root()
+        .join("target")
+        .join("debug")
+        .join("tyu")
 }
 
 fn tool_available(name: &str) -> bool {
@@ -58,54 +61,6 @@ fn tool_available(name: &str) -> bool {
         return true;
     }
     langc_exe().exists() || tyu_exe().exists()
-}
-
-/// The §Q12 source table for the hosted sysroot: an in-memory map loaded from
-/// disk at harness time — the exact contract the browser's sysroot blob (P5)
-/// will implement. Keys are canonical `.def` paths (`platform/testio.def`).
-struct MemTable {
-    files: std::collections::BTreeMap<Vec<u8>, std::sync::Arc<[u8]>>,
-}
-
-impl SourceTable for MemTable {
-    fn read(&self, path: &[u8]) -> Option<&[u8]> {
-        self.files.get(path).map(|a| &**a)
-    }
-}
-
-fn sysroot_table(root: &Path) -> std::sync::Arc<MemTable> {
-    let mut files = std::collections::BTreeMap::new();
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        if let Ok(entries) = std::fs::read_dir(&dir) {
-            for e in entries.flatten() {
-                let p = e.path();
-                if p.is_dir() {
-                    stack.push(p);
-                } else if p.extension().map(|x| x == "def").unwrap_or(false) {
-                    let rel = p
-                        .strip_prefix(root)
-                        .unwrap()
-                        .to_str()
-                        .unwrap()
-                        .replace('\\', "/");
-                    if let Ok(bytes) = std::fs::read(&p) {
-                        files.insert(rel.into_bytes(), std::sync::Arc::from(bytes));
-                    }
-                }
-            }
-        }
-    }
-    std::sync::Arc::new(MemTable { files })
-}
-
-/// The §Q12 search directory set for the hosted sysroot, mirroring `langc`:
-/// the generic root first, then the target-triple directory.
-fn sysroot_search() -> Vec<std::sync::Arc<MemTable>> {
-    vec![
-        sysroot_table(&sysroot_dir()),
-        sysroot_table(&sysroot_dir().join("x86_64-unknown-linux-gnu")),
-    ]
 }
 
 fn require_tools() -> bool {
@@ -159,26 +114,6 @@ const TRAP_ZERO: &[(&str, &str)] = &[
 
 fn fixture_path(stem: &str) -> PathBuf {
     fixtures_dir().join(format!("{stem}.mod"))
-}
-
-/// The shared compile path (frontend→typecheck→build_ir) needs ~5-8 MiB of
-/// stack for some constructs (a pre-existing toolchain property — `langc`
-/// itself segfaults under `ulimit -s 4096` and test threads default to 2 MiB),
-/// so the fixture-driven tests run their body on a sized thread.
-fn with_big_stack(what: &str, body: impl FnOnce() + Send + 'static) {
-    let handle = std::thread::Builder::new()
-        .stack_size(64 * 1024 * 1024)
-        .spawn(body)
-        .unwrap_or_else(|e| panic!("spawn {what} thread: {e}"));
-    if let Err(payload) = handle.join() {
-        if let Some(msg) = payload.downcast_ref::<&str>() {
-            panic!("{what}: {msg}");
-        }
-        if let Some(msg) = payload.downcast_ref::<String>() {
-            panic!("{what}: {msg}");
-        }
-        panic!("{what}: thread panicked ({payload:?})");
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -271,11 +206,8 @@ fn run_word_for(fixture: &Path) -> String {
 // Interpreter leg
 // ---------------------------------------------------------------------------
 
-fn interp_run(src: &[u8], entry: &[u8], search: &[std::sync::Arc<MemTable>]) -> Outcome {
-    let refs: Vec<&dyn SourceTable> = search
-        .iter()
-        .map(|t| t.as_ref() as &dyn SourceTable)
-        .collect();
+fn interp_run(src: &[u8], entry: &[u8], search: &[std::sync::Arc<common::MemTable>]) -> Outcome {
+    let refs = common::search_refs(search);
     let compiled = compile(src, &refs, X86_64_LINUX_SPEC).expect("fixture compiles");
     let engine = Engine::new(&compiled);
     let mut state = ExecState::new(&compiled);
@@ -292,52 +224,48 @@ fn interpreter_matches_hosted_native_byte_for_byte() {
     if !require_tools() {
         return;
     }
-    with_big_stack("parity", || {
-        build_bins();
-        let search = sysroot_search();
+    build_bins();
+    let search = sysroot_search();
 
-        for (stem, entry) in PARITY {
-            let src = std::fs::read(fixture_path(stem)).expect("fixture present");
-            let outcome = interp_run(&src, entry.as_bytes(), &search);
-            let Outcome::Ok { out, .. } = outcome else {
-                panic!("{stem}: interpreter must complete the run (got {outcome:?})");
-            };
+    for (stem, entry) in PARITY {
+        let src = std::fs::read(fixture_path(stem)).expect("fixture present");
+        let outcome = interp_run(&src, entry.as_bytes(), &search);
+        let Outcome::Ok { out, .. } = outcome else {
+            panic!("{stem}: interpreter must complete the run (got {outcome:?})");
+        };
 
-            let (native_stdout, native_code) = native_run(&fixture_path(stem));
-            assert_eq!(
-                native_code, 0,
-                "{stem}: native binary must exit 0 (an 'F' byte would mean a check failed)"
-            );
-            assert_eq!(
-                out, native_stdout,
-                "{stem}: interpreter output diverged from the hosted native binary"
-            );
-        }
-    });
+        let (native_stdout, native_code) = native_run(&fixture_path(stem));
+        assert_eq!(
+            native_code, 0,
+            "{stem}: native binary must exit 0 (an 'F' byte would mean a check failed)"
+        );
+        assert_eq!(
+            out, native_stdout,
+            "{stem}: interpreter output diverged from the hosted native binary"
+        );
+    }
 }
 
 #[test]
 fn trap_fixtures_pin_trap_code_10() {
-    with_big_stack("trap", || {
-        let search = sysroot_search();
-        for (stem, entry) in TRAP_ZERO {
-            let src = std::fs::read(fixture_path(stem)).expect("fixture present");
-            match interp_run(&src, entry.as_bytes(), &search) {
-                Outcome::Trap { code, out, .. } => {
-                    assert_eq!(
-                        code,
-                        ir::TrapCode::StackOverflow,
-                        "{stem}: expected stack-overflow trap (code 10)"
-                    );
-                    assert!(
-                        out.is_empty(),
-                        "{stem}: the trap must fire before any output"
-                    );
-                }
-                other => panic!("{stem}: expected Trap(StackOverflow), got {other:?}"),
+    let search = sysroot_search();
+    for (stem, entry) in TRAP_ZERO {
+        let src = std::fs::read(fixture_path(stem)).expect("fixture present");
+        match interp_run(&src, entry.as_bytes(), &search) {
+            Outcome::Trap { code, out, .. } => {
+                assert_eq!(
+                    code,
+                    ir::TrapCode::StackOverflow,
+                    "{stem}: expected stack-overflow trap (code 10)"
+                );
+                assert!(
+                    out.is_empty(),
+                    "{stem}: the trap must fire before any output"
+                );
             }
+            other => panic!("{stem}: expected Trap(StackOverflow), got {other:?}"),
         }
-    });
+    }
 }
 
 #[test]
@@ -345,48 +273,39 @@ fn ir_render_matches_langc_emit_ir_byte_for_byte() {
     if !require_tools() {
         return;
     }
-    with_big_stack("render", || {
-        build_bins();
-        for (stem, _entry) in PARITY {
-            let fixture = fixture_path(stem);
-            let src = std::fs::read(&fixture).expect("fixture present");
+    build_bins();
+    for (stem, _entry) in PARITY {
+        let fixture = fixture_path(stem);
+        let src = std::fs::read(&fixture).expect("fixture present");
 
-            // langc --emit=ir — the native text, the expected bytes (I-2/R-2).
-            let langc_ir = Command::new(langc_exe())
-                .args([
-                    "--emit=ir",
-                    &format!("--sysroot={}", sysroot_dir().display()),
-                ])
-                .arg(&fixture)
-                .output()
-                .expect("langc --emit=ir");
-            assert!(
-                langc_ir.status.success(),
-                "{stem}: langc --emit=ir failed:\n{}",
-                String::from_utf8_lossy(&langc_ir.stderr)
-            );
+        // langc --emit=ir — the native text, the expected bytes (I-2/R-2).
+        let langc_ir = Command::new(langc_exe())
+            .args([
+                "--emit=ir",
+                &format!("--sysroot={}", sysroot_dir().display()),
+            ])
+            .arg(&fixture)
+            .output()
+            .expect("langc --emit=ir");
+        assert!(
+            langc_ir.status.success(),
+            "{stem}: langc --emit=ir failed:\n{}",
+            String::from_utf8_lossy(&langc_ir.stderr)
+        );
 
-            // The REPL render path (build_ir → render_ir) — the pane's bytes.
-            let search = sysroot_search();
-            let compiled = compile(
-                &src,
-                &search
-                    .iter()
-                    .map(|t| t.as_ref() as &dyn SourceTable)
-                    .collect::<Vec<_>>(),
-                X86_64_LINUX_SPEC,
-            )
-            .expect("fixture compiles");
-            let mut rendered = Vec::new();
-            wasm_repl::render_ir(&mut VecSink(&mut rendered), &compiled.module);
+        // The REPL render path (build_ir → render_ir) — the pane's bytes.
+        let search = sysroot_search();
+        let refs = common::search_refs(&search);
+        let compiled = compile(&src, &refs, X86_64_LINUX_SPEC).expect("fixture compiles");
+        let mut rendered = Vec::new();
+        wasm_repl::render_ir(&mut VecSink(&mut rendered), &compiled.module);
 
-            assert_eq!(
-                rendered, langc_ir.stdout,
-                "{stem}: `--emit=ir` text drifted between langc and the REPL renderer \
-                 (build_ir/render_ir must be byte-identical; D-1/R-2/DEC-13)"
-            );
-        }
-    });
+        assert_eq!(
+            rendered, langc_ir.stdout,
+            "{stem}: `--emit=ir` text drifted between langc and the REPL renderer \
+             (build_ir/render_ir must be byte-identical; D-1/R-2/DEC-13)"
+        );
+    }
 }
 
 struct VecSink<'a>(&'a mut Vec<u8>);

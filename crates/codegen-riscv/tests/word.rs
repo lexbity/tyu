@@ -18,22 +18,6 @@ use ir::{
 
 /// Run a closure on an 8 MB thread stack.
 ///
-/// The IR types (`Word`, `Block`, `Op`) are large `FixedVec`-backed inline
-/// aggregates, so constructing a multi-block `Word` plus a `ModuleAst` on the
-/// default 2 MB test thread stack overflows it. Mirrors the x86-64 backend's
-/// `run_8mb!` (crates/codegen-x86_64/tests/util/mod.rs). Single-block tests fit
-/// the default stack and do not need this.
-macro_rules! run_8mb {
-    ($body:expr) => {
-        std::thread::Builder::new()
-            .stack_size(8 << 20)
-            .spawn(|| $body)
-            .unwrap()
-            .join()
-            .unwrap();
-    };
-}
-
 struct TestOut(Vec<u8>);
 impl TestOut {
     fn new() -> Self {
@@ -306,66 +290,65 @@ fn riscv_br_emits_j() {
 
 #[test]
 fn riscv_brif_uses_bnez() {
-    // Multi-block Word built inline → needs the 8 MB stack (see `run_8mb!`).
-    run_8mb!({
-        let mut b0_ops: frontend::fixed::FixedVec<ir::Op, 96> = frontend::fixed::FixedVec::new();
-        b0_ops
-            .push(ir::Op {
-                kind: OpKind::ConstBool(true),
-                span: Span::UNKNOWN,
-            })
-            .unwrap();
-        b0_ops
-            .push(ir::Op {
-                kind: OpKind::BrIf {
-                    then_tgt: BlockId(1),
-                    else_tgt: BlockId(2),
-                },
-                span: Span::UNKNOWN,
-            })
-            .unwrap();
-        let mut blocks: frontend::fixed::FixedVec<ir::Block, 16> = frontend::fixed::FixedVec::new();
-        blocks
-            .push(ir::Block {
-                id: BlockId(0),
-                entry_stack: frontend::fixed::FixedVec::new(),
-                ops: b0_ops,
-            })
-            .unwrap();
-        blocks
-            .push(ir::Block {
-                id: BlockId(1),
-                entry_stack: frontend::fixed::FixedVec::new(),
-                ops: frontend::fixed::FixedVec::new(),
-            })
-            .unwrap();
-        blocks
-            .push(ir::Block {
-                id: BlockId(2),
-                entry_stack: frontend::fixed::FixedVec::new(),
-                ops: frontend::fixed::FixedVec::new(),
-            })
-            .unwrap();
-        let w = Word {
-            name: atom(b"test"),
-            sig: sig_0_0(),
-            performs: ir::EffectSet::empty(),
-            requires: ir::CapSet::empty(),
-            bound: ir::StackBound::ID,
-            entry: BlockId(1),
-            types: baseline_types(),
-            type_sizes: baseline_sizes(),
-            type_classes: baseline_classes(),
-            apertures: FixedVec::new(),
-            subtype_bases: frontend::fixed::FixedVec::new(),
-            blocks,
-        };
-        let out = emit(&w);
-        assert!(
-            out.contains("bnez") || out.contains("beqz"),
-            "BrIf must use bnez/beqz, got: {out}"
-        );
-    });
+    // Multi-block Word built inline; the workspace test-thread stack
+    // (RUST_MIN_STACK in `.cargo/config.toml`) covers it.
+    let mut b0_ops: frontend::fixed::FixedVec<ir::Op, 96> = frontend::fixed::FixedVec::new();
+    b0_ops
+        .push(ir::Op {
+            kind: OpKind::ConstBool(true),
+            span: Span::UNKNOWN,
+        })
+        .unwrap();
+    b0_ops
+        .push(ir::Op {
+            kind: OpKind::BrIf {
+                then_tgt: BlockId(1),
+                else_tgt: BlockId(2),
+            },
+            span: Span::UNKNOWN,
+        })
+        .unwrap();
+    let mut blocks: frontend::fixed::FixedVec<ir::Block, 16> = frontend::fixed::FixedVec::new();
+    blocks
+        .push(ir::Block {
+            id: BlockId(0),
+            entry_stack: frontend::fixed::FixedVec::new(),
+            ops: b0_ops,
+        })
+        .unwrap();
+    blocks
+        .push(ir::Block {
+            id: BlockId(1),
+            entry_stack: frontend::fixed::FixedVec::new(),
+            ops: frontend::fixed::FixedVec::new(),
+        })
+        .unwrap();
+    blocks
+        .push(ir::Block {
+            id: BlockId(2),
+            entry_stack: frontend::fixed::FixedVec::new(),
+            ops: frontend::fixed::FixedVec::new(),
+        })
+        .unwrap();
+    let w = Word {
+        name: atom(b"test"),
+        sig: sig_0_0(),
+        performs: ir::EffectSet::empty(),
+        requires: ir::CapSet::empty(),
+        bound: ir::StackBound::ID,
+        entry: BlockId(1),
+        types: baseline_types(),
+        type_sizes: baseline_sizes(),
+        type_classes: baseline_classes(),
+        apertures: FixedVec::new(),
+        subtype_bases: frontend::fixed::FixedVec::new(),
+        blocks,
+    };
+    let out = emit(&w);
+    assert!(
+        out.contains("bnez") || out.contains("beqz"),
+        "BrIf must use bnez/beqz, got: {out}"
+    );
 }
 
 #[test]

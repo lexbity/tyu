@@ -12,7 +12,7 @@
 #   G56  REPL session goldens byte-exact                                (P3)
 #
 # Implemented: G52 (P1), G53(a) (P2: execution differential + props +
-# IR-render byte-parity vs `langc --emit=ir`).
+# IR-render byte-parity vs `langc --emit=ir`), G56 (P3: session goldens).
 #
 # Usage:
 #   bash ci/wasm.sh            run every gate defined so far
@@ -189,6 +189,46 @@ g53_selftest() {
 }
 
 # ---------------------------------------------------------------------------
+# G56 (P3): REPL session goldens byte-exact (DEC-3..DEC-6, §7.2/§7.3). The
+# host driver replays every `test-goldens/repl/*.session` and requires the
+# produced `tyu.repl-transcript/1` to match the committed `.expected`
+# byte-for-byte (persistent stack, transactional rollback, definitions commit
+# across phrase faults, deterministic fuel exhaustion, caps diagnostics).
+# ---------------------------------------------------------------------------
+
+g56_green() {
+    msg $YELLOW "G56: REPL session goldens byte-exact"
+
+    local failed_golden=""
+    for f in test-goldens/repl/*.session; do
+        if ! cargo run -q -p wasm-repl --features cli --bin repl-cli -- replay "$f" --check \
+            > /tmp/g56-replay.log 2>&1; then
+            failed_golden="$f"
+            break
+        fi
+    done
+    if [ -n "$failed_golden" ]; then
+        fail "session golden replay ($failed_golden) — see /tmp/g56-replay.log"
+    else
+        msg $GREEN "  G56: all test-goldens/repl/*.session transcripts byte-exact"
+    fi
+}
+
+g56_selftest() {
+    # Red-path demo (AC-9): the `wasm-selftest` corruption breaks the DEC-6
+    # output-retention asymmetry (a trapped phrase's output is discarded), so
+    # the rollback-trap golden MUST mismatch.
+    msg $YELLOW "G56 selftest: corrupted rollback must red the session goldens"
+    if cargo run -q -p wasm-repl --features wasm-selftest,cli --bin repl-cli \
+        -- replay test-goldens/repl/rollback-trap.session --check \
+        > /tmp/g56-selftest.log 2>&1; then
+        fail "selftest: the corrupted rollback PASSED the session goldens (G56 blind)"
+    else
+        msg $GREEN "  G56 selftest: corrupted rollback correctly redded the goldens"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
 
@@ -197,10 +237,12 @@ case "$mode" in
     run)
         g52_green
         g53_green
+        g56_green
         ;;
     --selftest)
         g52_selftest
         g53_selftest
+        g56_selftest
         ;;
     *)
         msg $RED "unknown mode '$mode' (run | --selftest)"

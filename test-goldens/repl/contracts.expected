@@ -1,0 +1,55 @@
+tyu.repl-transcript/1
+spec x86_64-unknown-linux-gnu
+---
+:fuel 100000
+fuel: 100000
+---
+import platform/testio { testio.write-byte };
+status: ok
+stack: -
+---
+subtype Percent = i64 range 0..100;
+status: ok
+stack: -
+---
+: pct-in-range ( Percent -- Percent bool ) dup 0 >= [ dup 100 <= ] [ 0 0 == ] if ;
+status: ok
+stack: -
+---
+: pct-add ( Percent -- Percent ) needs [ pct-in-range ] 1 + as Percent ;
+status: ok
+stack: -
+---
+: no-sevens ( i64 -- i64 bool ) dup 7 == not ;
+status: ok
+stack: -
+---
+: add-safely ( i64 -- i64 ) needs [ no-sevens ] 1 + ;
+status: ok
+stack: -
+---
+50 as Percent pct-add drop
+status: ok
+stack: -
+trace: C{pct-add:1}C{pct-in-range:2}D0
+---
+:stack
+stack: -
+---
+150 as Percent drop
+status: trapped 21
+stack: -
+trace: TSubtypeFail
+---
+:stack
+stack: -
+---
+7 add-safely drop
+status: trapped 20
+stack: -
+trace: C{add-safely:1}C{no-sevens:2}TContractFail
+---
+:stack
+stack: -
+---
+submits: 9

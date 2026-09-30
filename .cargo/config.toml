@@ -1,0 +1,12 @@
+# Workspace-wide Cargo configuration (P3, PLAN-WASM-1).
+#
+# RUST_MIN_STACK: the compile pipeline (frontend/typecheck/build_ir) is a
+# deep, allocation-heavy chain whose genuine stack need is ~4 MiB (a ModuleAst
+# is ~300 KiB and several driver frames carry by-value tables; the root-cause
+# reductions in P3 — opt-level=1, the heap-backed IR arena, boxed
+# module/descriptor — brought it down from ~8 MiB, but it is still above the
+# 2 MiB Rust test-thread default). Set the test-thread stack to the OS default
+# (8 MiB) so every `cargo test` leg runs without per-test sized threads. This
+# matches the main-thread default; the memory is virtual and lazily committed.
+[env]
+RUST_MIN_STACK = "8388608"

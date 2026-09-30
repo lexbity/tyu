@@ -1,0 +1,35 @@
+tyu.repl-transcript/1
+spec x86_64-unknown-linux-gnu
+---
+:fuel 100000
+fuel: 100000
+---
+: f ( i64 -- i64 ) dup + ;
+status: ok
+stack: -
+---
+1 f
+status: ok
+stack: i64:0x0000000000000002
+trace: C{f:1}D0
+---
+:stack
+stack: i64:0x0000000000000002
+---
+: trap-now ( -- ) recurse ; : recurse ( -- ) recurse ; trap-now
+status: trapped 10
+stack: i64:0x0000000000000002
+trace: C{trap-now:1}C{recurse:2}C{recurse:3}C{recurse:4}C{recurse:5}C{recurse:6}C{recurse:7}C{recurse:8}C{recurse:9}C{recurse:10}C{recurse:11}C{recurse:12}C{recurse:13}C{recurse:14}C{recurse:15}C{recurse:16}C{recurse:17}C{recurse:18}C{recurse:19}C{recurse:20}C{recurse:21}C{recurse:22}C{recurse:23}C{recurse:24}C{recurse:25}C{recurse:26}C{recurse:27}C{recurse:28}C{recurse:29}C{recurse:30}C{recurse:31}C{recurse:32}TStackOverflowC{…222}
+---
+:stack
+stack: i64:0x0000000000000002
+---
+1 f
+status: ok
+stack: i64:0x0000000000000002 i64:0x0000000000000002
+trace: C{f:1}D0
+---
+:stack
+stack: i64:0x0000000000000002 i64:0x0000000000000002
+---
+submits: 4

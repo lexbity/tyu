@@ -295,9 +295,11 @@ fn build_env(
         if d.kind != DeclKind::Word {
             continue;
         }
-        let sig_span = d
-            .sig
-            .ok_or_else(|| code_err(2221, "word declaration has no signature"))?;
+        // langc parity: a sig-less local word is skipped here and rejected
+        // by the typechecker (build_ir NoSig) — never a pre-check error.
+        let Some(sig_span) = d.sig else {
+            continue;
+        };
         let sig = typecheck::parse_word_sig(src, sig_span)
             .map_err(|_| code_err(2219, "local signature does not parse"))?;
         if env.len() >= 256 {

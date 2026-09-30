@@ -1,0 +1,11 @@
+# caps — session limits surfaced as diagnostics (§5): a >4096-slot word is
+# beyond the typechecker's own analysis floor (a native diagnostic surfaced
+# verbatim — FR-11), and an oversized definition submission is rejected at the
+# SESSION boundary (E9154, §7.5). `@repeat` keeps the script readable; the
+# gate is byte-exact on the expanded text.
+:fuel 100000
+: flood ( -- ) @repeat 4100 [1 ] @repeat 4100 [drop ] ;
+flood
+: huge ( -- ) @repeat 17000 [0 ] @repeat 17000 [drop ] ;
+:stack
+:ir

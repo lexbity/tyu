@@ -1,0 +1,10 @@
+# rollback-fuel — fuel exhaustion is deterministic (DEC-10): the phrase rolls
+# back, raising `:fuel` and re-running the SAME phrase hits the call-depth
+# cap instead (trap 10 — the infinite recursion).
+:fuel 50
+: reloop ( i64 -- i64 ) 1 + reloop ;
+0 reloop
+:stack
+:fuel 100000
+0 reloop
+:stack

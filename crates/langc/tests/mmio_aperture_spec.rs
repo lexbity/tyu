@@ -98,14 +98,10 @@ fn compile_with_apertures(apertures: &[MmioApertureSpec]) -> String {
 
 #[test]
 fn emulated_aperture_size_sources_bounds_compare() {
-    // The driver holds large inline aggregates (ModuleAst, MemOut); run on an
-    // 8 MB stack like the other golden tests.
-    std::thread::Builder::new()
-        .stack_size(8 << 20)
-        .spawn(emulated_aperture_size_sources_bounds_compare_inner)
-        .unwrap()
-        .join()
-        .unwrap();
+    // The driver holds large inline aggregates (ModuleAst, MemOut); the
+    // workspace test-thread stack (RUST_MIN_STACK in `.cargo/config.toml`)
+    // covers it.
+    emulated_aperture_size_sources_bounds_compare_inner();
 }
 
 fn emulated_aperture_size_sources_bounds_compare_inner() {

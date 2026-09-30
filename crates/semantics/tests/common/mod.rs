@@ -130,12 +130,14 @@ impl Dbs {
 }
 
 // ---------------------------------------------------------------------------
-// check() — run the typechecker, assertions run inside the 8MB-stack thread.
+// check() — run the typechecker. Consumers span test binaries; the shared
+// compile path runs on the workspace-configured test-thread stack
+// (`.cargo/config.toml` sets `RUST_MIN_STACK`).
 // ---------------------------------------------------------------------------
 
 /// Run the typechecker with given body/inputs/outputs/env/dbs/checks.
-/// The `on_word` callback runs inside the big-stack thread with access to
-/// the built IR `Word` (on success).  On error the error code is returned.
+/// The `on_word` callback runs with access to the built IR `Word` (on
+/// success).  On error the error code is returned.
 // Shared checker-test helper surface; consumers span test binaries.
 #[allow(dead_code)]
 pub fn check(
@@ -153,67 +155,60 @@ pub fn check(
     let env_owned: Vec<WordEntry> = env.to_vec();
     let subtypes_owned: Vec<SubtypeInfo> = dbs.subtypes.clone();
 
-    std::thread::Builder::new()
-        .stack_size(8 << 20)
-        .spawn(move || {
-            let (decl, src) = make_decl(&body_owned);
-            let s = sig(
-                &inputs_owned
-                    .iter()
-                    .map(|v| v.as_slice())
-                    .collect::<Vec<_>>(),
-                &outputs_owned
-                    .iter()
-                    .map(|v| v.as_slice())
-                    .collect::<Vec<_>>(),
-            );
-            let mut arena = arena::ArenaAllocator::new();
-            let mmio = MmioDb {
-                maps: FixedVec::new(),
-                instances: FixedVec::new(),
-                reg_meta: FixedVec::new(),
-            };
-            let resources = ResourceDb {
-                items: FixedVec::new(),
-            };
-            let nominals = NominalDb {
-                structs: FixedVec::new(),
-                enums: FixedVec::new(),
-            };
-            let iso = IsoDb {
-                types: FixedVec::new(),
-            };
-            let mut obs = NullObserver;
-            match build_ir_word(
-                verifier::target::TargetSpec::X86_64,
-                &decl,
-                &src,
-                &env_owned,
-                &subtypes_owned,
-                &mmio,
-                None,
-                &resources,
-                &nominals,
-                &iso,
-                checks,
-                false,
-                &s,
-                &mut arena,
-                None,
-                None,
-                false,
-                false, // proven_gate (tests: off)
-                None,  // bind_obl (tests: off)
-                &[],
-                &mut obs,
-            ) {
-                Ok(_out_words) => on_result(Ok(())),
-                Err(e) => on_result(Err(e.code())),
-            }
-        })
-        .unwrap()
-        .join()
-        .unwrap()
+    let (decl, src) = make_decl(&body_owned);
+    let s = sig(
+        &inputs_owned
+            .iter()
+            .map(|v| v.as_slice())
+            .collect::<Vec<_>>(),
+        &outputs_owned
+            .iter()
+            .map(|v| v.as_slice())
+            .collect::<Vec<_>>(),
+    );
+    let mut arena = arena::ArenaAllocator::new();
+    let mmio = MmioDb {
+        maps: FixedVec::new(),
+        instances: FixedVec::new(),
+        reg_meta: FixedVec::new(),
+    };
+    let resources = ResourceDb {
+        items: FixedVec::new(),
+    };
+    let nominals = NominalDb {
+        structs: FixedVec::new(),
+        enums: FixedVec::new(),
+    };
+    let iso = IsoDb {
+        types: FixedVec::new(),
+    };
+    let mut obs = NullObserver;
+    match build_ir_word(
+        verifier::target::TargetSpec::X86_64,
+        &decl,
+        &src,
+        &env_owned,
+        &subtypes_owned,
+        &mmio,
+        None,
+        &resources,
+        &nominals,
+        &iso,
+        checks,
+        false,
+        &s,
+        &mut arena,
+        None,
+        None,
+        false,
+        false, // proven_gate (tests: off)
+        None,  // bind_obl (tests: off)
+        &[],
+        &mut obs,
+    ) {
+        Ok(_out_words) => on_result(Ok(())),
+        Err(e) => on_result(Err(e.code())),
+    }
 }
 
 // Shared checker-test helper surface; consumers span test binaries.
@@ -236,7 +231,6 @@ pub fn check_ok(body: &str, inputs: &[&[u8]], outputs: &[&[u8]], env: &[WordEntr
 
 /// Like `check_ok` but also invokes `on_word` with the built IR word
 /// so callers can assert IR shape (op kinds, block count, etc.).
-/// The callback runs inside the 8MB-stack thread.
 // Shared checker-test helper surface; consumers span test binaries.
 #[allow(dead_code)]
 pub fn check_ok_with<F>(
@@ -253,72 +247,65 @@ pub fn check_ok_with<F>(
     let outputs_owned: Vec<Vec<u8>> = outputs.iter().map(|b| b.to_vec()).collect();
     let env_owned: Vec<WordEntry> = env.to_vec();
 
-    std::thread::Builder::new()
-        .stack_size(8 << 20)
-        .spawn(move || {
-            let (decl, src) = make_decl(&body_owned);
-            let s = sig(
-                &inputs_owned
-                    .iter()
-                    .map(|v| v.as_slice())
-                    .collect::<Vec<_>>(),
-                &outputs_owned
-                    .iter()
-                    .map(|v| v.as_slice())
-                    .collect::<Vec<_>>(),
-            );
-            let mut arena = arena::ArenaAllocator::new();
-            let mmio = MmioDb {
-                maps: FixedVec::new(),
-                instances: FixedVec::new(),
-                reg_meta: FixedVec::new(),
-            };
-            let resources = ResourceDb {
-                items: FixedVec::new(),
-            };
-            let nominals = NominalDb {
-                structs: FixedVec::new(),
-                enums: FixedVec::new(),
-            };
-            let iso = IsoDb {
-                types: FixedVec::new(),
-            };
-            let subtypes: &[SubtypeInfo] = &[];
-            let mut obs = NullObserver;
-            match build_ir_word(
-                verifier::target::TargetSpec::X86_64,
-                &decl,
-                &src,
-                &env_owned,
-                subtypes,
-                &mmio,
-                None,
-                &resources,
-                &nominals,
-                &iso,
-                ChecksMode::All,
-                false,
-                &s,
-                &mut arena,
-                None,
-                None,
-                false,
-                false, // proven_gate (tests: off)
-                None,  // bind_obl (tests: off)
-                &[],
-                &mut obs,
-            ) {
-                Ok(out_words) => on_word(out_words.word),
-                Err(e) => panic!(
-                    "expected OK, got error code {} span={:?}",
-                    e.code(),
-                    e.span()
-                ),
-            }
-        })
-        .unwrap()
-        .join()
-        .unwrap()
+    let (decl, src) = make_decl(&body_owned);
+    let s = sig(
+        &inputs_owned
+            .iter()
+            .map(|v| v.as_slice())
+            .collect::<Vec<_>>(),
+        &outputs_owned
+            .iter()
+            .map(|v| v.as_slice())
+            .collect::<Vec<_>>(),
+    );
+    let mut arena = arena::ArenaAllocator::new();
+    let mmio = MmioDb {
+        maps: FixedVec::new(),
+        instances: FixedVec::new(),
+        reg_meta: FixedVec::new(),
+    };
+    let resources = ResourceDb {
+        items: FixedVec::new(),
+    };
+    let nominals = NominalDb {
+        structs: FixedVec::new(),
+        enums: FixedVec::new(),
+    };
+    let iso = IsoDb {
+        types: FixedVec::new(),
+    };
+    let subtypes: &[SubtypeInfo] = &[];
+    let mut obs = NullObserver;
+    match build_ir_word(
+        verifier::target::TargetSpec::X86_64,
+        &decl,
+        &src,
+        &env_owned,
+        subtypes,
+        &mmio,
+        None,
+        &resources,
+        &nominals,
+        &iso,
+        ChecksMode::All,
+        false,
+        &s,
+        &mut arena,
+        None,
+        None,
+        false,
+        false, // proven_gate (tests: off)
+        None,  // bind_obl (tests: off)
+        &[],
+        &mut obs,
+    ) {
+        Ok(out_words) => on_word(out_words.word),
+        Err(e) => panic!(
+            "expected OK, got error code {} span={:?}",
+            e.code(),
+            e.span()
+        ),
+    }
 }
 
 // Shared checker-test helper surface; consumers span test binaries.

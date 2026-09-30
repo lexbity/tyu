@@ -13,7 +13,6 @@
 //!   - bind &a, ref, ref → OK (shared non-linear)
 
 use std::process::Command;
-use std::thread;
 
 fn langc_exe() -> std::path::PathBuf {
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -239,21 +238,12 @@ fn test_all_sequences(max_len: usize, dir: &std::path::Path) {
     );
 }
 
-fn spawn_test(f: impl FnOnce() + Send + 'static) {
-    thread::Builder::new()
-        .stack_size(8 << 20)
-        .spawn(f)
-        .unwrap()
-        .join()
-        .unwrap();
-}
-
 #[test]
 fn property_length_1() {
     let dir = std::env::temp_dir().join("tyu_borrow_prop_1");
     let _ = std::fs::create_dir_all(&dir);
     let d = dir.clone();
-    spawn_test(move || test_all_sequences(1, &d));
+    test_all_sequences(1, &d);
 }
 
 #[test]
@@ -261,7 +251,7 @@ fn property_length_2() {
     let dir = std::env::temp_dir().join("tyu_borrow_prop_2");
     let _ = std::fs::create_dir_all(&dir);
     let d = dir.clone();
-    spawn_test(move || test_all_sequences(2, &d));
+    test_all_sequences(2, &d);
 }
 
 #[test]
@@ -269,5 +259,5 @@ fn property_length_3() {
     let dir = std::env::temp_dir().join("tyu_borrow_prop_3");
     let _ = std::fs::create_dir_all(&dir);
     let d = dir.clone();
-    spawn_test(move || test_all_sequences(3, &d));
+    test_all_sequences(3, &d);
 }

@@ -10,8 +10,6 @@
 
 mod common;
 
-use std::thread;
-
 use common::builtin_env;
 use frontend::parse::Parser;
 use verifier::model::{ExtractionCtx, Kind};
@@ -19,53 +17,46 @@ use verifier::model::{ExtractionCtx, Kind};
 fn compile_with_extraction(
     source: Vec<u8>,
 ) -> (Result<(), u32>, Vec<verifier::model::ResolvedVerdict>) {
-    thread::Builder::new()
-        .stack_size(8 << 20)
-        .spawn(move || {
-            let src = source;
-            let module = Parser::new(&src).parse_module_ast().expect("valid module");
-            let (env, len) = builtin_env();
-            let mut env: Vec<common::WordEntry> = env[..len].to_vec();
-            // langc's `load_local_sigs` pre-seeds every local word (with an
-            // empty sig) before the summary fixpoint; mirror it here.
-            env.push(common::entry(b"five", &[], &[b"i64"]));
-            env.push(common::entry(b"inputy", &[b"i64"], &[b"i64"]));
-            env.push(common::entry(b"main", &[], &[b"i64"]));
-            let subtypes: Vec<SubtypeInfo> = Vec::new();
-            let mut resources =
-                semantics::typecheck::db::build_resource_db(&module, &src).expect("resource db");
-            let mut ctx = ExtractionCtx::new(b"P");
-            match semantics::typecheck::for_each_ir_word(
-                &module,
-                &src,
-                &env,
-                &subtypes,
-                semantics::typecheck::ChecksMode::Undischarged,
-                false,
-                verifier::target::TargetSpec::X86_64,
-                &mut resources,
-                None,
-                Some(&mut ctx),
-                None,
-                false,
-                false, // proven_gate (tests: off)
-                None,  // bind_obl (tests: off)
-                &[],
-                |_w, _ctx| Ok::<(), ()>(()),
-            ) {
-                Ok(()) => (Ok(()), ctx.resolved().to_vec()),
-                Err(e) => (
-                    Err(match e {
-                        semantics::typecheck::ForEachIrError::Type(t) => t.code(),
-                        semantics::typecheck::ForEachIrError::Consumer(_) => 0,
-                    }),
-                    Vec::new(),
-                ),
-            }
-        })
-        .unwrap()
-        .join()
-        .unwrap()
+    let src = source;
+    let module = Parser::new(&src).parse_module_ast().expect("valid module");
+    let (env, len) = builtin_env();
+    let mut env: Vec<common::WordEntry> = env[..len].to_vec();
+    // langc's `load_local_sigs` pre-seeds every local word (with an
+    // empty sig) before the summary fixpoint; mirror it here.
+    env.push(common::entry(b"five", &[], &[b"i64"]));
+    env.push(common::entry(b"inputy", &[b"i64"], &[b"i64"]));
+    env.push(common::entry(b"main", &[], &[b"i64"]));
+    let subtypes: Vec<SubtypeInfo> = Vec::new();
+    let mut resources =
+        semantics::typecheck::db::build_resource_db(&module, &src).expect("resource db");
+    let mut ctx = ExtractionCtx::new(b"P");
+    match semantics::typecheck::for_each_ir_word(
+        &module,
+        &src,
+        &env,
+        &subtypes,
+        semantics::typecheck::ChecksMode::Undischarged,
+        false,
+        verifier::target::TargetSpec::X86_64,
+        &mut resources,
+        None,
+        Some(&mut ctx),
+        None,
+        false,
+        false, // proven_gate (tests: off)
+        None,  // bind_obl (tests: off)
+        &[],
+        |_w, _ctx| Ok::<(), ()>(()),
+    ) {
+        Ok(()) => (Ok(()), ctx.resolved().to_vec()),
+        Err(e) => (
+            Err(match e {
+                semantics::typecheck::ForEachIrError::Type(t) => t.code(),
+                semantics::typecheck::ForEachIrError::Consumer(_) => 0,
+            }),
+            Vec::new(),
+        ),
+    }
 }
 
 use semantics::typecheck::db::SubtypeInfo;

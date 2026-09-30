@@ -10,7 +10,7 @@ use ir::TrapCode;
 
 use crate::engine::ExecState;
 use crate::heap::HeapFault;
-use crate::trace::Event;
+use crate::journal::Effect;
 use crate::value::Slot;
 
 /// What a builtin signals instead of a normal return.
@@ -55,11 +55,7 @@ impl Builtin {
                 // ( i64 -- ) write the low byte to the diagnostic channel.
                 let v = pop_i64(st)?;
                 st.out.push((v & 0xFF) as u8);
-                st.trace.record(Event::Output {
-                    start: st.trace.output_len,
-                    len: 1,
-                });
-                st.trace.output_len += 1;
+                st.record_output(1);
                 Ok(())
             }
             Builtin::TestioWriteStr => {
@@ -83,11 +79,7 @@ impl Builtin {
                     st.out.push(b);
                     written += 1;
                 }
-                st.trace.record(Event::Output {
-                    start: st.trace.output_len,
-                    len: written,
-                });
-                st.trace.output_len += written;
+                st.record_output(written);
                 Ok(())
             }
             Builtin::TestioExit => {
@@ -100,6 +92,7 @@ impl Builtin {
                 match st.heap.region_create(size) {
                     Ok(handle) => {
                         st.stack.push(Slot::int(ir::TY_I64, handle as i64));
+                        st.journal.push(Effect::RegionCreate { handle });
                         Ok(())
                     }
                     Err(fault) => Err(region_fault(fault)),
@@ -110,8 +103,12 @@ impl Builtin {
                 let size = pop_u64(st)?;
                 let handle = pop_u64(st)?;
                 match st.heap.region_alloc(handle, size) {
-                    Ok(ptr) => {
+                    Ok((ptr, old_off)) => {
                         st.stack.push(Slot::ptr(ir::TY_PTR_MUT, ptr));
+                        st.journal.push(Effect::RegionAlloc {
+                            handle,
+                            old_off: old_off as u32,
+                        });
                         Ok(())
                     }
                     Err(fault) => Err(region_fault(fault)),
@@ -121,7 +118,13 @@ impl Builtin {
                 // ( Region -- )
                 let handle = pop_u64(st)?;
                 match st.heap.region_reset(handle) {
-                    Ok(()) => Ok(()),
+                    Ok(old_off) => {
+                        st.journal.push(Effect::RegionReset {
+                            handle,
+                            old_off: old_off as u32,
+                        });
+                        Ok(())
+                    }
                     Err(fault) => Err(region_fault(fault)),
                 }
             }
@@ -129,7 +132,10 @@ impl Builtin {
                 // ( Region -- )
                 let handle = pop_u64(st)?;
                 match st.heap.region_destroy(handle) {
-                    Ok(()) => Ok(()),
+                    Ok(saved) => {
+                        st.journal.push(Effect::RegionDestroy { handle, saved });
+                        Ok(())
+                    }
                     Err(fault) => Err(region_fault(fault)),
                 }
             }

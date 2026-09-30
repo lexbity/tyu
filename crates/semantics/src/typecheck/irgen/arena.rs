@@ -1,6 +1,7 @@
 use super::*;
 extern crate alloc;
 use alloc::boxed::Box;
+use alloc::vec::Vec;
 
 pub(super) const QUOTE_WORD_CAP: usize = 16;
 // One main word + max quote words per build_ir_word call.
@@ -8,14 +9,20 @@ const WORD_ARENA_CAP: usize = QUOTE_WORD_CAP + 1;
 
 pub struct ArenaAllocator {
     len: usize,
-    words: Box<[MaybeUninit<lir::Word>; WORD_ARENA_CAP]>,
+    // Heap-backed arena. Never build `[MaybeUninit<T>; N]` on the stack
+    // (`Box::new([...])` materializes the array on the stack first): a `Word`
+    // is ~100 KB, so a 17-word arena array would need ~1.7 MiB of stack per
+    // `build_ir` call — beyond any 2 MiB test-thread stack (P3 fix).
+    words: Box<[MaybeUninit<lir::Word>]>,
 }
 
 impl ArenaAllocator {
     pub fn new() -> Self {
+        let words: Vec<MaybeUninit<lir::Word>> =
+            (0..WORD_ARENA_CAP).map(|_| MaybeUninit::uninit()).collect();
         Self {
             len: 0,
-            words: Box::new([const { MaybeUninit::uninit() }; WORD_ARENA_CAP]),
+            words: words.into_boxed_slice(),
         }
     }
 

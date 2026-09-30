@@ -1,0 +1,15 @@
+# contracts — L1 guard-on semantics (§Q4): contract failure traps 20 with a
+# span, subtype range failure traps 21; diagnostics carry native codes.
+:fuel 100000
+import platform/testio { testio.write-byte };
+subtype Percent = i64 range 0..100;
+: pct-in-range ( Percent -- Percent bool ) dup 0 >= [ dup 100 <= ] [ 0 0 == ] if ;
+: pct-add ( Percent -- Percent ) needs [ pct-in-range ] 1 + as Percent ;
+: no-sevens ( i64 -- i64 bool ) dup 7 == not ;
+: add-safely ( i64 -- i64 ) needs [ no-sevens ] 1 + ;
+50 as Percent pct-add drop
+:stack
+150 as Percent drop
+:stack
+7 add-safely drop
+:stack

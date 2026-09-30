@@ -203,7 +203,7 @@ proptest! {
         let base = heap.region_base(h).expect("live region base");
         let mut cursor = 0u64;
         for size in sizes {
-            let ptr = heap.region_alloc(h, size).expect("allocated");
+            let (ptr, _old_off) = heap.region_alloc(h, size).expect("allocated");
             assert_eq!(ptr.wrapping_sub(base), cursor, "cursor divergence at size {size}");
             cursor += (size + 7) & !7;
         }
@@ -244,7 +244,7 @@ fn dup_copies_the_reference_not_the_aggregate() {
 fn destroyed_region_slots_are_reused_fresh() {
     let mut heap = RegionHeap::new();
     let h1 = heap.region_create(64).expect("create");
-    let p1 = heap.region_alloc(h1, 8).expect("alloc");
+    let (p1, _) = heap.region_alloc(h1, 8).expect("alloc");
     let _ = p1;
     heap.region_destroy(h1).expect("destroy");
 
@@ -253,8 +253,8 @@ fn destroyed_region_slots_are_reused_fresh() {
         h1, h2,
         "the destroyed slot must be reusable (native scans size==0)"
     );
-    let p2 = heap.region_alloc(h2, 8).expect("alloc");
-    // Fresh storage: a stale stale read must answer 0, not old bytes.
+    let (p2, _) = heap.region_alloc(h2, 8).expect("alloc");
+    // Fresh storage: a stale read must answer 0, not old bytes.
     assert_eq!(
         heap.load(p2, 8).unwrap(),
         0,

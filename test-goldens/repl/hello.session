@@ -1,0 +1,9 @@
+# hello — persistent data stack across submits (PLAN-WASM-1 DEC-4).
+# Each submit recompiles the accumulated buffer; the stack survives.
+:fuel 100000
+1 2 +
+:stack
+3 +
+:stack
+4 +
+:stack

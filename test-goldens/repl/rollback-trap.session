@@ -1,0 +1,18 @@
+# rollback-trap — a phrase that mutates the heap, emits output, then traps:
+# stack+heap roll back to the entry checkpoint, already-emitted output stays
+# (DEC-5/DEC-6, §7.3). A follow-up phrase proves the heap is clean again.
+# NOTE: the CLI replays one line = one submission; definitions are one-liners.
+:fuel 100000
+import platform/testio { testio.write-byte };
+import platform/mem;
+: recurse ( -- ) recurse ;
+: dance ( -- ) 64 as usize platform.mem.region-create dup 8 as usize platform.mem.region-alloc 42 as i64 !i64 65 testio.write-byte platform.mem.region-destroy 66 testio.write-byte recurse ;
+dance
+:stack
+: verify ( -- ) 1 2 + 3 == [ 67 testio.write-byte ] [ 70 testio.write-byte ] if ;
+verify
+:stack
+# heap-usability: the region store survived the rollback intact.
+: heap-ok ( -- ) 32 as usize platform.mem.region-create dup 8 as usize platform.mem.region-alloc dup 42 as i64 !i64 dup @i64 42 == [ 68 testio.write-byte ] [ 70 testio.write-byte ] if drop platform.mem.region-destroy ;
+heap-ok
+:stack

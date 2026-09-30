@@ -18,12 +18,7 @@ const TARGETS: &[(Target, &str)] = &[
 
 #[test]
 fn golden_codegen_asm_is_stable() {
-    std::thread::Builder::new()
-        .stack_size(8 << 20)
-        .spawn(run_golden_codegen_asm_is_stable)
-        .unwrap()
-        .join()
-        .unwrap();
+    run_golden_codegen_asm_is_stable();
 }
 
 fn run_golden_codegen_asm_is_stable() {

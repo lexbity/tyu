@@ -13,6 +13,7 @@ pub mod driver;
 pub mod iface;
 pub mod util;
 
+use alloc::boxed::Box;
 use codegen_core::compiled_desc::{
     decode_compiled_desc, validate_compiled_desc, CompiledDescriptor,
 };
@@ -38,8 +39,10 @@ pub unsafe fn run(argc: isize, argv: *const *const hosted::c::c_char) -> i32 {
 
     // Effective MMIO apertures: the compiled platform descriptor when
     // `--platform` is present (P3/P4, D-1), otherwise the target's static
-    // defaults. Loaded once, before any emit that needs them.
-    let mut compiled = CompiledDescriptor::default();
+    // defaults. Loaded once, before any emit that needs them. Boxed: a
+    // `CompiledDescriptor` is ~133 KiB of table by value — on the 2 MiB
+    // default stack it is a material fraction of the compile path (P3 fix).
+    let mut compiled = Box::new(CompiledDescriptor::default());
     let descriptor: Option<&CompiledDescriptor> =
         match load_descriptor(cfg.platform_dir, &mut compiled) {
             Ok(Some(())) => Some(&compiled),
@@ -74,13 +77,15 @@ pub unsafe fn run(argc: isize, argv: *const *const hosted::c::c_char) -> i32 {
     };
 
     let src = buf.as_slice();
-    let module = match Parser::new(src).parse_module_ast() {
+    // Boxed: a `ModuleAst` is ~308 KiB by value (decls/imports tables); on the
+    // stack it dominates the compile path's footprint (P3 root-cause fix).
+    let module = Box::new(match Parser::new(src).parse_module_ast() {
         Ok(m) => m,
         Err(e) => {
             emit_parse_error(cfg.input, src, e.code(), e.message(), e.span().start);
             return 2;
         }
-    };
+    });
 
     // D-1 / E3640: a module containing any MMIO construct (register-map
     // declaration or instance) requires `--platform`. Raw bases are likewise

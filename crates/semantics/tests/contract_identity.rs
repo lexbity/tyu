@@ -16,52 +16,43 @@
 
 mod common;
 
-use std::thread;
-
 use common::builtin_env;
 use frontend::parse::Parser;
 
 /// Drive `for_each_ir_word` over the module exactly as langc's drivers do.
 /// Returns `Ok(())` or the typecheck error code.
 fn compile(source: Vec<u8>) -> Result<(), u32> {
-    thread::Builder::new()
-        .stack_size(8 << 20)
-        .spawn(move || {
-            let src = source;
-            let module = Parser::new(&src).parse_module_ast().expect("valid module");
-            let (env, len) = builtin_env();
-            let env: Vec<common::WordEntry> = env[..len].to_vec();
-            let subtypes: Vec<SubtypeInfo> = Vec::new();
-            let mut resources =
-                semantics::typecheck::db::build_resource_db(&module, &src).expect("resource db");
-            match semantics::typecheck::for_each_ir_word(
-                &module,
-                &src,
-                &env,
-                &subtypes,
-                semantics::typecheck::ChecksMode::All,
-                false,
-                verifier::target::TargetSpec::X86_64,
-                &mut resources,
-                None,
-                None,
-                None,
-                false,
-                false, // proven_gate (tests: off)
-                None,  // bind_obl (tests: off)
-                &[],
-                |_w, _ctx| Ok::<(), ()>(()),
-            ) {
-                Ok(()) => Ok(()),
-                Err(e) => Err(match e {
-                    semantics::typecheck::ForEachIrError::Type(t) => t.code(),
-                    semantics::typecheck::ForEachIrError::Consumer(_) => 0,
-                }),
-            }
-        })
-        .unwrap()
-        .join()
-        .unwrap()
+    let src = source;
+    let module = Parser::new(&src).parse_module_ast().expect("valid module");
+    let (env, len) = builtin_env();
+    let env: Vec<common::WordEntry> = env[..len].to_vec();
+    let subtypes: Vec<SubtypeInfo> = Vec::new();
+    let mut resources =
+        semantics::typecheck::db::build_resource_db(&module, &src).expect("resource db");
+    match semantics::typecheck::for_each_ir_word(
+        &module,
+        &src,
+        &env,
+        &subtypes,
+        semantics::typecheck::ChecksMode::All,
+        false,
+        verifier::target::TargetSpec::X86_64,
+        &mut resources,
+        None,
+        None,
+        None,
+        false,
+        false, // proven_gate (tests: off)
+        None,  // bind_obl (tests: off)
+        &[],
+        |_w, _ctx| Ok::<(), ()>(()),
+    ) {
+        Ok(()) => Ok(()),
+        Err(e) => Err(match e {
+            semantics::typecheck::ForEachIrError::Type(t) => t.code(),
+            semantics::typecheck::ForEachIrError::Consumer(_) => 0,
+        }),
+    }
 }
 
 use semantics::typecheck::db::SubtypeInfo;
