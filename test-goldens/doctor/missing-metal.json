@@ -1,0 +1,20 @@
+{
+  "schema": "tyu.doctor/1",
+  "tyu_version": "0.1.0",
+  "tier": "all",
+  "host": { "os": "linux", "arch": "x86_64" },
+  "sysroot": { "requested": "cwd", "resolved": "@ROOT@/sysroot", "present": true },
+  "checks": [
+    { "id": "D01", "tier": "hosted", "status": "pass", "tool": "rustc", "version": "1.101.0-nightly", "path": "@FAKEBIN@/rustc", "source": "path", "detail": "matches rust-toolchain.toml pin (nightly-2026-09-29)"},
+    { "id": "D02", "tier": "hosted", "status": "pass", "tool": null, "version": null, "path": null, "source": null, "detail": "tyu and langc both resolvable"},
+    { "id": "D03", "tier": "hosted", "status": "pass", "tool": null, "version": null, "path": null, "source": null, "detail": "cwd -> @ROOT@/sysroot (Core.mod present)"},
+    { "id": "D04", "tier": "metal", "status": "fail", "tool": "fasm", "version": null, "path": null, "source": null, "detail": null, "fix": { "auto": false, "command": "@FIX-CMD@" }},
+    { "id": "D05", "tier": "metal", "status": "fail", "tool": "ld/nm", "version": null, "path": null, "source": null, "detail": null, "fix": { "auto": false, "command": "@FIX-CMD@" }},
+    { "id": "D06", "tier": "metal", "status": "fail", "tool": "arm-none-eabi-as", "version": null, "path": null, "source": null, "detail": null, "fix": { "auto": false, "command": "@FIX-CMD@" }},
+    { "id": "D07", "tier": "metal", "status": "fail", "tool": "riscv32/riscv64-*-as/ld", "version": null, "path": null, "source": null, "detail": null, "fix": { "auto": false, "command": "@FIX-CMD@" }},
+    { "id": "D08", "tier": "metal", "status": "fail", "tool": "qemu-system-*", "version": null, "path": null, "source": null, "detail": null, "fix": { "auto": false, "command": "@FIX-CMD@" }},
+    { "id": "D11", "tier": "hosted", "status": "pass", "tool": "git", "version": "git version 2.55.0", "path": "@FAKEBIN@/git", "source": "path", "detail": null},
+    { "id": "D12", "tier": "hosted", "status": "pass", "tool": null, "version": null, "path": null, "source": null, "detail": "no shadowing tyu on PATH"}
+  ],
+  "summary": { "pass": 5, "warn": 0, "fail": 5 }
+}

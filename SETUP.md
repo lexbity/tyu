@@ -75,9 +75,10 @@ last act. Rerun anytime — it re-clones fresh and atomically reinstalls.)
 
 ## Health checks and the first build
 
-- `tyu doctor` is the health check (tier-scoped; `--tier=hosted|metal|proof`,
-  `--format=human|json`). The full catalog lands with the toolchain-health
-  slice; `tyu toolchain check` is its per-target role-availability subset.
+- `tyu doctor` is the health check (tier-scoped; `--tier=hosted|metal|proof|all`,
+  `--format=human|json`; checks D01–D08 + D11–D12; D09 platform-lint and D10
+  proof land with the toolchain-health follow-on slice). `tyu toolchain check`
+  is its per-target role-availability subset.
 - The smoke contract is the IMAGE exit code (the driver's `tyu run` marker
   protocol is not the smoke signal):
   - `ci/smoke/hello.mod` — green; the built image exits `0` (the quickstart

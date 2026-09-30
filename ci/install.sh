@@ -158,6 +158,7 @@ elif [ -z "$BRANCH" ]; then
         REF="$newest_tag"
         say "resolve-ref  : newest release tag on the origin: $REF"
     else
+        REF="HEAD"
         REF_IS_DEFAULT=1
         say "resolve-ref  : no v* tags on the origin — defaulting to the origin HEAD (main)"
     fi
@@ -188,12 +189,20 @@ else
     say "clone        : $REF from $REPO -> $SRC_CHECKOUT"
     if [ -d "$SRC_CHECKOUT/.git" ]; then
         # idempotent in-place update: shallow-fetch the ref and force it out
-        if ! git -C "$SRC_CHECKOUT" fetch --quiet --depth 1 origin "$REF" --force \
-            && ! git -C "$SRC_CHECKOUT" fetch --quiet --depth 1 origin "refs/tags/$REF" --force; then
-            die "update of $SRC_CHECKOUT to $REF failed"
+        if [ "$REF_IS_DEFAULT" -eq 1 ]; then
+            # default ref: fetch the origin HEAD, then reset to it.
+            if ! git -C "$SRC_CHECKOUT" fetch --quiet --depth 1 --force origin \
+                || ! git -C "$SRC_CHECKOUT" reset --hard --quiet FETCH_HEAD; then
+                die "update of $SRC_CHECKOUT to the origin HEAD failed"
+            fi
+        else
+            if ! git -C "$SRC_CHECKOUT" fetch --quiet --depth 1 origin "$REF" --force \
+                && ! git -C "$SRC_CHECKOUT" fetch --quiet --depth 1 origin "refs/tags/$REF" --force; then
+                die "update of $SRC_CHECKOUT to $REF failed"
+            fi
+            git -C "$SRC_CHECKOUT" checkout --force --quiet "$REF" 2>/dev/null \
+                || git -C "$SRC_CHECKOUT" checkout --force --quiet "refs/tags/$REF"
         fi
-        git -C "$SRC_CHECKOUT" checkout --force --quiet "$REF" 2>/dev/null \
-            || git -C "$SRC_CHECKOUT" checkout --force --quiet "refs/tags/$REF"
     elif [[ "$REF" =~ ^[0-9a-f]{40}$ ]]; then
         # raw SHA: clone the origin's default branch, then detach at the SHA
         # (works even when the origin is a shallow clone whose HEAD is the SHA)

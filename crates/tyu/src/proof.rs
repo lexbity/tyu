@@ -2384,18 +2384,11 @@ fn lake_on_path() -> bool {
     crate::toolchain::find_in_path("lake").is_some()
 }
 
-/// `lean --version` → `"4.27.0"`-style version string.
+/// `lean --version` → `"4.27.0"`-style version string — via the shared §6.2
+/// probe (1500 ms deadline, 4 KiB cap, ETXTBSY retry) so a wedged or
+/// transiently-busy `lean` can never hang or flake the proof gate.
 fn lean_version(path: &Path) -> Option<String> {
-    let out = Command::new(path).arg("--version").output().ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let text = String::from_utf8_lossy(&out.stdout);
-    let v = text
-        .strip_prefix("Lean (version ")
-        .and_then(|r| r.split(',').next())?
-        .trim();
-    Some(v.to_string())
+    crate::toolchain::probe_version(path)
 }
 
 /// Prefix-equal version comparison on dot-separated numeric segments: the
@@ -2855,6 +2848,11 @@ mod tests {
 
     #[test]
     fn vendored_library_tamper_is_fail_closed() {
+        // Spawns the gen renderer (which may resolve lean by name) — hold the
+        // shared test PATH lock so a fabricated PATH is never observed.
+        let _path_guard = crate::toolchain::ambient_path_lock()
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         let dir = temp_dir("vendor");
         let project = dir.join("project");
         fs::create_dir_all(&project).unwrap();
@@ -2980,6 +2978,11 @@ mod tests {
 
     #[test]
     fn generate_package_is_deterministic_and_fast_paths() {
+        // Spawns the gen renderer (which may resolve lean by name) — hold the
+        // shared test PATH lock so a fabricated PATH is never observed.
+        let _path_guard = crate::toolchain::ambient_path_lock()
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         let dir = temp_dir("genpkg");
         let project = dir.join("project");
         fs::create_dir_all(&project).unwrap();

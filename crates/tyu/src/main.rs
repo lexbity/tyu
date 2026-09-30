@@ -86,6 +86,32 @@ fn main() {
                 }
             }
         }
+        args::Command::Doctor(doctor_args) => {
+            // S7 dispatch: run the tier-scoped checks, render (human | JSON),
+            // write --json-out when requested, exit per FR-15.
+            let report = tyu::doctor::run(&doctor_args, &project_manifest);
+            // --json-out ALWAYS writes the machine surface, regardless of
+            // --format (a silent no-op under the human format was a trap for
+            // doctor's primary consumers — agents and scripts). stdout still
+            // follows --format.
+            if let Some(path) = &doctor_args.json_out {
+                let json = tyu::doctor::render_json(&report);
+                if let Err(e) = std::fs::write(path, json.as_bytes()) {
+                    eprintln!("tyu: doctor: cannot write --json-out '{}': {}", path, e);
+                    std::process::exit(3);
+                }
+                eprintln!("tyu: doctor: json written to '{}'", path);
+            }
+            match doctor_args.format {
+                args::DoctorFormat::Json => {
+                    print!("{}", tyu::doctor::render_json(&report));
+                }
+                args::DoctorFormat::Human => {
+                    print!("{}", tyu::doctor::render_human(&report));
+                }
+            }
+            std::process::exit(report.exit_code());
+        }
         args::Command::Proof(proof_args) => {
             let result = match proof_args {
                 args::ProofArgs::Init { dir, input } => {

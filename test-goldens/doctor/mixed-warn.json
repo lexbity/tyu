@@ -1,0 +1,20 @@
+{
+  "schema": "tyu.doctor/1",
+  "tyu_version": "0.1.0",
+  "tier": "all",
+  "host": { "os": "linux", "arch": "x86_64" },
+  "sysroot": { "requested": "cwd", "resolved": "@ROOT@/sysroot", "present": true },
+  "checks": [
+    { "id": "D01", "tier": "hosted", "status": "pass", "tool": "rustc", "version": "1.101.0-nightly", "path": "@FAKEBIN@/rustc", "source": "path", "detail": "matches rust-toolchain.toml pin (nightly-2026-09-29)"},
+    { "id": "D02", "tier": "hosted", "status": "pass", "tool": null, "version": null, "path": null, "source": null, "detail": "tyu and langc both resolvable"},
+    { "id": "D03", "tier": "hosted", "status": "pass", "tool": null, "version": null, "path": null, "source": null, "detail": "cwd -> @ROOT@/sysroot (Core.mod present)"},
+    { "id": "D04", "tier": "metal", "status": "pass", "tool": "fasm", "version": "1.73.35", "path": "@FAKEBIN@/fasm", "source": "path", "detail": null},
+    { "id": "D05", "tier": "metal", "status": "pass", "tool": null, "version": null, "path": null, "source": null, "detail": "ld, nm present"},
+    { "id": "D06", "tier": "metal", "status": "pass", "tool": "arm-none-eabi-as", "version": "GNU assembler 2.41", "path": "@FAKEBIN@/arm-none-eabi-as", "source": "path", "detail": null},
+    { "id": "D07", "tier": "metal", "status": "pass", "tool": "riscv64-unknown-elf-as", "version": null, "path": "@FAKEBIN@/riscv64-unknown-elf-as", "source": "path", "detail": "a RISC-V cross assembler/linker candidate resolves"},
+    { "id": "D08", "tier": "metal", "status": "warn", "tool": null, "version": null, "path": null, "source": null, "detail": "missing some QEMU binaries; have qemu-system-x86_64", "fix": { "auto": false, "command": "@FIX-CMD@" }},
+    { "id": "D11", "tier": "hosted", "status": "pass", "tool": "git", "version": "git version 2.55.0", "path": "@FAKEBIN@/git", "source": "path", "detail": null},
+    { "id": "D12", "tier": "hosted", "status": "pass", "tool": null, "version": null, "path": null, "source": null, "detail": "no shadowing tyu on PATH"}
+  ],
+  "summary": { "pass": 9, "warn": 1, "fail": 0 }
+}

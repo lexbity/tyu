@@ -47,16 +47,13 @@ SHA="$(git -C "$CHECKOUT" rev-parse HEAD)"
 say "tree under test: $SHA"
 
 # --- the verified quickstart (runs as one shell, like a real user) --------
-# TYU_REPO must be a repo whose refs/heads/main IS the tested commit: the
-# mounted Actions checkout is a detached HEAD with no refs/heads (a branch
-# clone from it fails with "Remote branch main not found" — audit finding,
-# S6), and even where a branch ref existed, a branch clone would fetch that
-# branch's tip, not the tree under test. A writable local clone of the
-# checkout's HEAD, with its HEAD named 'main', makes the installer's default
-# ref resolution (newest v* tag -> else main) clone EXACTLY the tested commit.
+# TYU_REPO must be a repo whose HEAD IS the tested commit: the mounted
+# checkout is exactly that (a detached Actions checkout is still a valid git
+# repo whose HEAD is the tested merge commit). install.sh's default ref
+# resolution clones the origin HEAD, so a plain writable clone of the checkout
+# makes the installer clone EXACTLY the tree under test.
 SRC_REPO="$WORKDIR/src"
 git clone --quiet "$CHECKOUT" "$SRC_REPO"
-git -C "$SRC_REPO" branch --force main HEAD
 set +e
 (
     cd "$CHECKOUT"
@@ -69,22 +66,24 @@ set -e
 [ "$quickstart_rc" -eq 0 ] || fail "the quickstart command failed (rc=$quickstart_rc) — see the log above"
 say "quickstart executed end-to-end (installer -> build -> green smoke)"
 
-# --- health surface --------------------------------------------------------
-export PATH="$PREFIX/bin:$PATH"
-# doctor lands with the S7 slice; until then it is a forward contract. The
-# verifier feature-detects and skips transparently; S7 tightens this to a
-# hard requirement (a doctor that reports failures fails the job).
+# --- health surface (HARD since S7 — doctor exists) ------------------------
+# The doctor runs from the INSTALLED checkout (its cwd/sysroot) with both
+# install.sh's prefix and rustup's binaries on PATH (rustc/rustup live in
+# $HOME/.cargo/bin in the fresh container; the quickstart subshell's PATH did
+# not outlive it).
+export PATH="$PREFIX/bin:$HOME/.cargo/bin:$PATH"
 doctor_json="$PREFIX/doctor.json"
 doctor_ok=0
-if "$PREFIX/bin/tyu" doctor --tier=hosted --format=json > "$doctor_json" 2>/dev/null; then
-    say "doctor: present — asserting hosted tier healthy"
-    doctor_ok=1
-    grep -q '"fail": 0' "$doctor_json" \
-        || { cat "$doctor_json" >&2; fail "doctor reports failures on the installed toolchain"; }
-else
-    say "doctor: not on this tree yet (arrives with the S7 slice) — skipped transparently"
-    rm -f "$doctor_json"
+if ! ( cd "$PREFIX/src/tyu" && "$PREFIX/bin/tyu" doctor --tier=hosted --format=json > "$doctor_json" 2>&1 ); then
+    cat "$doctor_json" >&2
+    fail "tyu doctor did not run cleanly on the installed toolchain"
 fi
+if ! grep -q '"fail": 0' "$doctor_json"; then
+    cat "$doctor_json" >&2
+    fail "doctor reports failures on the installed toolchain (hosted tier must be fully healthy)"
+fi
+doctor_ok=1
+say "doctor: hosted tier healthy (json asserted)"
 
 # --- red smoke: must trap CONTRACT_FAIL (code 20) --------------------------
 # run from the tested checkout (the quickstart subshell already left CWD=/)

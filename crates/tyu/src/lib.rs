@@ -12,6 +12,7 @@ pub mod cert;
 pub mod closure;
 pub mod debug_escalate;
 pub mod deploy;
+pub mod doctor;
 pub mod elf_reader;
 pub mod error;
 pub mod graph;
