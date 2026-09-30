@@ -11,6 +11,11 @@
 #
 # Every job exports TYU_BIN_DIR so all e2e suites consume the same
 # release binary that CI built — never a stale debug binary.
+#
+# Install-tool apt names are for the ubuntu-latest image (Ubuntu 24.04):
+# package qemu-system-x provides /usr/bin/qemu-system-x86_64, package
+# qemu-system-misc provides /usr/bin/qemu-system-riscv32 (and riscv64),
+# and package binutils provides /usr/bin/ld.
 
 name: Integration
 
@@ -46,12 +51,12 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
             fasm \
-            qemu-system-x86_64 \
+            qemu-system-x86 \
             gcc-arm-none-eabi \
             qemu-system-arm \
             gcc-riscv64-unknown-elf \
-            qemu-system-riscv32 \
-            ld
+            qemu-system-misc \
+            binutils
       - name: Build (release)
         run: cargo build --release -p langc -p tyu -p lmod-pack -p lmod-encrypt -p lmod-sign
       - name: Tooling tests (all)
@@ -74,7 +79,7 @@ jobs:
             gcc-arm-none-eabi \
             qemu-system-arm \
             gcc-riscv64-unknown-elf \
-            qemu-system-riscv32
+            qemu-system-misc
       - name: Build (release)
         run: cargo build --release -p langc -p tyu -p lmod-pack -p lmod-encrypt -p lmod-sign
       - name: Loader tests (all)
@@ -95,8 +100,8 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
             fasm \
-            qemu-system-x86_64 \
-            ld
+            qemu-system-x86 \
+            binutils
       - name: Build (release)
         run: cargo build --release -p langc -p tyu
       - name: Diagnostic & effect corpus
@@ -122,7 +127,7 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq fasm qemu-system-x86_64 ld
+          sudo apt-get install -y -qq fasm qemu-system-x86 binutils
       - name: Install the pinned Lean toolchain (elan)
         run: |
           curl -fsSL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o /tmp/elan-init.sh
@@ -153,7 +158,7 @@ jobs:
           sudo apt-get install -y -qq \
             qemu-system-arm \
             gcc-arm-none-eabi \
-            qemu-system-riscv32 \
+            qemu-system-misc \
             gcc-riscv64-unknown-elf
       - name: Build (release)
         run: cargo build --release -p rsp-client
@@ -176,11 +181,11 @@ jobs:
           sudo apt-get install -y -qq \
             qemu-system-arm \
             gcc-arm-none-eabi \
-            qemu-system-riscv32 \
+            qemu-system-misc \
             gcc-riscv64-unknown-elf \
             fasm \
-            qemu-system-x86_64 \
-            ld
+            qemu-system-x86 \
+            binutils
       - name: Build (release)
         run: cargo build --release -p langc -p tyu
       - name: ARM concurrency test
@@ -205,12 +210,12 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
             fasm \
-            qemu-system-x86_64 \
+            qemu-system-x86 \
             gcc-arm-none-eabi \
             qemu-system-arm \
             gcc-riscv64-unknown-elf \
-            qemu-system-riscv32 \
-            ld
+            qemu-system-misc \
+            binutils
       - name: Build (release)
         run: cargo build --release -p langc -p tyu -p lmod-pack -p lmod-encrypt -p lmod-sign
       - name: E2E tests (all)
@@ -237,8 +242,8 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
             fasm \
-            qemu-system-x86_64 \
-            ld
+            qemu-system-x86 \
+            binutils
       - name: Build (debug — the acceptance e2e gates resolve the in-tree bins)
         run: cargo build -p langc -p tyu
       - name: Acceptance matrix (P16.3, §11.1–§11.10)

@@ -11,6 +11,11 @@
 # Disabling or ignoring a failing workflow or job WITHOUT an inline
 # justification comment is a review-blocking change.
 #
+# Install-tool apt names are for the ubuntu-latest image (Ubuntu 24.04):
+# package qemu-system-x provides /usr/bin/qemu-system-x86_64, package
+# qemu-system-misc provides /usr/bin/qemu-system-riscv32 (and riscv64),
+# and package binutils provides /usr/bin/ld.
+#
 # Runs the full test matrix on every push/PR, including the poison
 # corpus, debug-mode (`.lang.debug`) leg, hermetic RSP client, and
 # all three hardware backends (x86_64, ARM, RISC-V) under QEMU.
@@ -65,12 +70,12 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
             fasm \
-            qemu-system-x86_64 \
+            qemu-system-x86 \
             qemu-system-arm \
-            qemu-system-riscv32 \
+            qemu-system-misc \
             gcc-arm-none-eabi \
             gcc-riscv64-unknown-elf \
-            ld
+            binutils
       - name: Statement goldens (PLAN-VERIFY-3 P1.3, blocking gate)
         # The band rule (§Q4 item 3) on a fresh checkout: bootstrap the
         # gitignored goldens with two regen passes (byte-determinism), then
@@ -162,7 +167,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
             gcc-riscv64-unknown-elf \
-            qemu-system-riscv32
+            qemu-system-misc
       - name: Test-delivery guard
         run: bash ci/guards.sh
       - name: Build langc
@@ -188,8 +193,8 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
             fasm \
-            qemu-system-x86_64 \
-            ld
+            qemu-system-x86 \
+            binutils
       - name: Test-delivery guard
         run: bash ci/guards.sh
       - name: Build langc
