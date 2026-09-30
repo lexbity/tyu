@@ -15,7 +15,7 @@ lower one's prerequisites.
 | Tier | What it unlocks | Additional tools |
 |---|---|---|
 | `hosted` | build and run hosted (x86_64-unknown-linux-gnu) programs | git, a C linker, rustup + the pinned nightly |
-| `metal` | bare-metal codegen + QEMU execution (x86_64 / ARM / RISC-V) | fasm, binutils, qemu-system-x/-arm/-misc, cross toolchains |
+| `metal` | bare-metal codegen + QEMU execution (x86_64 / ARM / RISC-V) | fasm, binutils, qemu-system-x/-arm/-misc/-riscv, cross toolchains |
 | `proof` | the Lean verification port gates (`ci/port.sh`, `ci/differential.sh`) | elan + the Lean toolchain pin |
 
 ## Prerequisites

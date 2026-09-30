@@ -203,6 +203,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
             gcc-riscv64-unknown-elf \
+            qemu-system-riscv \
             qemu-system-misc \
             fasm \
             binutils
