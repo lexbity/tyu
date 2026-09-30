@@ -63,11 +63,13 @@ pub fn tool_available(name: &str) -> bool {
     // maps onto riscv64-unknown-elf-as etc. (RISCV_*_CANDIDATES), and the
     // workspace/installed dirs are consulted before PATH — a bare `which`
     // cannot see any of that under CI (S9 audit finding).
-    if crate::toolchain::resolve_tool_candidates(&[name]).is_ok() {
+    if crate::toolchain::resolve_tool(name).is_ok() {
         return true;
     }
-    Command::new("which")
-        .arg(name)
+    // ubuntu-26.04 removed the standalone `which` binary — `command -v` is
+    // the shell-builtin equivalent that always exists (S9 audit finding).
+    Command::new("sh")
+        .args(["-c", "command -v -- \"$1\"", "probe", name])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)

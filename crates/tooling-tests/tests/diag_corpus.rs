@@ -36,8 +36,10 @@ fn tool_available(name: &str) -> bool {
     if common::bin::try_resolve(name).is_some() {
         return true;
     }
-    Command::new("which")
-        .arg(name)
+    // ubuntu-26.04 removed the standalone `which` binary — `command -v` is
+    // the shell-builtin equivalent that always exists (S9 audit finding).
+    Command::new("sh")
+        .args(["-c", "command -v -- \"$1\"", "probe", name])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)

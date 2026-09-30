@@ -172,8 +172,8 @@ pub const DYNAMIC_TARGETS: &[DynamicTarget] = &[
 /// `target/debug/`, or in `target/release/` (for workspace-built
 /// binaries like `langc`, `tyu`).
 pub fn tool_available(name: &str) -> bool {
-    if Command::new("which")
-        .arg(name)
+    if Command::new("sh")
+        .args(["-c", "command -v -- \"$1\"", "probe", name])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)

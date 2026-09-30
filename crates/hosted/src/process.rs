@@ -55,6 +55,63 @@ pub struct ExitStatus {
     pub code: i32,
 }
 
+/// Return the index of the first candidate that is executable, with PATH
+/// lookup: names containing `/` are tested directly, bare names are probed
+/// in every `PATH` directory via `access(X_OK)`. Candidates like
+/// `riscv32-elf-as` vs `riscv64-unknown-elf-as` differ per distro, and the
+/// assembler must run the one the system actually ships (S9 audit:
+/// ubuntu-26.04 has no `riscv32-elf-as`).
+pub fn resolve_executable(candidates: &[&[u8]]) -> Option<usize> {
+    for (idx, c) in candidates.iter().enumerate() {
+        if c.contains(&b'/') {
+            if executable_at(c) {
+                return Some(idx);
+            }
+            continue;
+        }
+        let path_ptr = crate::env::get(b"PATH")?;
+        let mut plen = 0usize;
+        unsafe {
+            while *path_ptr.add(plen) != 0 {
+                plen += 1;
+            }
+        }
+        let path = unsafe { core::slice::from_raw_parts(path_ptr as *const u8, plen) };
+        let mut start = 0usize;
+        for i in 0..=path.len() {
+            if i == path.len() || path[i] == b':' {
+                let dir = &path[start..i];
+                start = i + 1;
+                if dir.is_empty() || dir.len() + 1 + c.len() > 509 {
+                    continue;
+                }
+                let mut probe = [0u8; 512];
+                probe[..dir.len()].copy_from_slice(dir);
+                let mut n = dir.len();
+                if probe[n - 1] != b'/' {
+                    probe[n] = b'/';
+                    n += 1;
+                }
+                probe[n..n + c.len()].copy_from_slice(c);
+                n += c.len();
+                if executable_at(&probe[..n]) {
+                    return Some(idx);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn executable_at(path: &[u8]) -> bool {
+    let mut buf = [0u8; 512];
+    if path.len() >= 511 {
+        return false;
+    }
+    buf[..path.len()].copy_from_slice(path);
+    (unsafe { c::access(buf[..path.len()].as_ptr() as *const i8, 1) }) == 0 // X_OK
+}
+
 pub fn run(prog: &[u8], args: &[&[u8]]) -> Result<ExitStatus, Errno> {
     if args.len() > MAX_ARGS {
         return Err(Errno(7));

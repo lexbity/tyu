@@ -325,7 +325,8 @@ msg 2 "  port.sh: P15.1 service-relativism gate (service_relativism, FORCED)"
     if [ ! -f target/debug/tyu ]; then
         cargo build -q -p tyu -p langc
     fi
-    TYU_SERVICE_E2E=1 cargo test -q -p tooling-tests --test service_relativism 2>&1 | tail -4
+    TYU_SERVICE_E2E=1 cargo test -q -p tooling-tests --test service_relativism 2>&1 \
+        | tee /tmp/port-p15.log | tail -30
 ) || {
     msg 1 "  port.sh: P15.1 service-relativism gate FAILED"
     exit 1
