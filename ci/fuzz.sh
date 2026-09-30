@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# PLAN-VERIFY-3 P16.3 — fuzz PR-smoke (the "three decode targets, corpus
-# seeds" gate, §11 criterion 8).
+# PLAN-VERIFY-3 P16.3 — fuzz PR-smoke (the "decode targets, corpus seeds"
+# gate, §11 criterion 8).
 #
 #   obl_v2_decode         fuzz target, tracked seeds ci/fuzz-seeds/obl_v2_decode/
 #   verdicts_v2_decode    fuzz target, tracked seeds ci/fuzz-seeds/verdicts_v2_decode/
 #   cert_index_decode     fuzz target, tracked seeds ci/fuzz-seeds/cert_index_decode/
+#   modinfo_decode        fuzz target, tracked seeds ci/fuzz-seeds/modinfo_decode/
+#                         (adversarial seeds, incl. the 2026-09-29 res_meta
+#                         out-of-bounds regression input — PLAN-RELEASE-1)
 #
 # The tracked seeds are producer-faithful documents (real artifacts, verdicts
 # and cert indices emitted by the codecs under test). The *live* corpus
@@ -22,7 +25,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SECONDS_BUDGET="${TYU_FUZZ_SECONDS:-30}"
 CMD_ARGS=("$@")
 
-TARGETS=(obl_v2_decode verdicts_v2_decode cert_index_decode)
+TARGETS=(obl_v2_decode verdicts_v2_decode cert_index_decode modinfo_decode)
 FILTER=""
 
 for i in "${!CMD_ARGS[@]}"; do
