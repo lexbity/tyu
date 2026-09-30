@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # PLAN-RELEASE-1 S6 / FR-9 — pristine-container install verification.
 #
-# Runs INSIDE an ubuntu:24.04 container with the repository checked out
+# Runs INSIDE an ubuntu:26.04 container with the repository checked out
 # read-only at /repo — the EXACT tree under test (the pull_request path
 # filter means a PR that touches the install path proves its own tree here).
 #

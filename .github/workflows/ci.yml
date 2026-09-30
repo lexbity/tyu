@@ -11,7 +11,7 @@
 # Disabling or ignoring a failing workflow or job WITHOUT an inline
 # justification comment is a review-blocking change.
 #
-# Install-tool apt names are for the ubuntu-latest image (Ubuntu 24.04):
+# Install-tool apt names are for the ubuntu-26.04 image (baseline; container-proven):
 # package qemu-system-x provides /usr/bin/qemu-system-x86_64, package
 # qemu-system-misc provides /usr/bin/qemu-system-riscv32 (and riscv64),
 # and package binutils provides /usr/bin/ld.
@@ -51,7 +51,7 @@ jobs:
   # Lint — static checks and test-count guard
   # ---------------------------------------------------------------------------
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -62,7 +62,7 @@ jobs:
   # x86_64 — primary architecture (fully tooled)
   # ---------------------------------------------------------------------------
   x86_64:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: lint
     timeout-minutes: 45
     steps:
@@ -145,7 +145,7 @@ jobs:
   # ARM (armv7m) — cross-compiled under QEMU
   # ---------------------------------------------------------------------------
   arm:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: lint
     timeout-minutes: 20
     steps:
@@ -179,7 +179,7 @@ jobs:
   # RISC-V (riscv32) — cross-compiled under QEMU
   # ---------------------------------------------------------------------------
   riscv:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: lint
     timeout-minutes: 20
     steps:
@@ -211,7 +211,7 @@ jobs:
   # Feature matrix — verifies gate diagnostic + size delta for slim vs fat
   # ---------------------------------------------------------------------------
   feature_matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: lint
     timeout-minutes: 20
     steps:
@@ -242,7 +242,7 @@ jobs:
   # Debug build (cargo check, no tests) — exercises no_std compile paths
   # ---------------------------------------------------------------------------
   build_only:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: lint
     timeout-minutes: 15
     steps:
@@ -254,7 +254,7 @@ jobs:
   # Fuzz smoke — parser/container hostile-byte harnesses
   # ---------------------------------------------------------------------------
   fuzz_smoke:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: lint
     timeout-minutes: 30
     steps:
@@ -274,7 +274,7 @@ jobs:
   # Miri — UB / unsafe-container tests under the Miri interpreter
   # ---------------------------------------------------------------------------
   miri:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -296,7 +296,7 @@ jobs:
   # then records the non-blocking stable-channel probe verdict (FR-19).
   # ---------------------------------------------------------------------------
   pin_audit:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

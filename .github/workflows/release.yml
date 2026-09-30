@@ -53,7 +53,7 @@ jobs:
   # Gate 1 — tag identity (first, cheapest; fails fast on a malformed ref)
   # ---------------------------------------------------------------------------
   verify:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -84,7 +84,7 @@ jobs:
   # Gate 2 — repo invariants + lint surface
   # ---------------------------------------------------------------------------
   guards:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: verify
     timeout-minutes: 30
     steps:
@@ -98,7 +98,7 @@ jobs:
   # Gate 3 — the ci.yml arch legs, re-run from the tagged SHA
   # ---------------------------------------------------------------------------
   matrix-x86_64:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: guards
     timeout-minutes: 45
     steps:
@@ -164,7 +164,7 @@ jobs:
         run: cargo test --release -p rsp-client -- qemu_read_register_and_memory
 
   matrix-arm:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: guards
     timeout-minutes: 20
     steps:
@@ -193,7 +193,7 @@ jobs:
         run: cargo test --release -p execution-tests --test arm -- trap_emits_framed_d_record trap_overflow_emits_trap_code_10
 
   matrix-riscv:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: guards
     timeout-minutes: 20
     steps:
@@ -226,7 +226,7 @@ jobs:
   # installs it and the scripts resolve the pin themselves.
   # ---------------------------------------------------------------------------
   port:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: guards
     timeout-minutes: 90
     steps:
@@ -244,7 +244,7 @@ jobs:
         run: PATH="$HOME/.elan/bin:$PATH" bash ci/port.sh
 
   differential:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: port
     timeout-minutes: 90
     steps:
@@ -268,7 +268,7 @@ jobs:
   # gates — the acceptance-skip mechanic is exactly this ownership split).
   # ---------------------------------------------------------------------------
   acceptance:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: guards
     timeout-minutes: 30
     steps:
@@ -293,7 +293,7 @@ jobs:
   # Gate 7 — artifact well-formedness (draft + §6.4 tarball/checksum/signature)
   # ---------------------------------------------------------------------------
   artifacts:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: [verify, guards, matrix-x86_64, matrix-arm, matrix-riscv, port, differential, acceptance]
     timeout-minutes: 15
     steps:
@@ -328,7 +328,7 @@ jobs:
   # still reports it so a persistent fuzz regression is visible, not hidden.
   # ---------------------------------------------------------------------------
   fuzz-smoke:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: guards
     continue-on-error: true
     timeout-minutes: 30
@@ -346,7 +346,7 @@ jobs:
   # the "publish is manual" notice. Runs ALWAYS so a red gate still renders.
   # ---------------------------------------------------------------------------
   summary:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: [verify, guards, matrix-x86_64, matrix-arm, matrix-riscv, port, differential, acceptance, artifacts, fuzz-smoke]
     if: always()
     timeout-minutes: 10

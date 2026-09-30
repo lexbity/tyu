@@ -247,7 +247,9 @@ check_actionlint() {
         msg $RED "  ACTIONLINT: binary not bootstrapped"
         return 1
     fi
-    if ! "$ACTIONLINT_BIN" .github/workflows/*.yml; then
+    # -config-file: the ubuntu-26.04 runner label (declared in
+    # .config/actionlint.yaml) is newer than this pinned actionlint's table.
+    if ! "$ACTIONLINT_BIN" -config-file .config/actionlint.yaml .github/workflows/*.yml; then
         rc=1
     fi
     return $rc
