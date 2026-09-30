@@ -96,7 +96,7 @@ flowchart LR
 | `Cargo.toml` | Workspace manifest | Declares all crates. Dev/test behavior is controlled at the workspace level. |
 | `README.md` | Front door summary | Points to the tracked docs and lists the main build prerequisites. |
 | `docs/DOCS.md` | Documentation index | Treat this as the tracked docs map. Add new docs here. |
-| `docs/SETUP.md` | Setup and local development | Mirrors the actual CI/tooling commands. |
+| `SETUP.md` | Setup and local development | Tracked, CI-executed setup reference (tiers, source installer, first build). |
 | `docs/TROUBLESHOOTING.md` | Known failure modes | Good reference for loader, diagnostic, and toolchain failures. |
 | `docs/GLOSSARY.md` | Shared vocabulary | Useful for matching parser/IR/loader terminology. |
 | `ci-lint.sh` | Test lint gate | Enforces test-quality conventions and a few repository-specific invariants. |
@@ -1208,7 +1208,7 @@ What should be refactored first:
 Read first:
 1. `README.md`
 2. `docs/GLOSSARY.md`
-3. `docs/SETUP.md`
+3. `SETUP.md`
 4. `docs/TROUBLESHOOTING.md`
 5. `crates/codegen-core/src/target.rs`
 6. `crates/tyu/src/main.rs`
@@ -1279,7 +1279,7 @@ Mistakes to avoid:
 ### Existing docs in the repo
 - `README.md`
 - `docs/DOCS.md`
-- `docs/SETUP.md`
+- `SETUP.md`
 - `docs/TROUBLESHOOTING.md`
 - `docs/GLOSSARY.md`
 - `docs/hil/rp2350.md` (hardware-in-the-loop replay via `TYU_RP2350_TRANSCRIPT` / `TYU_RP2350_EXPECT_DIAG`)

@@ -293,12 +293,31 @@ check_sha_pinned_actions() {
 }
 
 # --- 17. NFR-6 gate: the installer never escalates (fr-8) ------------------
-# ci/install.sh must never contain `sudo`; this gate exists from today so a
-# future installer cannot grow one unnoticed.
+# ci/install.sh must never EXECUTE `sudo`; mentioning sudo in user-facing
+# remediation text (apt lines) is fine. The gate flags command-position sudo
+# only: line start, or after `;` `&&` `|` (NFR-6 — installed today so a
+# future installer cannot grow one unnoticed).
 check_no_sudo_installer() {
     local rc=0
-    if [ -f ci/install.sh ] && grep -n "sudo" ci/install.sh >/dev/null 2>&1; then
-        msg $RED "  INSTALLER: ci/install.sh contains sudo (NFR-6)"
+    if [ -f ci/install.sh ] && grep -nE '(^|[;&|])\s*sudo\b' ci/install.sh >/dev/null 2>&1; then
+        msg $RED "  INSTALLER: ci/install.sh has command-position sudo (NFR-6)"
+        rc=1
+    fi
+    return $rc
+}
+
+# --- 18. PLAN-RELEASE-1 S5: no "unverified" hedge may return --------------
+# The README/SETUP quickstart commands are the commands CI executes; a
+# hedge like `# unverified` would mean the repo is shipping claims it never
+# ran. The hedge is banned from the user-facing setup docs.
+check_no_unverified_hedges() {
+    local rc=0 hits
+    hits=$(grep -n "# unverified" README.md SETUP.md 2>/dev/null || true)
+    if [ -n "$hits" ]; then
+        msg $RED "  HEDGE: '# unverified' must not return in README.md/SETUP.md (S5):"
+        while IFS= read -r line; do
+            msg $RED "    $line"
+        done <<< "$hits"
         rc=1
     fi
     return $rc
@@ -534,6 +553,7 @@ if [ $# -eq 0 ]; then
     check_shellcheck || overall_rc=1
     check_sha_pinned_actions || overall_rc=1
     check_no_sudo_installer || overall_rc=1
+    check_no_unverified_hedges || overall_rc=1
 fi
 
 if [ "$overall_rc" -eq 0 ]; then

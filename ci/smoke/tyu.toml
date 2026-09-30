@@ -1,0 +1,12 @@
+# PLAN-RELEASE-1 smoke project (S5/S6) — release-engineering-owned and
+# minimal by design, deliberately separate from the book's pedagogy corpus
+# (docs/book/labs/): the smoke is the install/health surface; the pedagogy is
+# the book's. Consumed by ci/install.sh's advise step and the S6
+# install-verify container job.
+
+[project]
+main = "hello.mod"
+modules = ["bad.mod"]
+
+[targets.host]
+triple = "x86_64-unknown-linux-gnu"

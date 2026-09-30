@@ -187,11 +187,9 @@ fn apply_project_to_build(args: &mut args::BuildArgs, manifest: &ProjectManifest
             }
         }
     }
+    // FR-21 sysroot rung: flag -> TYU_SYSROOT env -> cwd/sysroot.
     if args.sysroot.is_none() {
-        let candidate = cwd.join("sysroot");
-        if candidate.is_dir() {
-            args.sysroot = Some(candidate);
-        }
+        args.sysroot = tyu::sysroot::resolve(None, cwd);
     }
 }
 
@@ -211,11 +209,9 @@ fn apply_project_to_run(args: &mut args::RunArgs, manifest: &ProjectManifest, cw
             }
         }
     }
+    // FR-21 sysroot rung: flag -> TYU_SYSROOT env -> cwd/sysroot.
     if args.sysroot.is_none() {
-        let candidate = cwd.join("sysroot");
-        if candidate.is_dir() {
-            args.sysroot = Some(candidate);
-        }
+        args.sysroot = tyu::sysroot::resolve(None, cwd);
     }
 }
 

@@ -25,6 +25,7 @@ pub mod provenance;
 pub mod provision;
 pub mod run_cmd;
 pub mod runner;
+pub mod sysroot;
 pub mod test_cmd;
 pub mod test_helpers;
 pub mod toolchain;

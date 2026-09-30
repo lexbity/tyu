@@ -505,7 +505,9 @@ fn print_usage() {
     eprintln!("  --platform=<name>   Platform pack name");
     eprintln!("  --isa=<arch>        ISA filter for platform packs");
     eprintln!("  --profile=<name>    Build profile from tyu.toml [profile.<name>]");
-    eprintln!("  --sysroot=<dir>     Sysroot directory");
+    eprintln!(
+        "  --sysroot=<dir>     Sysroot directory (flag > TYU_SYSROOT env > cwd/sysroot, FR-21)"
+    );
     eprintln!("  --out-dir=<dir>     Output directory");
     eprintln!("  -I <dir>            Add include directory");
     eprintln!("  --verify=on|off     Verdict-driven checks (default on; off = legacy path)");

@@ -36,8 +36,10 @@ A small **concatenative, stack-based** systems language for embedded + simulatio
   its open-obligation allowlist (guards.sh G20 — every reported open is
   justified, and every justification still occurs)
 - `CONTRIBUTING.md`: contribution and test policy
-- `devdocs/`: design plans (incl. the verification plan family), the v3 book,
-  the technical manual, and the research docs
+- `docs/book/`: the canonical book (14 chapters + appendices, 82 verified
+  lab fixtures) — tracked and CI-exercised
+- `devdocs/`: design plans (incl. the verification plan family), the
+  technical manual, and the research docs (gitignored scratchpad)
 
 ## Design documents (verification subsystem)
 
@@ -73,28 +75,48 @@ The static-verification plan family lives in `devdocs/plans/`:
 
 ## Prerequisites
 
-- Rust stable, as pinned by `rust-toolchain.toml`
-- `fasm`, `as`, and `ld`
-- `qemu-system-x86_64`, `qemu-system-arm`, and `qemu-system-riscv32`
+The toolchain is used in three tiers (`hosted` / `metal` / `proof`); the
+exact per-tier commands are in [`SETUP.md`](SETUP.md) and are the same
+commands CI executes. Essentials:
+
+- Rust at the **dated nightly pin** in `rust-toolchain.toml` (rustup
+  provisions it; `rust-src` is included for the RISC-V loader build)
+- `fasm`, `binutils` (provides `ld`, `nm`)
+- `qemu-system-x`, `qemu-system-arm`, `qemu-system-misc` (the
+  `qemu-system-*` binaries)
 - Optional cross toolchains: `gcc-arm-none-eabi`, `gcc-riscv64-unknown-elf`
-- Optional proof toolchain (the `ci/port.sh` / `ci/differential.sh` tier):
-  `lean` + `lake` at the pin recorded in `verification/ports/lean/lean-toolchain`
+- Optional proof tier (the `ci/port.sh` / `ci/differential.sh` gates):
+  elan + Lean at the pin in `verification/ports/lean/lean-toolchain`
 - `TYU_BIN_DIR` for execution-test runs that need built host binaries
 
 ## Quick start
 
-See [`SETUP.md`](SETUP.md) for the full setup path and first-run checks.
-
-The commands below are taken from repo CI and have not been re-run in this write-up.
-
-```bash
-cargo build --release -p langc -p tyu -p lmod-pack -p lmod-encrypt -p lmod-sign  # unverified
-cargo test --workspace --release  # unverified
-```
-
-Before opening a PR, run:
+The blessed path is the **source installer** (no prebuilt binaries). Full,
+CI-executed setup steps are in [`SETUP.md`](SETUP.md):
 
 ```bash
-bash ci-lint.sh  # unverified
-bash ci/guards.sh  # unverified
+git clone https://github.com/lexbity/tyu
+cd tyu
+bash ci/install.sh                 # newest v* tag (else main); installs into ~/.tyu
+export PATH="$HOME/.tyu/bin:$PATH"
+# first build + run = the committed smoke fixture (the exact contract CI proves)
+tyu build ci/smoke/hello.mod --out-dir=/tmp/smoke-out
+/tmp/smoke-out/image.elf; echo $?         # must be 0 (green)
 ```
+
+From a working checkout, the same commands CI runs before a merge:
+
+```bash
+cargo build --release -p langc -p tyu -p lmod-pack -p lmod-encrypt -p lmod-sign
+cargo test --workspace --release
+bash ci-lint.sh
+bash ci/guards.sh
+```
+
+## Status
+
+[![CI](https://github.com/lexbity/tyu/actions/workflows/ci.yml/badge.svg)](https://github.com/lexbity/tyu/actions/workflows/ci.yml)
+[![Integration](https://github.com/lexbity/tyu/actions/workflows/integration.yml/badge.svg)](https://github.com/lexbity/tyu/actions/workflows/integration.yml)
+
+Releases: [`RELEASES.md`](RELEASES.md) (policy) ·
+[GitHub releases](https://github.com/lexbity/tyu/releases)

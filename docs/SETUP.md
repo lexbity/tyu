@@ -1,58 +1,7 @@
-# Setup and local development
+# Setup
 
-This document is the tracked setup reference for the repository. It is based on the tracked CI workflow and command-line parsers in the workspace. Commands below are marked `unverified` unless this pass explicitly ran them.
-
-## Environment
-
-- Rust, as pinned by `rust-toolchain.toml` (`nightly-2026-09-29`, rustup provisions the exact date — PLAN-RELEASE-1 S3)
-- `fasm`
-- `binutils` (provides `ld`, `nm`)
-- `qemu-system-x` (provides `qemu-system-x86_64`)
-- `qemu-system-arm`
-- `qemu-system-misc` (provides `qemu-system-riscv32`)
-- Optional cross toolchains:
-  - `gcc-arm-none-eabi`
-  - `gcc-riscv64-unknown-elf`
-- `python3` for the guard script
-
-The CI workflow installs these packages on `ubuntu-latest`; see [.github/workflows/ci.yml](.github/workflows/ci.yml) for the exact package list. The workflows are tracked repository governance (PLAN-RELEASE-1 S1). The root `SETUP.md` (PLAN-RELEASE-1 S5) will supersede this file's quickstart with a CI-executed one.
-
-## Common commands
-
-The repository's top-level scripts and CI use these commands:
-
-```bash
-cargo build --release -p langc -p tyu -p lmod-pack -p lmod-encrypt -p lmod-sign  # unverified
-cargo test --workspace --release  # unverified
-bash ci-lint.sh  # unverified
-bash ci/guards.sh  # unverified
-```
-
-If you only want to confirm the host toolchain path resolution, use:
-
-```bash
-tyu toolchain check <target>  # unverified
-```
-
-The `tyu` parser also accepts `build`, `run`, `test`, `deploy`, `toolchain`, `clean`, and `--help` / `-h`.
-
-## First-run checks
-
-- `TYU_BIN_DIR` is read by the execution-test helpers and should point at the directory containing built host binaries during local runs. See `crates/tyu/src/test_helpers.rs` and `crates/tooling-tests/tests/common/bin.rs`.
-- `tyu test` requires `langc`, `fasm`, `ld`, and a target-specific QEMU binary for the selected triple. See `crates/tyu/src/test_cmd.rs`.
-- `execution-tests` for `arm` and `riscv` spawn `qemu-system-arm` and `qemu-system-riscv32` directly. See `crates/execution-tests/tests/arm.rs` and `crates/execution-tests/tests/riscv.rs`.
-- `ci/guards.sh` fails if a crate with `#[test]` reports zero runnable tests or if `test=false` / `harness=false` hides an in-source test. See `ci/guards.sh`.
-- `ci-lint.sh` rejects bare `is_err()` / `is_ok()` checks that do not assert the error value, assertion-free tests, and AEAD/AAD reimplementation in tests. See `ci-lint.sh`.
-
-## Practical startup order
-
-1. Install the environment packages above.
-2. Run `bash ci-lint.sh` and `bash ci/guards.sh`.
-3. Run `cargo build --release -p langc -p tyu`.
-4. Run `cargo test --workspace --release`.
-5. If you are working on execution tests, set `TYU_BIN_DIR` to your release bin directory before running those suites.
-
-## Notes
-
-- The repository has no tracked `devdocs/` index. Use `DOCS.md` for tracked docs and treat any local `devdocs/` files as ignored workspace notes.
-- This document does not claim the commands above have been executed in this session. It only records the repository-backed setup path.
+This file was the old vendor-specific setup note. It is superseded by the
+repository-root [`SETUP.md`](../SETUP.md) — the tracked, CI-executed setup
+reference (tiers, prerequisites per tier, the source installer, first build
+via the smoke fixture). The root file is the canonical setup document; this
+pointer exists so old links keep working.
