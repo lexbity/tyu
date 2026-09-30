@@ -1404,9 +1404,18 @@ for thm in transitive_closure_sound cyclic_not_well_closed open_edge_not_well_cl
         g37_fail=1
     fi
 done
-if ! grep -q "### T-CL" devdocs/plans/design-doc/formal-semantics-core.md; then
-    msg $RED "  G37 FAIL: formal-semantics-core.md T-CL registry entry missing"
-    g37_fail=1
+# The devdocs/ registry file is a gitignored scratchpad (PLAN-RELEASE-1 §8):
+# absent on a fresh checkout by design. Same rule as G51's survey check — the
+# sub-check is LIVE when the scratchpad is present, SKIP when absent; a
+# scratchpad absence is not a code defect.
+if [ -f devdocs/plans/design-doc/formal-semantics-core.md ]; then
+    if ! grep -q "### T-CL" devdocs/plans/design-doc/formal-semantics-core.md; then
+        msg $RED "  G37 FAIL: formal-semantics-core.md T-CL registry entry missing"
+        g37_fail=1
+    fi
+else
+    echo "  G37: formal-semantics-core.md T-CL registry: skipped (gitignored scratchpad absent on this checkout)"
+fi
 fi
 if ! grep -q 'id: "T-CL"' crates/verifier/src/report.rs \
    || ! grep -q 'status: "theorem"' crates/verifier/src/report.rs; then
