@@ -1,9 +1,9 @@
 # Tyu programming language
 
-[![CI](https://github.com/lexbity/tyu/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/lexbity/tyu/actions/workflows/ci.yml)
-[![Integration](https://github.com/lexbity/tyu/actions/workflows/integration.yml/badge.svg?branch=main&event=push)](https://github.com/lexbity/tyu/actions/workflows/integration.yml)
-[![Install verify](https://github.com/lexbity/tyu/actions/workflows/install-verify.yml/badge.svg)](https://github.com/lexbity/tyu/actions/workflows/install-verify.yml)
-[![Release](https://github.com/lexbity/tyu/actions/workflows/release.yml/badge.svg)](https://github.com/lexbity/tyu/actions/workflows/release.yml)
+[![CI](https://github.com/lexbity/tyu/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/lexbity/tyu/actions/workflows/ci.yml?query=branch%3Amain)
+[![Integration](https://github.com/lexbity/tyu/actions/workflows/integration.yml/badge.svg?branch=main&event=push)](https://github.com/lexbity/tyu/actions/workflows/integration.yml?query=branch%3Amain)
+[![Install verify](https://github.com/lexbity/tyu/actions/workflows/install-verify.yml/badge.svg?branch=main)](https://github.com/lexbity/tyu/actions/workflows/install-verify.yml?query=branch%3Amain)
+[![Release](https://github.com/lexbity/tyu/actions/workflows/release.yml/badge.svg?event=push)](https://github.com/lexbity/tyu/actions/workflows/release.yml?query=branch%3Amain)
 
 Tyu is a concatenative, stack-based systems language for embedded and simulation targets. This repository contains the compiler, loader, module tooling, runtime assembly, sysroot sources, and test suites.
 
@@ -120,8 +120,12 @@ bash ci/guards.sh
 
 ## Status
 
-[![CI](https://github.com/lexbity/tyu/actions/workflows/ci.yml/badge.svg)](https://github.com/lexbity/tyu/actions/workflows/ci.yml)
-[![Integration](https://github.com/lexbity/tyu/actions/workflows/integration.yml/badge.svg)](https://github.com/lexbity/tyu/actions/workflows/integration.yml)
+The badge row above shows the CI status of `main` for every workflow —
+`CI` (per-commit matrix), `Integration` (heavy suites + the Lean port gate),
+`Install verify` (the quickstart proven in a pristine container), and
+`Release` (the signed-release gate on `v*` tags). Per-branch runs:
+[Actions list](https://github.com/lexbity/tyu/actions) — every branch push
+runs the full `CI` workflow (evidence surface, PLAN-RELEASE-1 Q1).
 
 Releases: [`RELEASES.md`](RELEASES.md) (policy) ·
 [GitHub releases](https://github.com/lexbity/tyu/releases)
