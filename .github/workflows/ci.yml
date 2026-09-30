@@ -76,6 +76,11 @@ jobs:
             gcc-arm-none-eabi \
             gcc-riscv64-unknown-elf \
             binutils
+      - name: Build langc (goldens prerequisite, debug)
+        # statement_goldens resolves target/debug/langc (bin.rs) before
+        # the release build step — on a fresh runner this must be built
+        # explicitly or the gate fails with "langc not found".
+        run: cargo build -p langc
       - name: Statement goldens (PLAN-VERIFY-3 P1.3, blocking gate)
         # The band rule (§Q4 item 3) on a fresh checkout: bootstrap the
         # gitignored goldens with two regen passes (byte-determinism), then
@@ -87,6 +92,19 @@ jobs:
           TYU_REGEN_STATEMENT_GOLDENS=1 cargo test --release -p tooling-tests --test statement_goldens
           cargo test --release -p tooling-tests --test statement_goldens
           test "$(find test-goldens/statements/x86_64-unknown-none -name '*.stmt.json' | wc -l)" -eq 6
+      - name: Build ARM device-loader archive (G7 prerequisite)
+        # G7 in ci/guards.sh requires the signed loader staticlib to exist
+        # under CI (tyu's build_device_loader_staticlib produces it during
+        # dynamic ARM builds; a fresh runner must build it explicitly before
+        # the guard runs). Same command tyu drives, minus --offline (the
+        # runner has network; a cold registry cache must not red the guard).
+        run: |
+          rustup target add thumbv7m-none-eabi
+          CARGO_TARGET_DIR="$PWD/target/device-loader/signing" \
+            cargo build --locked \
+              --manifest-path crates/device-loader-archive/Cargo.toml \
+              --target thumbv7m-none-eabi \
+              --features signing --release
       - name: Test-delivery guard
         run: bash ci/guards.sh
       - name: Build (release)
@@ -139,7 +157,21 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
             gcc-arm-none-eabi \
-            qemu-system-arm
+            qemu-system-arm \
+            fasm \
+            binutils
+      - name: Build langc (guard prerequisite)
+        run: cargo build -p langc -p tyu
+      - name: Build ARM device-loader archive (G7 prerequisite)
+        # G7 in ci/guards.sh requires the signed loader staticlib under CI;
+        # a fresh runner must build it explicitly before the guard runs.
+        run: |
+          rustup target add thumbv7m-none-eabi
+          CARGO_TARGET_DIR="$PWD/target/device-loader/signing" \
+            cargo build --locked \
+              --manifest-path crates/device-loader-archive/Cargo.toml \
+              --target thumbv7m-none-eabi \
+              --features signing --release
       - name: Test-delivery guard
         run: bash ci/guards.sh
       - name: Build langc
@@ -167,7 +199,21 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
             gcc-riscv64-unknown-elf \
-            qemu-system-misc
+            qemu-system-misc \
+            fasm \
+            binutils
+      - name: Build langc (guard prerequisite)
+        run: cargo build -p langc -p tyu
+      - name: Build ARM device-loader archive (G7 prerequisite)
+        # G7 in ci/guards.sh requires the signed loader staticlib under CI;
+        # a fresh runner must build it explicitly before the guard runs.
+        run: |
+          rustup target add thumbv7m-none-eabi
+          CARGO_TARGET_DIR="$PWD/target/device-loader/signing" \
+            cargo build --locked \
+              --manifest-path crates/device-loader-archive/Cargo.toml \
+              --target thumbv7m-none-eabi \
+              --features signing --release
       - name: Test-delivery guard
         run: bash ci/guards.sh
       - name: Build langc
@@ -195,6 +241,18 @@ jobs:
             fasm \
             qemu-system-x86 \
             binutils
+      - name: Build langc (guard prerequisite)
+        run: cargo build -p langc -p tyu
+      - name: Build ARM device-loader archive (G7 prerequisite)
+        # G7 in ci/guards.sh requires the signed loader staticlib under CI;
+        # a fresh runner must build it explicitly before the guard runs.
+        run: |
+          rustup target add thumbv7m-none-eabi
+          CARGO_TARGET_DIR="$PWD/target/device-loader/signing" \
+            cargo build --locked \
+              --manifest-path crates/device-loader-archive/Cargo.toml \
+              --target thumbv7m-none-eabi \
+              --features signing --release
       - name: Test-delivery guard
         run: bash ci/guards.sh
       - name: Build langc
