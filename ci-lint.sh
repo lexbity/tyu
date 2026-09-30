@@ -15,7 +15,6 @@ set -euo pipefail
 
 RED=1
 GREEN=2
-NC=0
 failures=0
 
 msg() { local c=$1; shift; tput setaf "$c" 2>/dev/null || true; echo "$*"; tput sgr0 2>/dev/null || true; }
@@ -73,7 +72,8 @@ check_diag_corpus() {
     fi
     
     # Check at least 3 corpus entries
-    local entries=$(grep -c 'fn corpus_' "crates/tooling-tests/tests/diag_corpus.rs" 2>/dev/null || echo 0)
+    local entries
+    entries=$(grep -c 'fn corpus_' "crates/tooling-tests/tests/diag_corpus.rs" 2>/dev/null || echo 0)
     if [ "$entries" -lt 3 ]; then
         msg $RED "  DIAG CORPUS: only $entries corpus entries (expected >= 3)"
         rc=1
@@ -91,13 +91,15 @@ check_doc_links() {
     # Find all markdown links of the form [text](./path.md) and [text](path.md)
     # in design doc files and verify the target exists relative to the source.
     for f in $(find "$doc_dirs" -name '*.md' 2>/dev/null | sort); do
-        local dir=$(dirname "$f")
+        local dir
+        dir=$(dirname "$f")
         while IFS= read -r link; do
             # Extract the path portion from [text](./path.md) or [text](path.md)
-            local target=$(echo "$link" | sed -n 's/.*\[.*\](\(.*\))/\1/p')
+            local target
+            target=$(echo "$link" | sed -n 's/.*\[.*\](\(.*\))/\1/p')
             # Skip external links and bare anchors
             case "$target" in
-                http*|https*|'#'*) continue;;
+                http*|'#'*) continue;;
                 ''|' ') continue;;
             esac
             # Strip anchor fragment (#...)
@@ -129,11 +131,12 @@ check_doc_links() {
 # the invariant it tests, so discarding the Err verdict is intentional.
 check_ir_verify_usage() {
     local rc=0
-    local total=$(grep -rn 'let _ = ir::verify_word' crates/ir/tests/ --include='*.rs' 2>/dev/null | wc -l)
-    local exempt=$(grep -rn 'fn verifier_never_panics' crates/ir/tests/ --include='*.rs' 2>/dev/null | wc -l)
-    local violations=$((total - exempt))
+    local total exempt violations
+    total=$(grep -rn 'let _ = ir::verify_word' crates/ir/tests/ --include='*.rs' 2>/dev/null | wc -l)
+    exempt=$(grep -rn 'fn verifier_never_panics' crates/ir/tests/ --include='*.rs' 2>/dev/null | wc -l)
+    violations=$((total - exempt))
     if [ "$violations" -gt 0 ]; then
-        msg $RED "  IR VERIFY: $violations occurrence(s) of `let _ = ir::verify_word` outside verifier_never_panics — must assert the verdict"
+        msg $RED "  IR VERIFY: $violations occurrence(s) of \`let _ = ir::verify_word\` outside verifier_never_panics — must assert the verdict"
         rc=1
     fi
     return $rc
@@ -193,10 +196,139 @@ check_consolidation_dead_api() {
     return $rc
 }
 
-# Function stubs for pre-existing missing checkers (defined before first use)
-check_aad_reimplementation() { return 0; }
-check_test_count() { return 0; }
-check_source_patterns() { return 0; }
+# --- Lint-tool bootstrap (pinned binaries into the gitignored .tools/) ----
+LINT_TOOLS_VERSION_SH="0.10.0"
+LINT_TOOLS_VERSION_ACTIONLINT="1.7.12"
+SH_CHECK_BIN=".tools/shellcheck/shellcheck"
+ACTIONLINT_BIN=".tools/actionlint/actionlint"
+
+bootstrap_lint_tools() {
+    local rc=0
+    if [ ! -x "$SH_CHECK_BIN" ]; then
+        echo "  LINT TOOLS: downloading shellcheck v$LINT_TOOLS_VERSION_SH"
+        mkdir -p .tools/shellcheck
+        local tmp
+        tmp=$(mktemp -d) || return 1
+        if ! curl -fsSL \
+            "https://github.com/koalaman/shellcheck/releases/download/v${LINT_TOOLS_VERSION_SH}/shellcheck-v${LINT_TOOLS_VERSION_SH}.linux.x86_64.tar.xz" \
+            -o "$tmp/sh.txz"; then
+            msg $RED "  LINT TOOLS: shellcheck download failed"
+            return 1
+        fi
+        tar -xJf "$tmp/sh.txz" -C "$tmp"
+        mv "$tmp/shellcheck-v${LINT_TOOLS_VERSION_SH}/shellcheck" "$SH_CHECK_BIN"
+        rm -rf "$tmp"
+    fi
+    if [ ! -x "$ACTIONLINT_BIN" ]; then
+        echo "  LINT TOOLS: downloading actionlint v$LINT_TOOLS_VERSION_ACTIONLINT"
+        mkdir -p .tools/actionlint
+        local tmp
+        tmp=$(mktemp -d) || return 1
+        if ! curl -fsSL \
+            "https://github.com/rhysd/actionlint/releases/download/v${LINT_TOOLS_VERSION_ACTIONLINT}/actionlint_${LINT_TOOLS_VERSION_ACTIONLINT}_linux_amd64.tar.gz" \
+            -o "$tmp/al.tgz"; then
+            msg $RED "  LINT TOOLS: actionlint download failed"
+            return 1
+        fi
+        tar -xzf "$tmp/al.tgz" -C "$tmp" actionlint
+        mv "$tmp/actionlint" "$ACTIONLINT_BIN"
+        rm -rf "$tmp"
+    fi
+    return $rc
+}
+
+# --- 14. actionlint gate: workflow YAML is machine-checked (fr-4) ---------
+# A workflow syntax error on GitHub is exactly the "erroneous CI issue" that
+# once got `.github` gitignored — the syntax must be proven locally before a
+# push, and re-proven by this gate on every CI run.
+check_actionlint() {
+    local rc=0
+    if [ ! -x "$ACTIONLINT_BIN" ]; then
+        msg $RED "  ACTIONLINT: binary not bootstrapped"
+        return 1
+    fi
+    if ! "$ACTIONLINT_BIN" .github/workflows/*.yml; then
+        rc=1
+    fi
+    return $rc
+}
+
+# --- 15. shellcheck gate: every ci shell script is linted (fr-4, nfr-7) ----
+check_shellcheck() {
+    local rc=0
+    if [ ! -x "$SH_CHECK_BIN" ]; then
+        msg $RED "  SHELLCHECK: binary not bootstrapped"
+        return 1
+    fi
+    local -a sh_files=()
+    while IFS= read -r f; do sh_files+=("$f"); done < <(find ci -maxdepth 1 -name '*.sh' -type f | sort)
+    sh_files+=("ci-lint.sh")
+    if ! "$SH_CHECK_BIN" "${sh_files[@]}"; then
+        rc=1
+    fi
+    return $rc
+}
+
+# --- 16. NFR-8 gate: every third-party Action is SHA-pinned (fr-3) ---------
+# A supply-chain-integrity project does not float its own CI on @v4 tags.
+# `uses:` lines must pin a 40-hex commit (tag allowed only in a trailing
+# comment). Local/self runners (docker, ghcr impersonators) are not used.
+check_sha_pinned_actions() {
+    local rc=0
+    while IFS= read -r line; do
+        case "$line" in
+            *"uses: "*)
+                # Normative form: uses: owner/repo@0000000000000000000000000000000000000000  # v4
+                if ! printf '%s' "$line" | grep -qE 'uses: [A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[0-9a-f]{40}([[:space:]]+#.*)?$'; then
+                    msg $RED "  ACTIONS PIN: not SHA-pinned: $line"
+                    rc=1
+                fi
+                ;;
+        esac
+    done < <(grep -rn "uses:" .github/workflows/ || true)
+    if [ "$rc" -eq 0 ]; then
+        msg $GREEN "  Actions SHA-pinned (NFR-8)"
+    fi
+    return $rc
+}
+
+# --- 17. NFR-6 gate: the installer never escalates (fr-8) ------------------
+# ci/install.sh must never contain `sudo`; this gate exists from today so a
+# future installer cannot grow one unnoticed.
+check_no_sudo_installer() {
+    local rc=0
+    if [ -f ci/install.sh ] && grep -n "sudo" ci/install.sh >/dev/null 2>&1; then
+        msg $RED "  INSTALLER: ci/install.sh contains sudo (NFR-6)"
+        rc=1
+    fi
+    return $rc
+}
+
+# --- Rule A: harness tests never re-implement the AEAD oracle ---------------
+# The loader's AEAD is the single cryptographic oracle; E2E tests exercising
+# encryption/decryption must drive the loader (C-CT-2/3/4), never import a
+# cipher crate to hand-roll AAD. A cipher-crate import inside the harness
+# suites is exactly the anti-pattern PLAN-VERIFY-3 retired.
+check_aad_reimplementation() {
+    local f="$1" rc=0
+    if grep -qE '^use (aes_gcm|chacha20poly1305|aes_siv|crypto_box|aes)' "$f" 2>/dev/null; then
+        msg $RED "  RULE A: $f imports a cipher crate — hand-rolled AEAD oracle (drive the loader instead)"
+        rc=1
+    fi
+    return $rc
+}
+
+# --- Source anti-patterns: no debug scaffolding in product code ------------
+check_source_patterns() {
+    local rc=0 hits
+    hits=$(grep -rn "dbg!" crates/*/src/ 2>/dev/null | grep -v "/tests/" || true)
+    if [ -n "$hits" ]; then
+        msg $RED "  SOURCE: dbg! left in product code:"
+        echo "$hits" | sed 's/^/    /' | head -10
+        rc=1
+    fi
+    return $rc
+}
 
 # Main
 if [ $# -eq 0 ]; then
@@ -225,7 +357,10 @@ for f in $files; do
     fi
 done
 
-check_test_count || overall_rc=1
+# Test-count integrity is enforced by ci/guards.sh G1/G2/G4 — no duplicate
+# grep here (a parallel implementation would drift from the authoritative
+# cargo test enumeration).
+
 check_poison_corpus || overall_rc=1
 check_diag_corpus || overall_rc=1
 check_doc_links || overall_rc=1
@@ -246,8 +381,9 @@ check_corpus_fixtures() {
     # 7a. Check that all e<code>_*.mod fixtures have a numeric code in the name.
     for f in "$corpus"/e*.mod; do
         [ -f "$f" ] || continue
-        local base=$(basename "$f")
-        local code=$(echo "$base" | sed -n 's/^e\([0-9]\+\).*/\1/p')
+        local base code
+        base=$(basename "$f")
+        code=$(echo "$base" | sed -n 's/^e\([0-9]\+\).*/\1/p')
         if [ -z "$code" ]; then
             msg $RED "  FIXTURE: $base — no error code in filename"
             rc=1
@@ -260,7 +396,12 @@ check_corpus_fixtures() {
     # prevent reaching 65 distinct borrows in practice.
     local codes="5001 5002 5003 5004 5005 5010 5011 5012 5020 5030 5031 5040 5100"
     for code in $codes; do
-        local match=$(ls "$corpus"/e"${code}"_*.mod 2>/dev/null | wc -l)
+        # SC2012-clean fixture count: glob expansion into an array (nullglob).
+        local match
+        shopt -s nullglob
+        local -a found=( "$corpus"/e"${code}"_*.mod )
+        shopt -u nullglob
+        match=${#found[@]}
         if [ "$match" -eq 0 ]; then
             msg $RED "  FIXTURE: E${code}: missing fixture file (corpus/e${code}_*.mod)"
             rc=1
@@ -279,9 +420,10 @@ check_50xx_corpus() {
     # 5024 (BorrowLedgerFull) excluded (same reasoning as above).
     local codes="5001 5002 5003 5004 5005 5010 5011 5012 5020 5021 5022 5023 5030 5031 5040 5050 5051 3523"
     for code in $codes; do
-        local error_match=$(grep -rn "error\[E${code}\]" crates/tooling-tests/tests/ --include="*.rs" 2>/dev/null | wc -l)
-        local contains_match=$(grep -rn "contains.*\"${code}\"" crates/tooling-tests/tests/ --include="*.rs" 2>/dev/null | wc -l)
-        local numeric_match=$(grep -rn "[^0-9]${code}[,)]" crates/tooling-tests/tests/ --include="*.rs" 2>/dev/null | grep -v "//\|TODO\|FIXME" | wc -l)
+        local error_match contains_match numeric_match
+        error_match=$(grep -rn "error\[E${code}\]" crates/tooling-tests/tests/ --include="*.rs" 2>/dev/null | wc -l)
+        contains_match=$(grep -rn "contains.*\"${code}\"" crates/tooling-tests/tests/ --include="*.rs" 2>/dev/null | wc -l)
+        numeric_match=$(grep -rn "[^0-9]${code}[,)]" crates/tooling-tests/tests/ --include="*.rs" 2>/dev/null | grep -cv "//\|TODO\|FIXME")
         if [ "$error_match" -eq 0 ] && [ "$contains_match" -eq 0 ] && [ "$numeric_match" -eq 0 ]; then
             msg $RED "  E${code}: missing test fixture"
             rc=1
@@ -348,7 +490,7 @@ check_context_consolidation() {
     # Pre-ContextStack state must not return as code (comments referencing
     # the old names are allowed).
     n=$(grep -rn 'in_lock\|locked_resource\|allow_suspend' "$sem" --include='*.rs' \
-        | grep -v '^\s*$' | grep -v ':[0-9]*:\s*//' | wc -l)
+        | grep -v '^\s*$' | grep -cv ':[0-9]*:\s*//')
     if [ "$n" -ne 0 ]; then
         msg $RED "  CONSOLIDATION: in_lock/locked_resource/allow_suspend found outside comments ($n hits)"
         grep -rn 'in_lock\|locked_resource\|allow_suspend' "$sem" --include='*.rs' | grep -v ':[0-9]*:\s*//' | head -5
@@ -357,7 +499,7 @@ check_context_consolidation() {
 
     # The ambient forbid fold is ContextStack's job; nothing outside
     # context.rs may mutate it.
-    n=$(grep -rn 'ambient_forbids\s*=' "$sem" --include='*.rs' | grep -v 'context.rs' | wc -l)
+    n=$(grep -rn 'ambient_forbids\s*=' "$sem" --include='*.rs' | grep -cv 'context.rs')
     if [ "$n" -ne 0 ]; then
         msg $RED "  CONSOLIDATION: ambient_forbids assigned outside context.rs ($n hits)"
         rc=1
@@ -383,6 +525,16 @@ check_corpus_fixtures || overall_rc=1
 check_50xx_corpus || overall_rc=1
 check_consolidation_dead_api || overall_rc=1
 check_ir_verify_usage || overall_rc=1
+
+# --- PLAN-RELEASE-1 S2 gates: machine-checked workflows and shell ----------
+if [ $# -eq 0 ]; then
+    # Whole-repo gates run only in the full sweep (no explicit file args).
+    bootstrap_lint_tools || overall_rc=1
+    check_actionlint || overall_rc=1
+    check_shellcheck || overall_rc=1
+    check_sha_pinned_actions || overall_rc=1
+    check_no_sudo_installer || overall_rc=1
+fi
 
 if [ "$overall_rc" -eq 0 ]; then
     msg $GREEN "All lint checks passed."

@@ -214,8 +214,7 @@ impl<'a> X86_64HostedBackend<'a> {
     /// or `offset` alone when the aperture base is a link-time symbol (the
     /// emulated aperture — `__mmio_mem` is indexed by the offset directly).
     pub fn mmio_aperture_addr(&self, aperture: u16, offset: u32) -> Result<u64, CodegenError> {
-        for i in 0..self.mmio_aperture_count {
-            let w = &self.mmio_apertures[i];
+        for w in &self.mmio_apertures[..self.mmio_aperture_count] {
             if w.id == aperture {
                 return Ok(w.base.unwrap_or(0).saturating_add(offset as u64));
             }
@@ -350,17 +349,15 @@ impl<'a> X86_64HostedBackend<'a> {
         // Build entries from the collected words.
         let mut entries: alloc::vec::Vec<lmod::debugsec::DebugEntry<'_>> =
             alloc::vec::Vec::with_capacity(count);
-        for i in 0..count {
-            if let Some(ref dw) = self.debug_words[i] {
-                let name = dw.name.as_bytes();
-                entries.push(lmod::debugsec::DebugEntry {
-                    sym_hash: crate::util::fnv1a_u64(name),
-                    name,
-                    net: dw.net,
-                    high: dw.high,
-                    effects: dw.effects,
-                });
-            }
+        for dw in self.debug_words[..count].iter().flatten() {
+            let name = dw.name.as_bytes();
+            entries.push(lmod::debugsec::DebugEntry {
+                sym_hash: crate::util::fnv1a_u64(name),
+                name,
+                net: dw.net,
+                high: dw.high,
+                effects: dw.effects,
+            });
         }
 
         let mut buf = [0u8; 65536];

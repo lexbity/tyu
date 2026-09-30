@@ -330,8 +330,8 @@ mod tests {
         let decoded = decode_enc_header(&buf).unwrap();
         assert_eq!(decoded.enc_mode, EncMode::Device);
         assert_eq!(decoded.wrapped_slots.len(), 3);
-        for i in 0..3 {
-            assert_eq!(decoded.wrapped_slots[i].key_id, i as u64 + 1000);
+        for (i, w) in decoded.wrapped_slots.iter().enumerate() {
+            assert_eq!(w.key_id, i as u64 + 1000);
         }
     }
 
@@ -475,9 +475,9 @@ mod tests {
         let decoded = decode_enc_header(&buf).unwrap();
         assert_eq!(decoded.enc_mode, EncMode::Device);
         assert_eq!(decoded.wrapped_slots.len(), 3);
-        for i in 0..3 {
-            assert_eq!(decoded.wrapped_slots[i].key_id, i as u64);
-            assert_eq!(decoded.wrapped_slots[i].wrapped, [i as u8; WRAP_LEN]);
+        for (i, w) in decoded.wrapped_slots.iter().enumerate() {
+            assert_eq!(w.key_id, i as u64);
+            assert_eq!(w.wrapped, [i as u8; WRAP_LEN]);
         }
     }
 

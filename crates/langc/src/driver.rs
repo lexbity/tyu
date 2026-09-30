@@ -464,8 +464,8 @@ pub fn emit_obj_driver(
 
     // Emit extrn declarations for all imported word symbols so the assembler
     // can resolve cross-module calls at link time.
-    for i in builtin_env_end..import_env_end {
-        if let Err(e) = gen.emit_extern_word(es.env[i].name.as_bytes()) {
+    for e in es.env.iter().take(import_env_end).skip(builtin_env_end) {
+        if let Err(e) = gen.emit_extern_word(e.name.as_bytes()) {
             let _ = diag::error_simple(e.code(), codegen_error_message(e.code()));
             return 2;
         }

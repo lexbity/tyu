@@ -233,7 +233,7 @@ fn rederive_arm_thumb(code: &[u8], slot_bytes: u32) -> u32 {
 fn rederive_riscv(code: &[u8], slot_bytes: u32) -> u32 {
     let mut off: i64 = 0;
     let mut peak: u32 = 0;
-    for chunk in code.chunks_exact(4) {
+    for chunk in code.as_chunks::<4>().0 {
         let insn = read_u32_le(chunk);
         let opcode = insn & 0x7f;
         let rd = ((insn >> 7) & 0x1f) as u8;

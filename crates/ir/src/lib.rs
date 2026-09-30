@@ -909,12 +909,12 @@ pub fn verify_word(w: &Word) -> Result<(), VerifyError> {
             span: Span::UNKNOWN,
         });
     }
-    for i in 0..(w.sig.in_len as usize) {
+    for (i, expected) in w.sig.inputs.iter().take(w.sig.in_len as usize).enumerate() {
         if *entry_block
             .entry_stack
             .get(i)
             .expect("verified entry stack len")
-            != w.sig.inputs[i]
+            != *expected
         {
             return Err(VerifyError::EntryStackTypeMismatch {
                 span: Span::UNKNOWN,
@@ -1188,14 +1188,14 @@ fn verify_block(w: &Word, b: &Block) -> Result<(), VerifyError> {
                 if sp < need {
                     return Err(VerifyError::CallStackUnderflow { span: op.span });
                 }
-                for i in 0..need {
-                    if !type_ok(w, stack[sp - need + i], sig.inputs[i]) {
+                for (i, expected) in sig.inputs.iter().take(need).enumerate() {
+                    if !type_ok(w, stack[sp - need + i], *expected) {
                         return Err(VerifyError::CallInputTypeMismatch { span: op.span });
                     }
                 }
                 sp -= need;
-                for i in 0..(sig.out_len as usize) {
-                    push(&mut stack, &mut sp, sig.outputs[i], op.span)?;
+                for &out_ty in sig.outputs[..sig.out_len as usize].iter() {
+                    push(&mut stack, &mut sp, out_ty, op.span)?;
                 }
             }
             OpKind::Load { ty } => {
@@ -1497,21 +1497,21 @@ fn type_atom(w: &Word, id: TypeId) -> &Atom {
 
 fn write_sig(out: &mut impl Output, w: &Word, sig: &Sig) {
     out.write(b"( ");
-    for i in 0..(sig.in_len as usize) {
+    for (i, ty) in sig.inputs[..sig.in_len as usize].iter().enumerate() {
         if i != 0 {
             out.write(b" ");
         }
-        write_type_atom(out, type_atom(w, sig.inputs[i]), 4);
+        write_type_atom(out, type_atom(w, *ty), 4);
     }
     out.write(b" --");
     if sig.out_len > 0 {
         out.write(b" ");
     }
-    for i in 0..(sig.out_len as usize) {
+    for (i, ty) in sig.outputs[..sig.out_len as usize].iter().enumerate() {
         if i != 0 {
             out.write(b" ");
         }
-        write_type_atom(out, type_atom(w, sig.outputs[i]), 4);
+        write_type_atom(out, type_atom(w, *ty), 4);
     }
     out.write(b" )");
 }

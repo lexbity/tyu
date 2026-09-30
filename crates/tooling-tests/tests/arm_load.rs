@@ -130,7 +130,7 @@ fn arm_load_with_import() {
 
     let ds_high = allocate_runtime_page();
     let mut global_map: SymMap<'_, 256> = SymMap::new();
-    register_test_runtime_symtab(&mut global_map, ds_high);
+    let stub = register_test_runtime_symtab(&mut global_map, ds_high) as u64;
     let mut loaded_set = LoadedSet::<64>::new();
 
     let loaded = load_module(
@@ -148,11 +148,10 @@ fn arm_load_with_import() {
     let code_slice = loaded.code.as_slice();
     let patched = u32::from_le_bytes(code_slice[..4].try_into().unwrap()) as u64;
 
-    let stub = common::extern_c_fn_stub as *const () as u64;
     assert_eq!(
         patched,
         stub & 0xFFFF_FFFF,
-        "ABS32 relocation should write the lower 32 bits of the symbol address"
+        "ABS32 relocation should write the lower 32 bits of the registered symbol address"
     );
 }
 

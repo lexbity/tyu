@@ -1,14 +1,28 @@
-# no RISCV
-#[toolchain]
-#channel = "stable"
-
-# Assuming RISCV target: is a TIER2 target
+# Pinned, reproducible toolchain (PLAN-RELEASE-1 S3).
+#
+# channel is a DATED nightly, provisioned by rustup from this file alone —
+# two checkout/builds on different days resolve to the same compiler, so the
+# workspace bar (rustfmt G28, clippy G29) and every test expectation are
+# pinned to one toolchain. Bumping the date is a normal maintenance commit
+# and MUST be noted in the next release (RELEASES.md, §Q2).
+#
+# components = ["rust-src"] — KEPT (S3 removal-trial verdict, 2026-09-30):
+#   tyu's loader build (crates/tyu/src/build.rs) drives
+#   `-Z build-std=core,alloc` for the RISC-V loader staticlib. With rust-src
+#   absent the trial build reds:
+#     "library/Cargo.lock does not exist, unable to build with the standard
+#      library" (building loader-core staticlib for riscv32im-unknown-none-elf)
+#   So rust-src is load-bearing and stays.
+#
+# targets (riscv32im/riscv32imac) — REMOVED (S3 removal-trial verdict):
+#   the trial built the RISC-V loader staticlib for riscv32im-unknown-none-elf
+#   with `-Z build-std=core,alloc` and NO rustup riscv target installed:
+#   it compiled core/alloc from source and produced the archive. The riscv
+#   triples are the sole consumers of those rustup targets (build.rs:2569);
+#   build-std makes them redundant. The stale self-contradicting "# no RISCV"
+#   comment block is also gone. CI's bootstrap steps provision
+#   x86_64-unknown-none + thumbv7m-none-eabi (precompiled-std targets) via
+#   ci/bootstrap-loaders.sh.
 [toolchain]
-channel = "nightly"
+channel = "nightly-2026-09-29"
 components = ["rust-src"]
-targets = [
-  "riscv32im-unknown-none-elf",  #default: riscv32-unknown-none
-  "riscv32imac-unknown-none-elf",
-]
-
-#"riscv32e-unknown-none-elf", #different platform

@@ -43,6 +43,9 @@
 #       contract obligations/elision, error-registry E6410/E6413.
 #   G52 PLAN-RELEASE-1 S1: `.github` must stay tracked — the CI evidence
 #       surface is repository truth, never an ignore line.
+#   G53 PLAN-RELEASE-1 S2: every workflow job declares `timeout-minutes`.
+#   G54 PLAN-RELEASE-1 S3: the toolchain pin is a dated nightly
+#       (nightly-YYYY-MM-DD), not a floating `nightly`.
 #
 # Escape hatch: add `# guards: allow-no-tests` as a comment in the
 # package's Cargo.toml to suppress G1/G2 for that package.  This is
@@ -73,7 +76,7 @@
 
 set -euo pipefail
 
-RED=1; GREEN=2; YELLOW=3; NC=0
+RED=1; GREEN=2; YELLOW=3
 msg()  { local c=$1; shift; tput setaf "$c" 2>/dev/null || true; echo "  $*"; tput sgr0 2>/dev/null || true; }
 
 failures=0
@@ -946,7 +949,7 @@ for triple in x86_64-unknown-linux-gnu x86_64-unknown-none armv7m-unknown-none r
         g25_fail=1
         continue
     fi
-    actual=$(cd "$dir" && ls *.stmt.json 2>/dev/null | sed 's/\.stmt\.json$//' | sort | tr '\n' ' ' | sed 's/ $//')
+    actual=$(cd "$dir" && find . -maxdepth 1 -name '*.stmt.json' -printf '%f\n' 2>/dev/null | sed 's/\.stmt\.json$//' | sort | tr '\n' ' ' | sed 's/ $//')
     if [ "$actual" != "$expected_set" ]; then
         msg $RED "  G25 FAIL: statement-golden set for $triple drifted"
         msg $RED "    expected: $expected_set"
@@ -1031,7 +1034,7 @@ if [ ! -f crates/tooling-tests/tests/stackmeta_export.rs ]; then
 fi
 sm_count=0
 for triple in x86_64-unknown-linux-gnu x86_64-unknown-none armv7m-unknown-none riscv32-unknown-none; do
-    for f in test-goldens/stackmeta/$triple/*.json; do
+    for f in test-goldens/stackmeta/"$triple"/*.json; do
         [ -f "$f" ] && sm_count=$((sm_count + 1))
     done
 done
@@ -1946,6 +1949,40 @@ for wf in .github/workflows/ci.yml .github/workflows/integration.yml; do
 done
 [ "$g52_fail" -eq 0 ] && msg $GREEN "  G52: .github tracked — the CI evidence surface is repository truth"
 failures=$((failures + g52_fail))
+
+# G53: PLAN-RELEASE-1 S2 (plan's G32) — every workflow job declares
+# `timeout-minutes`. An unbounded job makes a red diff unreadable and a hung
+# job unkillable; the NFR-1 wall-clock budgets are only enforceable because
+# every leg is bounded.
+g53_fail=0
+for wf in .github/workflows/ci.yml .github/workflows/integration.yml; do
+    jobs=$(awk '/^jobs:/{in_jobs=1; next} in_jobs && /^  [a-zA-Z0-9_]+:/{c++} END{print c+0}' "$wf")
+    timeouts=$(grep -c "timeout-minutes:" "$wf")
+    if [ "$timeouts" -lt "$jobs" ]; then
+        msg $RED "  G53 FAIL: $wf has $jobs jobs but only $timeouts timeout-minutes"
+        g53_fail=1
+    fi
+done
+[ "$g53_fail" -eq 0 ] && msg $GREEN "  G53: every workflow job carries timeout-minutes"
+failures=$((failures + g53_fail))
+
+# G54: PLAN-RELEASE-1 S3 (plan's G31) — the toolchain is a DATED nightly.
+# An undated `channel = "nightly"` resolves to whichever nightly is latest at
+# build time, which is exactly the reproducibility failure S3 exists to kill
+# (three months of nightly moved the clippy bar and broke loader tests before
+# the pin landed). The pin's format is enforced here; its buildability is the
+# pin-audit CI job's job (FR-5).
+g54_fail=0
+pin="$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml | head -1)"
+case "$pin" in
+    nightly-[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;;
+    *)
+        msg $RED "  G54 FAIL: rust-toolchain.toml channel must be a dated nightly (nightly-YYYY-MM-DD), got '${pin:-<unset>}'"
+        g54_fail=1
+        ;;
+esac
+[ "$g54_fail" -eq 0 ] && msg $GREEN "  G54: toolchain pin is a dated nightly ($pin)"
+failures=$((failures + g54_fail))
 
 echo ""
 msg $GREEN "============================================"

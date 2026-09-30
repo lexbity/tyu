@@ -4,12 +4,12 @@ This document is the tracked setup reference for the repository. It is based on 
 
 ## Environment
 
-- Rust, as pinned by `rust-toolchain.toml` (currently the `nightly` channel; PLAN-RELEASE-1 S3 dates this pin for reproducibility)
+- Rust, as pinned by `rust-toolchain.toml` (`nightly-2026-09-29`, rustup provisions the exact date — PLAN-RELEASE-1 S3)
 - `fasm`
-- `ld`
-- `qemu-system-x86_64`
+- `binutils` (provides `ld`, `nm`)
+- `qemu-system-x` (provides `qemu-system-x86_64`)
 - `qemu-system-arm`
-- `qemu-system-riscv32`
+- `qemu-system-misc` (provides `qemu-system-riscv32`)
 - Optional cross toolchains:
   - `gcc-arm-none-eabi`
   - `gcc-riscv64-unknown-elf`

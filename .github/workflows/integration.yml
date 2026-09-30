@@ -45,7 +45,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install tools
         run: |
           sudo apt-get update -qq
@@ -57,8 +57,10 @@ jobs:
             gcc-riscv64-unknown-elf \
             qemu-system-misc \
             binutils
-      - name: Provision Rust bare-metal targets
-        run: rustup target add x86_64-unknown-none thumbv7m-none-eabi
+      - name: Bootstrap bare-metal targets + loader archives
+        # Single provisioning path for every job (targets, ARM signing
+        # archive, RISC-V build-std cache warm) — ci/bootstrap-loaders.sh.
+        run: bash ci/bootstrap-loaders.sh
       - name: Build (release)
         run: cargo build --release -p langc -p tyu -p lmod-pack -p lmod-encrypt -p lmod-sign
       - name: Tooling tests (all)
@@ -73,7 +75,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install tools
         run: |
           sudo apt-get update -qq
@@ -82,8 +84,10 @@ jobs:
             qemu-system-arm \
             gcc-riscv64-unknown-elf \
             qemu-system-misc
-      - name: Provision Rust bare-metal targets
-        run: rustup target add x86_64-unknown-none thumbv7m-none-eabi
+      - name: Bootstrap bare-metal targets + loader archives
+        # Single provisioning path for every job (targets, ARM signing
+        # archive, RISC-V build-std cache warm) — ci/bootstrap-loaders.sh.
+        run: bash ci/bootstrap-loaders.sh
       - name: Build (release)
         run: cargo build --release -p langc -p tyu -p lmod-pack -p lmod-encrypt -p lmod-sign
       - name: Loader tests (all)
@@ -98,7 +102,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install tools
         run: |
           sudo apt-get update -qq
@@ -106,8 +110,10 @@ jobs:
             fasm \
             qemu-system-x86 \
             binutils
-      - name: Provision Rust bare-metal targets
-        run: rustup target add x86_64-unknown-none thumbv7m-none-eabi
+      - name: Bootstrap bare-metal targets + loader archives
+        # Single provisioning path for every job (targets, ARM signing
+        # archive, RISC-V build-std cache warm) — ci/bootstrap-loaders.sh.
+        run: bash ci/bootstrap-loaders.sh
       - name: Build (release)
         run: cargo build --release -p langc -p tyu
       - name: Diagnostic & effect corpus
@@ -129,14 +135,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install tools
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq fasm qemu-system-x86 binutils
       - name: Install the pinned Lean toolchain (elan)
         run: |
-          curl -fsSL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o /tmp/elan-init.sh
+          bash ci/retry.sh -- curl -fsSL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o /tmp/elan-init.sh
           sh /tmp/elan-init.sh -y --default-toolchain none >/dev/null
           ~/.elan/bin/elan toolchain install "$(cat verification/ports/lean/lean-toolchain)" >/dev/null
       - name: Port gate (conformance + axiom audit + P14 re-derivation)
@@ -157,7 +163,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install tools
         run: |
           sudo apt-get update -qq
@@ -166,8 +172,10 @@ jobs:
             gcc-arm-none-eabi \
             qemu-system-misc \
             gcc-riscv64-unknown-elf
-      - name: Provision Rust bare-metal targets
-        run: rustup target add x86_64-unknown-none thumbv7m-none-eabi
+      - name: Bootstrap bare-metal targets + loader archives
+        # Single provisioning path for every job (targets, ARM signing
+        # archive, RISC-V build-std cache warm) — ci/bootstrap-loaders.sh.
+        run: bash ci/bootstrap-loaders.sh
       - name: Build (release)
         run: cargo build --release -p rsp-client
       - name: ARM RSP read register and memory
@@ -182,7 +190,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install tools
         run: |
           sudo apt-get update -qq
@@ -194,8 +202,10 @@ jobs:
             fasm \
             qemu-system-x86 \
             binutils
-      - name: Provision Rust bare-metal targets
-        run: rustup target add x86_64-unknown-none thumbv7m-none-eabi
+      - name: Bootstrap bare-metal targets + loader archives
+        # Single provisioning path for every job (targets, ARM signing
+        # archive, RISC-V build-std cache warm) — ci/bootstrap-loaders.sh.
+        run: bash ci/bootstrap-loaders.sh
       - name: Build (release)
         run: cargo build --release -p langc -p tyu
       - name: ARM concurrency test
@@ -214,7 +224,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install tools
         run: |
           sudo apt-get update -qq
@@ -226,8 +236,10 @@ jobs:
             gcc-riscv64-unknown-elf \
             qemu-system-misc \
             binutils
-      - name: Provision Rust bare-metal targets
-        run: rustup target add x86_64-unknown-none thumbv7m-none-eabi
+      - name: Bootstrap bare-metal targets + loader archives
+        # Single provisioning path for every job (targets, ARM signing
+        # archive, RISC-V build-std cache warm) — ci/bootstrap-loaders.sh.
+        run: bash ci/bootstrap-loaders.sh
       - name: Build (release)
         run: cargo build --release -p langc -p tyu -p lmod-pack -p lmod-encrypt -p lmod-sign
       - name: E2E tests (all)
@@ -248,7 +260,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install tools
         run: |
           sudo apt-get update -qq
@@ -256,8 +268,10 @@ jobs:
             fasm \
             qemu-system-x86 \
             binutils
-      - name: Provision Rust bare-metal targets
-        run: rustup target add x86_64-unknown-none thumbv7m-none-eabi
+      - name: Bootstrap bare-metal targets + loader archives
+        # Single provisioning path for every job (targets, ARM signing
+        # archive, RISC-V build-std cache warm) — ci/bootstrap-loaders.sh.
+        run: bash ci/bootstrap-loaders.sh
       - name: Build (debug — the acceptance e2e gates resolve the in-tree bins)
         run: cargo build -p langc -p tyu
       - name: Acceptance matrix (P16.3, §11.1–§11.10)
@@ -273,10 +287,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - name: Install nightly + cargo-fuzz
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install pinned nightly + cargo-fuzz
         run: |
-          rustup toolchain install nightly --profile minimal
-          cargo +nightly install cargo-fuzz --locked
+          bash ci/retry.sh -- rustup toolchain install nightly-2026-09-29 --profile minimal
+          bash ci/retry.sh -- cargo +nightly-2026-09-29 install cargo-fuzz --locked
       - name: Fuzz decode targets (seeded smoke)
         run: bash ci/fuzz.sh --seconds 20

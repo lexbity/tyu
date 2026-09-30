@@ -12,9 +12,9 @@ use crate::X86_64HostedBackend;
 /// than the checked bound would admit MMIO past the array into adjacent
 /// `.bss` (platform-layer spec, finding F1).
 pub(crate) fn emulated_aperture_size(gen: &X86_64HostedBackend<'_>) -> Result<u32, CodegenError> {
-    for i in 0..gen.mmio_aperture_count {
-        if gen.mmio_apertures[i].kind == MmioApertureKind::Emulated {
-            return Ok(gen.mmio_apertures[i].size);
+    for w in &gen.mmio_apertures[..gen.mmio_aperture_count] {
+        if w.kind == MmioApertureKind::Emulated {
+            return Ok(w.size);
         }
     }
     Err(CodegenError::NoMmioAperture)

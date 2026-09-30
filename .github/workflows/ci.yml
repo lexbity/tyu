@@ -32,6 +32,8 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+  schedule:
+    - cron: "3 3 * * 1" # Monday 03:03 UTC — weekly re-proof of the dated pin (S3)
 
 # Cancel superseded runs for the same ref and bound every job with a
 # timeout, so a red diff stays readable and the minutes budget bounded
@@ -52,7 +54,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Run ci-lint.sh
         run: bash ci-lint.sh
 
@@ -64,7 +66,7 @@ jobs:
     needs: lint
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install tools (x86_64)
         run: |
           sudo apt-get update -qq
@@ -92,19 +94,11 @@ jobs:
           TYU_REGEN_STATEMENT_GOLDENS=1 cargo test --release -p tooling-tests --test statement_goldens
           cargo test --release -p tooling-tests --test statement_goldens
           test "$(find test-goldens/statements/x86_64-unknown-none -name '*.stmt.json' | wc -l)" -eq 6
-      - name: Build ARM device-loader archive (G7 prerequisite)
-        # G7 in ci/guards.sh requires the signed loader staticlib to exist
-        # under CI (tyu's build_device_loader_staticlib produces it during
-        # dynamic ARM builds; a fresh runner must build it explicitly before
-        # the guard runs). Same command tyu drives, minus --offline (the
-        # runner has network; a cold registry cache must not red the guard).
-        run: |
-          rustup target add thumbv7m-none-eabi x86_64-unknown-none
-          CARGO_TARGET_DIR="$PWD/target/device-loader/signing" \
-            cargo build --locked \
-              --manifest-path crates/device-loader-archive/Cargo.toml \
-              --target thumbv7m-none-eabi \
-              --features signing --release
+      - name: Bootstrap bare-metal targets + loader archives (G5/G7 prerequisites)
+        # ci/guards.sh G5 (x86_64 dynamic symtab build) and G7 (signed ARM
+        # loader size) require facts a fresh runner lacks. This is the single
+        # provisioning path used by every job — see ci/bootstrap-loaders.sh.
+        run: bash ci/bootstrap-loaders.sh
       - name: Test-delivery guard
         run: bash ci/guards.sh
       - name: Build (release)
@@ -116,6 +110,8 @@ jobs:
           ./target/release/tyu platform lint riscv32-unknown-none
           ./target/release/tyu platform lint rp2350
           ./target/release/tyu test --all-platforms --manifest=crates/execution-tests/fixtures/manifest.toml
+        env:
+          TYU_BIN_DIR: ${{ github.workspace }}/target/release
       - name: Dead-code gate (effect/context consolidation, S13)
         # Authoritative backstop for the consolidation dead-API gate: any
         # orphaned item on the semantics surface fails the build. Catches new
@@ -123,6 +119,8 @@ jobs:
         run: RUSTFLAGS="-D dead_code" cargo build --release -p semantics
       - name: Workspace unit tests (all crates, default features)
         run: cargo test --workspace --release
+        env:
+          TYU_BIN_DIR: ${{ github.workspace }}/target/release
       - name: Golden codegen corpus
         run: cargo test --release -p langc --test golden_codegen
       - name: Encryption feature tests
@@ -151,7 +149,7 @@ jobs:
     needs: lint
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install tools (ARM)
         run: |
           sudo apt-get update -qq
@@ -160,18 +158,10 @@ jobs:
             qemu-system-arm \
             fasm \
             binutils
-      - name: Build langc (guard prerequisite)
-        run: cargo build -p langc -p tyu
-      - name: Build ARM device-loader archive (G7 prerequisite)
-        # G7 in ci/guards.sh requires the signed loader staticlib under CI;
-        # a fresh runner must build it explicitly before the guard runs.
-        run: |
-          rustup target add thumbv7m-none-eabi x86_64-unknown-none
-          CARGO_TARGET_DIR="$PWD/target/device-loader/signing" \
-            cargo build --locked \
-              --manifest-path crates/device-loader-archive/Cargo.toml \
-              --target thumbv7m-none-eabi \
-              --features signing --release
+      - name: Bootstrap bare-metal targets + loader archives (G5/G7 prerequisites)
+        # ci/guards.sh G5/G7 require facts a fresh runner lacks — the single
+        # provisioning path for every job (ci/bootstrap-loaders.sh).
+        run: bash ci/bootstrap-loaders.sh
       - name: Test-delivery guard
         run: bash ci/guards.sh
       - name: Build langc
@@ -193,7 +183,7 @@ jobs:
     needs: lint
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install tools (RISC-V)
         run: |
           sudo apt-get update -qq
@@ -202,18 +192,10 @@ jobs:
             qemu-system-misc \
             fasm \
             binutils
-      - name: Build langc (guard prerequisite)
-        run: cargo build -p langc -p tyu
-      - name: Build ARM device-loader archive (G7 prerequisite)
-        # G7 in ci/guards.sh requires the signed loader staticlib under CI;
-        # a fresh runner must build it explicitly before the guard runs.
-        run: |
-          rustup target add thumbv7m-none-eabi x86_64-unknown-none
-          CARGO_TARGET_DIR="$PWD/target/device-loader/signing" \
-            cargo build --locked \
-              --manifest-path crates/device-loader-archive/Cargo.toml \
-              --target thumbv7m-none-eabi \
-              --features signing --release
+      - name: Bootstrap bare-metal targets + loader archives (G5/G7 prerequisites)
+        # ci/guards.sh G5/G7 require facts a fresh runner lacks — the single
+        # provisioning path for every job (ci/bootstrap-loaders.sh).
+        run: bash ci/bootstrap-loaders.sh
       - name: Test-delivery guard
         run: bash ci/guards.sh
       - name: Build langc
@@ -233,7 +215,7 @@ jobs:
     needs: lint
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install tools
         run: |
           sudo apt-get update -qq
@@ -241,18 +223,10 @@ jobs:
             fasm \
             qemu-system-x86 \
             binutils
-      - name: Build langc (guard prerequisite)
-        run: cargo build -p langc -p tyu
-      - name: Build ARM device-loader archive (G7 prerequisite)
-        # G7 in ci/guards.sh requires the signed loader staticlib under CI;
-        # a fresh runner must build it explicitly before the guard runs.
-        run: |
-          rustup target add thumbv7m-none-eabi x86_64-unknown-none
-          CARGO_TARGET_DIR="$PWD/target/device-loader/signing" \
-            cargo build --locked \
-              --manifest-path crates/device-loader-archive/Cargo.toml \
-              --target thumbv7m-none-eabi \
-              --features signing --release
+      - name: Bootstrap bare-metal targets + loader archives (G5/G7 prerequisites)
+        # ci/guards.sh G5/G7 require facts a fresh runner lacks — the single
+        # provisioning path for every job (ci/bootstrap-loaders.sh).
+        run: bash ci/bootstrap-loaders.sh
       - name: Test-delivery guard
         run: bash ci/guards.sh
       - name: Build langc
@@ -272,7 +246,7 @@ jobs:
     needs: lint
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Check all targets compile
         run: cargo check --workspace --release
 
@@ -284,15 +258,15 @@ jobs:
     needs: lint
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - name: Install nightly + cargo-fuzz
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install pinned nightly + cargo-fuzz
         run: |
-          rustup toolchain install nightly --profile minimal
-          cargo +nightly install cargo-fuzz --locked
+          bash ci/retry.sh -- rustup toolchain install nightly-2026-09-29 --profile minimal
+          bash ci/retry.sh -- cargo +nightly-2026-09-29 install cargo-fuzz --locked
       - name: Container parser fuzz smoke
-        run: cargo +nightly fuzz run parse_container -- -runs=100000
+        run: cargo +nightly-2026-09-29 fuzz run parse_container -- -runs=100000
       - name: Modinfo decoder fuzz smoke
-        run: cargo +nightly fuzz run modinfo_decode -- -runs=100000
+        run: cargo +nightly-2026-09-29 fuzz run modinfo_decode -- -runs=100000
       - name: Decode targets with tracked seeds (PLAN-VERIFY-3 P16.3, §11.8)
         run: bash ci/fuzz.sh --seconds 60
 
@@ -303,14 +277,30 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - name: Install nightly + miri
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install pinned nightly + miri
         run: |
-          rustup toolchain install nightly --component miri
-          cargo +nightly miri setup
+          bash ci/retry.sh -- rustup toolchain install nightly-2026-09-29 --component miri
+          bash ci/retry.sh -- cargo +nightly-2026-09-29 miri setup
       - name: loader-core + lmod byte logic under Miri
-        run: cargo +nightly miri test -p loader-core -p lmod
+        run: cargo +nightly-2026-09-29 miri test -p loader-core -p lmod
       - name: frontend/fixed — unsafe FixedVec tests under Miri
-        run: cargo +nightly miri test -p frontend --test fixed
+        run: cargo +nightly-2026-09-29 miri test -p frontend --test fixed
       - name: semantics/arena — unsafe manual-Drop tests under Miri
-        run: cargo +nightly miri test -p semantics --test arena
+        run: cargo +nightly-2026-09-29 miri test -p semantics --test arena
+
+  # ---------------------------------------------------------------------------
+  # Pin audit (PLAN-RELEASE-1 S3) — the committed toolchain pin is citable.
+  # Builds the host binary set with the EXACT dated pin rust-toolchain.toml
+  # provisions (FR-5 proof — a broken pin fails here before anything else),
+  # then records the non-blocking stable-channel probe verdict (FR-19).
+  # ---------------------------------------------------------------------------
+  pin_audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Build host binaries on the dated pin (FR-5 proof)
+        run: cargo build --release -p langc -p tyu -p lmod-pack -p lmod-sign -p lmod-encrypt
+      - name: Stable channel probe (non-blocking, FR-19)
+        run: bash ci/probe-stable.sh

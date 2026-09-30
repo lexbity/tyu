@@ -95,21 +95,21 @@ pub fn emit_ir(
             {
                 // Minimal signature printer for the IR dump.
                 words_buf.write(b"( ");
-                for i in 0..(sig.in_len as usize) {
+                for (i, ty) in sig.inputs[..sig.in_len as usize].iter().enumerate() {
                     if i != 0 {
                         words_buf.write(b" ");
                     }
-                    words_buf.write(sig.inputs[i].as_bytes());
+                    words_buf.write(ty.as_bytes());
                 }
                 words_buf.write(b" --");
                 if sig.out_len > 0 {
                     words_buf.write(b" ");
                 }
-                for i in 0..(sig.out_len as usize) {
+                for (i, ty) in sig.outputs[..sig.out_len as usize].iter().enumerate() {
                     if i != 0 {
                         words_buf.write(b" ");
                     }
-                    words_buf.write(sig.outputs[i].as_bytes());
+                    words_buf.write(ty.as_bytes());
                 }
                 words_buf.write(b" )\n");
             }

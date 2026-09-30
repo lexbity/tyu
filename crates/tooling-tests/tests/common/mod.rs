@@ -223,7 +223,15 @@ pub fn allocate_runtime_page() -> usize {
 
 /// Register the test runtime symbols through the generated `.lang.symtab`
 /// byte-table API used by device boot.
-pub fn register_test_runtime_symtab(map: &mut SymMap<'_, 256>, ds_high_addr: usize) {
+///
+/// Returns the address that was registered for `__stack_overflow`. Callers
+/// that assert on the ABS32/absolute relocations must use THIS returned
+/// value — re-deriving `extern_c_fn_stub as *const ()` at a second site is
+/// not stable: the compiler may emit a cloned copy of the (empty) stub and
+/// bind the two references to different clones, which makes the relocation
+/// look "off by a constant" when it is in fact correct (it wrote exactly
+/// the registered symtab value).
+pub fn register_test_runtime_symtab(map: &mut SymMap<'_, 256>, ds_high_addr: usize) -> usize {
     let stub = extern_c_fn_stub as *const () as usize;
     let entries = [
         (lmod::hash::fnv1a_u64(b"__stack_overflow"), stub),
@@ -240,6 +248,7 @@ pub fn register_test_runtime_symtab(map: &mut SymMap<'_, 256>, ds_high_addr: usi
         bytes.extend_from_slice(&(addr as u64).to_le_bytes());
     }
     map.register_symtab_bytes(&bytes).unwrap();
+    stub
 }
 
 /// Load a .lmod, call `main`, and return the result.

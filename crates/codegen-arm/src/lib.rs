@@ -164,8 +164,7 @@ impl<'a> ArmThumbBackend<'a> {
     /// A aperture base that is a link-time symbol is not a bus address and is
     /// unreachable on this backend (no emulated apertures here).
     pub fn mmio_aperture_addr(&self, aperture: u16, offset: u32) -> Result<u64, CodegenError> {
-        for i in 0..self.mmio_aperture_count {
-            let w = &self.mmio_apertures[i];
+        for w in &self.mmio_apertures[..self.mmio_aperture_count] {
             if w.id == aperture {
                 let base = w.base.ok_or(CodegenError::NoMmioAperture)?;
                 return Ok(base.saturating_add(offset as u64));

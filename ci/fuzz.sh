@@ -47,7 +47,8 @@ if ! cargo +nightly fuzz --version >/dev/null 2>&1; then
 fi
 
 run_one() {
-    local t="$1" corpus="$ROOT/fuzz/corpus/$t" seeds="$ROOT/ci/fuzz-seeds/$t"
+    local t="$1"
+    local corpus="$ROOT/fuzz/corpus/$t" seeds="$ROOT/ci/fuzz-seeds/$t"
     mkdir -p "$corpus"
     if [ -d "$seeds" ]; then
         for f in "$seeds"/*; do
