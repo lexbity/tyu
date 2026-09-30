@@ -1416,7 +1416,6 @@ if [ -f devdocs/plans/design-doc/formal-semantics-core.md ]; then
 else
     echo "  G37: formal-semantics-core.md T-CL registry: skipped (gitignored scratchpad absent on this checkout)"
 fi
-fi
 if ! grep -q 'id: "T-CL"' crates/verifier/src/report.rs \
    || ! grep -q 'status: "theorem"' crates/verifier/src/report.rs; then
     msg $RED "  G37 FAIL: report TCB must carry T-CL with status theorem"
