@@ -491,6 +491,20 @@ impl LoaderHarness {
 }
 
 // ---------------------------------------------------------------------------
+// fasm exec-bit normalization
+// ---------------------------------------------------------------------------
+
+/// fasm versions disagree on whether an ELF-executable output gets the exec
+/// bit (1.73.35 sets it, 1.73.34/1.73.32 do not). The hosted pipeline's
+/// outputs are run directly by tests, so normalize here (S9 audit finding).
+pub(crate) fn set_exec(path: &std::path::Path) {
+    let mut perms = std::fs::metadata(path).unwrap().permissions();
+    use std::os::unix::fs::PermissionsExt;
+    perms.set_mode(0o755);
+    std::fs::set_permissions(path, perms).unwrap();
+}
+
+// ---------------------------------------------------------------------------
 // Self-tests
 // ---------------------------------------------------------------------------
 
@@ -533,14 +547,4 @@ mod tests {
             "valid module must load successfully"
         );
     }
-}
-
-/// fasm versions disagree on whether an ELF-executable output gets the exec
-/// bit (1.73.35 sets it, 1.73.34/1.73.32 do not). The hosted pipeline's
-/// outputs are run directly by tests, so normalize here (S9 audit finding).
-fn set_exec(path: &std::path::Path) {
-    let mut perms = std::fs::metadata(path).unwrap().permissions();
-    use std::os::unix::fs::PermissionsExt;
-    perms.set_mode(0o755);
-    std::fs::set_permissions(path, perms).unwrap();
 }
