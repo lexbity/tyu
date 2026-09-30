@@ -4,7 +4,7 @@ This document is the tracked setup reference for the repository. It is based on 
 
 ## Environment
 
-- Rust stable, as pinned by `rust-toolchain.toml`
+- Rust, as pinned by `rust-toolchain.toml` (currently the `nightly` channel; PLAN-RELEASE-1 S3 dates this pin for reproducibility)
 - `fasm`
 - `ld`
 - `qemu-system-x86_64`
@@ -15,7 +15,7 @@ This document is the tracked setup reference for the repository. It is based on 
   - `gcc-riscv64-unknown-elf`
 - `python3` for the guard script
 
-The CI workflow installs these packages on `ubuntu-latest`; see [.github/workflows/ci.yml](.github/workflows/ci.yml) for the exact package list. That workflow file is ignored in git, so treat it as local evidence, not tracked governance.
+The CI workflow installs these packages on `ubuntu-latest`; see [.github/workflows/ci.yml](.github/workflows/ci.yml) for the exact package list. The workflows are tracked repository governance (PLAN-RELEASE-1 S1). The root `SETUP.md` (PLAN-RELEASE-1 S5) will supersede this file's quickstart with a CI-executed one.
 
 ## Common commands
 
