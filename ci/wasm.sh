@@ -11,6 +11,9 @@
 #   G55  Browser bundle budgets, artifact hashes, now_ms grep, smoke    (P5)
 #   G56  REPL session goldens byte-exact                                (P3)
 #
+# Implemented: G52 (P1), G53(a) (P2: execution differential + props +
+# IR-render byte-parity vs `langc --emit=ir`).
+#
 # Usage:
 #   bash ci/wasm.sh            run every gate defined so far
 #   bash ci/wasm.sh --selftest run every gate's red-path demo and require
@@ -58,21 +61,22 @@ g52_green() {
         fail "wasm-repl host build (see /tmp/wasm-repl-build.log)"
     fi
 
-    # FR-1 / I-6, load-bearing check: the fork's NORMAL dependency graph must
-    # be exactly the in-tree R-A allowlist (today: ir → frontend → lmod; the
-    # plan grows this by in-tree crates only — frontend/semantics/ir/verifier/
-    # codegen-core). Any registry crate (a new external dep, even one that
-    # compiles cleanly) appears in `cargo tree` output, fails the filter, and
-    # reds the gate. `-e normal` excludes dev-deps (the G52 differential's
-    # verifier+serde_json dev-deps are legitimate and not part of this proof).
-    local tree
-    tree=$(cargo tree -p wasm-repl -e normal --prefix none 2>/dev/null || true)
-    if [ -z "$tree" ]; then
-        fail "cargo tree -p wasm-repl failed (FR-1 dep-graph check could not run)"
-    elif printf '%s\n' "$tree" | grep -vE '^(wasm-repl|ir|frontend|lmod) v' | grep -q .; then
-        fail "wasm-repl normal dep graph has a crate outside the in-tree R-A allowlist (FR-1, I-6)"
+    # FR-1 / I-6, load-bearing check: every `[dependencies]` entry in the
+    # crate manifest must be an in-tree R-A-allowed crate (path deps). The
+    # *transitive* closure may include those crates' own deps (e.g. verifier's
+    # `sha2`) — that is the allowed crates' business, not a wasm-repl dep. A
+    # NEW direct dep (even a cleanly-compiling registry crate) reds this gate.
+    local bad
+    bad=$(
+        awk '/^\[dependencies\]/{f=1;next} /^\[/{f=0} f' crates/wasm-repl/Cargo.toml \
+            | grep -E '^[a-z][a-z0-9_-]*[[:space:]]*=' \
+            | cut -d= -f1 | sed 's/[[:space:]]//g' \
+            | grep -vE '^(ir|frontend|semantics|verifier)$' || true
+    )
+    if [ -n "$bad" ]; then
+        fail "wasm-repl [dependencies] has a crate outside the in-tree R-A allowlist (FR-1, I-6): $bad"
     else
-        msg $GREEN "  G52: wasm-repl normal dep graph is the in-tree allowlist only (FR-1, I-6)"
+        msg $GREEN "  G52: wasm-repl [dependencies] is the in-tree R-A allowlist only (FR-1, I-6)"
     fi
 
     # The differential itself.
@@ -153,6 +157,38 @@ g52_selftest() {
 }
 
 # ---------------------------------------------------------------------------
+# G53 (P2): the interpreter ↔ hosted-native execution differential. The
+# in-scope fixtures run byte-identically through the interpreter and the
+# hosted x86_64 binary (`testio.*` surface, I-4/FR-8), trap fixtures pin trap
+# code 10 (I-3), and `build_ir`+`render_ir` are byte-identical to
+# `langc --emit=ir` (D-1/R-2/DEC-13). The property tests pin the model/alias/
+# heap-geometry invariants (R-1/R-3).
+# ---------------------------------------------------------------------------
+
+g53_green() {
+    msg $YELLOW "G53: interpreter ↔ native execution goldens"
+
+    if cargo test -p wasm-repl --test exec_parity --test props --release \
+        > /tmp/g53-parity.log 2>&1; then
+        msg $GREEN "  G53: execution differential + property tests green (byte-identical to native; alias probes pinned)"
+    else
+        fail "execution differential (see /tmp/g53-parity.log)"
+    fi
+}
+
+g53_selftest() {
+    # Red-path demo (AC-9): corrupt `add_i64` → `wrapping_sub` under
+    # `wasm-selftest` and REQUIRE the execution differential to fail.
+    msg $YELLOW "G53 selftest: corrupted 'add_i64' must red the execution differential"
+    if cargo test -p wasm-repl --features wasm-selftest --test exec_parity --release \
+        > /tmp/g53-selftest.log 2>&1; then
+        fail "selftest: the corrupted AddI64 arm PASSED the gate (G53 blind)"
+    else
+        msg $GREEN "  G53 selftest: corrupted AddI64 correctly failed (red path demonstrated)"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
 
@@ -160,9 +196,11 @@ mode="${1:-run}"
 case "$mode" in
     run)
         g52_green
+        g53_green
         ;;
     --selftest)
         g52_selftest
+        g53_selftest
         ;;
     *)
         msg $RED "unknown mode '$mode' (run | --selftest)"

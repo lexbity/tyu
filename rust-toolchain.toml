@@ -4,11 +4,18 @@
 
 # Assuming RISCV target: is a TIER2 target
 [toolchain]
-channel = "nightly"
+# PLAN-WASM-1 D-3: the nightly is pinned by date so wasm artifact builds are
+# reproducible (the browser artifact's SHA-256 pinning, §10, requires it).
+# The date matches the repo-canonical floating nightly the CI exercised at the
+# time of the pin. Bump deliberately (isolated PR) — see
+# `devdocs/plans/wasm-repl.md` D-3.
+channel = "nightly-2026-06-25"
 components = ["rust-src"]
 targets = [
   "riscv32im-unknown-none-elf",  #default: riscv32-unknown-none
   "riscv32imac-unknown-none-elf",
+  "thumbv7m-none-eabi",          # ARM bare-metal (QEMU matrix; date-pinned D-3)
+  "wasm32-unknown-unknown",      # PLAN-WASM-1 browser REPL target (P2 D-3)
 ]
 
 #"riscv32e-unknown-none-elf", #different platform

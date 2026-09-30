@@ -9,6 +9,13 @@ ignore = [
   "svc_fifo_order.mod",
   "svc_fifo_two_channels.mod",
   "svc_fifo_deep_isolation.mod",
+  # PLAN-WASM-1 §Q11: the aliasing probes are hosted-leg-only differential
+  # fixtures driven by the wasm-repl G53 harness (`exec_parity.rs`) against
+  # the hosted region ABI — not `tyu test` matrix fixtures (that would require
+  # a per-target elementwise golden they are not written to provide).
+  "aliasing_probe1.mod",
+  "aliasing_probe2.mod",
+  "aliasing_probe3.mod",
 ]
 
 [[fixture]]
@@ -88,6 +95,14 @@ name = "locals_slices"
 file = "locals_slices.mod"
 axes = ["locals"]
 requires = []
+
+[[fixture]]
+name = "ds_guard_deep"
+file = "ds_guard_deep.mod"
+axes = ["stack"]
+requires = []
+# PLAN-WASM-1 L1 guard-on baseline: a deep-but-in-cap stack that must run
+# byte-identically in the interpreter and natively (G53).
 
 [[fixture]]
 name = "trap_overflow"

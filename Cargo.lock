@@ -1172,8 +1172,13 @@ dependencies = [
 name = "wasm-repl"
 version = "0.1.0"
 dependencies = [
+ "codegen-core",
+ "frontend",
  "ir",
+ "proptest",
+ "semantics",
  "serde_json",
+ "tyu",
  "verifier",
 ]
 

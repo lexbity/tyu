@@ -22,7 +22,7 @@ use crate::typecheck::db::{
 use crate::typecheck::irgen::{build_ir_word, lir_atom, NullObserver};
 use crate::typecheck::mmio::{build_mmio_db, MmioDb};
 use crate::typecheck::util::{slice_span, write_sig};
-use crate::types::WordEntry;
+use crate::types::{TypeAtom, WordEntry, WordSig};
 use alloc::string::ToString;
 use alloc::vec::Vec;
 use frontend::fixed::FixedVec;
@@ -38,7 +38,18 @@ impl frontend::parse::Output for VecOut {
     }
 }
 
-pub fn emit_ir(
+/// Build the production `ir::Module` for a module AST (PLAN-WASM-1 D-1/FR-14).
+///
+/// This is the IR-*construction* half of the former conflated `emit_ir`:
+/// frontend parser output → verified `ir::Module`, in declaration order. The
+/// REPL and any other IR-struct consumer call this and never parse
+/// `--emit=ir` text back (DEC-2, FR-2).
+///
+/// Words declared without a body (`.def`-style decls) are represented as
+/// synthetic body-less words: empty blocks, raw signature atoms preserved in
+/// `types` so [`render_ir`] reproduces the legacy signature line byte-for-byte
+/// (the `--emit=ir` convention that keeps `.def` files useful).
+pub fn build_ir(
     module: &ModuleAst,
     src: &[u8],
     env: &[WordEntry],
@@ -47,8 +58,7 @@ pub fn emit_ir(
     allow_raw_casts: bool,
     target_spec: verifier::target::TargetSpec,
     descriptor: Option<&codegen_core::compiled_desc::CompiledDescriptor>,
-    out: &mut impl Output,
-) -> Result<(), TcError> {
+) -> Result<lir::Module, TcError> {
     let mmio = build_mmio_db(module, src, descriptor)?;
     let mut resources = build_resource_db(module, src)?;
     // Compute resource sharing from ISR roots before compiling any word body.
@@ -71,10 +81,7 @@ pub fn emit_ir(
         allow_raw_casts,
     )?;
 
-    // P4: buffer the word text and collect the module's aperture-use union so
-    // the `format_ver`/`module`/`apertures` header precedes the words, exactly
-    // matching `ir::write_module`.
-    let mut words_buf = VecOut(Vec::new());
+    let mut words: Vec<lir::Word> = Vec::new();
     let mut apertures: FixedVec<lir::ApertureUse, 8> = FixedVec::new();
 
     for decl in module.decls.iter() {
@@ -87,32 +94,12 @@ pub fn emit_ir(
         let sig = parse_word_sig(src, sig_span)
             .map_err(|_| TcError::TypeParseFailed { span: sig_span })?;
         if decl.body.is_none() {
-            words_buf.write(b"word ");
-            words_buf.write(lir_atom(slice_span(src, decl.name))?.as_bytes());
-            words_buf.write(b" ");
-            // Keep legacy behavior: declarations without bodies don't need IR blocks.
-            // Still show the signature so `--emit=ir` is useful on `.def` files.
-            {
-                // Minimal signature printer for the IR dump.
-                words_buf.write(b"( ");
-                for i in 0..(sig.in_len as usize) {
-                    if i != 0 {
-                        words_buf.write(b" ");
-                    }
-                    words_buf.write(sig.inputs[i].as_bytes());
-                }
-                words_buf.write(b" --");
-                if sig.out_len > 0 {
-                    words_buf.write(b" ");
-                }
-                for i in 0..(sig.out_len as usize) {
-                    if i != 0 {
-                        words_buf.write(b" ");
-                    }
-                    words_buf.write(sig.outputs[i].as_bytes());
-                }
-                words_buf.write(b" )\n");
-            }
+            // Legacy behavior: declarations without bodies don't need IR
+            // blocks, but keep the signature so `--emit=ir` is useful on
+            // `.def` files (the synthetic word renders that line — see
+            // `render_bodyless_sig`).
+            let name = lir_atom(slice_span(src, decl.name))?;
+            push_word(&mut words, bodyless_sig_word(name, sig)?, decl.name)?;
             continue;
         }
 
@@ -146,26 +133,170 @@ pub fn emit_ir(
             span: e.span(),
         })?;
         merge_apertures(&mut apertures, out_words.word);
-        lir::write_word(&mut words_buf, out_words.word);
+        push_word(&mut words, out_words.word.clone(), decl.name)?;
         for w in out_words.extra_words.iter() {
             lir::verify_word(w).map_err(|e| TcError::InternalError {
                 code: e.code(),
                 span: e.span(),
             })?;
             merge_apertures(&mut apertures, w);
-            lir::write_word(&mut words_buf, w);
+            push_word(&mut words, (*w).clone(), decl.name)?;
         }
     }
 
-    // Header: format_ver, module, apertures — then the buffered words.
+    Ok(lir::Module {
+        name: lir_atom(slice_span(src, module.name))?,
+        words,
+        apertures,
+    })
+}
+
+/// Push a word into the module's word table, enforcing the IR's `≤ 64 words/
+/// module` format cap (surfaced as a diagnostic, never silently truncated —
+/// PLAN-WASM-1 §5).
+fn push_word(words: &mut Vec<lir::Word>, w: lir::Word, span: Span) -> Result<(), TcError> {
+    if words.len() >= 64 {
+        return Err(TcError::InternalError {
+            code: 3920, // module word-table full (IR format cap, §5)
+            span,
+        });
+    }
+    words.push(w);
+    Ok(())
+}
+
+/// A synthetic body-less `lir::Word` for a `.def`-style declaration. The raw
+/// signature type atoms are preserved (in first-appearance order) in `types`
+/// so [`render_ir`] can reproduce the legacy `word NAME ( in -- out )` line
+/// byte-for-byte, including channel/array atoms that the general IR renderer
+/// would reformat (§Q2 — the text is a pin, not an execution input).
+fn bodyless_sig_word(name: lir::Atom, wsig: WordSig) -> Result<lir::Word, TcError> {
+    fn resolve(
+        types: &mut FixedVec<lir::Atom, 64>,
+        atom: &TypeAtom,
+    ) -> Result<lir::TypeId, TcError> {
+        let bytes = atom.as_bytes();
+        if let Some(id) = types.iter().position(|t| t.as_bytes() == bytes) {
+            return Ok(lir::TypeId(id as u8));
+        }
+        let id = types.len();
+        types
+            .push(lir::Atom::new(bytes).ok_or(TcError::AtomTooLong {
+                span: Span::UNKNOWN,
+            })?)
+            .map_err(|_| TcError::InternalError {
+                code: 3921, // module signature type table full
+                span: Span::UNKNOWN,
+            })?;
+        Ok(lir::TypeId(id as u8))
+    }
+
+    let mut types: FixedVec<lir::Atom, 64> = FixedVec::new();
+    let mut inputs = [lir::TY_EMPTY; 8];
+    for (i, a) in wsig.inputs.iter().enumerate().take(wsig.in_len as usize) {
+        inputs[i] = resolve(&mut types, a)?;
+    }
+    let mut outputs = [lir::TY_EMPTY; 8];
+    for (i, a) in wsig.outputs.iter().enumerate().take(wsig.out_len as usize) {
+        outputs[i] = resolve(&mut types, a)?;
+    }
+    Ok(lir::Word {
+        name,
+        sig: lir::Sig {
+            in_len: wsig.in_len,
+            out_len: wsig.out_len,
+            inputs,
+            outputs,
+        },
+        performs: lir::EffectSet::empty(),
+        requires: lir::CapSet::empty(),
+        bound: lir::StackBound::ID,
+        entry: lir::BlockId(0),
+        types,
+        type_sizes: FixedVec::new(),
+        type_classes: FixedVec::new(),
+        subtype_bases: FixedVec::new(),
+        apertures: FixedVec::new(),
+        blocks: FixedVec::new(),
+    })
+}
+
+/// Render a built module as canonical `--emit=ir` text (PLAN-WASM-1 D-1,
+/// DEC-13): the header (byte-pinned to `ir::write_module`) followed by the
+/// words. Body-less decls render their legacy raw-signature line; bodied
+/// words pass through the canonical `ir::write_word` renderer.
+pub fn render_ir(out: &mut impl Output, m: &lir::Module) {
     out.write(b"format_ver ");
     write_u32(out, lir::FORMAT_VER);
     out.write(b"\n");
     out.write(b"module ");
-    out.write(slice_span(src, module.name));
+    out.write(m.name.as_bytes());
     out.write(b"\n");
-    write_apertures(out, &apertures);
-    out.write(words_buf.0.as_slice());
+    write_apertures(out, &m.apertures);
+    for w in m.words.iter() {
+        if w.blocks.is_empty() {
+            render_bodyless_sig(out, w);
+        } else {
+            lir::write_word(out, w);
+        }
+    }
+}
+
+/// The legacy `.def` signature line: `word NAME ( in -- out )` with the RAW
+/// type atoms (no `Chan`/`Array` reformatting) — the exact bytes the
+/// pre-split `emit_ir` wrote for body-less decls.
+fn render_bodyless_sig(out: &mut impl Output, w: &lir::Word) {
+    out.write(b"word ");
+    out.write(w.name.as_bytes());
+    out.write(b" ");
+    out.write(b"( ");
+    for i in 0..(w.sig.in_len as usize) {
+        if i != 0 {
+            out.write(b" ");
+        }
+        raw_type_atom(out, w, w.sig.inputs[i]);
+    }
+    out.write(b" --");
+    if w.sig.out_len > 0 {
+        out.write(b" ");
+    }
+    for i in 0..(w.sig.out_len as usize) {
+        if i != 0 {
+            out.write(b" ");
+        }
+        raw_type_atom(out, w, w.sig.outputs[i]);
+    }
+    out.write(b" )\n");
+}
+
+fn raw_type_atom(out: &mut impl Output, w: &lir::Word, id: lir::TypeId) {
+    if let Some(a) = w.types.get(id.0 as usize) {
+        out.write(a.as_bytes());
+    }
+}
+
+pub fn emit_ir(
+    module: &ModuleAst,
+    src: &[u8],
+    env: &[WordEntry],
+    subtypes: &[SubtypeInfo],
+    checks: ChecksMode,
+    allow_raw_casts: bool,
+    target_spec: verifier::target::TargetSpec,
+    descriptor: Option<&codegen_core::compiled_desc::CompiledDescriptor>,
+    out: &mut impl Output,
+) -> Result<(), TcError> {
+    let built = build_ir(
+        module,
+        src,
+        env,
+        subtypes,
+        checks,
+        allow_raw_casts,
+        target_spec,
+        descriptor,
+    )?;
+    render_ir(out, &built);
     Ok(())
 }
 

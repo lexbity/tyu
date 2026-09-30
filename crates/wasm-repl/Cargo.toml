@@ -14,10 +14,14 @@ description = "Tyu console interpreter fork (PLAN-WASM-1): the concrete fuel-met
 wasm-selftest = []
 
 [dependencies]
-# The fork's ONLY dependency (R-A; I-6): the `ir` crate, which furnishes the
-# `OpKind`/`CmpKind`/`Atom`/`BlockId`/`TypeId`/`ReadKind`/`WriteKind`/
-# `BarrierKind` surface the fragment engine transcribes against.
+# The engine's runtime dependencies (R-A; I-6): `ir`, plus the host-agnostic
+# compiler-front layers it compiles with (parse → typecheck → IR structs).
+# All are `no_std` + zero-external-dep; nothing below talks to a filesystem
+# (the `SourceTable` seam, §Q12).
 ir = { path = "../ir" }
+frontend = { path = "../frontend" }
+semantics = { path = "../semantics" }
+verifier = { path = "../verifier" }
 
 [dev-dependencies]
 # The frozen upstream surface the fork is pinned against (G52). `test-util`
@@ -25,3 +29,12 @@ ir = { path = "../ir" }
 # is never part of a production build (FR-1).
 verifier = { path = "../verifier", features = ["test-util"] }
 serde_json = "1"
+# Property tests (P2): transaction/aliasing invariants over the engine
+# (proptest is the repo's shared dev-dep for exactly this).
+proptest = "1"
+# The G53 harness legs: the native runner (`tyu`), the target identity
+# (`codegen-core`), and the parser/IR types the fixtures exercise.
+tyu = { path = "../tyu" }
+codegen-core = { path = "../codegen-core" }
+frontend = { path = "../frontend" }
+ir = { path = "../ir" }

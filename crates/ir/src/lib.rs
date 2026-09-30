@@ -6,6 +6,11 @@
 //! The crate defines the load-bearing IR and related compatibility types used
 //! by the front end, semantics pass, and code generators.
 
+extern crate alloc;
+
+// `Vec` backs `Module.words` (heap words — see the field's doc comment).
+use alloc::vec::Vec;
+
 // `Span`, `FixedVec`, and `Output` appear in public API positions (`Op.span`,
 // `OpKind::ConstStr`, every `FixedVec` field, `write_module`'s sink), so
 // consumers of those positions need the types themselves; re-export them
@@ -726,12 +731,14 @@ pub enum AddrOfBase {
     Mmio { aperture: u16, offset: u32 },
 }
 
+#[derive(Clone)]
 pub struct Block {
     pub id: BlockId,
     pub entry_stack: FixedVec<TypeId, 32>,
     pub ops: FixedVec<Op, 96>,
 }
 
+#[derive(Clone)]
 pub struct Word {
     pub name: Atom,
     pub sig: Sig,
@@ -756,9 +763,16 @@ pub struct Word {
     pub blocks: FixedVec<Block, 16>,
 }
 
+/// Clone: `build_ir` (PLAN-WASM-1 D-1) lifts arena-backed quotation words
+/// into an owned module; the clone semantics are structural (name, sig,
+/// blocks, tables — nothing is computed or re-derived).
+#[derive(Clone)]
 pub struct Module {
     pub name: Atom,
-    pub words: FixedVec<Word, 64>,
+    /// Heap-backed: an IR module is inherently variable-length (≤ 64 words by
+    /// format contract) and a stack `FixedVec<Word,64>` would be multiple MB.
+    /// The cap is enforced by the builder (`semantics::build_ir`, E3920).
+    pub words: Vec<Word>,
     /// The union of every word's aperture-use table (P4).
     pub apertures: FixedVec<ApertureUse, 8>,
 }

@@ -79,6 +79,23 @@ impl<T, const N: usize> Drop for FixedVec<T, N> {
     }
 }
 
+impl<T: Clone, const N: usize> Clone for FixedVec<T, N> {
+    /// Clone exactly the initialized prefix (PLAN-WASM-1 D-1: `build_ir` needs
+    /// to lift arena-backed quotation words into an owned `ir::Module`). The
+    /// target is filled with `push` only, so every element is initialized and
+    /// the `Drop` impl below sees a fully-owned prefix.
+    fn clone(&self) -> Self {
+        let mut out: FixedVec<T, N> = FixedVec::new();
+        for i in 0..self.len {
+            // `push` cannot fail here: the source has the same prefix length
+            // and `N` is the same type parameter.
+            let v = self.get(i).expect("cloned prefix is fully initialized");
+            let _ = out.push(v.clone());
+        }
+        out
+    }
+}
+
 pub struct Iter<'a, T, const N: usize> {
     v: &'a FixedVec<T, N>,
     i: usize,
