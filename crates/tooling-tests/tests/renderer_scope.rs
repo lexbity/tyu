@@ -34,6 +34,40 @@ fn fresh_dir(tag: &str) -> PathBuf {
     dir
 }
 
+/// The renderer tests need the port's `gen` exe, which requires a Lean
+/// toolchain. A fresh runner without one must SKIP loudly (the sibling e2e
+/// suites' convention) — an ungated spawn panics with NotFound (the
+/// local-green/remote-red asymmetry). `ci/port.sh` forces these runs (the
+/// port gate always has the toolchain).
+fn renderer_available() -> bool {
+    let gen_exe = common::workspace_root().join("verification/ports/lean/.lake/build/bin/gen");
+    if gen_exe.is_file() {
+        return true;
+    }
+    // Try to build it (lake is present iff the toolchain is).
+    if Command::new("lake")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        let build = Command::new("lake")
+            .current_dir(common::workspace_root().join("verification/ports/lean"))
+            .args(["build", "gen"])
+            .status()
+            .expect("lake build gen");
+        if build.success() && gen_exe.is_file() {
+            return true;
+        }
+    }
+    eprintln!(
+        "SKIP: renderer tests need the port's gen (lake + Lean toolchain on \
+         PATH, or a built verification/ports/lean/.lake); ci/port.sh runs \
+         them FORCED"
+    );
+    false
+}
+
 /// A call-free register-map word: the only statements its obligations need
 /// are mmio-bounds (OffsetLE) — no regular calls, so the renderer can
 /// express them truthfully.
@@ -143,6 +177,9 @@ fn rust_hash(set: &verifier::model::OblSet, o: &verifier::model::Obligation) -> 
 /// gate) and the mmio-bounds statements actually render.
 #[test]
 fn mmio_bounds_render_with_encoder_matching_hashes() {
+    if !renderer_available() {
+        return;
+    }
     common::ensure_bins();
     let dir = fresh_dir("mmio");
     let set = compile_obl(&dir, "Regs", REGS_MOD, &[]);
@@ -186,6 +223,9 @@ fn mmio_bounds_render_with_encoder_matching_hashes() {
 /// contracts).
 #[test]
 fn contract_obligations_are_honestly_classified() {
+    if !renderer_available() {
+        return;
+    }
     common::ensure_bins();
     let dir = fresh_dir("contract");
     let set = compile_obl(&dir, "P", CONTRACT_MOD, &[]);
@@ -250,6 +290,9 @@ end;
 /// renderer is indifferent to provenance; the E6418 gate is the drift lock.
 #[test]
 fn contract_statements_render_when_the_word_ir_is_call_free() {
+    if !renderer_available() {
+        return;
+    }
     common::ensure_bins();
     let dir = fresh_dir("contract-render");
     let raw = compile_obl(&dir, "Pure", PURE_MOD, &[]);

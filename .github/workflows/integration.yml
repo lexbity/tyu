@@ -110,12 +110,20 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install tools
+        # Same tool set as the `tooling` job: this job runs the full
+        # tooling-tests suite too (platform_binding compiles ARM/RISC-V
+        # modules), so it needs the cross assemblers and every QEMU ISA.
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
             fasm \
             qemu-system-x86 \
-            binutils
+            binutils \
+            qemu-system-arm \
+            gcc-arm-none-eabi \
+            gcc-riscv64-unknown-elf \
+            qemu-system-riscv \
+            qemu-system-misc
       - name: Bootstrap bare-metal targets + loader archives
         # Single provisioning path for every job (targets, ARM signing
         # archive, RISC-V build-std cache warm) — ci/bootstrap-loaders.sh.
