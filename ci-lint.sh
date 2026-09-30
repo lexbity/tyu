@@ -323,6 +323,51 @@ check_no_unverified_hedges() {
     return $rc
 }
 
+# --- 19. PLAN-RELEASE-1 S6: SETUP.md quickstart fence == executed commands --
+# The install-verify job executes ci/install-verify-commands.txt verbatim in a
+# pristine container; the SETUP.md quickstart fence must match it line-for-line
+# so the documented quickstart and the executed one cannot drift (FR-9/FR-10).
+check_setup_matches_commands() {
+    local rc=0
+    local commands="ci/install-verify-commands.txt"
+    if [ ! -f "$commands" ]; then
+        msg $RED "  SETUP SYNC: $commands missing"
+        return 1
+    fi
+    # the executable quickstart = the commands file minus comments/blank lines
+    local expected cur line in_fence matched
+    expected="$(grep -v '^#' "$commands" | grep -v '^[[:space:]]*$')"
+    in_fence=0
+    cur=""
+    matched=0
+    while IFS= read -r line; do
+        if [[ "$line" == '```'* ]]; then
+            if [ "$in_fence" -eq 0 ]; then
+                in_fence=1
+                cur=""
+            else
+                in_fence=0
+                # command substitution strips expected's trailing newline;
+                # the fence keeps one — compare with it reinstated.
+                if [ "$cur" = "$expected"$'\n' ]; then
+                    matched=1
+                fi
+            fi
+            continue
+        fi
+        if [ "$in_fence" -eq 0 ]; then
+            continue
+        fi
+        cur="${cur}${line}"
+        cur="${cur}"$'\n'
+    done < SETUP.md
+    if [ "$matched" -eq 0 ]; then
+        msg $RED "  SETUP SYNC: SETUP.md has no fence equal to $commands — the documented quickstart must be byte-identical to what ci/install-verify runs"
+        rc=1
+    fi
+    return $rc
+}
+
 # --- Rule A: harness tests never re-implement the AEAD oracle ---------------
 # The loader's AEAD is the single cryptographic oracle; E2E tests exercising
 # encryption/decryption must drive the loader (C-CT-2/3/4), never import a
@@ -554,6 +599,7 @@ if [ $# -eq 0 ]; then
     check_sha_pinned_actions || overall_rc=1
     check_no_sudo_installer || overall_rc=1
     check_no_unverified_hedges || overall_rc=1
+    check_setup_matches_commands || overall_rc=1
 fi
 
 if [ "$overall_rc" -eq 0 ]; then

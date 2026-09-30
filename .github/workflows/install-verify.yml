@@ -1,0 +1,53 @@
+# Install verify (PLAN-RELEASE-1 S6, FR-9) — CI proves the quickstart.
+#
+# Runs the repo's own source installer (ci/install.sh) end-to-end inside a
+# PRISTINE ubuntu:24.04 container: nothing preinstalled beyond git/curl/
+# build-essential, rustup bootstrapped SHA-256-verified, the pinned nightly
+# provisioned, host binaries built, the smoke fixtures run (green exits 0,
+# red exits 20/CONTRACT_FAIL). "Works on my machine" is structurally
+# impossible here.
+#
+# Triggers: PRs touching the install path, weekly (environment/drift re-proof
+# on the default branch), and manually.
+
+name: Install verify
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "ci/**"
+      - "rust-toolchain.toml"
+      - "Cargo.lock"
+      - "SETUP.md"
+      - ".github/workflows/install-verify.yml"
+  schedule:
+    - cron: "3 3 * * 0" # Sunday 03:03 UTC — weekly drift re-proof (NFR-2)
+  workflow_dispatch:
+
+concurrency:
+  group: workflows-${{ github.ref }}-install-verify
+  cancel-in-progress: true
+
+jobs:
+  install_verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30 # NFR-2: cold install is build-dominated
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Verify the quickstart in a pristine ubuntu:24.04 container
+        run: |
+          mkdir -p "$RUNNER_TEMP/install-verify"
+          docker run --rm \
+            -v "$PWD:/repo:ro" \
+            -v "$RUNNER_TEMP/install-verify":/verify \
+            -e VERIFY_OUT=/verify \
+            ubuntu:24.04 \
+            bash /repo/ci/install-verify.sh
+      - name: Install verify summary
+        if: always()
+        run: |
+          {
+            cat "$RUNNER_TEMP/install-verify/summary.md" 2>/dev/null \
+              || echo "_install-verify produced no summary_"
+          } >> "$GITHUB_STEP_SUMMARY"

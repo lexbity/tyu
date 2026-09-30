@@ -26,9 +26,9 @@ Blocking for the `hosted` tier — everything builds and runs with just these:
 - **a C linker/compiler** (`cc`/`gcc`/`clang`) — `sudo apt-get install -y build-essential` · `sudo dnf groupinstall "Development Tools"` · `sudo pacman -S base-devel` · `brew install gcc`
 - **rustup** (user-local; `ci/install.sh` installs it automatically when absent — the official installer, SHA-256-verified before execution):
   ```sh
-  curl -fsSLO https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init.sh
-  sha256sum -c <(curl -fsS https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init.sh.sha256)
-  sh ./rustup-init.sh -y --default-toolchain none --no-modify-path
+  curl -fsSLO https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init
+  curl -fsS https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init.sha256 | sha256sum -c -
+  chmod +x ./rustup-init && ./rustup-init -y --default-toolchain none --no-modify-path
   ```
   The repository's `rust-toolchain.toml` pins a dated nightly; rustup provisions
   exactly that toolchain (plus `rust-src`) on the first build.
@@ -53,42 +53,37 @@ sh /tmp/elan-init.sh -y --default-toolchain none
 
 ## Install (the blessed source path)
 
-Clone and run the installer (it re-clones the chosen ref into `$prefix/src`
-and builds):
+Clone the repository, then run the installer (it re-clones the chosen ref
+into `$prefix/src` and builds). **The four-line quickstart below is
+byte-for-byte what the CI `install-verify` job executes in a pristine
+container** — the fence IS `ci/install-verify-commands.txt`, enforced by a
+ci-lint gate, so the docs and CI cannot drift:
 
 ```sh
-git clone https://github.com/lexbity/tyu
-cd tyu
-bash ci/install.sh              # newest v* tag, else main; prefix $HOME/.tyu
-# or: bash ci/install.sh --tag v0.1.0 --prefix "$HOME/.tyu"
-```
-
-`ci/install.sh` is fail-closed per stage, idempotent, and **never uses sudo**.
-The default ref is the newest `v*` release tag on the origin, falling back to
-`main` with a visible notice. It writes `$prefix/INSTALL_RECORD` (ref, SHA,
-date) as its last act. Rerun anytime — it re-clones fresh and atomically
-reinstalls.
-
-Then put the binaries on `PATH`:
-
-```sh
+bash ci/install.sh
 export PATH="$HOME/.tyu/bin:$PATH"
+tyu build ci/smoke/hello.mod --target=x86_64-unknown-linux-gnu --out-dir=/tmp/smoke-out
+/tmp/smoke-out/image.elf
 ```
+
+(For a bare clone, `git clone https://github.com/lexbity/tyu && cd tyu`
+precedes it; the verified block starts at the installer. `ci/install.sh` is
+fail-closed per stage, idempotent, and **never uses sudo**. The default ref
+is the newest `v*` release tag on the origin, else the origin head, with a
+visible notice. It writes `$prefix/INSTALL_RECORD` (ref, SHA, date) as its
+last act. Rerun anytime — it re-clones fresh and atomically reinstalls.)
 
 ## Health checks and the first build
 
 - `tyu doctor` is the health check (tier-scoped; `--tier=hosted|metal|proof`,
   `--format=human|json`). The full catalog lands with the toolchain-health
   slice; `tyu toolchain check` is its per-target role-availability subset.
-- First build = the committed smoke fixture. The smoke contract is the IMAGE
-  exit code (the driver's `tyu run` marker protocol is not the smoke signal):
-
-  ```sh
-  tyu build ci/smoke/hello.mod --out-dir=/tmp/smoke-out
-  /tmp/smoke-out/image.elf                  # must exit 0 (green)
-  tyu build ci/smoke/bad.mod --out-dir=/tmp/smoke-bad-out
-  /tmp/smoke-bad-out/image.elf              # must exit 20 (CONTRACT_FAIL)
-  ```
+- The smoke contract is the IMAGE exit code (the driver's `tyu run` marker
+  protocol is not the smoke signal):
+  - `ci/smoke/hello.mod` — green; the built image exits `0` (the quickstart
+    above builds and runs it).
+  - `ci/smoke/bad.mod` — red; the built image must exit `20` (`CONTRACT_FAIL`),
+    asserted by the install-verify job.
 
 - The repository gate suite (the same commands CI runs before a merge):
 

@@ -51,9 +51,9 @@ usage: ci/install.sh [--tag vMAJOR.MINOR[.0]] [--branch NAME] [--prefix DIR] [--
 
 rustup bootstrap, verify-first two-step (recommended; install.sh runs the
 same two steps itself when cargo is absent):
-  curl -fsSLO https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init.sh
-  sha256sum -c <(curl -fsS https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init.sh.sha256)
-  sh ./rustup-init.sh -y --default-toolchain none --no-modify-path
+  curl -fsSLO https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init
+  curl -fsS https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init.sha256 | sha256sum -c -
+  chmod +x ./rustup-init && ./rustup-init -y --default-toolchain none --no-modify-path
 
 Env: TYU_REPO (origin URL), TYU_PREFIX. Zero sudo anywhere.
 EOF
@@ -114,14 +114,15 @@ else
         rustup_host="${RUSTUP_HOST:-x86_64-unknown-linux-gnu}"
         base="https://static.rust-lang.org/rustup/dist/${rustup_host}"
         rustup_tmp="$(mktemp -d)"
-        curl -fsSL "${base}/rustup-init.sh" -o "${rustup_tmp}/rustup-init.sh"
-        expected="$(curl -fsSL "${base}/rustup-init.sh.sha256" | awk '{print $1}')"
-        actual="$(sha256sum "${rustup_tmp}/rustup-init.sh" | awk '{print $1}')"
+        curl -fsSL "${base}/rustup-init" -o "${rustup_tmp}/rustup-init"
+        expected="$(curl -fsSL "${base}/rustup-init.sha256" | awk '{print $1}')"
+        actual="$(sha256sum "${rustup_tmp}/rustup-init" | awk '{print $1}')"
         if [ "$expected" != "$actual" ]; then
             rm -rf "$rustup_tmp"
-            die "rustup-init.sh checksum verification FAILED (expected $expected, got $actual) — refusing to execute"
+            die "rustup-init checksum verification FAILED (expected $expected, got $actual) — refusing to execute"
         fi
-        sh "${rustup_tmp}/rustup-init.sh" -y --default-toolchain none --no-modify-path
+        chmod +x "${rustup_tmp}/rustup-init"
+        "${rustup_tmp}/rustup-init" -y --default-toolchain none --no-modify-path
         rm -rf "$rustup_tmp"
         # rustup-init placed the binaries under HOME/.cargo/bin; path them now
         # without editing any shell rc (the advise stage prints the export).
@@ -135,7 +136,13 @@ fi
 # ===========================================================================
 # stage: resolve-ref
 # ===========================================================================
+# REF_IS_DEFAULT marks the no-flag default resolution. The default clones the
+# origin's HEAD rather than a hardcoded "main": on a normal origin HEAD is
+# what a bare `git clone` gets (main), and on the CI install-verify fixture
+# (a detached checkout of the exact tested commit) HEAD IS that commit — so
+# "install the checked tree" needs no special ref plumbing.
 REF="$BRANCH"
+REF_IS_DEFAULT=0
 if [ -n "$TAG" ]; then
     REF="$TAG"
     # a requested tag must actually exist on the origin
@@ -151,9 +158,15 @@ elif [ -z "$BRANCH" ]; then
         REF="$newest_tag"
         say "resolve-ref  : newest release tag on the origin: $REF"
     else
-        REF="main"
-        say "resolve-ref  : no v* tags on the origin — falling back to 'main' (visible, never silent)"
+        REF_IS_DEFAULT=1
+        say "resolve-ref  : no v* tags on the origin — defaulting to the origin HEAD (main)"
     fi
+fi
+
+# a bare 40-hex SHA ref (e.g. CI's "--branch <sha>") needs a clone + checkout,
+# not a --branch fetch (git clone --branch takes ref names).
+if [[ "$REF" =~ ^[0-9a-f]{40}$ ]]; then
+    say "resolve-ref  : ref '$REF' is a raw commit SHA"
 fi
 
 # ===========================================================================
@@ -174,13 +187,35 @@ if [ "$DRY_RUN" -eq 1 ]; then
 else
     say "clone        : $REF from $REPO -> $SRC_CHECKOUT"
     if [ -d "$SRC_CHECKOUT/.git" ]; then
+        # idempotent in-place update: shallow-fetch the ref and force it out
         if ! git -C "$SRC_CHECKOUT" fetch --quiet --depth 1 origin "$REF" --force \
             && ! git -C "$SRC_CHECKOUT" fetch --quiet --depth 1 origin "refs/tags/$REF" --force; then
             die "update of $SRC_CHECKOUT to $REF failed"
         fi
         git -C "$SRC_CHECKOUT" checkout --force --quiet "$REF" 2>/dev/null \
             || git -C "$SRC_CHECKOUT" checkout --force --quiet "refs/tags/$REF"
+    elif [[ "$REF" =~ ^[0-9a-f]{40}$ ]]; then
+        # raw SHA: clone the origin's default branch, then detach at the SHA
+        # (works even when the origin is a shallow clone whose HEAD is the SHA)
+        mkdir -p "$PREFIX/src"
+        if ! git clone --quiet "$REPO" "$SRC_CHECKOUT"; then
+            rm -rf "$SRC_CHECKOUT"
+            die "clone of $REPO failed — check the URL and network"
+        fi
+        if ! git -C "$SRC_CHECKOUT" checkout --quiet --detach "$REF"; then
+            rm -rf "$SRC_CHECKOUT"
+            die "cannot check out '$REF' from a clone of $REPO (is it reachable?)"
+        fi
+    elif [ "$REF_IS_DEFAULT" -eq 1 ]; then
+        # default: clone the origin HEAD (main on a normal origin; the exact
+        # checked commit on the CI install-verify fixture)
+        mkdir -p "$PREFIX/src"
+        if ! git clone --quiet --depth 1 --single-branch "$REPO" "$SRC_CHECKOUT"; then
+            rm -rf "$SRC_CHECKOUT"
+            die "clone of $REPO failed — check the URL and network"
+        fi
     else
+        # explicit branch/tag: shallow single-branch at that ref
         mkdir -p "$PREFIX/src"
         if ! git clone --quiet --depth 1 --branch "$REF" --single-branch "$REPO" "$SRC_CHECKOUT"; then
             rm -rf "$SRC_CHECKOUT"
