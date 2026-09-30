@@ -94,6 +94,18 @@ pub fn read_file(path: &[u8]) -> Result<ByteBuf, Errno> {
     }
 }
 
+/// Set the executable bit (mode 0755) on `path`. Used by the assembler
+/// driver: fasm versions disagree on whether an ELF-executable output is
+/// written with the exec bit (1.73.35 sets it, 1.73.34 does not).
+pub fn mark_executable(path: &[u8]) -> Result<(), Errno> {
+    let path_c = CStrBuf::new(path)?;
+    let rc = unsafe { c::chmod(path_c.as_ptr_i8(), 0o755) };
+    if rc != 0 {
+        return Err(Errno::last());
+    }
+    Ok(())
+}
+
 pub fn write_file(path: &[u8], bytes: &[u8]) -> Result<(), Errno> {
     let path_c = CStrBuf::new(path)?;
     let mode = b"wb\0";

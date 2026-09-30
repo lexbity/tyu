@@ -298,14 +298,15 @@ fn langc_compile_g(
     }
     args.push(src.to_str().unwrap().into());
 
-    let status = Command::new(common::langc_exe())
+    let out = Command::new(common::langc_exe())
         .args(&args)
-        .status()
+        .output()
         .expect("langc (g) invocation failed");
     assert!(
-        status.success(),
-        "langc -g --checks=all failed on {}",
-        src.display()
+        out.status.success(),
+        "langc -g --checks=all failed on {}:\n{}",
+        src.display(),
+        String::from_utf8_lossy(&out.stderr)
     );
 
     std::fs::read_dir(out_dir)

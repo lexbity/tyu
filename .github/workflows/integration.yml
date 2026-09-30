@@ -52,6 +52,8 @@ jobs:
           sudo apt-get install -y -qq \
             fasm \
             qemu-system-x86 \
+            fasm \
+            binutils \
             gcc-arm-none-eabi \
             qemu-system-arm \
             gcc-riscv64-unknown-elf \
@@ -81,6 +83,8 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
+            fasm \
+            binutils \
             gcc-arm-none-eabi \
             qemu-system-arm \
             gcc-riscv64-unknown-elf \
@@ -199,6 +203,7 @@ jobs:
           sudo apt-get install -y -qq \
             qemu-system-arm \
             gcc-arm-none-eabi \
+            qemu-system-riscv \
             qemu-system-misc \
             gcc-riscv64-unknown-elf \
             fasm \
@@ -233,6 +238,8 @@ jobs:
           sudo apt-get install -y -qq \
             fasm \
             qemu-system-x86 \
+            fasm \
+            binutils \
             gcc-arm-none-eabi \
             qemu-system-arm \
             gcc-riscv64-unknown-elf \

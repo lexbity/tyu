@@ -59,22 +59,18 @@ pub fn langc_exe() -> PathBuf {
 /// `target/debug/`, or in `target/release/` (for workspace-built
 /// binaries like `langc`, `tyu`).
 pub fn tool_available(name: &str) -> bool {
-    // Check PATH via which.
-    if Command::new("which")
+    // Resolve through the product's own candidate chain: "riscv32-elf-as"
+    // maps onto riscv64-unknown-elf-as etc. (RISCV_*_CANDIDATES), and the
+    // workspace/installed dirs are consulted before PATH — a bare `which`
+    // cannot see any of that under CI (S9 audit finding).
+    if crate::toolchain::resolve_tool_candidates(&[name]).is_ok() {
+        return true;
+    }
+    Command::new("which")
         .arg(name)
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
-    {
-        return true;
-    }
-    // Check target/debug/ then target/release/ for workspace-built binaries.
-    let root = workspace_root();
-    let p = root.join("target").join("debug").join(name);
-    if p.exists() {
-        return true;
-    }
-    root.join("target").join("release").join(name).exists()
 }
 
 /// Environment-aware tool gating: requires all named tools, panics under CI

@@ -22,6 +22,7 @@ extern "C" {
     pub fn free(ptr: *mut c_void);
     pub fn _exit(status: c_int) -> !;
 
+    pub fn chmod(path: *const i8, mode: u32) -> i32;
     pub fn fopen(path: *const c_char, mode: *const c_char) -> *mut FILE;
     pub fn fread(ptr: *mut c_void, size: size_t, nmemb: size_t, stream: *mut FILE) -> size_t;
     pub fn fwrite(ptr: *const c_void, size: size_t, nmemb: size_t, stream: *mut FILE) -> size_t;
