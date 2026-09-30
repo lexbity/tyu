@@ -14,9 +14,9 @@
     { "id": "D07", "tier": "metal", "status": "pass", "tool": "riscv64-unknown-elf-as", "version": null, "path": "@FAKEBIN@/riscv64-unknown-elf-as", "source": "path", "detail": "a RISC-V cross assembler/linker candidate resolves"},
     { "id": "D08", "tier": "metal", "status": "pass", "tool": null, "version": null, "path": null, "source": null, "detail": "3 QEMU system binaries present"},
     { "id": "D09", "tier": "metal", "status": "pass", "tool": null, "version": null, "path": null, "source": null, "detail": "4 platform pack(s) lint clean"},
-    { "id": "D10", "tier": "proof", "status": "pass", "tool": "lean", "version": "4.27.0", "path": "@FAKEBIN@/lean", "source": "path", "detail": "matches verification/ports/lean/lean-toolchain pin (leanprover/lean4:v4.27.0)"},
+    { "id": "D10", "tier": "proof", "status": "warn", "tool": "lean", "version": "4.16.0", "path": "@FAKEBIN@/lean", "source": "path", "detail": "lean 4.16.0 != pinned 4.27.0 (leanprover/lean4:v4.27.0)", "fix": { "auto": false, "command": "@FIX-CMD@" }},
     { "id": "D11", "tier": "hosted", "status": "pass", "tool": "git", "version": "git version 2.55.0", "path": "@FAKEBIN@/git", "source": "path", "detail": null},
     { "id": "D12", "tier": "hosted", "status": "pass", "tool": null, "version": null, "path": null, "source": null, "detail": "no shadowing tyu on PATH"}
   ],
-  "summary": { "pass": 12, "warn": 0, "fail": 0 }
+  "summary": { "pass": 11, "warn": 1, "fail": 0 }
 }

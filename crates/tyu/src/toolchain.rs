@@ -45,7 +45,7 @@ pub struct ResolvedTool {
 }
 
 /// Where a tool was resolved from.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum ToolSource {
     /// `--tool-<role>=<path>` flag.
     FlagOverride,
@@ -531,24 +531,38 @@ fn parse_probe_version(name: &str, output: &str) -> Option<String> {
     output.lines().next().map(|s| s.to_string())
 }
 
+/// The human source label for a [`ToolSource`] — SHARED by `toolchain check`
+/// and the doctor role report (FR-22 consolidation: one mapping, two layout
+/// surfaces).
+pub fn source_name(source: ToolSource) -> &'static str {
+    match source {
+        ToolSource::FlagOverride => "flag",
+        ToolSource::Manifest => "manifest",
+        ToolSource::EnvVar => "env",
+        ToolSource::Workspace => "workspace target dir",
+        ToolSource::Path => "PATH",
+    }
+}
+
 /// Run `tyu toolchain check <target>`.
 /// Returns a human-readable report string.
 pub fn toolchain_check(target: Target, manifest: &ProjectManifest) -> String {
     let flag_overrides = std::collections::HashMap::new();
     let res = resolve_tools(target, manifest, &flag_overrides);
-    let triple = std::str::from_utf8(target.triple()).unwrap_or("???");
+    render_toolchain_check(&res)
+}
 
+/// The byte-stable `toolchain check` layout, rendered from a `ToolResolution`
+/// — the same resolution object `doctor::check_tools` produces (FR-12/FR-22:
+/// one resolution, two renderers). The format is locked by
+/// `toolchain_check_layout_is_byte_stable` in this module's tests.
+pub fn render_toolchain_check(res: &ToolResolution) -> String {
+    let triple = std::str::from_utf8(res.target.triple()).unwrap_or("???");
     let mut report = format!("Toolchain for {}:\n", triple);
 
     let mut add = |role: &str, tool: Option<&ResolvedTool>| match tool {
         Some(t) => {
-            let src = match t.source {
-                ToolSource::FlagOverride => "flag",
-                ToolSource::Manifest => "manifest",
-                ToolSource::EnvVar => "env",
-                ToolSource::Workspace => "workspace target dir",
-                ToolSource::Path => "PATH",
-            };
+            let src = source_name(t.source);
             let ver = t
                 .version
                 .as_ref()
@@ -744,6 +758,60 @@ mod tests {
         // langc/tyu are never version-probed (§6.2): presence only.
         let fake = write_script(&base, "langc", "#!/bin/sh\necho 'langc 0.1.0'\n");
         assert_eq!(probe_version(&fake), None);
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    // --- FR-22: toolchain check layout is byte-stable -----------------------
+    #[test]
+    fn toolchain_check_layout_is_byte_stable() {
+        // The `toolchain check` report FORMAT is the contract (FR-22
+        // consolidation: one resolution, two renderers — this layout must
+        // not drift when doctor shares the resolution object). Paths are
+        // environment data, so the assertion builds the expected string from
+        // the same resolution doctor would produce.
+        let _lock = crate::toolchain::ambient_path_lock()
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let prev_path = std::env::var_os("PATH").unwrap_or_default();
+        let base = temp_dir("tc-layout");
+        let b = base.join("bin");
+        write_script(
+            &b,
+            "fasm",
+            "#!/bin/sh\necho 'flat assembler  version 1.73.32'\n",
+        );
+        write_script(&b, "ld", "#!/bin/sh\necho 'GNU ld 2.42'\n");
+        write_script(&b, "nm", "#!/bin/sh\necho 'GNU nm 2.42'\n");
+        write_script(
+            &b,
+            "qemu-system-x86_64",
+            "#!/bin/sh\necho 'QEMU emulator version 8.2.2'\n",
+        );
+        std::env::set_var("PATH", &b);
+
+        let manifest = ProjectManifest::default();
+        let target = Target::X86_64UnknownNone;
+        let res = resolve_tools(target, &manifest, &Default::default());
+        let compiler = res.compiler.as_ref().expect("workspace langc resolves");
+        let report = toolchain_check(target, &manifest);
+
+        let expected = format!(
+            "Toolchain for x86_64-unknown-none:\n\
+             \x20 compiler: found@{} [workspace target dir]\n\
+             \x20 assembler: found@{} [PATH] (1.73.32)\n\
+             \x20 linker: found@{} [PATH] (GNU ld 2.42)\n\
+             \x20 qemu: found@{} [PATH] (8.2.2)\n",
+            compiler.path.display(),
+            b.join("fasm").display(),
+            b.join("ld").display(),
+            b.join("qemu-system-x86_64").display(),
+        );
+        assert_eq!(
+            report, expected,
+            "toolchain check layout is byte-stable (FR-22)"
+        );
+
+        std::env::set_var("PATH", prev_path);
         fs::remove_dir_all(&base).unwrap();
     }
 

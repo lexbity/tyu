@@ -13,8 +13,10 @@
     { "id": "D06", "tier": "metal", "status": "fail", "tool": "arm-none-eabi-as", "version": null, "path": null, "source": null, "detail": null, "fix": { "auto": false, "command": "@FIX-CMD@" }},
     { "id": "D07", "tier": "metal", "status": "fail", "tool": "riscv32/riscv64-*-as/ld", "version": null, "path": null, "source": null, "detail": null, "fix": { "auto": false, "command": "@FIX-CMD@" }},
     { "id": "D08", "tier": "metal", "status": "fail", "tool": "qemu-system-*", "version": null, "path": null, "source": null, "detail": null, "fix": { "auto": false, "command": "@FIX-CMD@" }},
+    { "id": "D09", "tier": "metal", "status": "pass", "tool": null, "version": null, "path": null, "source": null, "detail": "4 platform pack(s) lint clean"},
+    { "id": "D10", "tier": "proof", "status": "fail", "tool": "lean", "version": null, "path": null, "source": null, "detail": "elan not found on PATH (the proof tier needs the Lean toolchain manager; pin: leanprover/lean4:v4.27.0)", "fix": { "auto": true, "command": "@FIX-CMD@" }},
     { "id": "D11", "tier": "hosted", "status": "pass", "tool": "git", "version": "git version 2.55.0", "path": "@FAKEBIN@/git", "source": "path", "detail": null},
     { "id": "D12", "tier": "hosted", "status": "pass", "tool": null, "version": null, "path": null, "source": null, "detail": "no shadowing tyu on PATH"}
   ],
-  "summary": { "pass": 5, "warn": 0, "fail": 5 }
+  "summary": { "pass": 6, "warn": 0, "fail": 6 }
 }

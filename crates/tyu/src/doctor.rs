@@ -1,4 +1,4 @@
-//! `tyu doctor` — tier-scoped toolchain health checks (PLAN-RELEASE-1 S7).
+//! `tyu doctor` — tier-scoped toolchain health checks (PLAN-RELEASE-1 S7/S8).
 //!
 //! Every check produces `pass | warn | fail` with an optional fix
 //! suggestion. ALL tool resolution flows through
@@ -8,6 +8,12 @@
 //! JSON output is fixed-key `tyu.doctor/1`, hand-rolled (no serde), and
 //! golden-locked byte-wise (FR-14). Exit codes (FR-15): `0` all pass, `1`
 //! warnings only, `2` any fail, `3` internal error.
+//!
+//! S8 additions: D09 (platform-pack lint, in-process via `lint_pack`), D10
+//! (the Lean/elan proof tier), and `--fix` — which auto-executes exactly one
+//! action class (the user-local elan bootstrap, FR-16) and prints everything
+//! else as the platform-appropriate command. `TYU_DOCTOR_FIX_DRY_RUN=1`
+//! renders the fix report without executing anything (test seam).
 
 use crate::args::DoctorArgs;
 use crate::project::ProjectManifest;
@@ -40,7 +46,6 @@ impl Status {
 pub(crate) enum Tier {
     Hosted,
     Metal,
-    #[allow(dead_code)] // Proof checks land in the S8 slice.
     Proof,
 }
 
@@ -65,6 +70,11 @@ pub(crate) enum CheckId {
     D06,
     D07,
     D08,
+    /// Platform-pack lint (§7.1 metal tier) — wraps `lint_pack` in-process.
+    D09,
+    /// Proof tier: the `verification/ports/lean/lean-toolchain` pin + elan +
+    /// a resolvable `lean` at the pin (S8).
+    D10,
     D11,
     D12,
 }
@@ -80,6 +90,8 @@ impl CheckId {
             CheckId::D06 => "D06",
             CheckId::D07 => "D07",
             CheckId::D08 => "D08",
+            CheckId::D09 => "D09",
+            CheckId::D10 => "D10",
             CheckId::D11 => "D11",
             CheckId::D12 => "D12",
         }
@@ -90,7 +102,13 @@ impl CheckId {
             CheckId::D01 | CheckId::D02 | CheckId::D03 | CheckId::D11 | CheckId::D12 => {
                 Tier::Hosted
             }
-            CheckId::D04 | CheckId::D05 | CheckId::D06 | CheckId::D07 | CheckId::D08 => Tier::Metal,
+            CheckId::D04
+            | CheckId::D05
+            | CheckId::D06
+            | CheckId::D07
+            | CheckId::D08
+            | CheckId::D09 => Tier::Metal,
+            CheckId::D10 => Tier::Proof,
         }
     }
 }
@@ -240,11 +258,37 @@ fn fix_for(check: CheckId) -> FixSuggestion {
         CheckId::D11 => "git",
         _ => "",
     };
+    if pkgs.is_empty() && !matches!(check, CheckId::D02) {
+        // D09/D10 fixes are check-specific (they name the pack / use elan) and
+        // are constructed inside their checks; D02 is "build the workspace".
+        return FixSuggestion {
+            auto: false,
+            command: String::new(),
+        };
+    }
     FixSuggestion {
         auto: false,
         command: pkg_install(pkgs),
     }
 }
+
+/// The official elan bootstrap — the ONE `--fix` action class that is
+/// auto-executed (FR-16 / Q5): user-local, no root, official installer. The
+/// non-interactive form mirrors SETUP.md's `elan-init.sh -y
+/// --default-toolchain none` (no default Lean toolchain is installed; the pin
+/// is elan's job to install on request). `--fix` is a non-interactive CLI, so
+/// a prompting installer would hang — the `-y` is mandatory, not cosmetic.
+fn elan_bootstrap_command() -> String {
+    "curl --proto '=https' --tlsv1.2 -sSf \
+     https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+     | sh -s -- -y --default-toolchain none"
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The relative lean-toolchain pin file (relative to the checkout CWD).
+const LEAN_PIN_REL: &str = "verification/ports/lean/lean-toolchain";
 
 // ---------------------------------------------------------------------------
 // platform scoping (FR-11: --platform restricts D04–D08 to one target's roles)
@@ -387,7 +431,12 @@ fn check_d02_from(
             r.detail = Some(
                 "neither tyu nor langc resolvable (PATH or workspace target dirs)".to_string(),
             );
-            fix_command(&mut r, fix_for(CheckId::D02));
+            // Printed, never executed (FR-16): the honest remedy is building
+            // the workspace so the binaries exist in target/{debug,release}.
+            r.fix = Some(FixSuggestion {
+                auto: false,
+                command: "cargo build --release -p langc -p tyu".to_string(),
+            });
             r
         }
     }
@@ -549,6 +598,219 @@ fn check_d08(platform: Option<&codegen_core::Target>) -> CheckResult {
     }
 }
 
+/// The platform-pack root D09 lints. `TYU_PLATFORM_ROOT` overrides the
+/// compile-time workspace root (a documented test/override seam — identical
+/// in spirit to `TYU_SYSROOT`): production resolves the checkout's own
+/// `platforms/` + `runtime/`; tests point at a fabricated tree.
+fn platform_root() -> PathBuf {
+    if let Some(v) = std::env::var_os("TYU_PLATFORM_ROOT") {
+        if !v.is_empty() {
+            return PathBuf::from(v);
+        }
+    }
+    crate::platform::workspace_root()
+}
+
+/// The metal triples D09 scopes by default: the bare-metal (QEMU-backed)
+/// targets — the same set `ci.yml`'s platform-lint gate and the Q7 release
+/// matrix lint. The hosted bundle (`x86_64-unknown-linux-gnu`) is deliberately
+/// OUT of the metal tier's default scope: its full-surface lint carries the
+/// documented pre-existing gaps (the DS-geometry exports withheld for the §7.5
+/// fail-closed guard-elision design, and the legacy glue path — both pinned
+/// out-of-scope by `crates/tyu/tests/platform_model_lint.rs`). Pass
+/// `--platform=x86_64-unknown-linux-gnu` to lint it explicitly.
+const METAL_TRIPLES: &[&str] = &[
+    "x86_64-unknown-none",
+    "armv7m-unknown-none",
+    "riscv32-unknown-none",
+];
+
+/// D09 (§7.1 metal tier): `tyu platform lint` for every pack in scope,
+/// in-process through `lint_pack` (the library entry the `platform lint`
+/// command uses — no subprocess, no duplicate resolution). Scope is the
+/// packs declaring `--platform`'s triple when given, else the metal-tier
+/// packs (those declaring a bare-metal triple — see [`METAL_TRIPLES`]).
+/// lint errors ⇒ fail (fix: re-run the lint for the pack); warnings are
+/// advisory and do not fail (§7.1 pass = "lint clean").
+fn check_d09(root: &Path, platform: Option<&codegen_core::Target>) -> CheckResult {
+    let packs = match crate::platform::discover_platforms_in(root) {
+        Ok(packs) => packs,
+        Err(e) => {
+            let mut r = fail_with_fix(
+                CheckId::D09,
+                "platform lint",
+                FixSuggestion {
+                    auto: false,
+                    command: "review the platform pack layout (platforms/, runtime/)".to_string(),
+                },
+            );
+            r.detail = Some(format!(
+                "platform discovery failed under {}: {}",
+                root.display(),
+                e
+            ));
+            return r;
+        }
+    };
+    let triple = platform.map(|t| std::str::from_utf8(t.triple()).unwrap_or("").to_string());
+    let mut selected: Vec<String> = Vec::new();
+    for pack in &packs {
+        let declares = |t: &str| pack.manifest.platform.isa.iter().any(|isa| isa.triple == t);
+        match triple {
+            Some(ref t) if !declares(t) => continue,
+            // Default (no --platform): the metal-tier scope only.
+            None if !pack
+                .manifest
+                .platform
+                .isa
+                .iter()
+                .any(|isa| METAL_TRIPLES.contains(&isa.triple.as_str())) =>
+            {
+                continue
+            }
+            _ => {}
+        }
+        selected.push(pack.name().to_string());
+    }
+    if selected.is_empty() {
+        let mut r = pass(CheckId::D09);
+        r.detail = Some(match triple {
+            Some(t) => format!("no platform pack declares '{t}'"),
+            None => "no platform packs in scope".to_string(),
+        });
+        return r;
+    }
+
+    let mut failures: Vec<String> = Vec::new();
+    for name in &selected {
+        match crate::platform::lint_pack(root, name, false) {
+            Ok(o) if o.errors.is_empty() => {}
+            Ok(o) => {
+                for err in &o.errors {
+                    failures.push(format!("pack={name} E{} {}", err.code, err.detail));
+                }
+            }
+            Err(e) => failures.push(format!("pack={name}: {e}")),
+        }
+    }
+
+    if failures.is_empty() {
+        let mut r = pass(CheckId::D09);
+        r.detail = Some(format!("{} platform pack(s) lint clean", selected.len()));
+        r
+    } else {
+        let first = selected.first().cloned().unwrap_or_default();
+        let mut r = fail_with_fix(
+            CheckId::D09,
+            "platform lint",
+            FixSuggestion {
+                auto: false,
+                command: format!("tyu platform lint {first}"),
+            },
+        );
+        r.detail = Some(failures.join("; "));
+        r
+    }
+}
+
+/// D10 (S8, proof tier): the `verification/ports/lean/lean-toolchain` pin
+/// must parse, `elan` must be present, and `lean` must resolve. Lean's
+/// version is compared against the pin — a mismatch WARNS (never fails; the
+/// pin is elan's job to honor, doctor's job to report). The elan-absent fix
+/// is the auto-executed `--fix` action class (FR-16).
+fn check_d10(cwd: &Path) -> CheckResult {
+    let Some((pin_line, pin_ver)) = parse_lean_pin(cwd) else {
+        let mut r = fail_with_fix(
+            CheckId::D10,
+            "lean",
+            FixSuggestion {
+                auto: false,
+                command: format!(
+                    "add {LEAN_PIN_REL} to this checkout (format: leanprover/lean4:vX.Y.Z; see verification/ports/lean/README.md)"
+                ),
+            },
+        );
+        r.detail = Some(format!(
+            "lean toolchain pin '{LEAN_PIN_REL}' missing or unparseable"
+        ));
+        return r;
+    };
+
+    if resolve_tool_candidates(&["elan"]).is_err() {
+        let mut r = fail_with_fix(
+            CheckId::D10,
+            "lean",
+            FixSuggestion {
+                auto: true,
+                command: elan_bootstrap_command(),
+            },
+        );
+        r.detail = Some(format!(
+            "elan not found on PATH (the proof tier needs the Lean toolchain manager; pin: {pin_line})"
+        ));
+        return r;
+    }
+
+    let Ok(lean_path) = resolve_tool_candidates(&["lean"]) else {
+        let mut r = pass(CheckId::D10);
+        r.status = Status::Warn;
+        r.tool = Some("lean".to_string());
+        r.detail = Some(format!(
+            "elan present but lean not resolvable through the elan shims (pin: {pin_line})"
+        ));
+        r.fix = Some(FixSuggestion {
+            auto: false,
+            command: format!("elan install {pin_line}"),
+        });
+        return r;
+    };
+    let version = toolchain::probe_version(&lean_path);
+    match version.as_deref() {
+        Some(v) if v == pin_ver => {
+            let mut r = found(pass(CheckId::D10), &lean_path, version.clone(), "path");
+            r.tool = Some("lean".to_string());
+            r.detail = Some(format!("matches {LEAN_PIN_REL} pin ({pin_line})"));
+            r
+        }
+        Some(v) => {
+            let mut r = found(pass(CheckId::D10), &lean_path, version.clone(), "path");
+            r.status = Status::Warn;
+            r.tool = Some("lean".to_string());
+            r.detail = Some(format!("lean {v} != pinned {pin_ver} ({pin_line})"));
+            r.fix = Some(FixSuggestion {
+                auto: false,
+                command: format!("elan default {pin_line}"),
+            });
+            r
+        }
+        None => {
+            let mut r = found(pass(CheckId::D10), &lean_path, None, "path");
+            r.status = Status::Warn;
+            r.tool = Some("lean".to_string());
+            r.detail = Some(format!(
+                "lean resolves but its version is unparseable (pin: {pin_line})"
+            ));
+            r.fix = Some(FixSuggestion {
+                auto: false,
+                command: format!("elan default {pin_line}"),
+            });
+            r
+        }
+    }
+}
+
+/// Parse `verification/ports/lean/lean-toolchain` (`leanprover/lean4:vX.Y.Z`);
+/// returns the raw line and the version (leading `v` stripped).
+fn parse_lean_pin(cwd: &Path) -> Option<(String, String)> {
+    let text = std::fs::read_to_string(cwd.join(LEAN_PIN_REL)).ok()?;
+    let line = text.trim().to_string();
+    let version = line.rsplit(':').next()?.trim_start_matches('v').to_string();
+    if line.is_empty() || version.is_empty() {
+        return None;
+    }
+    Some((line, version))
+}
+
 fn check_d11() -> CheckResult {
     match resolve_tool_candidates(&["git"]) {
         Ok(p) => {
@@ -608,44 +870,33 @@ pub fn check_tools(target: codegen_core::Target, manifest: &ProjectManifest) -> 
 }
 
 /// Run doctor over the requested tier. `platform` restricts the metal checks
-/// (D04–D08) to one target's roles (FR-11).
-pub fn run(args: &DoctorArgs, manifest: &ProjectManifest) -> DoctorReport {
+/// (D04–D09) to one target's roles (FR-11).
+///
+/// Returns the report plus, when `--fix` ran, the fix report (EXECUTED /
+/// SUGGESTED / STILL-FAILING sections, FR-16).
+pub fn run(args: &DoctorArgs, manifest: &ProjectManifest) -> (DoctorReport, Option<FixReport>) {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let platform = args.platform;
+    let root = platform_root();
+    run_at(&cwd, &root, args, manifest)
+}
+
+/// Testable core of [`run`]: carries the injected CWD and platform root so
+/// unit tests can fabricate a checkout and a platform-pack tree.
+pub(crate) fn run_at(
+    cwd: &Path,
+    root: &Path,
+    args: &DoctorArgs,
+    manifest: &ProjectManifest,
+) -> (DoctorReport, Option<FixReport>) {
     let _ = manifest;
-
-    // Hosted tier is always included (D01–D03, D11, D12).
-    let mut checks = vec![
-        check_d01(&cwd),
-        check_d02(),
-        check_d03(&cwd),
-        check_d11(),
-        check_d12(),
-    ];
-
-    // Metal tier adds the per-target tool roles (D04–D08), scoped by
-    // --platform when given.
-    if args.tier.includes_metal() {
-        if applies(CheckId::D04, platform.as_ref()) {
-            checks.push(check_d04());
-        }
-        if applies(CheckId::D05, platform.as_ref()) {
-            checks.push(check_tool_pair(CheckId::D05, &["ld", "nm"], CheckId::D05));
-        }
-        if applies(CheckId::D06, platform.as_ref()) {
-            checks.push(check_d06());
-        }
-        if applies(CheckId::D07, platform.as_ref()) {
-            checks.push(check_d07());
-        }
-        if applies(CheckId::D08, platform.as_ref()) {
-            checks.push(check_d08(platform.as_ref()));
-        }
-    }
-
-    checks.sort_by_key(|c| c.id);
-    let sysroot = crate::sysroot::resolve(None, &cwd);
-    DoctorReport {
+    let mut checks = collect_checks(cwd, root, args);
+    let fix = if args.fix {
+        Some(apply_fixes(cwd, root, args, &mut checks))
+    } else {
+        None
+    };
+    let sysroot = crate::sysroot::resolve(None, cwd);
+    let report = DoctorReport {
         tier: args.tier.name(),
         host_os: std::env::consts::OS,
         host_arch: std::env::consts::ARCH,
@@ -664,7 +915,208 @@ pub fn run(args: &DoctorArgs, manifest: &ProjectManifest) -> DoctorReport {
             .unwrap_or(false),
         sysroot_resolved: sysroot,
         checks,
+    };
+    (report, fix)
+}
+
+/// The tier-scoped check list (sorted by id, ready for rendering).
+fn collect_checks(cwd: &Path, root: &Path, args: &DoctorArgs) -> Vec<CheckResult> {
+    let platform = args.platform;
+    let mut checks = vec![
+        check_d01(cwd),
+        check_d02(),
+        check_d03(cwd),
+        check_d11(),
+        check_d12(),
+    ];
+    if args.tier.includes_metal() {
+        for id in [
+            CheckId::D04,
+            CheckId::D05,
+            CheckId::D06,
+            CheckId::D07,
+            CheckId::D08,
+            CheckId::D09,
+        ] {
+            if applies(id, platform.as_ref()) {
+                checks.push(run_check(cwd, root, platform.as_ref(), id));
+            }
+        }
     }
+    if args.tier.includes_proof() {
+        checks.push(run_check(cwd, root, platform.as_ref(), CheckId::D10));
+    }
+    checks.sort_by_key(|c| c.id);
+    checks
+}
+
+/// Run ONE check by id — the single dispatch both the initial collection and
+/// the post-`--fix` re-probe use, so a fixed check is re-detected exactly as
+/// it was first detected (FR-16: "re-run detection afterward").
+fn run_check(
+    cwd: &Path,
+    root: &Path,
+    platform: Option<&codegen_core::Target>,
+    id: CheckId,
+) -> CheckResult {
+    match id {
+        CheckId::D01 => check_d01(cwd),
+        CheckId::D02 => check_d02(),
+        CheckId::D03 => check_d03(cwd),
+        CheckId::D04 => check_d04(),
+        CheckId::D05 => check_tool_pair(CheckId::D05, &["ld", "nm"], CheckId::D05),
+        CheckId::D06 => check_d06(),
+        CheckId::D07 => check_d07(),
+        CheckId::D08 => check_d08(platform),
+        CheckId::D09 => check_d09(root, platform),
+        CheckId::D10 => check_d10(cwd),
+        CheckId::D11 => check_d11(),
+        CheckId::D12 => check_d12(),
+    }
+}
+
+/// The `--fix` outcome (FR-16): what was EXECUTED, what is printed as a
+/// SUGGESTED command, and what is STILL-FAILING after the re-probe.
+#[derive(Debug, Default)]
+pub struct FixReport {
+    /// Auto-executed fixes (today: the elan bootstrap), `"<id>: <command>"`.
+    pub executed: Vec<String>,
+    /// Printed-only suggestions, `(check id, platform command)` pairs.
+    pub suggested: Vec<(String, String)>,
+    /// Post-fix non-passing checks, `(check id, status)` pairs.
+    pub still_failing: Vec<(String, String)>,
+}
+
+/// Apply the `--fix` policy (§Q5 / FR-16): auto-execute ONLY the elan
+/// bootstrap (user-local, official installer); every other fix is collected
+/// into SUGGESTED and never executed. Runs under `TYU_DOCTOR_FIX_DRY_RUN=1`
+/// by printing instead of executing (a documented, tested seam — the real
+/// elan download is exercised manually, not by the test suite).
+fn apply_fixes(
+    cwd: &Path,
+    root: &Path,
+    args: &DoctorArgs,
+    checks: &mut [CheckResult],
+) -> FixReport {
+    let dry_run = std::env::var_os("TYU_DOCTOR_FIX_DRY_RUN")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false);
+    let mut executed: Vec<String> = Vec::new();
+    let mut suggested: Vec<(String, String)> = Vec::new();
+    let mut recheck: Vec<CheckId> = Vec::new();
+
+    for c in checks.iter() {
+        if c.status == Status::Pass {
+            continue;
+        }
+        let Some(fix) = &c.fix else { continue };
+        if fix.auto {
+            let id = c.id;
+            if dry_run {
+                executed.push(format!("[dry-run] {id}: {}", fix.command));
+            } else {
+                match run_shell(&fix.command) {
+                    Ok(()) => executed.push(format!("{id}: {}", fix.command)),
+                    Err(e) => executed.push(format!("{id}: FAILED ({e})")),
+                }
+            }
+            recheck.push(parse_check_id(id).expect("auto-fix checks must have a CheckId factory"));
+        } else if !fix.command.is_empty() {
+            suggested.push((c.id.to_string(), fix.command.clone()));
+        }
+    }
+
+    // FR-16 "re-run detection afterward": re-probe any check whose auto fix
+    // was attempted, so the final status reflects post-fix reality.
+    for id in recheck {
+        let fresh = run_check(cwd, root, args.platform.as_ref(), id);
+        if let Some(slot) = checks.iter_mut().find(|c| c.id == id.id()) {
+            *slot = fresh;
+        }
+    }
+    checks.sort_by_key(|c| c.id);
+
+    let still_failing = checks
+        .iter()
+        .filter(|c| c.status != Status::Pass)
+        .map(|c| (c.id.to_string(), c.status.name().to_string()))
+        .collect();
+    FixReport {
+        executed,
+        suggested,
+        still_failing,
+    }
+}
+
+fn parse_check_id(s: &str) -> Option<CheckId> {
+    match s {
+        "D01" => Some(CheckId::D01),
+        "D02" => Some(CheckId::D02),
+        "D03" => Some(CheckId::D03),
+        "D04" => Some(CheckId::D04),
+        "D05" => Some(CheckId::D05),
+        "D06" => Some(CheckId::D06),
+        "D07" => Some(CheckId::D07),
+        "D08" => Some(CheckId::D08),
+        "D09" => Some(CheckId::D09),
+        "D10" => Some(CheckId::D10),
+        "D11" => Some(CheckId::D11),
+        "D12" => Some(CheckId::D12),
+        _ => None,
+    }
+}
+
+/// Run a fix command through the user's shell (the elan bootstrap pipeline).
+/// Fixes are user-local by policy — never `sudo`, never root (NFR-6).
+/// Spawn failures surface as `TyuError::Io`; a non-zero exit is a
+/// `TyuError::Toolchain` carrying the exit code (the caller renders it into
+/// the EXECUTED section verbatim).
+fn run_shell(cmd: &str) -> Result<(), crate::error::TyuError> {
+    let status = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .status()
+        .map_err(crate::error::TyuError::Io)?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(crate::error::TyuError::Toolchain(format!(
+            "fix command exited with {:?}",
+            status.code()
+        )))
+    }
+}
+
+/// The `--fix` three-section report (FR-16), rendered to stderr by main so
+/// the JSON stdout stream stays machine-clean.
+pub fn render_fix(fix: &FixReport) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "tyu doctor --fix");
+    let _ = writeln!(out, "  EXECUTED:");
+    if fix.executed.is_empty() {
+        let _ = writeln!(out, "    (none)");
+    } else {
+        for e in &fix.executed {
+            let _ = writeln!(out, "    {e}");
+        }
+    }
+    let _ = writeln!(out, "  SUGGESTED (run manually):");
+    if fix.suggested.is_empty() {
+        let _ = writeln!(out, "    (none)");
+    } else {
+        for (id, cmd) in &fix.suggested {
+            let _ = writeln!(out, "    {id}: {cmd}");
+        }
+    }
+    let _ = writeln!(out, "  STILL-FAILING:");
+    if fix.still_failing.is_empty() {
+        let _ = writeln!(out, "    (none)");
+    } else {
+        for (id, status) in &fix.still_failing {
+            let _ = writeln!(out, "    {id}: {status}");
+        }
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -1282,6 +1734,250 @@ mod tests {
                 b_.map(|t| t.path.clone()),
                 "FR-12: doctor must resolve identically to toolchain check"
             );
+        }
+        drop(_g);
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    // --- D09 platform-pack lint (S8) ---------------------------------------
+
+    /// A clean fake pack (compiler-interface matches; required symbols
+    /// declared; deploy + untested rung) — the lint must pass it.
+    fn write_pack(root: &Path, name: &str, compiler_interface: u16) {
+        let dir = root.join("platforms").join(name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("platform.toml"),
+            format!(
+                r#"[platform]
+name = "{name}"
+compiler-interface = {compiler_interface}
+
+[[platform.isa]]
+triple = "x86_64-unknown-none"
+arch = "x86_64"
+default = true
+expected_abi_hash = "0x50fbac4f4e87016c"
+
+[metal]
+path = "."
+startup = "runtime.asm"
+linker = ""
+
+[deploy]
+method = "qemu"
+
+[test]
+rung = "untested"
+"#,
+            ),
+        )
+        .unwrap();
+        fs::write(
+            dir.join("runtime.asm"),
+            "public __lang_start\npublic __lang_trap\npublic __lang_ds_base\n\
+             public __lang_ds_limit\npublic __lang_ds_high\n\
+             public __lang_expected_abi_hash\n",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn d09_platform_lint_pass_fail_and_scope() {
+        let base = temp_dir("d09");
+        let root = base.join("root");
+        write_pack(&root, "broken", 999); // E5401 — interface mismatch
+        write_pack(&root, "clean", 1);
+
+        // broken pack in scope ⇒ fail naming the pack, with a lint fix.
+        let r = check_d09(&root, None);
+        assert_eq!(r.status, Status::Fail, "a lint error must fail D09");
+        let detail = r.detail.as_deref().unwrap_or("");
+        assert!(
+            detail.contains("broken"),
+            "detail must name the failing pack: {detail}"
+        );
+        assert!(
+            detail.contains("E5401"),
+            "detail must carry the lint E-code: {detail}"
+        );
+        let fix = r.fix.expect("D09 fail must suggest a fix");
+        assert!(!fix.auto, "D09 fix is printed, never auto-executed");
+        assert_eq!(fix.command, "tyu platform lint broken");
+
+        // only the clean pack ⇒ pass.
+        fs::remove_dir_all(root.join("platforms").join("broken")).unwrap();
+        let r = check_d09(&root, None);
+        assert_eq!(r.status, Status::Pass, "lint-clean packs must pass");
+        assert!(r.detail.as_deref().unwrap_or("").contains("lint clean"));
+
+        // an empty root ⇒ vacuous pass (nothing in scope to lint).
+        let empty = base.join("empty-root");
+        fs::create_dir_all(&empty).unwrap();
+        assert_eq!(check_d09(&empty, None).status, Status::Pass);
+
+        // --platform scoping: a triple no pack declares ⇒ pass with a note.
+        let r = check_d09(&root, Some(&codegen_core::Target::ArmV7MUnknownNone));
+        assert_eq!(r.status, Status::Pass);
+        assert!(
+            r.detail
+                .as_deref()
+                .unwrap_or("")
+                .contains("no platform pack declares"),
+            "unmatched --platform must be reported, not crash"
+        );
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    // --- D10 proof tier (S8) -----------------------------------------------
+
+    fn lean_checkout(base: &Path) -> PathBuf {
+        let cwd = base.join("checkout");
+        fs::create_dir_all(cwd.join("verification").join("ports").join("lean")).unwrap();
+        fs::write(
+            cwd.join("verification")
+                .join("ports")
+                .join("lean")
+                .join("lean-toolchain"),
+            "leanprover/lean4:v4.27.0\n",
+        )
+        .unwrap();
+        cwd
+    }
+
+    #[test]
+    fn d10_proof_tier_all_states() {
+        let base = temp_dir("d10");
+
+        // pin file absent ⇒ fail, printed (non-auto) fix.
+        let bare = base.join("bare");
+        fs::create_dir_all(&bare).unwrap();
+        let r = check_d10(&bare);
+        assert_eq!(r.status, Status::Fail);
+        assert!(!r.fix.as_ref().unwrap().auto);
+
+        let cwd = lean_checkout(&base);
+
+        // elan absent ⇒ fail with the AUTO elan bootstrap fix (the one
+        // --fix action class).
+        let empty = base.join("empty");
+        fs::create_dir_all(&empty).unwrap();
+        let _g = with_path(&empty);
+        let r = check_d10(&cwd);
+        assert_eq!(r.status, Status::Fail);
+        let d10_fix = r.fix.expect("elan-absent must suggest the bootstrap");
+        assert!(
+            d10_fix.auto,
+            "elan bootstrap is the auto-executed fix class"
+        );
+        assert!(
+            d10_fix.command.contains("elan-init.sh"),
+            "must name the official installer"
+        );
+        drop(_g);
+
+        // elan present, lean missing ⇒ warn (never fail).
+        let b1 = base.join("bin-elan");
+        write_script(&b1, "elan", "#!/bin/sh\necho 'elan 5.0.0'\n");
+        let _g = with_path(&b1);
+        let r = check_d10(&cwd);
+        assert_eq!(
+            r.status,
+            Status::Warn,
+            "lean unresolved with elan present ⇒ warn"
+        );
+        assert!(!r.fix.as_ref().unwrap().auto);
+        drop(_g);
+
+        // elan + lean at the pin ⇒ pass.
+        let b2 = base.join("bin-ok");
+        write_script(&b2, "elan", "#!/bin/sh\necho 'elan 5.0.0'\n");
+        write_script(
+            &b2,
+            "lean",
+            "#!/bin/sh\necho 'Lean (version 4.27.0, commit abc)'\n",
+        );
+        let _g = with_path(&b2);
+        let r = check_d10(&cwd);
+        assert_eq!(r.status, Status::Pass, "lean at the pin must pass");
+        assert_eq!(r.version.as_deref(), Some("4.27.0"));
+        assert!(r.detail.as_deref().unwrap_or("").contains("matches"));
+        drop(_g);
+
+        // elan + lean at a DIFFERENT version ⇒ warn, never fail (the pin is
+        // elan's job to honor, doctor's job to report).
+        let b3 = base.join("bin-mismatch");
+        write_script(&b3, "elan", "#!/bin/sh\necho 'elan 5.0.0'\n");
+        write_script(
+            &b3,
+            "lean",
+            "#!/bin/sh\necho 'Lean (version 4.16.0, commit abc)'\n",
+        );
+        let _g = with_path(&b3);
+        let r = check_d10(&cwd);
+        assert_eq!(
+            r.status,
+            Status::Warn,
+            "version mismatch must warn, never fail"
+        );
+        assert_eq!(r.version.as_deref(), Some("4.16.0"));
+        assert!(r.detail.as_deref().unwrap_or("").contains("!="));
+        drop(_g);
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    // --- --fix (FR-16, S8) ---------------------------------------------------
+
+    #[test]
+    fn fix_dry_run_executes_only_elan_bootstrap() {
+        let base = temp_dir("fix");
+        let cwd = lean_checkout(&base);
+        let empty = base.join("empty");
+        fs::create_dir_all(&empty).unwrap();
+        let _g = with_path(&empty);
+
+        // The dry-run knob is process-global; set+restore under the ambient
+        // PATH lock so concurrent tests never observe either mutation.
+        let prev_dry = std::env::var_os("TYU_DOCTOR_FIX_DRY_RUN");
+        std::env::set_var("TYU_DOCTOR_FIX_DRY_RUN", "1");
+        let args = crate::args::DoctorArgs {
+            tier: crate::args::DoctorTier::Proof,
+            format: crate::args::DoctorFormat::Human,
+            platform: None,
+            json_out: None,
+            fix: true,
+        };
+        let (_report, fix) = run_at(
+            &cwd,
+            &base.join("noplats"),
+            &args,
+            &crate::project::ProjectManifest::default(),
+        );
+        let fix = fix.expect("--fix must return a fix report");
+        // EXECUTED carries the elan bootstrap, marked dry-run.
+        assert!(
+            fix.executed
+                .iter()
+                .any(|e| e.contains("D10") && e.contains("elan-init.sh")),
+            "elan bootstrap must be the auto-executed fix: {:?}",
+            fix.executed
+        );
+        assert!(
+            fix.executed.iter().any(|e| e.starts_with("[dry-run]")),
+            "TYU_DOCTOR_FIX_DRY_RUN=1 must never execute: {:?}",
+            fix.executed
+        );
+        // SUGGESTED never carries D10 (its fix is the auto class).
+        assert!(!fix.suggested.iter().any(|(id, _)| id == "D10"));
+        // STILL-FAILING reflects the post-fix reality (still no elan).
+        assert!(fix
+            .still_failing
+            .iter()
+            .any(|(id, st)| id == "D10" && st == "fail"));
+        if let Some(p) = prev_dry {
+            std::env::set_var("TYU_DOCTOR_FIX_DRY_RUN", p);
+        } else {
+            std::env::remove_var("TYU_DOCTOR_FIX_DRY_RUN");
         }
         drop(_g);
         fs::remove_dir_all(&base).unwrap();

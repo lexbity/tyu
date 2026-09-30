@@ -76,9 +76,16 @@ last act. Rerun anytime — it re-clones fresh and atomically reinstalls.)
 ## Health checks and the first build
 
 - `tyu doctor` is the health check (tier-scoped; `--tier=hosted|metal|proof|all`,
-  `--format=human|json`; checks D01–D08 + D11–D12; D09 platform-lint and D10
-  proof land with the toolchain-health follow-on slice). `tyu toolchain check`
-  is its per-target role-availability subset.
+  `--format=human|json`; the D01–D12 catalog: D01–D03/D11/D12 hosted, D04–D09
+  metal tools + platform-pack lint, D10 the Lean/elan proof tier). `--fix`
+  auto-executes **only** the user-local elan bootstrap (when the proof tier is
+  requested and elan is absent); every other remedy is printed as the
+  platform-appropriate command (`sudo apt-get install …`, etc.) and is never
+  run for you (a tool that shells out to sudo is not a tool to trust). Exit
+  codes (FR-15): `0` all pass · `1` warnings only · `2` any fail · `3`
+  internal error — scriptable, and echoed by the `--format=json` stream.
+  `tyu toolchain check` is its per-target role-availability subset (an alias
+  retained byte-for-byte, FR-22).
 - The smoke contract is the IMAGE exit code (the driver's `tyu run` marker
   protocol is not the smoke signal):
   - `ci/smoke/hello.mod` — green; the built image exits `0` (the quickstart

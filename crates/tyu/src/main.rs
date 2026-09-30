@@ -87,9 +87,15 @@ fn main() {
             }
         }
         args::Command::Doctor(doctor_args) => {
-            // S7 dispatch: run the tier-scoped checks, render (human | JSON),
-            // write --json-out when requested, exit per FR-15.
-            let report = tyu::doctor::run(&doctor_args, &project_manifest);
+            // S7/S8 dispatch: run the tier-scoped checks, apply --fix when
+            // requested, render (human | JSON), write --json-out, exit per
+            // FR-15.
+            let (report, fix) = tyu::doctor::run(&doctor_args, &project_manifest);
+            // The --fix report (EXECUTED/SUGGESTED/STILL-FAILING, FR-16) goes
+            // to stderr so the JSON stdout stream stays machine-clean.
+            if let Some(fix_report) = &fix {
+                eprint!("{}", tyu::doctor::render_fix(fix_report));
+            }
             // --json-out ALWAYS writes the machine surface, regardless of
             // --format (a silent no-op under the human format was a trap for
             // doctor's primary consumers — agents and scripts). stdout still
