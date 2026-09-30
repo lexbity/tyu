@@ -57,6 +57,8 @@ jobs:
             gcc-riscv64-unknown-elf \
             qemu-system-misc \
             binutils
+      - name: Provision Rust bare-metal targets
+        run: rustup target add x86_64-unknown-none thumbv7m-none-eabi
       - name: Build (release)
         run: cargo build --release -p langc -p tyu -p lmod-pack -p lmod-encrypt -p lmod-sign
       - name: Tooling tests (all)
@@ -80,6 +82,8 @@ jobs:
             qemu-system-arm \
             gcc-riscv64-unknown-elf \
             qemu-system-misc
+      - name: Provision Rust bare-metal targets
+        run: rustup target add x86_64-unknown-none thumbv7m-none-eabi
       - name: Build (release)
         run: cargo build --release -p langc -p tyu -p lmod-pack -p lmod-encrypt -p lmod-sign
       - name: Loader tests (all)
@@ -102,6 +106,8 @@ jobs:
             fasm \
             qemu-system-x86 \
             binutils
+      - name: Provision Rust bare-metal targets
+        run: rustup target add x86_64-unknown-none thumbv7m-none-eabi
       - name: Build (release)
         run: cargo build --release -p langc -p tyu
       - name: Diagnostic & effect corpus
@@ -160,6 +166,8 @@ jobs:
             gcc-arm-none-eabi \
             qemu-system-misc \
             gcc-riscv64-unknown-elf
+      - name: Provision Rust bare-metal targets
+        run: rustup target add x86_64-unknown-none thumbv7m-none-eabi
       - name: Build (release)
         run: cargo build --release -p rsp-client
       - name: ARM RSP read register and memory
@@ -186,6 +194,8 @@ jobs:
             fasm \
             qemu-system-x86 \
             binutils
+      - name: Provision Rust bare-metal targets
+        run: rustup target add x86_64-unknown-none thumbv7m-none-eabi
       - name: Build (release)
         run: cargo build --release -p langc -p tyu
       - name: ARM concurrency test
@@ -216,6 +226,8 @@ jobs:
             gcc-riscv64-unknown-elf \
             qemu-system-misc \
             binutils
+      - name: Provision Rust bare-metal targets
+        run: rustup target add x86_64-unknown-none thumbv7m-none-eabi
       - name: Build (release)
         run: cargo build --release -p langc -p tyu -p lmod-pack -p lmod-encrypt -p lmod-sign
       - name: E2E tests (all)
@@ -244,6 +256,8 @@ jobs:
             fasm \
             qemu-system-x86 \
             binutils
+      - name: Provision Rust bare-metal targets
+        run: rustup target add x86_64-unknown-none thumbv7m-none-eabi
       - name: Build (debug — the acceptance e2e gates resolve the in-tree bins)
         run: cargo build -p langc -p tyu
       - name: Acceptance matrix (P16.3, §11.1–§11.10)
