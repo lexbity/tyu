@@ -1,131 +1,84 @@
-# Tyu programming language
+# Tyu Programming Language
 
 [![CI](https://github.com/lexbity/tyu/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/lexbity/tyu/actions/workflows/ci.yml?query=branch%3Amain)
 [![Integration](https://github.com/lexbity/tyu/actions/workflows/integration.yml/badge.svg?branch=main&event=push)](https://github.com/lexbity/tyu/actions/workflows/integration.yml?query=branch%3Amain)
 [![Install verify](https://github.com/lexbity/tyu/actions/workflows/install-verify.yml/badge.svg?branch=main)](https://github.com/lexbity/tyu/actions/workflows/install-verify.yml?query=branch%3Amain)
 [![Release](https://github.com/lexbity/tyu/actions/workflows/release.yml/badge.svg?event=push)](https://github.com/lexbity/tyu/actions/workflows/release.yml?query=branch%3Amain)
 
-Tyu is a concatenative, stack-based systems language for embedded and simulation targets. This repository contains the compiler, loader, module tooling, runtime assembly, sysroot sources, and test suites.
+A small, statically typed, **concatenative**,
+rigor- and proof-focused systems
+language. 
 
-## Core idea
+## Quick Install
 
-A small **concatenative, stack-based** systems language for embedded + simulation:
-- no GC
-- explicit allocation via **regions**
-- **fixed arrays** are core (`T'N`)
-- higher-level collections/algorithms live in the **stdlib**
-- Ada/SPARK-ish safety tools: **subtypes** + **contracts**
-- strong MMIO/representation support
-
-## Repository map
-
-- `crates/`: compiler, loader, codegen, tooling (incl. `verifier`, `tyu`,
-  `langc`, `loader-core`, `lmod*`), and tests (incl. `execution-tests`,
-  `tooling-tests`)
-- `verification/ports/lean/`: the reference proof port (Lean 4) — generated
-  data layer, semantics + registry theorems, statement renderer, harvest,
-  automation library, conformance/rederive exes
-- `runtime/`: per-target assembly runtime and linker scripts
-- `sysroot/`: Tyu standard library sources (incl. the hosted bundle's model
-  identity carrier)
-- `platforms/<triple>/`: platform packs — `platform.toml` (schema 3, incl.
-  `[model]` semantics), model artifacts, `evidence/` vector corpora
-- `test-goldens/`: checked-in expected artifacts (obligations, verdicts,
-  statements, stackmeta, assumptions, modinfo, reports)
-- `fuzz/`: cargo-fuzz decode targets (`obl_v2_decode`, `verdicts_v2_decode`,
-  `cert_index_decode`, …) with seeded corpora
-- `ci/guards.sh`, `ci/port.sh`, `ci/differential.sh`, `ci/acceptance.sh`:
-  repository gates, the port gate, the ≥10^5 differential, the §11 acceptance
-  matrix
-- `ci/verify-corpus/` + `ci/verify-allowlist.txt`: the verification corpus and
-  its open-obligation allowlist (guards.sh G20 — every reported open is
-  justified, and every justification still occurs)
-- `CONTRIBUTING.md`: contribution and test policy
-- `docs/book/`: the canonical book (14 chapters + appendices, 82 verified
-  lab fixtures) — tracked and CI-exercised
-- `devdocs/`: design plans (incl. the verification plan family), the
-  technical manual, and the research docs (gitignored scratchpad)
-
-## Design documents (verification subsystem)
-
-The static-verification plan family lives in `devdocs/plans/`:
-
-- `devdocs/plans/developer-proof-pipeline.md` — PLAN-VERIFY-3 (current): the
-  developer-proof pipeline — canonical statements (`tyu.stmt/1.0`), dual
-  proof surfaces, model semantics, the harvest path, trust classes, the
-  certification package. Phase slices P1–P15 implemented; P16 (anchor,
-  blame surface, acceptances) closes it.
-- `devdocs/plans/done/static-verification.md` — PLAN-VERIFY-1 (implemented):
-  obligations, verdicts, policy, slices P1–P8.
-- `devdocs/tyu-research/formal-verification.md` — PLAN-VERIFY-2 (partially
-  superseded per PLAN-VERIFY-3 §Q16): formal semantics, certifier-neutral
-  ports, the certification package's origin.
-- `devdocs/plans/design-doc/ir-op-semantics.md` — the normative IR op
-  semantics + VC projections (the *only* normative meaning of IR ops for
-  proof purposes).
-- `devdocs/plans/design-doc/formal-semantics-core.md` — the semantics core +
-  statement registry (owner of `tyu.stmt`).
-- `devdocs/plans/design-doc/verification-trust.md` — trust classes, certifier
-  registry, manifest + package records.
-- `devdocs/plans/design-doc/verification-obligations.md` — the `.obl.json` /
-  verdicts / report field semantics.
-- `devdocs/plans/design-doc/` also holds the pre-existing companions
-  (abi-contract, effect-context-model, stack-bound-analysis,
-  module-format-and-loading, runtime-diagnostic-protocol-v1).
-
-## Build framework
-
-- cross-compiler targeting platforms
-- hosted management tools
-
-## Prerequisites
-
-The toolchain is used in three tiers (`hosted` / `metal` / `proof`); the
-exact per-tier commands are in [`SETUP.md`](SETUP.md) and are the same
-commands CI executes. Essentials:
-
-- Rust at the **dated nightly pin** in `rust-toolchain.toml` (rustup
-  provisions it; `rust-src` is included for the RISC-V loader build)
-- `fasm`, `binutils` (provides `ld`, `nm`)
-- `qemu-system-x`, `qemu-system-arm`, `qemu-system-misc` (the
-  `qemu-system-*` binaries)
-- Optional cross toolchains: `gcc-arm-none-eabi`, `gcc-riscv64-unknown-elf`
-- Optional proof tier (the `ci/port.sh` / `ci/differential.sh` gates):
-  elan + Lean at the pin in `verification/ports/lean/lean-toolchain`
-- `TYU_BIN_DIR` for execution-test runs that need built host binaries
-
-## Quick start
-
-The blessed path is the **source installer** (no prebuilt binaries). Full,
-CI-executed setup steps are in [`SETUP.md`](SETUP.md):
+Install from source recomended full details in [`SETUP.md`](SETUP.md):
 
 ```bash
 git clone https://github.com/lexbity/tyu
 cd tyu
 bash ci/install.sh                 # newest v* tag (else main); installs into ~/.tyu
 export PATH="$HOME/.tyu/bin:$PATH"
-# first build + run = the committed smoke fixture (the exact contract CI proves)
 tyu build ci/smoke/hello.mod --out-dir=/tmp/smoke-out
-/tmp/smoke-out/image.elf; echo $?         # must be 0 (green)
+/tmp/smoke-out/image.elf; echo $?         # 0 = green: your first build + run
 ```
 
-From a working checkout, the same commands CI runs before a merge:
+Prerequisites come in three tiers — a higher tier includes the lower one:
 
-```bash
-cargo build --release -p langc -p tyu -p lmod-pack -p lmod-encrypt -p lmod-sign
-cargo test --workspace --release
-bash ci-lint.sh
-bash ci/guards.sh
-```
+| Tier | Unlocks | Additional tools |
+|---|---|---|
+| `hosted` | build + run hosted (x86_64-linux) programs | git, a C linker, rustup (auto-installed) |
+| `metal` | bare-metal codegen + QEMU runs (x86_64 / ARM / RISC-V) | fasm, binutils, `qemu-system-*`, optional cross-GCCs |
+| `proof` | the Lean verification gates (`ci/port.sh`, `ci/differential.sh`) | elan + the Lean pin in `verification/ports/lean/lean-toolchain` |
 
-## Status
+## Toolchain Features
 
-The badge row above shows the CI status of `main` for every workflow —
-`CI` (per-commit matrix), `Integration` (heavy suites + the Lean port gate),
-`Install verify` (the quickstart proven in a pristine container), and
-`Release` (the signed-release gate on `v*` tags). Per-branch runs:
-[Actions list](https://github.com/lexbity/tyu/actions) — every branch push
-runs the full `CI` workflow (evidence surface, PLAN-RELEASE-1 Q1).
+- **One-command cross-target builds** — `tyu build` emits hosted or bare-metal images (x86_64 / ARM / RISC-V). New platform targets can be defined with platform bundles
+- **Module pipeline** — pack, **encrypt**, and **sign** modules
+- **Emulation before deployment: QEMU test flow** — the execution-test suites build real images and run
+  them under QEMU
+- **GDB debugging over RSP** — a hermetic GDB remote-serial-protocol client
+  (`rsp-client`) can drive and debug targets, including under QEMU.
+- **Optional formal verification pipeline** — the compiler emits proof obligations and canonical statements (certifier neutral). 
+  **Lean 4** is default port (`verification/ports/lean/`) — discharges them or
+  reports them open. 
 
-Releases: [`RELEASES.md`](RELEASES.md) (policy) ·
-[GitHub releases](https://github.com/lexbity/tyu/releases)
+
+## Language features
+
+Checkout our  [book](docs/book/README.md) for more details and examples.
+
+- **Concatenative, stack-based syntax** — the stack's shape is checked at
+  compile time ([ch06](docs/book/ch06-the-stack-has-a-shape.md))
+- **Static types with subtypes and contracts** — Ada/SPARK-flavored safety
+  ([ch03](docs/book/ch03-types.md), [ch04](docs/book/ch04-contracts.md))
+- **Effects and capabilities** — hardware access is a tracked effect
+  ([ch05](docs/book/ch05-effects-and-capabilities.md))
+- **Regions, no GC** — explicit, region-scoped allocation
+  ([ch07](docs/book/ch07-places-borrowing-ownership.md))
+- **Fixed arrays in the core** (`T'N`) — collections and algorithms live in
+  the stdlib, which is itself Tyu source
+- **MMIO register maps and representation control** — named devices from a
+  platform descriptor ([ch08](docs/book/ch08-touching-hardware.md))
+- **Tasks and channels** — opt-in concurrency with the cross-context rule
+  ([ch12](docs/book/ch12-tasks-and-channels.md))
+- **Provable programs** — the IR op semantics are normative and
+  machine-checkable; factoring style becomes proof
+  ([ch14](docs/book/ch14-proving-the-program.md),
+  [ch15](docs/book/ch15-the-machine-as-witness.md))
+
+## Documents
+
+- **The book** — *Assembling in Tyu*:  every lab
+  executed against the toolchain
+  ([docs/book/README.md](docs/book/README.md)); language reference in
+  [Appendix A](docs/book/appendix-a-language-reference.md); toolchain setup in
+  [Appendix C](docs/book/appendix-c-toolchain-setup.md)
+- **Setup** — [`SETUP.md`](SETUP.md) (the CI-executed setup reference)
+- **Developer documentation** —
+  [docs/DEVELOPER_DOCUMENTATION.md](docs/DEVELOPER_DOCUMENTATION.md) ·
+  [docs/GLOSSARY.md](docs/GLOSSARY.md)
+- **Verification design** — the Lean proof port lives in
+  [`verification/ports/lean/`](verification/ports/lean/README.md)
+- **Contributing** — [`CONTRIBUTING.md`](CONTRIBUTING.md)
+
+- [LICENSE](LICENSE) · [AUTHORS.md](AUTHORS.md)

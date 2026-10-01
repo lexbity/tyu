@@ -25,30 +25,13 @@ This repository is a documentation-heavy systems workspace. The main enforcement
 - `ci/guards.sh` fails if a crate with `#[test]` reports zero runnable tests.
 - `ci/guards.sh` also fails if `test=false` or `harness=false` hides an in-source `#[test]`.
 
-## Releases and CI (PLAN-RELEASE-1)
 
-- Release policy is `RELEASES.md`: `vMAJOR.MINOR.0` tags, patch fixes are
-  identified by commit SHA (never tagged), and the statement band rule
-  (PLAN-VERIFY-3 §Q4 item 3) is what makes minor releases stable.
-- Releases are cut with `ci/cut-release.sh vX.Y.0` — never by hand. The
-  script refuses a cut on a dirty tree, a missing changelog section, an
-  existing tag, or a previous gate that is red.
-- Pushing a `v*` tag runs the release gate (`.github/workflows/release.yml`):
-  the §Q7 gates in order (verify → guards → arch matrix → port → differential
-  → acceptance → artifacts), fail-fast and DRAFT-only — CI never publishes
-  and never holds the signing key (Q6). `SECURITY.md` documents signature
-  verification and key-loss recovery.
-- A red CI run is a diagnostic, not a reason to remove CI: triage it
-  fix-forward with `gh run view <run-id> --log-failed`, classify the
-  failure (environment vs code vs workflow), fix, and push. Disabling or
-  ignoring a failing workflow or job WITHOUT an inline justification
-  comment is a review-blocking change (Q1).
-- The toolchain is a dated nightly pin (`rust-toolchain.toml`); bumping the
-  date is a normal maintenance commit that must be noted in the next
-  release's notes.
+## Reporting vulnerabilities
 
-## Documentation policy
+- **Preferred**: GitHub security advisory
+  <https://github.com/lexbity/tyu/security/advisories/new> (private disclosure,
+  tracked, credit-granting).
 
-- `DOCS.md` is the tracked documentation index.
-- `devdocs/` is intentionally ignored in git and is not part of the versioned repository.
-- Do not cite ignored local notes as repository authority in PRs or review comments.
+Please include the tyu version, the platform/target, and a minimal reproducer.
+There is no bug bounty; my expectations are: a best-effort response window of a
+few days, a fix on `main`, and an advisory/issue note.
