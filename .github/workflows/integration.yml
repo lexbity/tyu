@@ -153,7 +153,10 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq fasm qemu-system-x86 binutils
+          # binutils-arm-none-eabi: langc --emit=obj for armv7m (the P13
+          # refined_proof_e2e fixture) shells out to arm-none-eabi-as (E1016
+          # without it — a missing assembler, not a codegen/binding failure).
+          sudo apt-get install -y -qq fasm qemu-system-x86 binutils binutils-arm-none-eabi
       - name: Install the pinned Lean toolchain (elan)
         run: |
           bash ci/retry.sh -- curl -fsSL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o /tmp/elan-init.sh
