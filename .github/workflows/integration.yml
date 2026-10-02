@@ -169,7 +169,10 @@ jobs:
       - name: P15 service-relativism gate (FORCED — a Lean-less skip is a failure here)
         run: |
           cargo build -q -p langc -p tyu
-          TYU_SERVICE_E2E=1 cargo test -p tooling-tests --test service_relativism
+          # elan on PATH: the test is FORCED (TYU_SERVICE_E2E=1), so the
+          # lean/lake shims must resolve here exactly as they do inside
+          # port.sh (the default toolchain was set by the port gate above).
+          PATH="$HOME/.elan/bin:$PATH" TYU_SERVICE_E2E=1 cargo test -p tooling-tests --test service_relativism
       - name: P15 hosted service-conformance leg (executes the svcvec wire fixtures)
         run: cargo test -p execution-tests --test hosted
 

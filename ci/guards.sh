@@ -39,8 +39,9 @@
 #       hand-declared `data_stack_slots` key (amended §6.4, E6403).
 #   G22 Report honesty block agrees with the object on the corpus (FR-16,
 #       guard form).
-#   G23 NFR-10 doc gates: README doc map, ch03 both-policies example, ch04
-#       contract obligations/elision, error-registry E6410/E6413.
+#   (G23 retired — the NFR-10 doc gates enforced README/book prose grep
+#       matches; the doc map follows the tracked tree, the book has its own
+#       CI-exercised lab gates. Do not reuse the number.)
 #   G52 PLAN-RELEASE-1 S1: `.github` must stay tracked — the CI evidence
 #       surface is repository truth, never an ignore line.
 #   G53 PLAN-RELEASE-1 S2: every workflow job declares `timeout-minutes`.
@@ -868,36 +869,6 @@ else
     fi
 fi
 failures=$((failures + g22_fail))
-
-# --- G23: NFR-10 doc gates (P8) ---
-# The verification docs are registered and teach the boundary as the norm:
-# README maps the design-doc suite, the book teaches the both-policies
-# example (ch03) and contract obligations/elision (ch04), and the error
-# registry names the artifact band codes.
-g23_fail=0
-if ! grep -q "ir-op-semantics" README.md \
-   || ! grep -q "verification-obligations" README.md \
-   || ! grep -q "static-verification" README.md; then
-    msg $RED "  G23 FAIL: README doc map must register the verification design docs"
-    g23_fail=1
-fi
-if ! grep -q 'E6410' docs/book/appendix-b-error-registry.md \
-   || ! grep -q 'E6413' docs/book/appendix-b-error-registry.md; then
-    msg $RED "  G23 FAIL: error-registry appendix must carry E6410/E6413"
-    g23_fail=1
-fi
-if ! grep -q "Compile-time discharge" docs/book/ch03-types.md \
-   || ! grep -q "no-open" docs/book/ch03-types.md; then
-    msg $RED "  G23 FAIL: ch03 must teach the both-policies compile-time-discharge example"
-    g23_fail=1
-fi
-if ! grep -q "Contract obligations and elision" docs/book/ch04-contracts.md \
-   || ! grep -q "module-loading" docs/book/ch04-contracts.md; then
-    msg $RED "  G23 FAIL: ch04 must teach contract obligations and dynamic-export retention"
-    g23_fail=1
-fi
-[ "$g23_fail" -eq 0 ] && msg $GREEN "  G23: NFR-10 doc gates (doc map, both-policies example, errors, contracts)"
-failures=$((failures + g23_fail))
 
 # --- G24: PLAN-VERIFY-3 P1.1 — canonical-statement boundary gates ---
 # The statement encoder is the hash the whole pipeline binds against and MUST
