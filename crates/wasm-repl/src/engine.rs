@@ -23,9 +23,11 @@ use ir::{BlockId, OpKind, Span, TrapCode};
 
 use crate::builtins::{Builtin, BuiltinSignal};
 use crate::compile::{Compiled, DictTarget};
+use crate::diag::code;
 use crate::fuel::{Fuel, CALL_DEPTH_CAP, STACK_CAP};
 use crate::heap::RegionHeap;
 use crate::journal::{Effect, Journal};
+use crate::mmio::{apply_write_kind, extract_field, insert_field, width_mask};
 use crate::periph::Peripheral;
 use crate::value::{Slot, Value};
 
@@ -65,6 +67,16 @@ pub enum Outcome {
     Exited { code: i64, out: Vec<u8> },
     /// Fuel exhausted (E9150 surface): deterministic, resumable.
     Fuel { out: Vec<u8> },
+    /// A device-level failure surfaced as a REPL-layer diagnostic (P4): the
+    /// peripheral reported an unbound aperture (E9152), carrying the aperture
+    /// id when known. Distinct from a trap (trap numerics are frozen, I-3).
+    /// Output already emitted stays emitted.
+    Device {
+        code: u32,
+        span: Span,
+        aperture: Option<u16>,
+        out: Vec<u8>,
+    },
 }
 
 /// The execution state (§5).
@@ -233,8 +245,8 @@ impl<'c> Engine<'c> {
     }
 
     /// Run one word (by dictionary name) to completion. `periph` is the
-    /// device boundary (I-1); P2's repertoire never reaches it (MMIO modules
-    /// are compile-rejected), but the signature is the contract.
+    /// device boundary (I-1); the MMIO arms reach it when the session runs a
+    /// module compiled with a platform descriptor (P4).
     pub fn run(&self, entry: &[u8], state: &mut ExecState, periph: &mut dyn Peripheral) -> Outcome {
         let Some(target) = self.compiled.dict_lookup(entry) else {
             return Outcome::Trap {
@@ -307,6 +319,14 @@ impl<'c> Engine<'c> {
                         out: core::mem::take(&mut state.out),
                     };
                 }
+                StepResult::Device(code, span, aperture) => {
+                    return Outcome::Device {
+                        code,
+                        span,
+                        aperture,
+                        out: core::mem::take(&mut state.out),
+                    };
+                }
             }
         }
     }
@@ -350,9 +370,27 @@ impl<'c> Engine<'c> {
                     state.stack.push(Slot::ptr(ir::TY_PTR_MUT, addr));
                     StepResult::Continue(next_op)
                 }
-                ir::AddrOfBase::Mmio { .. } => StepResult::Fault, // P4
+                ir::AddrOfBase::Mmio { aperture, offset } => {
+                    // A register address: the aperture's bound base plus the
+                    // register offset (P4). Resolved through the compiled
+                    // aperture table (from the platform descriptor).
+                    let addr = self.mmio_base(u64::from(aperture), u64::from(offset));
+                    state.stack.push(Slot::ptr(ir::TY_PTR_MUT, addr));
+                    StepResult::Continue(next_op)
+                }
             },
-            OpKind::MmioPlace { .. } => StepResult::Fault, // P4 (compile-rejected)
+            OpKind::MmioPlace {
+                place: _,
+                aperture,
+                offset,
+            } => {
+                // A register-map instance place (a *field* of a register-map
+                // const) addresses the aperture directly — no `&` needed. The
+                // pushed address is exactly the AddrOf{Mmio} address above.
+                let addr = self.mmio_base(u64::from(aperture), u64::from(offset));
+                state.stack.push(Slot::ptr(ir::TY_PTR_MUT, addr));
+                StepResult::Continue(next_op)
+            }
             OpKind::ScopedEnter { ty, len } => match self.step_scoped_enter(word, ty, len, state) {
                 Ok(()) => StepResult::Continue(next_op),
                 Err(()) => StepResult::Fault,
@@ -554,12 +592,56 @@ impl<'c> Engine<'c> {
                 Ok(()) => StepResult::Continue(next_op),
                 Err(()) => StepResult::Trap(TrapCode::AssertFail, op.span),
             },
-            OpKind::MmioVolLoad { .. }
-            | OpKind::MmioVolStore { .. }
-            | OpKind::MmioVolLoadField { .. }
-            | OpKind::MmioVolStoreField { .. } => {
-                let _ = periph;
-                StepResult::Fault
+            OpKind::MmioVolLoad {
+                place: _,
+                ty,
+                read_kind,
+                atomic_max: _,
+                barrier,
+            } => {
+                let _ = (read_kind, barrier); // single-threaded: Effectful/Barrier
+                match self.step_mmio_load(word, ty, op.span, state, periph) {
+                    Ok(()) => StepResult::Continue(next_op),
+                    Err(e) => e,
+                }
+            }
+            OpKind::MmioVolStore {
+                place: _,
+                ty,
+                write_kind,
+                read_kind,
+                atomic_max: _,
+                barrier,
+            } => {
+                let _ = (read_kind, barrier); // single-threaded: Effectful/Barrier
+                match self.step_mmio_store(word, ty, write_kind, op.span, state, periph) {
+                    Ok(()) => StepResult::Continue(next_op),
+                    Err(e) => e,
+                }
+            }
+            OpKind::MmioVolLoadField {
+                place: _,
+                read_kind,
+                barrier,
+                ..
+            } => {
+                let _ = (read_kind, barrier);
+                match self.step_mmio_load_field(word, op, state, periph) {
+                    Ok(()) => StepResult::Continue(next_op),
+                    Err(e) => e,
+                }
+            }
+            OpKind::MmioVolStoreField {
+                place: _,
+                read_kind,
+                barrier,
+                ..
+            } => {
+                let _ = (read_kind, barrier);
+                match self.step_mmio_store_field(word, op, state, periph) {
+                    Ok(()) => StepResult::Continue(next_op),
+                    Err(e) => e,
+                }
             }
             OpKind::TrapIfFalse { code } => {
                 let v = state.stack.pop();
@@ -693,6 +775,200 @@ impl<'c> Engine<'c> {
         Ok(())
     }
 
+    // -- P4 MMIO -------------------------------------------------------------
+
+    /// The address an `AddrOf{Mmio}`/`MmioPlace` pushes: the aperture's bound
+    /// base plus the register offset (through the compiled aperture table).
+    fn mmio_base(&self, aperture: u64, offset: u64) -> u64 {
+        self.compiled
+            .apertures
+            .iter()
+            .find(|a| u64::from(a.id) == aperture)
+            .map(|a| a.base.wrapping_add(offset))
+            .unwrap_or(offset)
+    }
+
+    /// Resolve a pushed MMIO address to `(aperture, register_offset)` via the
+    /// aperture table. `None` = the address is not inside any bound aperture
+    /// (E9152 — no device/aperture for it).
+    fn mmio_target(&self, addr: u64) -> Option<(u16, u32)> {
+        self.compiled
+            .apertures
+            .iter()
+            .find(|a| {
+                let end = a.base.wrapping_add(u64::from(a.size));
+                addr >= a.base && addr < end
+            })
+            .map(|a| (a.id, (addr - a.base) as u32))
+    }
+
+    /// The register-cell width of a typed value (the integer storage width).
+    fn mmio_width(&self, word: &ir::Word, ty: ir::TypeId) -> Option<u8> {
+        let (bits, _) = ir::storage_bits_signed(word, ty, self.spec.word_bits as u16)?;
+        Some(bits_to_width(bits))
+    }
+
+    /// E9152 for an unbound aperture / outside-aperture address (P4), carrying
+    /// the aperture id when known.
+    fn device_err(span: Span, aperture: Option<u16>) -> StepResult {
+        StepResult::Device(code::E9152_PERIPH_UNBOUND, span, aperture)
+    }
+
+    /// `MmioVolLoad`: pop the register address, read the device, push the
+    /// value (width-masked by the device).
+    fn step_mmio_load(
+        &self,
+        word: &ir::Word,
+        ty: ir::TypeId,
+        span: Span,
+        state: &mut ExecState,
+        periph: &mut dyn Peripheral,
+    ) -> Result<(), StepResult> {
+        let width = self.mmio_width(word, ty).ok_or(StepResult::Fault)?;
+        let addr = pop_ptr(state).map_err(|t| StepResult::Trap(t, span))?;
+        let (ap, off) = self
+            .mmio_target(addr)
+            .ok_or_else(|| Self::device_err(span, None))?;
+        let v = periph
+            .read(ap, off, width)
+            .map_err(|_| Self::device_err(span, Some(ap)))?;
+        state.stack.push(Slot::int(ty, v as i64));
+        state.journal.push(Effect::Periph {
+            aperture: ap,
+            off,
+            width,
+            val: v,
+            is_write: false,
+        });
+        Ok(())
+    }
+
+    /// `MmioVolStore`: `WriteKind` semantics — a `Plain` store writes the
+    /// width-masked value; `W1c`/`W1s`/`Xor` read the register (RMW), apply
+    /// the bit math, and write the result.
+    fn step_mmio_store(
+        &self,
+        word: &ir::Word,
+        ty: ir::TypeId,
+        write_kind: ir::WriteKind,
+        span: Span,
+        state: &mut ExecState,
+        periph: &mut dyn Peripheral,
+    ) -> Result<(), StepResult> {
+        let width = self.mmio_width(word, ty).ok_or(StepResult::Fault)?;
+        let v = pop_int(state).map_err(|t| StepResult::Trap(t, span))?;
+        let addr = pop_ptr(state).map_err(|t| StepResult::Trap(t, span))?;
+        let (ap, off) = self
+            .mmio_target(addr)
+            .ok_or_else(|| Self::device_err(span, None))?;
+        let out = if write_kind == ir::WriteKind::Plain {
+            v as u64 & width_mask(width)
+        } else {
+            let cur = periph
+                .read(ap, off, width)
+                .map_err(|_| Self::device_err(span, Some(ap)))?;
+            apply_write_kind(cur, v as u64, width, write_kind)
+        };
+        periph
+            .write(ap, off, width, out)
+            .map_err(|_| Self::device_err(span, Some(ap)))?;
+        state.journal.push(Effect::Periph {
+            aperture: ap,
+            off,
+            width,
+            val: out,
+            is_write: true,
+        });
+        Ok(())
+    }
+
+    /// `MmioVolLoadField`: read the register, mask/shift out the field.
+    fn step_mmio_load_field(
+        &self,
+        word: &ir::Word,
+        op: &ir::Op,
+        state: &mut ExecState,
+        periph: &mut dyn Peripheral,
+    ) -> Result<(), StepResult> {
+        let OpKind::MmioVolLoadField {
+            reg_ty,
+            field_ty,
+            mask,
+            shift,
+            ..
+        } = op.kind
+        else {
+            return Err(StepResult::Fault);
+        };
+        let span = op.span;
+        let width = self.mmio_width(word, reg_ty).ok_or(StepResult::Fault)?;
+        let addr = pop_ptr(state).map_err(|t| StepResult::Trap(t, span))?;
+        let (ap, off) = self
+            .mmio_target(addr)
+            .ok_or_else(|| Self::device_err(span, None))?;
+        let reg = periph
+            .read(ap, off, width)
+            .map_err(|_| Self::device_err(span, Some(ap)))?;
+        let field = extract_field(reg, mask, shift);
+        state.stack.push(Slot::int(field_ty, field as i64));
+        state.journal.push(Effect::Periph {
+            aperture: ap,
+            off,
+            width,
+            val: reg,
+            is_write: false,
+        });
+        Ok(())
+    }
+
+    /// `MmioVolStoreField`: RMW the field into the register, then apply the
+    /// `WriteKind` to the register write (Plain = the field RMW result).
+    fn step_mmio_store_field(
+        &self,
+        word: &ir::Word,
+        op: &ir::Op,
+        state: &mut ExecState,
+        periph: &mut dyn Peripheral,
+    ) -> Result<(), StepResult> {
+        let OpKind::MmioVolStoreField {
+            reg_ty,
+            mask,
+            shift,
+            write_kind,
+            ..
+        } = op.kind
+        else {
+            return Err(StepResult::Fault);
+        };
+        let span = op.span;
+        let width = self.mmio_width(word, reg_ty).ok_or(StepResult::Fault)?;
+        let field = pop_int(state).map_err(|t| StepResult::Trap(t, span))?;
+        let addr = pop_ptr(state).map_err(|t| StepResult::Trap(t, span))?;
+        let (ap, off) = self
+            .mmio_target(addr)
+            .ok_or_else(|| Self::device_err(span, None))?;
+        let cur = periph
+            .read(ap, off, width)
+            .map_err(|_| Self::device_err(span, Some(ap)))?;
+        let reg = insert_field(cur, mask, shift, field as u64);
+        let out = if write_kind == ir::WriteKind::Plain {
+            reg
+        } else {
+            apply_write_kind(cur, reg, width, write_kind)
+        };
+        periph
+            .write(ap, off, width, out)
+            .map_err(|_| Self::device_err(span, Some(ap)))?;
+        state.journal.push(Effect::Periph {
+            aperture: ap,
+            off,
+            width,
+            val: out,
+            is_write: true,
+        });
+        Ok(())
+    }
+
     fn call_builtin(&self, b: Builtin, state: &mut ExecState) -> Result<(), BuiltinSignal> {
         b.execute(state)
     }
@@ -738,6 +1014,9 @@ enum StepResult {
     Done,
     Trap(TrapCode, Span),
     Exit(i64),
+    /// A REPL-layer device diagnostic (E9152) — the peripheral rejected the
+    /// access (unbound aperture), with the aperture id when known.
+    Device(u32, Span, Option<u16>),
     Fault,
 }
 

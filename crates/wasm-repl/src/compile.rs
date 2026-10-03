@@ -10,6 +10,7 @@
 //! compile diagnostics here — never mis-execution (FR-3).
 
 use alloc::vec::Vec;
+use codegen_core::compiled_desc::CompiledDescriptor;
 use frontend::parse::{DeclKind, ModuleAst, Parser};
 use frontend::span::Span;
 use ir::{OpKind, StackBound};
@@ -18,6 +19,7 @@ use semantics::types::{TypeAtom, WordEntry};
 
 use crate::builtins::Builtin;
 use crate::diag::{code, Diag};
+use crate::mmio::{self, ApertureEntry};
 
 /// The §Q12 source seam: read a module file by its canonical path
 /// (e.g. `platform/testio.def`). Host/CI implementations back this with a
@@ -54,6 +56,10 @@ pub struct Compiled {
     pub spec: verifier::target::TargetSpec,
     /// The session source (const strings are sliced from it at build/load).
     pub src: Vec<u8>,
+    /// The aperture table resolved from the platform descriptor (P4): the
+    /// session's MMIO addresses resolve against it (empty when the session
+    /// has no descriptor — MMIO modules are then compile-rejected, E3640).
+    pub apertures: Vec<ApertureEntry>,
     dict: Vec<(ir::Atom, DictTarget)>,
     subtypes: Vec<SubtypeRange>,
 }
@@ -72,19 +78,26 @@ impl Compiled {
 }
 
 /// Compile a session source buffer. `search_dirs` are the sysroot/include
-/// roots the imports resolve through (first hit wins, ordered).
+/// roots the imports resolve through (first hit wins, ordered). `descriptor`
+/// is the compiled platform descriptor (P4): when present, MMIO modules
+/// compile and the aperture table is resolved from it; when absent, an MMIO
+/// module is rejected with the same code as `langc` without `--platform`
+/// (E3640).
 pub fn compile(
     source: &[u8],
     search_dirs: &[&dyn SourceTable],
     spec: verifier::target::TargetSpec,
+    descriptor: Option<&CompiledDescriptor>,
 ) -> Result<Compiled, Diag> {
     let src: Vec<u8> = source.to_vec();
     let module = Parser::new(&src)
         .parse_module_ast()
         .map_err(|e| Diag::from_bytes(e.code(), e.span(), e.message()))?;
 
-    // Reject constructs the REPL v1 cannot execute, at submit time (FR-3).
-    if module_uses_mmio(&module) {
+    // P4: an MMIO module requires a platform descriptor — E3640 parity with
+    // `langc` without `--platform` (same code, verbatim). With a descriptor,
+    // MMIO constructs compile (this mirrors native: `langc --platform=...`).
+    if module_uses_mmio(&module) && descriptor.is_none() {
         return Err(Diag::from_bytes(
             3640, // E3640 parity with `langc` without `--platform`
             Span::UNKNOWN,
@@ -94,6 +107,7 @@ pub fn compile(
 
     let subtypes = subtype_infos(&src, &module)?;
     let env = build_env(&src, &module, search_dirs)?;
+    let apertures = aperture_table(descriptor);
 
     let built = typecheck::build_ir(
         &module,
@@ -103,7 +117,7 @@ pub fn compile(
         ChecksMode::All,
         false, // allow_raw_casts
         spec,
-        None, // descriptor (P4 wires platform packs)
+        descriptor,
     )
     .map_err(tc_diag)?;
 
@@ -155,9 +169,27 @@ pub fn compile(
         module: built,
         spec,
         src,
+        apertures,
         dict,
         subtypes: ranges,
     })
+}
+
+/// Resolve the descriptor's aperture table (P4): absolute `base` for
+/// bus-bound apertures, the deterministic emulated base otherwise (§Q5 —
+/// the interpreter resolves MMIO through this table, never the linker).
+fn aperture_table(descriptor: Option<&CompiledDescriptor>) -> Vec<ApertureEntry> {
+    let Some(d) = descriptor else {
+        return Vec::new();
+    };
+    d.apertures()
+        .iter()
+        .map(|ap| ApertureEntry {
+            id: ap.id,
+            base: mmio::aperture_base(ap.id, ap.base),
+            size: ap.size,
+        })
+        .collect()
 }
 
 const BUILTIN_NAMES: &[&[u8]] = &[

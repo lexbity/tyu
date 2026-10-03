@@ -30,6 +30,12 @@ ir = { path = "../ir" }
 frontend = { path = "../frontend" }
 semantics = { path = "../semantics" }
 verifier = { path = "../verifier" }
+# The compiled platform descriptor type (P4): `compile` takes
+# `Option<&CompiledDescriptor>` and resolves the aperture table from it —
+# the descriptor *is* the target-spec's compiled board identity (§Q5/DEC-8),
+# and P4 deliberately wires platform packs through it (the plan's R-A
+# "codegen-core (target spec only)" grows exactly by this type).
+codegen-core = { path = "../codegen-core" }
 
 [dev-dependencies]
 # The frozen upstream surface the fork is pinned against (G52). `test-util`

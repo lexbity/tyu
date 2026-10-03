@@ -208,7 +208,7 @@ fn run_word_for(fixture: &Path) -> String {
 
 fn interp_run(src: &[u8], entry: &[u8], search: &[std::sync::Arc<common::MemTable>]) -> Outcome {
     let refs = common::search_refs(search);
-    let compiled = compile(src, &refs, X86_64_LINUX_SPEC).expect("fixture compiles");
+    let compiled = compile(src, &refs, X86_64_LINUX_SPEC, None).expect("fixture compiles");
     let engine = Engine::new(&compiled);
     let mut state = ExecState::new(&compiled);
     let mut periph = wasm_repl::periph::Disabled;
@@ -296,7 +296,7 @@ fn ir_render_matches_langc_emit_ir_byte_for_byte() {
         // The REPL render path (build_ir → render_ir) — the pane's bytes.
         let search = sysroot_search();
         let refs = common::search_refs(&search);
-        let compiled = compile(&src, &refs, X86_64_LINUX_SPEC).expect("fixture compiles");
+        let compiled = compile(&src, &refs, X86_64_LINUX_SPEC, None).expect("fixture compiles");
         let mut rendered = Vec::new();
         wasm_repl::render_ir(&mut VecSink(&mut rendered), &compiled.module);
 
@@ -312,5 +312,97 @@ struct VecSink<'a>(&'a mut Vec<u8>);
 impl frontend::parse::Output for VecSink<'_> {
     fn write(&mut self, bytes: &[u8]) {
         self.0.extend_from_slice(bytes);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// G53 (P4 scope): MMIO fixtures — compile parity + scripted-device runs
+// ---------------------------------------------------------------------------
+
+/// The in-scope MMIO fixtures (P4): the `_x86` pack driven through the
+/// x86_64-unknown-none descriptor (OQ-3 — the pack the existing MMIO tests
+/// already drive). The aperture/device pinning lives in `tests/mmio.rs`
+/// (device-log == IR projection); here G53 asserts (a) the REPL render is
+/// byte-equal to `langc --emit=ir` for the same descriptor, and (b) the
+/// engine runs each fixture self-check-clean (the fixture writes 'F' on any
+/// wrong MMIO value) against the emulated-aperture RAM device.
+const MMIO_PARITY: &[(&str, &str)] = &[
+    ("mmio_smoke_x86", "mmio-smoke-x86-run"),
+    ("mmio_strategies_x86", "mmio-strategies-x86-run"),
+];
+
+fn x86_desc() -> codegen_core::compiled_desc::CompiledDescriptor {
+    let bytes =
+        std::fs::read(common::workspace_root().join("platforms/x86_64-unknown-none/platform.desc"))
+            .expect("x86_64-unknown-none platform.desc committed");
+    let cd =
+        codegen_core::compiled_desc::decode_compiled_desc(&bytes).expect("decode platform.desc");
+    codegen_core::compiled_desc::validate_compiled_desc(&cd).expect("validate platform.desc");
+    cd
+}
+
+#[test]
+fn mmio_fixtures_render_byte_equal_to_langc_and_self_check() {
+    if !require_tools() {
+        return;
+    }
+    build_bins();
+    let search = sysroot_search();
+    let refs = common::search_refs(&search);
+    let desc = x86_desc();
+
+    for (stem, entry) in MMIO_PARITY {
+        let fixture = fixture_path(stem);
+        let src = std::fs::read(&fixture).expect("fixture present");
+
+        // Native text with the descriptor — the expected bytes (I-2/R-2 +
+        // P4 descriptor wiring; `langc` needs the bare-metal sysroot include).
+        let langc_ir = Command::new(langc_exe())
+            .args([
+                "--emit=ir",
+                &format!("--sysroot={}", sysroot_dir().display()),
+                "-I",
+                &format!("{}/x86_64-unknown-none", sysroot_dir().display()),
+                &format!(
+                    "--platform={}",
+                    common::workspace_root()
+                        .join("platforms/x86_64-unknown-none")
+                        .display()
+                ),
+            ])
+            .arg(&fixture)
+            .output()
+            .expect("langc --emit=ir (mmio)");
+        assert!(
+            langc_ir.status.success(),
+            "{stem}: langc --emit=ir failed:\n{}",
+            String::from_utf8_lossy(&langc_ir.stderr)
+        );
+
+        // The REPL render path with the same descriptor — byte-identical.
+        let compiled =
+            compile(&src, &refs, X86_64_LINUX_SPEC, Some(&desc)).expect("fixture compiles");
+        let mut rendered = Vec::new();
+        wasm_repl::render_ir(&mut VecSink(&mut rendered), &compiled.module);
+        assert_eq!(
+            rendered, langc_ir.stdout,
+            "{stem}: MMIO `--emit=ir` text drifted between langc and the REPL \
+             (build_ir/render_ir must be byte-identical; D-1/R-2/DEC-13)"
+        );
+
+        // Run through the interpreter against the emulated-aperture device:
+        // every self-check in the fixture must pass (a wrong MMIO value
+        // writes an 'F' through `testio.write-byte`).
+        let engine = Engine::new(&compiled);
+        let mut state = ExecState::new(&compiled);
+        let mut dev = wasm_repl::RamDevice::new(&[0]);
+        let out = engine.run(entry.as_bytes(), &mut state, &mut dev);
+        let Outcome::Ok { out, .. } = out else {
+            panic!("{stem}: MMIO run must complete: {out:?}");
+        };
+        assert!(
+            out.is_empty(),
+            "{stem}: MMIO fixture self-checks must pass (no 'F' byte): {out:?}"
+        );
     }
 }

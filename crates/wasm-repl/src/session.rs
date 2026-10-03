@@ -10,8 +10,10 @@
 //! (P3) drives it the way the page (P5) will; `test-goldens/repl/` pins the
 //! transcripts byte-exactly (G56).
 
+use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
+use codegen_core::compiled_desc::CompiledDescriptor;
 use core::ops::Range;
 use frontend::span::Span;
 use ir::TrapCode;
@@ -22,7 +24,7 @@ use crate::engine::{Engine, ExecState, Outcome};
 use crate::fuel::Fuel;
 use crate::heap::RegionHeap;
 use crate::journal::Effect;
-use crate::periph::Disabled;
+use crate::periph::{Disabled, Peripheral};
 use crate::phrase::{self, EffectSig};
 use crate::trace::Trace;
 use crate::value::Slot;
@@ -66,6 +68,14 @@ pub enum Status {
     FuelExhausted,
     /// `testio.exit` terminated the run deliberately (session survives).
     Exited { code: i64 },
+    /// A device-level failure (P4): the peripheral reported an unbound
+    /// aperture (E9152), carrying the aperture id when known. Rollback
+    /// applied; output before the fault retained.
+    DeviceError {
+        code: u32,
+        span: Span,
+        aperture: Option<u16>,
+    },
 }
 
 /// One stack cell for the UI (§6.2 `StackCell`: type name + hex value).
@@ -101,6 +111,14 @@ pub struct ReplSession {
     out_total: Vec<u8>,
     fuel: Fuel,
     opts: SessionOpts,
+    /// The device boundary (P4, §7.3): the sole nondeterminism source. The
+    /// session defaults to [`Disabled`] (any MMIO access → E9152); a
+    /// scripted/board device is attached with [`ReplSession::set_peripheral`].
+    periph: Box<dyn Peripheral>,
+    /// The compiled platform descriptor (P4): MMIO modules compile only when
+    /// it is present (E3640 parity otherwise); its aperture table resolves
+    /// MMIO addresses and drives the session's IR pane.
+    descriptor: Option<Box<CompiledDescriptor>>,
 }
 
 /// The phrase-entry checkpoint (§7.3): the stack before the phrase (the
@@ -120,7 +138,28 @@ impl ReplSession {
             out_total: Vec::new(),
             fuel: opts.fuel,
             opts,
+            periph: Box::new(Disabled),
+            descriptor: None,
         }
+    }
+
+    /// Attach the device boundary (P4): a scripted/board device, or
+    /// [`Disabled`] to keep every MMIO access an E9152.
+    pub fn set_peripheral(&mut self, periph: Box<dyn Peripheral>) {
+        self.periph = periph;
+    }
+
+    /// The current device boundary (shared access for inspection).
+    pub fn peripheral(&self) -> &dyn Peripheral {
+        &*self.periph
+    }
+
+    /// Attach (or clear) the compiled platform descriptor (P4): without it
+    /// MMIO modules are compile-rejected E3640; with it, the aperture table
+    /// resolves MMIO accesses and the descriptor is passed to the compiler
+    /// exactly as `langc --platform=...` does natively.
+    pub fn set_descriptor(&mut self, descriptor: Option<Box<CompiledDescriptor>>) {
+        self.descriptor = descriptor;
     }
 
     /// The accumulated declarations source (the session buffer).
@@ -193,6 +232,10 @@ impl ReplSession {
         }
 
         let entry: &[u8] = b"repl-phrase";
+        // The compiled platform descriptor (P4): when present, MMIO modules
+        // compile (E3640 parity otherwise) and the aperture table resolves
+        // MMIO accesses.
+        let desc = self.descriptor.as_deref();
         let decls_src: Vec<u8> = {
             let mut t = alloc::string::String::with_capacity(candidate_len + 16);
             t.push_str("module repl-session;\n");
@@ -215,7 +258,7 @@ impl ReplSession {
             if !phrase.is_empty() {
                 let lookup_env: Option<Compiled> = if split.decls.is_some() {
                     // Phase A: validate + build the lookup dictionary.
-                    let built = match compile(decls_src.as_slice(), search, self.opts.spec) {
+                    let built = match compile(decls_src.as_slice(), search, self.opts.spec, desc) {
                         Ok(b) => Some(b),
                         Err(diag) => {
                             return self.result_for(
@@ -262,7 +305,7 @@ impl ReplSession {
         }
         module_text.push_str("end;\n");
 
-        let built = match compile(module_text.as_bytes(), search, self.opts.spec) {
+        let built = match compile(module_text.as_bytes(), search, self.opts.spec, desc) {
             Ok(b) => b,
             Err(diag) => {
                 // Session untouched (DEC-3: compile errors are not edits).
@@ -297,8 +340,7 @@ impl ReplSession {
             stack: state.stack.clone(),
             fuel: state.fuel,
         };
-        let mut periph = Disabled;
-        let outcome = Engine::new(&built).run(entry, &mut state, &mut periph);
+        let outcome = Engine::new(&built).run(entry, &mut state, &mut *self.periph);
 
         // The phrase trace is derived from the journal + outcome (§7.4).
         let journal: Vec<Effect> = state.journal.iter().cloned().collect();
@@ -331,11 +373,27 @@ impl ReplSession {
                 self.heap = core::mem::take(&mut state.heap);
                 (Status::FuelExhausted, out)
             }
+            Outcome::Device {
+                code,
+                span,
+                aperture,
+                out,
+            } => {
+                // A device-level failure (P4, e.g. E9152 unbound aperture):
+                // the same transactional treatment as a trap — state rolls
+                // back, output before the fault stays (DEC-6).
+                rollback(&mut state, &snap);
+                self.stack = core::mem::take(&mut state.stack);
+                self.heap = core::mem::take(&mut state.heap);
+                (Status::DeviceError { code, span, aperture }, out)
+            }
         };
         self.out_total.extend_from_slice(&phrase_out);
         // DEC-6: a trapped phrase's output is retained even as stack/heap roll
         // back — BUT never under the G56 selftest corruption.
-        if matches!(status, Status::Trapped { .. }) && !selftest_retain_trap_output() {
+        if matches!(status, Status::Trapped { .. } | Status::DeviceError { .. })
+            && !selftest_retain_trap_output()
+        {
             self.out_total.truncate(out_start as usize);
         }
         let out_end = self.out_total.len() as u32;
@@ -547,7 +605,7 @@ fn rollback(state: &mut ExecState, snap: &Checkpoint) {
             }
             Effect::ScopedEnter { addr } => state.heap.compensate_scoped(*addr),
             // Trace-only effects are never undone (§Q3 DEC-6).
-            Effect::Output { .. } | Effect::Call { .. } => {}
+            Effect::Output { .. } | Effect::Call { .. } | Effect::Periph { .. } => {}
         }
     }
     state.journal.clear();

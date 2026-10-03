@@ -15,7 +15,13 @@
 //! the REPL **session** layer — [`ReplSession`] with persistent stack/heap,
 //! transactional phrases (rollback via the [`journal`], DEC-4..DEC-6),
 //! phrase signature inference ([`phrase`]), and the byte-pinned session
-//! goldens (`test-goldens/repl/`, G56).
+//! goldens (`test-goldens/repl/`, G56). P4 completes `OpKind` coverage:
+//! the MMIO family (`AddrOf{Mmio}`/`MmioPlace`/`MmioVol*`) executes
+//! concretely against the device boundary — [`periph`] gains the scripted
+//! device and the emulated-aperture RAM device, [`mmio`] owns the
+//! `WriteKind` RMW bit math + aperture table, and the mmio fixture
+//! differential extends G53 (compile-parity + self-checking device runs).
+//! Task/interrupt constructs remain rejected at submit (E9156, FR-3).
 //!
 //! Discipline (FR-1, I-6): `#![no_std]` + `alloc`, in-tree dependencies only
 //! (R-A), `#![forbid(unsafe_code)]`.
@@ -39,6 +45,7 @@ pub mod engine;
 pub mod fuel;
 pub mod heap;
 pub mod journal;
+pub mod mmio;
 pub mod periph;
 pub mod phrase;
 pub mod session;
@@ -50,6 +57,8 @@ pub use diag::Diag;
 pub use engine::{Engine, ExecState, Outcome};
 pub use fuel::Fuel;
 pub use journal::{Effect, Journal};
+pub use mmio::{apply_write_kind, extract_field, insert_field, ApertureEntry};
+pub use periph::{Access, PeriphError, Peripheral, RamDevice, ScriptStep, ScriptedPeripheral};
 /// The canonical `--emit=ir` renderer (DEC-13): the IR pane and the G53-b
 /// parity tests render through this — the SAME bytes `langc --emit=ir` prints.
 pub use semantics::typecheck::render_ir;
@@ -59,4 +68,4 @@ pub use trace::Trace;
 /// Engine surface version (PLAN-WASM-1 §10): bumped on any change to the
 /// REPL's execution semantics. The browser exposes it for bug reports; the
 /// wasm artifact hash plus this version identify a page's engine exactly.
-pub const ENGINE_VERSION: u32 = 3;
+pub const ENGINE_VERSION: u32 = 4;

@@ -28,6 +28,18 @@ pub enum Event {
     Output { start: u32, len: u32 },
     /// A `Call` with the depth before the call (call pane).
     Call { word: String, depth: u16 },
+    /// A peripheral access (P4): aperture, register offset, width, value,
+    /// read/write.
+    Periph {
+        aperture: u16,
+        off: u32,
+        width: u8,
+        val: u64,
+        is_write: bool,
+    },
+    /// A device-level failure (P4, E9152-family) — the run ended on a
+    /// peripheral diagnostic rather than a trap.
+    Device { code: u32 },
     /// A trap with its frozen code + the faulting op's span.
     Trap { code: TrapCode, span: Span },
     /// Fuel exhausted (E9150 surface).
@@ -61,6 +73,19 @@ impl Trace {
                     word: String::from_utf8_lossy(word).into_owned(),
                     depth: *depth_before,
                 }),
+                Effect::Periph {
+                    aperture,
+                    off,
+                    width,
+                    val,
+                    is_write,
+                } => t.events.push(Event::Periph {
+                    aperture: *aperture,
+                    off: *off,
+                    width: *width,
+                    val: *val,
+                    is_write: *is_write,
+                }),
                 _ => {}
             }
         }
@@ -72,6 +97,7 @@ impl Trace {
                 span: *span,
             }),
             Outcome::Fuel { .. } => t.events.push(Event::Fuel),
+            Outcome::Device { code, .. } => t.events.push(Event::Device { code: *code }),
         }
         t
     }
@@ -96,6 +122,23 @@ impl Trace {
                     }
                 }
                 Event::Trap { code, .. } => s.push_str(&format!("T{:?}", code)),
+                Event::Periph {
+                    aperture,
+                    off,
+                    width,
+                    val,
+                    is_write,
+                } => {
+                    s.push_str(&format!(
+                        "P{}{:x}:{:x}:{}:{:x}",
+                        if *is_write { 'W' } else { 'R' },
+                        aperture,
+                        off,
+                        width,
+                        val
+                    ));
+                }
+                Event::Device { code } => s.push_str(&format!("E{code}")),
                 Event::Fuel => s.push('F'),
                 Event::Done { exit } => s.push_str(&format!("D{exit}")),
             }

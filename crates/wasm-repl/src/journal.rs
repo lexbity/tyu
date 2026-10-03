@@ -41,6 +41,17 @@ pub enum Effect {
     /// A word call (trace-only; the call pane). `depth_before` is the caller
     /// frame depth.
     Call { word: Vec<u8>, depth_before: u16 },
+    /// A peripheral access (P4; trace-only, never undone — a device access
+    /// cannot "un-blink", DEC-6). `barrier`/`ReadKind` are single-threaded
+    /// no-ops and are not carried: the plan's §5 `Periph` payload is exactly
+    /// `{aperture, off, width, val, is_write}`.
+    Periph {
+        aperture: u16,
+        off: u32,
+        width: u8,
+        val: u64,
+        is_write: bool,
+    },
 }
 
 impl Effect {

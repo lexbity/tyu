@@ -152,6 +152,10 @@ fn status_word(status: &Status) -> String {
         Status::Trapped { code, .. } => format!("trapped {}", ir::trap_code_u32(*code)),
         Status::FuelExhausted => "fuel".to_string(),
         Status::Exited { code } => format!("exited {code}"),
+        Status::DeviceError { code, aperture, .. } => match aperture {
+            Some(ap) => format!("device-error E{code} ap{ap}"),
+            None => format!("device-error E{code}"),
+        },
     }
 }
 

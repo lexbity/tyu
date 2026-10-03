@@ -1,7 +1,9 @@
 //! Session-layer unit tests (PLAN-WASM-1 P3): transactional semantics
 //! (DEC-4..DEC-6, §7.2/§7.3), journal-reversal ordering, FR-5 guard elision,
 //! and the transactional properties — asserted on the API directly, not
-//! through the CLI transcript.
+//! through the CLI transcript. P4 adds the session-level MMIO surface:
+//! descriptor attached → phrase-level runs against the session peripheral
+//! (`mmio_sessions_run_against_the_session_device`).
 //!
 //! The compile path runs on the cargo-configured test-thread stack
 //! (`.cargo/config.toml` sets `RUST_MIN_STACK` — the P3 root-cause fixes
@@ -296,7 +298,7 @@ fn journal_reversal_is_lifo() {
                 state.heap.compensate_region_destroy(*handle, *saved)
             }
             Effect::ScopedEnter { .. } => {}
-            Effect::Output { .. } | Effect::Call { .. } => {}
+            Effect::Output { .. } | Effect::Call { .. } | Effect::Periph { .. } => {}
         }
     }
 
@@ -311,5 +313,126 @@ fn journal_reversal_is_lifo() {
     assert!(
         state.heap.region_create(16).is_ok(),
         "region 1's slot was reclaimed"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// P4: session-level MMIO — descriptor attached → phrase runs against the
+// session device; device faults roll back like traps
+// ---------------------------------------------------------------------------
+
+fn mmio_refs() -> (
+    ReplSession,
+    Vec<&'static dyn SourceTable>,
+    std::vec::Vec<std::sync::Arc<common::MemTable>>,
+) {
+    use codegen_core::compiled_desc::{decode_compiled_desc, validate_compiled_desc};
+    let mut sess = ReplSession::new(SessionOpts::default());
+    let bytes = std::fs::read(
+        common::workspace_root().join("platforms/x86_64-unknown-none/platform.desc"),
+    )
+    .expect("platform.desc committed");
+    let cd = decode_compiled_desc(&bytes).expect("decode platform.desc");
+    validate_compiled_desc(&cd).expect("validate platform.desc");
+    sess.set_descriptor(Some(Box::new(cd)));
+    sess.set_peripheral(Box::new(wasm_repl::RamDevice::new(&[0])));
+    let s = common::sysroot_search();
+    let r = refs(&s);
+    // SAFETY-free: the table lives for the test; re-derive refs per submit.
+    let r2 = unsafe { core::mem::transmute::<Vec<&dyn SourceTable>, Vec<&'static dyn SourceTable>>(r) };
+    (sess, r2, s)
+}
+
+/// The MMIO session module: same rows as the descriptor's `scratch` device
+/// (E3647 divergence otherwise). `poke-a` writes the argument to A;
+/// `read-a` reads A; `fault-after-poke` writes A=7 then recurses (trap 10).
+const MMIO_SESSION_MOD: &[u8] = b"module M;
+import platform/testio { };
+register-map Scratch
+  0x00 A u32 rw volatile
+  0x04 B u32 rw volatile
+end;
+const regs = Scratch @ board.scratch;
+: poke-a ( i64 -- )
+  &!regs.A swap as u32 !u32 ;
+: read-a ( -- i64 )
+  &regs.A @u32 as i64 ;
+: fault-after-poke ( -- )
+  &!regs.A 7 as u32 !u32 fault-after-poke ;
+export { fault-after-poke };
+end;
+";
+
+#[test]
+fn descriptorless_mmio_session_is_e3640() {
+    let mut sess = session();
+    let st = submit(&mut sess, MMIO_SESSION_MOD);
+    match st {
+        Status::CompileError { diag } => assert_eq!(diag.code, 3640, "E3640 parity"),
+        other => panic!("expected E3640, got {other:?}"),
+    }
+}
+
+#[test]
+fn mmio_session_phrase_runs_against_the_session_device() {
+    let mut sess = ReplSession::new(SessionOpts::default());
+    let bytes = std::fs::read(
+        common::workspace_root().join("platforms/x86_64-unknown-none/platform.desc"),
+    )
+    .expect("platform.desc committed");
+    let cd = codegen_core::compiled_desc::decode_compiled_desc(&bytes).expect("decode");
+    codegen_core::compiled_desc::validate_compiled_desc(&cd).expect("validate");
+    sess.set_descriptor(Some(Box::new(cd)));
+    // A scripted device pins the exact session-level access sequence.
+    sess.set_peripheral(Box::new(wasm_repl::ScriptedPeripheral::new(
+        &[0],
+        vec![
+            wasm_repl::ScriptStep::Write { aperture: 0, off: 0x0, width: 4, val: 42 },
+            wasm_repl::ScriptStep::Read { aperture: 0, off: 0x0, width: 4, reply: 42 },
+        ],
+    )));
+
+    let s = common::sysroot_search();
+    let r = refs(&s);
+    // Definitions commit (descriptor-backed compile).
+    let st = sess.transactional_submit(MMIO_SESSION_MOD, &r).status;
+    assert_eq!(st, Status::Ok, "descriptor-backed MMIO compiles");
+
+    // Phrase: poke A=42 then read it back — 42 rests on the session stack.
+    let st = sess.transactional_submit(b"42 poke-a read-a", &s.iter().map(|t| t.as_ref() as &dyn SourceTable).collect::<Vec<_>>()).status;
+    assert_eq!(st, Status::Ok);
+    let cells = sess.stack_cells();
+    assert_eq!(cells.len(), 1);
+    assert_eq!(cells[0].value_hex, b"0x000000000000002a");
+}
+
+#[test]
+fn mmio_session_fault_rolls_back_the_register() {
+    let mut sess = ReplSession::new(SessionOpts::default());
+    let bytes = std::fs::read(
+        common::workspace_root().join("platforms/x86_64-unknown-none/platform.desc"),
+    )
+    .expect("platform.desc committed");
+    let cd = codegen_core::compiled_desc::decode_compiled_desc(&bytes).expect("decode");
+    codegen_core::compiled_desc::validate_compiled_desc(&cd).expect("validate");
+    sess.set_descriptor(Some(Box::new(cd)));
+    sess.set_peripheral(Box::new(wasm_repl::RamDevice::new(&[0])));
+
+    let s = common::sysroot_search();
+    let st = sess.transactional_submit(MMIO_SESSION_MOD, &s.iter().map(|t| t.as_ref() as &dyn SourceTable).collect::<Vec<_>>()).status;
+    assert_eq!(st, Status::Ok);
+
+    // A phrase that pokes A=7 then recurses to a stack-overflow trap: the
+    // MMIO store rolls back with the phrase (transaction #2, §7.3) — the
+    // register must read back its phrase-entry value (0).
+    let st = sess.transactional_submit(b"fault-after-poke", &s.iter().map(|t| t.as_ref() as &dyn SourceTable).collect::<Vec<_>>()).status;
+    assert!(is_trap_10(&st), "expected the recursion trap, got {st:?}");
+    let st = sess.transactional_submit(b"read-a", &s.iter().map(|t| t.as_ref() as &dyn SourceTable).collect::<Vec<_>>()).status;
+    assert_eq!(st, Status::Ok);
+    let cells = sess.stack_cells();
+    assert_eq!(cells.len(), 1, "the register reads back exactly one value");
+    assert_eq!(
+        cells[0].value_hex, b"0x0000000000000000",
+        "the faulted store (A=7) rolled back — the register holds its pre-fault value"
     );
 }

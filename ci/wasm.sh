@@ -66,12 +66,16 @@ g52_green() {
     # *transitive* closure may include those crates' own deps (e.g. verifier's
     # `sha2`) — that is the allowed crates' business, not a wasm-repl dep. A
     # NEW direct dep (even a cleanly-compiling registry crate) reds this gate.
+    # `codegen-core` entered the allowlist in P4 for the compiled platform
+    # descriptor (`Option<&CompiledDescriptor>` — the target-spec's compiled
+    # board identity, §Q5/DEC-8; the plan's R-A "codegen-core (target spec
+    # only)" grew exactly by this type).
     local bad
     bad=$(
         awk '/^\[dependencies\]/{f=1;next} /^\[/{f=0} f' crates/wasm-repl/Cargo.toml \
             | grep -E '^[a-z][a-z0-9_-]*[[:space:]]*=' \
             | cut -d= -f1 | sed 's/[[:space:]]//g' \
-            | grep -vE '^(ir|frontend|semantics|verifier)$' || true
+            | grep -vE '^(ir|frontend|semantics|verifier|codegen-core)$' || true
     )
     if [ -n "$bad" ]; then
         fail "wasm-repl [dependencies] has a crate outside the in-tree R-A allowlist (FR-1, I-6): $bad"
@@ -157,20 +161,24 @@ g52_selftest() {
 }
 
 # ---------------------------------------------------------------------------
-# G53 (P2): the interpreter ↔ hosted-native execution differential. The
+# G53 (P2/P4): the interpreter ↔ hosted-native execution differential. The
 # in-scope fixtures run byte-identically through the interpreter and the
 # hosted x86_64 binary (`testio.*` surface, I-4/FR-8), trap fixtures pin trap
 # code 10 (I-3), and `build_ir`+`render_ir` are byte-identical to
-# `langc --emit=ir` (D-1/R-2/DEC-13). The property tests pin the model/alias/
-# heap-geometry invariants (R-1/R-3).
+# `langc --emit=ir` (D-1/R-2/DEC-13). P4 extends the scope to the MMIO
+# fixtures: they render byte-equal to `langc --emit=ir` under the platform
+# descriptor and run self-check-clean against the scripted device, and the
+# mmio unit suite pins the `WriteKind`/field semantics + the E9152/E3640/
+# E9156 negatives. The property tests pin the model/alias/heap-geometry
+# invariants (R-1/R-3).
 # ---------------------------------------------------------------------------
 
 g53_green() {
     msg $YELLOW "G53: interpreter ↔ native execution goldens"
 
-    if cargo test -p wasm-repl --test exec_parity --test props --release \
+    if cargo test -p wasm-repl --test exec_parity --test mmio --test props --release \
         > /tmp/g53-parity.log 2>&1; then
-        msg $GREEN "  G53: execution differential + property tests green (byte-identical to native; alias probes pinned)"
+        msg $GREEN "  G53: execution differential + property tests green (byte-identical to native; alias probes pinned; MMIO fixture differential green)"
     else
         fail "execution differential (see /tmp/g53-parity.log)"
     fi
