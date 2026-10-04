@@ -18,6 +18,7 @@ pub enum Command {
     ToolchainCheck(ToolchainCheckArgs),
     Proof(ProofArgs),
     Cert(CertArgs),
+    Doctor(DoctorArgs),
     Clean,
     /// Help was explicitly requested (`--help`/`-h`); exit 0.
     Help,
@@ -118,6 +119,56 @@ pub enum PlatformArgs {
 #[derive(Debug)]
 pub struct ToolchainCheckArgs {
     pub target: String,
+}
+
+/// Selected `tyu doctor` tier (FR-11).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DoctorTier {
+    Hosted,
+    Metal,
+    Proof,
+    All,
+}
+
+impl DoctorTier {
+    pub fn name(self) -> &'static str {
+        match self {
+            DoctorTier::Hosted => "hosted",
+            DoctorTier::Metal => "metal",
+            DoctorTier::Proof => "proof",
+            DoctorTier::All => "all",
+        }
+    }
+
+    /// Metal-tier tool-role checks (D04–D08) run for metal and all.
+    pub fn includes_metal(self) -> bool {
+        matches!(self, DoctorTier::Metal | DoctorTier::All)
+    }
+
+    /// Proof-tier tools (elan/lean, D10) run for proof and all.
+    pub fn includes_proof(self) -> bool {
+        matches!(self, DoctorTier::Proof | DoctorTier::All)
+    }
+}
+
+/// Output format for `tyu doctor`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DoctorFormat {
+    Human,
+    Json,
+}
+
+/// Arguments for the `tyu doctor` subcommand (PLAN-RELEASE-1 S7/S8).
+#[derive(Debug)]
+pub struct DoctorArgs {
+    pub tier: DoctorTier,
+    pub format: DoctorFormat,
+    /// `--platform=<triple>` restricts the metal roles (D04–D09) to one target.
+    pub platform: Option<codegen_core::Target>,
+    pub json_out: Option<String>,
+    /// `--fix` (FR-16): auto-executes the elan bootstrap ONLY; every other
+    /// fix is printed as the platform-appropriate command.
+    pub fix: bool,
 }
 
 /// Encryption mode for deploy.
@@ -477,6 +528,7 @@ pub fn parse() -> Command {
         "toolchain" => parse_toolchain(&args[2..]),
         "proof" => parse_proof(&args[2..]),
         "cert" => parse_cert(&args[2..]),
+        "doctor" => parse_doctor(&args[2..]),
         "clean" => Command::Clean,
         "--help" | "-h" => {
             print_usage();
@@ -505,7 +557,9 @@ fn print_usage() {
     eprintln!("  --platform=<name>   Platform pack name");
     eprintln!("  --isa=<arch>        ISA filter for platform packs");
     eprintln!("  --profile=<name>    Build profile from tyu.toml [profile.<name>]");
-    eprintln!("  --sysroot=<dir>     Sysroot directory");
+    eprintln!(
+        "  --sysroot=<dir>     Sysroot directory (flag > TYU_SYSROOT env > cwd/sysroot, FR-21)"
+    );
     eprintln!("  --out-dir=<dir>     Output directory");
     eprintln!("  -I <dir>            Add include directory");
     eprintln!("  --verify=on|off     Verdict-driven checks (default on; off = legacy path)");
@@ -548,6 +602,9 @@ fn print_usage() {
     eprintln!();
     eprintln!("Toolchain options:");
     eprintln!("  tyu toolchain check <target>   Resolve and report tool paths");
+    eprintln!();
+    eprintln!("Doctor options:");
+    eprintln!("  tyu doctor [--tier=hosted|metal|proof|all] [--format=human|json]\n                      [--platform=<triple>] [--json-out=<path>] [--fix]\n                      Tier-scoped health check (D01-D12)\n                      --fix: auto-executes only the elan bootstrap; all other\n                      fixes are printed (never sudo). exit: 0 pass, 1 warn,\n                      2 any fail, 3 internal (FR-15).");
     eprintln!();
     eprintln!("Proof options:");
     eprintln!("  tyu proof init [--dir=<root>] [input.mod]   Scaffold the developer\n                      proofs/ directory (idempotent)");
@@ -1207,6 +1264,66 @@ fn parse_toolchain(args: &[String]) -> Command {
     }
     Command::ToolchainCheck(ToolchainCheckArgs {
         target: args[1].clone(),
+    })
+}
+
+/// `tyu doctor [--tier=hosted|metal|proof|all] [--format=human|json]
+///  [--platform=<triple>] [--json-out=<path>] [--fix]`
+fn parse_doctor(args: &[String]) -> Command {
+    let mut tier = DoctorTier::All;
+    let mut format = DoctorFormat::Human;
+    let mut platform: Option<codegen_core::Target> = None;
+    let mut json_out: Option<String> = None;
+    let mut fix = false;
+
+    for a in args {
+        if let Some(v) = a.strip_prefix("--tier=") {
+            tier = match v {
+                "hosted" => DoctorTier::Hosted,
+                "metal" => DoctorTier::Metal,
+                "proof" => DoctorTier::Proof,
+                "all" => DoctorTier::All,
+                _ => {
+                    eprintln!("tyu: doctor --tier must be hosted|metal|proof|all, got '{v}'");
+                    return Command::Usage;
+                }
+            };
+        } else if let Some(v) = a.strip_prefix("--format=") {
+            format = match v {
+                "human" => DoctorFormat::Human,
+                "json" => DoctorFormat::Json,
+                _ => {
+                    eprintln!("tyu: doctor --format must be human|json, got '{v}'");
+                    return Command::Usage;
+                }
+            };
+        } else if let Some(v) = a.strip_prefix("--platform=") {
+            match codegen_core::Target::parse(v.as_bytes()) {
+                Some(t) => platform = Some(t),
+                None => {
+                    eprintln!("tyu: doctor --platform: unknown triple '{v}'");
+                    return Command::Usage;
+                }
+            }
+        } else if let Some(v) = a.strip_prefix("--json-out=") {
+            json_out = Some(v.to_string());
+        } else if a == "--fix" {
+            // S8: --fix auto-executes ONLY the elan bootstrap (FR-16); every
+            // other fix is printed as the platform-appropriate command.
+            // TYU_DOCTOR_FIX_DRY_RUN=1 renders without executing (test seam).
+            fix = true;
+        } else {
+            eprintln!("tyu: doctor: unknown option '{a}' (see `tyu doctor` help)");
+            return Command::Usage;
+        }
+    }
+
+    Command::Doctor(DoctorArgs {
+        tier,
+        format,
+        platform,
+        json_out,
+        fix,
     })
 }
 

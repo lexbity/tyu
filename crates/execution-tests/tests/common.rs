@@ -172,8 +172,8 @@ pub const DYNAMIC_TARGETS: &[DynamicTarget] = &[
 /// `target/debug/`, or in `target/release/` (for workspace-built
 /// binaries like `langc`, `tyu`).
 pub fn tool_available(name: &str) -> bool {
-    if Command::new("which")
-        .arg(name)
+    if Command::new("sh")
+        .args(["-c", "command -v -- \"$1\"", "probe", name])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
@@ -265,14 +265,15 @@ pub fn langc_compile(target: Target, src: &Path, out_dir: &Path, is_lib: bool) -
     }
     args.push(src.to_str().unwrap().into());
 
-    let status = Command::new(langc_exe())
+    let out = Command::new(langc_exe())
         .args(&args)
-        .status()
+        .output()
         .expect("langc invocation failed");
     assert!(
-        status.success(),
-        "langc failed to compile {}",
-        src.display()
+        out.status.success(),
+        "langc failed to compile {}:\n{}",
+        src.display(),
+        String::from_utf8_lossy(&out.stderr)
     );
 
     std::fs::read_dir(out_dir)

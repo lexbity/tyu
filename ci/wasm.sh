@@ -112,7 +112,11 @@ g52_green() {
             msg $YELLOW "  G52: (nm unavailable; symbol-absence check skipped)"
         else
             local r found=0 sym_hit=0
-            for r in target/g52-prod/release/deps/libverifier-*.rlib; do
+            # Newer nightlies place the final rlib at release/ top level
+            # instead of (or in addition to) a hash-named copy under deps/;
+            # the isolated dir makes checking every layout sound.
+            for r in target/g52-prod/release/deps/libverifier-*.rlib \
+                     target/g52-prod/release/libverifier.rlib; do
                 [ -f "$r" ] || continue
                 found=1
                 if nm "$r" 2>/dev/null | grep -q "src_interp"; then

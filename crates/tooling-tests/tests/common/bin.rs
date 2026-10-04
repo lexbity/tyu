@@ -29,6 +29,35 @@ fn profile_dir() -> &'static str {
     }
 }
 
+/// Non-panicking availability probe: the same resolution order as
+/// [`resolve`] without the asserts. Under CI (`TYU_BIN_DIR` set) a tool that
+/// only exists in the built release dir MUST be found here — a bare `which`
+/// cannot see it (S9 audit finding: diag_corpus's first honest remote run).
+pub fn try_resolve(name: &str) -> Option<PathBuf> {
+    if let Ok(dir) = std::env::var("TYU_BIN_DIR") {
+        let raw = PathBuf::from(&dir);
+        let p = if raw.is_relative() {
+            workspace_root().join(&raw).join(name)
+        } else {
+            raw.join(name)
+        };
+        return p.is_file().then_some(p);
+    }
+    let root = workspace_root();
+    let other = if profile_dir() == "debug" {
+        "release"
+    } else {
+        "debug"
+    };
+    for profile in [profile_dir(), other] {
+        let p = root.join("target").join(profile).join(name);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    None
+}
+
 /// Resolve a workspace binary for e2e use.
 pub fn resolve(name: &str) -> PathBuf {
     if let Ok(dir) = std::env::var("TYU_BIN_DIR") {

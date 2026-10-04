@@ -1,5 +1,22 @@
 # CI — per-commit test suite.
 #
+# Owner: repository maintainer. This workflow is the repository's evidence
+# surface (PLAN-RELEASE-1 Q1): every push on any branch and every PR to
+# main runs the full matrix here. A red run is a diagnostic, not a deletion
+# event — triage is fix-forward:
+#
+#   gh run view <run-id> --log-failed
+#
+# Classify the failure (environment vs code vs workflow), fix, and push.
+# Disabling or ignoring a failing workflow or job WITHOUT an inline
+# justification comment is a review-blocking change.
+#
+# Install-tool apt names are for the ubuntu-26.04 image (baseline; container-proven):
+# package qemu-system-x provides /usr/bin/qemu-system-x86_64, package
+# qemu-system-riscv provides /usr/bin/qemu-system-riscv32 (and riscv64 — on
+# 26.04 qemu-system-misc does NOT carry the riscv binaries), and package
+# binutils provides /usr/bin/ld.
+#
 # Runs the full test matrix on every push/PR, including the poison
 # corpus, debug-mode (`.lang.debug`) leg, hermetic RSP client, and
 # all three hardware backends (x86_64, ARM, RISC-V) under QEMU.
@@ -12,9 +29,19 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: ["**"]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: "3 3 * * 1" # Monday 03:03 UTC — weekly re-proof of the dated pin (S3)
+
+# Cancel superseded runs for the same ref and bound every job with a
+# timeout, so a red diff stays readable and the minutes budget bounded
+# (PLAN-RELEASE-1 FR-2 / NFR-1).
+concurrency:
+  group: workflows-${{ github.ref }}-ci
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -25,9 +52,10 @@ jobs:
   # Lint — static checks and test-count guard
   # ---------------------------------------------------------------------------
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Run ci-lint.sh
         run: bash ci-lint.sh
 
@@ -35,21 +63,28 @@ jobs:
   # x86_64 — primary architecture (fully tooled)
   # ---------------------------------------------------------------------------
   x86_64:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: lint
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install tools (x86_64)
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
             fasm \
-            qemu-system-x86_64 \
+            qemu-system-x86 \
             qemu-system-arm \
-            qemu-system-riscv32 \
+            qemu-system-riscv \
+            qemu-system-misc \
             gcc-arm-none-eabi \
             gcc-riscv64-unknown-elf \
-            ld
+            binutils
+      - name: Build langc (goldens prerequisite, debug)
+        # statement_goldens resolves target/debug/langc (bin.rs) before
+        # the release build step — on a fresh runner this must be built
+        # explicitly or the gate fails with "langc not found".
+        run: cargo build -p langc
       - name: Statement goldens (PLAN-VERIFY-3 P1.3, blocking gate)
         # The band rule (§Q4 item 3) on a fresh checkout: bootstrap the
         # gitignored goldens with two regen passes (byte-determinism), then
@@ -60,7 +95,12 @@ jobs:
           TYU_REGEN_STATEMENT_GOLDENS=1 cargo test --release -p tooling-tests --test statement_goldens
           TYU_REGEN_STATEMENT_GOLDENS=1 cargo test --release -p tooling-tests --test statement_goldens
           cargo test --release -p tooling-tests --test statement_goldens
-          test "$(ls test-goldens/statements/x86_64-unknown-none/*.stmt.json | wc -l)" -eq 6
+          test "$(find test-goldens/statements/x86_64-unknown-none -name '*.stmt.json' | wc -l)" -eq 6
+      - name: Bootstrap bare-metal targets + loader archives (G5/G7 prerequisites)
+        # ci/guards.sh G5 (x86_64 dynamic symtab build) and G7 (signed ARM
+        # loader size) require facts a fresh runner lacks. This is the single
+        # provisioning path used by every job — see ci/bootstrap-loaders.sh.
+        run: bash ci/bootstrap-loaders.sh
       - name: Test-delivery guard
         run: bash ci/guards.sh
       - name: Build (release)
@@ -72,6 +112,8 @@ jobs:
           ./target/release/tyu platform lint riscv32-unknown-none
           ./target/release/tyu platform lint rp2350
           ./target/release/tyu test --all-platforms --manifest=crates/execution-tests/fixtures/manifest.toml
+        env:
+          TYU_BIN_DIR: ${{ github.workspace }}/target/release
       - name: Dead-code gate (effect/context consolidation, S13)
         # Authoritative backstop for the consolidation dead-API gate: any
         # orphaned item on the semantics surface fails the build. Catches new
@@ -79,6 +121,8 @@ jobs:
         run: RUSTFLAGS="-D dead_code" cargo build --release -p semantics
       - name: Workspace unit tests (all crates, default features)
         run: cargo test --workspace --release
+        env:
+          TYU_BIN_DIR: ${{ github.workspace }}/target/release
       - name: WASM REPL gates (PLAN-WASM-1, ci/wasm.sh)
         # G52 (fork ↔ src_interp fragvec differential + FR-1/FR-15 proofs) runs
         # on every commit from P1; the run is host-only today (no wasm32 target
@@ -111,16 +155,23 @@ jobs:
   # ARM (armv7m) — cross-compiled under QEMU
   # ---------------------------------------------------------------------------
   arm:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: lint
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install tools (ARM)
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
             gcc-arm-none-eabi \
-            qemu-system-arm
+            qemu-system-arm \
+            fasm \
+            binutils
+      - name: Bootstrap bare-metal targets + loader archives (G5/G7 prerequisites)
+        # ci/guards.sh G5/G7 require facts a fresh runner lacks — the single
+        # provisioning path for every job (ci/bootstrap-loaders.sh).
+        run: bash ci/bootstrap-loaders.sh
       - name: Test-delivery guard
         run: bash ci/guards.sh
       - name: Build langc
@@ -138,16 +189,24 @@ jobs:
   # RISC-V (riscv32) — cross-compiled under QEMU
   # ---------------------------------------------------------------------------
   riscv:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: lint
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install tools (RISC-V)
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
             gcc-riscv64-unknown-elf \
-            qemu-system-riscv32
+            qemu-system-riscv \
+            qemu-system-misc \
+            fasm \
+            binutils
+      - name: Bootstrap bare-metal targets + loader archives (G5/G7 prerequisites)
+        # ci/guards.sh G5/G7 require facts a fresh runner lacks — the single
+        # provisioning path for every job (ci/bootstrap-loaders.sh).
+        run: bash ci/bootstrap-loaders.sh
       - name: Test-delivery guard
         run: bash ci/guards.sh
       - name: Build langc
@@ -163,17 +222,22 @@ jobs:
   # Feature matrix — verifies gate diagnostic + size delta for slim vs fat
   # ---------------------------------------------------------------------------
   feature_matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: lint
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install tools
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
             fasm \
-            qemu-system-x86_64 \
-            ld
+            qemu-system-x86 \
+            binutils
+      - name: Bootstrap bare-metal targets + loader archives (G5/G7 prerequisites)
+        # ci/guards.sh G5/G7 require facts a fresh runner lacks — the single
+        # provisioning path for every job (ci/bootstrap-loaders.sh).
+        run: bash ci/bootstrap-loaders.sh
       - name: Test-delivery guard
         run: bash ci/guards.sh
       - name: Build langc
@@ -189,10 +253,11 @@ jobs:
   # Debug build (cargo check, no tests) — exercises no_std compile paths
   # ---------------------------------------------------------------------------
   build_only:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: lint
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Check all targets compile
         run: cargo check --workspace --release
 
@@ -200,18 +265,19 @@ jobs:
   # Fuzz smoke — parser/container hostile-byte harnesses
   # ---------------------------------------------------------------------------
   fuzz_smoke:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: lint
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - name: Install nightly + cargo-fuzz
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install pinned nightly + cargo-fuzz
         run: |
-          rustup toolchain install nightly --profile minimal
-          cargo +nightly install cargo-fuzz --locked
+          bash ci/retry.sh -- rustup toolchain install nightly-2026-09-29 --profile minimal
+          bash ci/retry.sh -- cargo +nightly-2026-09-29 install cargo-fuzz --locked
       - name: Container parser fuzz smoke
-        run: cargo +nightly fuzz run parse_container -- -runs=100000
+        run: cargo +nightly-2026-09-29 fuzz run parse_container -- -runs=100000
       - name: Modinfo decoder fuzz smoke
-        run: cargo +nightly fuzz run modinfo_decode -- -runs=100000
+        run: cargo +nightly-2026-09-29 fuzz run modinfo_decode -- -runs=100000
       - name: Decode targets with tracked seeds (PLAN-VERIFY-3 P16.3, §11.8)
         run: bash ci/fuzz.sh --seconds 60
 
@@ -219,16 +285,33 @@ jobs:
   # Miri — UB / unsafe-container tests under the Miri interpreter
   # ---------------------------------------------------------------------------
   miri:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - name: Install nightly + miri
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install pinned nightly + miri
         run: |
-          rustup toolchain install nightly --component miri
-          cargo +nightly miri setup
+          bash ci/retry.sh -- rustup toolchain install nightly-2026-09-29 --component miri
+          bash ci/retry.sh -- cargo +nightly-2026-09-29 miri setup
       - name: loader-core + lmod byte logic under Miri
-        run: cargo +nightly miri test -p loader-core -p lmod
+        run: cargo +nightly-2026-09-29 miri test -p loader-core -p lmod
       - name: frontend/fixed — unsafe FixedVec tests under Miri
-        run: cargo +nightly miri test -p frontend --test fixed
+        run: cargo +nightly-2026-09-29 miri test -p frontend --test fixed
       - name: semantics/arena — unsafe manual-Drop tests under Miri
-        run: cargo +nightly miri test -p semantics --test arena
+        run: cargo +nightly-2026-09-29 miri test -p semantics --test arena
+
+  # ---------------------------------------------------------------------------
+  # Pin audit (PLAN-RELEASE-1 S3) — the committed toolchain pin is citable.
+  # Builds the host binary set with the EXACT dated pin rust-toolchain.toml
+  # provisions (FR-5 proof — a broken pin fails here before anything else),
+  # then records the non-blocking stable-channel probe verdict (FR-19).
+  # ---------------------------------------------------------------------------
+  pin_audit:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Build host binaries on the dated pin (FR-5 proof)
+        run: cargo build --release -p langc -p tyu -p lmod-pack -p lmod-sign -p lmod-encrypt
+      - name: Stable channel probe (non-blocking, FR-19)
+        run: bash ci/probe-stable.sh

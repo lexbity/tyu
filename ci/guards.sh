@@ -39,8 +39,18 @@
 #       hand-declared `data_stack_slots` key (amended §6.4, E6403).
 #   G22 Report honesty block agrees with the object on the corpus (FR-16,
 #       guard form).
-#   G23 NFR-10 doc gates: README doc map, ch03 both-policies example, ch04
-#       contract obligations/elision, error-registry E6410/E6413.
+#   (G23 retired — the NFR-10 doc gates enforced README/book prose grep
+#       matches; the doc map follows the tracked tree, the book has its own
+#       CI-exercised lab gates. Do not reuse the number.)
+#   G52 PLAN-RELEASE-1 S1: `.github` must stay tracked — the CI evidence
+#       surface is repository truth, never an ignore line.
+#   G53 PLAN-RELEASE-1 S2: every workflow job declares `timeout-minutes`.
+#   G54 PLAN-RELEASE-1 S3: the toolchain pin is a dated nightly
+#       (nightly-YYYY-MM-DD), not a floating `nightly`.
+#   G55 PLAN-RELEASE-1 S9 (FR-7): a v* tag ref must be the canonical
+#       three-component zero-patch form (vMAJOR.MINOR.0) with a changelog
+#       section — delegated to ci/release-verify-tag.sh, the single
+#       implementation of the tag-format check.
 #
 # Escape hatch: add `# guards: allow-no-tests` as a comment in the
 # package's Cargo.toml to suppress G1/G2 for that package.  This is
@@ -71,7 +81,7 @@
 
 set -euo pipefail
 
-RED=1; GREEN=2; YELLOW=3; NC=0
+RED=1; GREEN=2; YELLOW=3
 msg()  { local c=$1; shift; tput setaf "$c" 2>/dev/null || true; echo "  $*"; tput sgr0 2>/dev/null || true; }
 
 failures=0
@@ -860,36 +870,6 @@ else
 fi
 failures=$((failures + g22_fail))
 
-# --- G23: NFR-10 doc gates (P8) ---
-# The verification docs are registered and teach the boundary as the norm:
-# README maps the design-doc suite, the book teaches the both-policies
-# example (ch03) and contract obligations/elision (ch04), and the error
-# registry names the artifact band codes.
-g23_fail=0
-if ! grep -q "ir-op-semantics" README.md \
-   || ! grep -q "verification-obligations" README.md \
-   || ! grep -q "static-verification" README.md; then
-    msg $RED "  G23 FAIL: README doc map must register the verification design docs"
-    g23_fail=1
-fi
-if ! grep -q 'E6410' devdocs/book_v3/appendix-b-error-registry.md \
-   || ! grep -q 'E6413' devdocs/book_v3/appendix-b-error-registry.md; then
-    msg $RED "  G23 FAIL: error-registry appendix must carry E6410/E6413"
-    g23_fail=1
-fi
-if ! grep -q "Compile-time discharge" devdocs/book_v3/ch03-types.md \
-   || ! grep -q "no-open" devdocs/book_v3/ch03-types.md; then
-    msg $RED "  G23 FAIL: ch03 must teach the both-policies compile-time-discharge example"
-    g23_fail=1
-fi
-if ! grep -q "Contract obligations and elision" devdocs/book_v3/ch04-contracts.md \
-   || ! grep -q "module-loading" devdocs/book_v3/ch04-contracts.md; then
-    msg $RED "  G23 FAIL: ch04 must teach contract obligations and dynamic-export retention"
-    g23_fail=1
-fi
-[ "$g23_fail" -eq 0 ] && msg $GREEN "  G23: NFR-10 doc gates (doc map, both-policies example, errors, contracts)"
-failures=$((failures + g23_fail))
-
 # --- G24: PLAN-VERIFY-3 P1.1 — canonical-statement boundary gates ---
 # The statement encoder is the hash the whole pipeline binds against and MUST
 # be SHA-256-only (FR-14): fnv1a64 stays confined to identity keys (id_hash),
@@ -944,7 +924,7 @@ for triple in x86_64-unknown-linux-gnu x86_64-unknown-none armv7m-unknown-none r
         g25_fail=1
         continue
     fi
-    actual=$(cd "$dir" && ls *.stmt.json 2>/dev/null | sed 's/\.stmt\.json$//' | sort | tr '\n' ' ' | sed 's/ $//')
+    actual=$(cd "$dir" && find . -maxdepth 1 -name '*.stmt.json' -printf '%f\n' 2>/dev/null | sed 's/\.stmt\.json$//' | sort | tr '\n' ' ' | sed 's/ $//')
     if [ "$actual" != "$expected_set" ]; then
         msg $RED "  G25 FAIL: statement-golden set for $triple drifted"
         msg $RED "    expected: $expected_set"
@@ -1029,7 +1009,7 @@ if [ ! -f crates/tooling-tests/tests/stackmeta_export.rs ]; then
 fi
 sm_count=0
 for triple in x86_64-unknown-linux-gnu x86_64-unknown-none armv7m-unknown-none riscv32-unknown-none; do
-    for f in test-goldens/stackmeta/$triple/*.json; do
+    for f in test-goldens/stackmeta/"$triple"/*.json; do
         [ -f "$f" ] && sm_count=$((sm_count + 1))
     done
 done
@@ -1077,11 +1057,22 @@ failures=$((failures + g40_fail))
 # the check itself — mechanical, zero judgement, no bypass path short of
 # editing this gate.
 g28_fail=0
-if ! cargo fmt --check >/dev/null 2>&1; then
-    msg $RED "  G28 FAIL: rustfmt drift — run 'cargo fmt' (workspace bar, §P0)"
-    cargo fmt --check 2>&1 | grep "^Diff in" | head -5 | while read -r d; do
-        msg $RED "    $d"
-    done
+fmt_out="$(cargo fmt --check 2>&1 || true)"
+if [ -n "$fmt_out" ]; then
+    if printf '%s\n' "$fmt_out" | grep -q "^Diff in"; then
+        msg $RED "  G28 FAIL: rustfmt drift — run 'cargo fmt' (workspace bar, §P0)"
+        printf '%s\n' "$fmt_out" | grep "^Diff in" | head -5 | while read -r d; do
+            msg $RED "    $d"
+        done
+    else
+        # Not drift — a broken fmt invocation (e.g. a missing component on a
+        # minimal-profile toolchain). Show it: a guard that cannot explain
+        # its failure is a diagnosis hole.
+        msg $RED "  G28 FAIL: cargo fmt errored (not drift):"
+        printf '%s\n' "$fmt_out" | head -3 | while read -r d; do
+            msg $RED "    $d"
+        done
+    fi
     g28_fail=1
 fi
 [ "$g28_fail" -eq 0 ] && msg $GREEN "  G28: rustfmt clean (workspace bar)"
@@ -1347,7 +1338,7 @@ for s in verification/ports/lean/tests/tamper/run-delete-theorem.sh \
     fi
 done
 for code in 6416 6417 6418 6419 6420 6421; do
-    if ! grep -q "E$code" devdocs/book_v3/appendix-b-error-registry.md; then
+    if ! grep -q "E$code" docs/book/appendix-b-error-registry.md; then
         msg $RED "  G36 FAIL: appendix-b error registry missing E$code (P6/P7 allocation, §6.9)"
         g36_fail=1
     fi
@@ -1384,9 +1375,17 @@ for thm in transitive_closure_sound cyclic_not_well_closed open_edge_not_well_cl
         g37_fail=1
     fi
 done
-if ! grep -q "### T-CL" devdocs/plans/design-doc/formal-semantics-core.md; then
-    msg $RED "  G37 FAIL: formal-semantics-core.md T-CL registry entry missing"
-    g37_fail=1
+# The devdocs/ registry file is a gitignored scratchpad (PLAN-RELEASE-1 §8):
+# absent on a fresh checkout by design. Same rule as G51's survey check — the
+# sub-check is LIVE when the scratchpad is present, SKIP when absent; a
+# scratchpad absence is not a code defect.
+if [ -f devdocs/plans/design-doc/formal-semantics-core.md ]; then
+    if ! grep -q "### T-CL" devdocs/plans/design-doc/formal-semantics-core.md; then
+        msg $RED "  G37 FAIL: formal-semantics-core.md T-CL registry entry missing"
+        g37_fail=1
+    fi
+else
+    echo "  G37: formal-semantics-core.md T-CL registry: skipped (gitignored scratchpad absent on this checkout)"
 fi
 if ! grep -q 'id: "T-CL"' crates/verifier/src/report.rs \
    || ! grep -q 'status: "theorem"' crates/verifier/src/report.rs; then
@@ -1668,7 +1667,7 @@ if [ ! -f fuzz/fuzz_targets/cert_index_decode.rs ]; then
 fi
 # Error-registry rows (65xx band).
 for code in E6500 E6501 E6502 E6503 E6504 E6510; do
-    if ! grep -q "$code" devdocs/book_v3/appendix-b-error-registry.md; then
+    if ! grep -q "$code" docs/book/appendix-b-error-registry.md; then
         msg $RED "  G45 FAIL: appendix-b error registry missing $code"
         g45_fail=1
     fi
@@ -1913,17 +1912,26 @@ for t in obl_v2_decode verdicts_v2_decode cert_index_decode; do
 done
 grep -q "invalid_utf8_lead_byte_in_string_fails_closed_not_hangs" crates/verifier/tests/codec_roundtrip.rs || { msg $RED "  G51 FAIL: the P16.3 codec livelock regression test missing"; g51_fail=1; }
 grep -q 'len == 0 || start + len > self.b.len()' crates/verifier/src/codec.rs || { msg $RED "  G51 FAIL: the codec zero-width-sequence guard missing"; g51_fail=1; }
-grep -q "SUPERSEDED" devdocs/tyu-research/formal-verification.md || { msg $RED "  G51 FAIL: the PLAN-VERIFY-2 superseded banner missing"; g51_fail=1; }
+# The PLAN-VERIFY-2 superseded banner lives in the gitignored scratchpad
+# (devdocs/, PLAN-RELEASE-1 §8 — its versioning is out of scope). It can
+# never exist on a CI checkout, so the check is enforced when the scratchpad
+# file is present locally and skips — never fails — when it is absent.
+if [ -f devdocs/tyu-research/formal-verification.md ]; then
+    grep -q "SUPERSEDED" devdocs/tyu-research/formal-verification.md || { msg $RED "  G51 FAIL: the PLAN-VERIFY-2 superseded banner missing"; g51_fail=1; }
+else
+    echo "  G51: PLAN-VERIFY-2 superseded banner: skipped (devdocs/tyu-research/formal-verification.md absent — gitignored scratchpad, no evidence to enforce)"
+fi
 [ "$g51_fail" -eq 0 ] && msg $GREEN "  G51: P16.3 — acceptance matrix (acceptance.sh + ACCEPTANCE.md), seeded fuzz smoke, NFR measurer, codec-livelock fix + regression"
 failures=$((failures + g51_fail))
 
 # ----------------------------------------------------------------------
-# G52-G56: defined in ci/wasm.sh (PLAN-WASM-1 §Q10).
-#
-# The WASM REPL plan adds gates G52 (fragvec parity), G53 (interpreter ↔
-# native goldens), G54 (codegen-wasm ↔ interpreter), G55 (browser bundles /
-# hashes / smoke), G56 (REPL session goldens). They live in `ci/wasm.sh`
-# so this flat registry is not renumbered or interleaved; run them with
+# NOTE on gate numbering (PLAN-WASM-1 §Q10 vs PLAN-RELEASE-1): the WASM REPL
+# plan reserved G52-G56 for `ci/wasm.sh` (fragvec parity, interpreter ↔
+# native goldens, codegen-wasm parity, browser budgets, session goldens) in
+# a separate appended registry, while PLAN-RELEASE-1 independently allocated
+# G52-G55 below in THIS registry. The two registries are separate files by
+# design (DEC-14); the numeric overlap is acknowledged here until a registry
+# extraction (follow-on F-1) unifies the IDs. WASM gates: run
 # `bash ci/wasm.sh` (and `bash ci/wasm.sh --selftest` for the red paths).
 # ----------------------------------------------------------------------
 

@@ -1,0 +1,6 @@
+# labs/ch10/red-01/Math.def — Lab 10.3 (red): the drifted mirror
+# (promises two outputs; the implementation produces one)
+module Math;
+export { double };
+: double ( i64 -- i64 i64 ) ;
+end;

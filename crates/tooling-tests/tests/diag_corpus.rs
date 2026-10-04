@@ -29,8 +29,17 @@ fn ensure_langc() {
 }
 
 fn tool_available(name: &str) -> bool {
-    Command::new("which")
-        .arg(name)
+    // Workspace binaries (langc, lmod-*) resolve through the shared chain
+    // (TYU_BIN_DIR / target dirs) — a bare `which` cannot see them under CI,
+    // where they live only in the built release dir. `which` stays the
+    // fallback for non-workspace tools (fasm, qemu-system-*).
+    if common::bin::try_resolve(name).is_some() {
+        return true;
+    }
+    // ubuntu-26.04 removed the standalone `which` binary — `command -v` is
+    // the shell-builtin equivalent that always exists (S9 audit finding).
+    Command::new("sh")
+        .args(["-c", "command -v -- \"$1\"", "probe", name])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)

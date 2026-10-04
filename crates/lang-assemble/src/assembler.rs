@@ -35,6 +35,26 @@ impl<'a> AssemblerDriver for FasmDriver<'a> {
         if status.code != 0 {
             return Err(AssembleError::NonZeroExit);
         }
+        mark_executable_if_elf_exec(output);
         Ok(())
     }
+}
+
+/// Make the assembled output executable iff it is an ELF *executable*
+/// (`e_type == ET_EXEC`). fasm sets the exec bit itself on some versions
+/// (1.73.35) and not others (1.73.34, the ubuntu-26.04 package) — the
+/// hosted pipeline's output must be runnable regardless of the assembler
+/// build. Object files (`e_type == ET_REL`) are left untouched.
+fn mark_executable_if_elf_exec(path: &[u8]) {
+    let Ok(blob) = hosted::fs::read_file(path) else {
+        return;
+    };
+    if blob.as_slice().len() < 18 || !blob.as_slice().starts_with(b"\x7fELF") {
+        return;
+    }
+    let e_type = u16::from_le_bytes([blob.as_slice()[16], blob.as_slice()[17]]);
+    if e_type != 2 {
+        return; // ET_REL / ET_DYN — not a runnable executable
+    }
+    let _ = hosted::fs::mark_executable(path);
 }

@@ -24,7 +24,8 @@
 //!      `trace_send_recv_output` law with the subtype bound); harvest binds
 //!      `trust: proof`, `method: certificate`, the recomputed statement hash.
 //!      The opaque `$top` cast obligation (`::0`) stays `open` with
-//!      `service-output-unmodeled` — the honest refusal.
+//!      `opaque-site` — the honest refusal (the renderer's classification
+//!      for an obligation with no oel root, Render.lean `serviceClassify`).
 //!   3. **FR-5 consumption + concurrency staleness**: langc consuming the
 //!      verdicts with `--concurrency=abstract-atomic` discharges the proven
 //!      site; consuming the SAME verdicts under `--concurrency=unmodeled` is
@@ -74,13 +75,17 @@ fn fresh_dir(label: &str) -> PathBuf {
 /// Render an artifact with the port's `gen` renderer into `<dir>/Gen`.
 fn render_fixture(root: &Path, dir: &Path, artifact_name: &str) {
     let gen_exe = root.join(PORT).join(".lake/build/bin/gen");
-    if !gen_exe.is_file() {
-        Command::new("lake")
-            .current_dir(root.join(PORT))
-            .args(["build", "gen"])
-            .status()
-            .expect("lake build gen");
-    }
+    // ALWAYS rebuild before use: a stale `gen` binary silently disagrees
+    // with the current renderer and the test then pins the OLD behavior
+    // (the local-green/remote-red asymmetry this gate's first remote run
+    // exposed — lake is incremental, so the no-op rebuild is cheap).
+    let build = Command::new("lake")
+        .current_dir(root.join(PORT))
+        .args(["build", "gen"])
+        .status()
+        .expect("lake build gen");
+    assert!(build.success(), "lake build gen");
+    let _ = &gen_exe;
     let status = Command::new(&gen_exe)
         .current_dir(dir)
         .arg("--render")
@@ -338,7 +343,7 @@ fn service_relativism_and_template_harvest() {
         "the service statement must be over the abstract-atomic model:\n{lean_text}"
     );
     assert!(
-        meta.contains("\"omitted\": true, \"reason\": \"service-output-unmodeled\""),
+        meta.contains("\"omitted\": true, \"reason\": \"opaque-site\""),
         "the opaque $top cast obligation must refuse honestly:\n{meta}"
     );
     // The Rust encoder's hash for the proven obligation (statement context is
@@ -428,10 +433,7 @@ fn service_relativism_and_template_harvest() {
         .lookup(OPAQUE_ID, "6a5be93a76c68bd7")
         .expect("the opaque obligation's record");
     assert!(opaque.status.is_open());
-    assert_eq!(
-        opaque.witness_reason.as_deref(),
-        Some("service-output-unmodeled")
-    );
+    assert_eq!(opaque.witness_reason.as_deref(), Some("opaque-site"));
 
     // 4. FR-5 consumption: the same provenance concurrency declaration
     // discharges; a DIFFERENT declaration is E6421-stale (fail-closed to

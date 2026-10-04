@@ -1,0 +1,5 @@
+# labs/ch10/green-01/Math.def — Lab 10.1 (green): the interface
+module Math;
+export { double };
+: double ( i64 -- i64 ) ;
+end;

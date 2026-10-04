@@ -173,6 +173,7 @@ pub fn static_exit_code(source: &str, dir: &PathBuf) -> i32 {
         .status()
         .unwrap();
     assert!(status.success(), "fasm failed");
+    set_exec(&dir.join("S_bin"));
     Command::new(dir.join("S_bin"))
         .status()
         .unwrap()
@@ -223,7 +224,15 @@ pub fn allocate_runtime_page() -> usize {
 
 /// Register the test runtime symbols through the generated `.lang.symtab`
 /// byte-table API used by device boot.
-pub fn register_test_runtime_symtab(map: &mut SymMap<'_, 256>, ds_high_addr: usize) {
+///
+/// Returns the address that was registered for `__stack_overflow`. Callers
+/// that assert on the ABS32/absolute relocations must use THIS returned
+/// value — re-deriving `extern_c_fn_stub as *const ()` at a second site is
+/// not stable: the compiler may emit a cloned copy of the (empty) stub and
+/// bind the two references to different clones, which makes the relocation
+/// look "off by a constant" when it is in fact correct (it wrote exactly
+/// the registered symtab value).
+pub fn register_test_runtime_symtab(map: &mut SymMap<'_, 256>, ds_high_addr: usize) -> usize {
     let stub = extern_c_fn_stub as *const () as usize;
     let entries = [
         (lmod::hash::fnv1a_u64(b"__stack_overflow"), stub),
@@ -240,6 +249,7 @@ pub fn register_test_runtime_symtab(map: &mut SymMap<'_, 256>, ds_high_addr: usi
         bytes.extend_from_slice(&(addr as u64).to_le_bytes());
     }
     map.register_symtab_bytes(&bytes).unwrap();
+    stub
 }
 
 /// Load a .lmod, call `main`, and return the result.
@@ -478,6 +488,20 @@ impl LoaderHarness {
         }
         Ok(result)
     }
+}
+
+// ---------------------------------------------------------------------------
+// fasm exec-bit normalization
+// ---------------------------------------------------------------------------
+
+/// fasm versions disagree on whether an ELF-executable output gets the exec
+/// bit (1.73.35 sets it, 1.73.34/1.73.32 do not). The hosted pipeline's
+/// outputs are run directly by tests, so normalize here (S9 audit finding).
+pub(crate) fn set_exec(path: &std::path::Path) {
+    let mut perms = std::fs::metadata(path).unwrap().permissions();
+    use std::os::unix::fs::PermissionsExt;
+    perms.set_mode(0o755);
+    std::fs::set_permissions(path, perms).unwrap();
 }
 
 // ---------------------------------------------------------------------------

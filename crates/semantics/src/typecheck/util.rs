@@ -405,16 +405,15 @@ pub fn apply_sig(
         return Err(TcError::SigStackUnderflow { span });
     }
     // Check types from top.
-    for i in 0..need {
+    for (i, expected) in sig.inputs.iter().take(need).enumerate() {
         let got = stack[*sp - need + i];
         let got = got.to_type_atom();
-        if !type_compatible(got, sig.inputs[i], subtypes) {
+        if !type_compatible(got, *expected, subtypes) {
             return Err(TcError::SigTypeMismatch { span });
         }
     }
     *sp -= need;
-    for i in 0..(sig.out_len as usize) {
-        let out_ty = sig.outputs[i];
+    for &out_ty in sig.outputs[..sig.out_len as usize].iter() {
         // S-8: a pointer-typed signature output is a raw pointer — shape it
         // as Value::Ptr (pointee unknown, PLACE_NONE) so the typed load/store
         // forms (@TY / !TY) and the rest of the pointer surface accept it
@@ -437,21 +436,21 @@ pub fn apply_sig(
 
 pub fn write_sig(out: &mut impl Output, sig: &WordSig) {
     out.write(b"( ");
-    for i in 0..(sig.in_len as usize) {
+    for (i, ty) in sig.inputs[..sig.in_len as usize].iter().enumerate() {
         if i != 0 {
             out.write(b" ");
         }
-        write_type(out, sig.inputs[i], 4);
+        write_type(out, *ty, 4);
     }
     out.write(b" --");
     if sig.out_len > 0 {
         out.write(b" ");
     }
-    for i in 0..(sig.out_len as usize) {
+    for (i, ty) in sig.outputs[..sig.out_len as usize].iter().enumerate() {
         if i != 0 {
             out.write(b" ");
         }
-        write_type(out, sig.outputs[i], 4);
+        write_type(out, *ty, 4);
     }
     out.write(b" )");
 }

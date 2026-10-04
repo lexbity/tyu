@@ -1,0 +1,13 @@
+# PLAN-RELEASE-1 S6 — the VERIFIED quickstart, byte-for-byte.
+#
+# These lines are what the CI install-verify job executes inside a pristine
+# ubuntu:24.04 container (ci/install-verify.sh runs this file with `bash -e`,
+# state persisting across lines exactly as in a user shell — PATH / cd carry),
+# and the SETUP.md quickstart fence MUST match this file line-for-line
+# (enforced by a ci-lint gate, so doc drift fails CI). `bash ci/install.sh`
+# runs from the checkout; TYU_REPO is set by the verifier so the installer
+# clones exactly the tree under test.
+bash ci/install.sh
+export PATH="$HOME/.tyu/bin:$PATH"
+tyu build ci/smoke/hello.mod --target=x86_64-unknown-linux-gnu --out-dir=/tmp/smoke-out
+/tmp/smoke-out/image.elf

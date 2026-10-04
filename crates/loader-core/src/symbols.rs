@@ -102,10 +102,7 @@ impl<'a, const N: usize> SymMap<'a, N> {
         addr: usize,
     ) -> Result<(), SymError> {
         // Check for conflicts and collisions.
-        for i in 0..self.len {
-            let Some(ref existing) = self.entries[i] else {
-                continue;
-            };
+        for existing in self.iter() {
             if !name.is_empty() && !existing.name.is_empty() && existing.name == name {
                 return Err(E_SYMBOL_CONFLICT);
             }
@@ -197,14 +194,7 @@ impl<'a, const N: usize> SymMap<'a, N> {
     /// u64 width), this returns the *first* matching entry.  The caller
     /// should verify the name via `SymEntry.name` if exactness is critical.
     pub fn lookup_by_hash(&self, hash: u64) -> Option<&SymEntry<'a>> {
-        for i in 0..self.len {
-            if let Some(ref entry) = self.entries[i] {
-                if entry.hash == hash {
-                    return Some(entry);
-                }
-            }
-        }
-        None
+        self.iter().find(|e| e.hash == hash)
     }
 
     /// Iterate over all registered entries.

@@ -427,7 +427,9 @@ pub fn export_entries_offset(data: &[u8]) -> Option<usize> {
         off += 1;
     }
     off = (off + 3) & !3;
-    if off + (hdr.export_count as usize) * EXPORT_ENTRY_SIZE as usize > data.len() {
+    let entries_end =
+        off.checked_add((hdr.export_count as usize).checked_mul(EXPORT_ENTRY_SIZE as usize)?)?;
+    if entries_end > data.len() {
         return None;
     }
     Some(off)
@@ -479,15 +481,24 @@ pub fn read_res_meta(data: &[u8], index: u32) -> Option<ResMetaEntry> {
 }
 
 /// Compute the byte offset of the res_meta entries array.
+///
+/// Validates the end of every preceding table *and* of the res_meta table
+/// itself: `read_res_meta` indexes `res_meta_count` entries of
+/// `RES_META_SIZE` from the returned offset, so a table extending past the
+/// payload must fail closed here. All arithmetic is checked — wire-derived
+/// counts must not overflow `usize` on 32-bit loaders.
 fn res_meta_offset(data: &[u8]) -> Option<usize> {
     let hdr = decode(data)?;
     let export_entries_off = export_entries_offset(data)?;
-    let import_entries_off =
-        export_entries_off + (hdr.export_count as usize) * EXPORT_ENTRY_SIZE as usize;
-    let word_meta_off =
-        import_entries_off + (hdr.import_count as usize) * IMPORT_ENTRY_SIZE as usize;
-    let word_meta_end = word_meta_off + (hdr.export_count as usize) * WORD_META_SIZE as usize;
-    if word_meta_end > data.len() {
+    let import_entries_off = export_entries_off
+        .checked_add((hdr.export_count as usize).checked_mul(EXPORT_ENTRY_SIZE as usize)?)?;
+    let word_meta_off = import_entries_off
+        .checked_add((hdr.import_count as usize).checked_mul(IMPORT_ENTRY_SIZE as usize)?)?;
+    let word_meta_end = word_meta_off
+        .checked_add((hdr.export_count as usize).checked_mul(WORD_META_SIZE as usize)?)?;
+    let res_meta_end = word_meta_end
+        .checked_add((hdr.res_meta_count as usize).checked_mul(RES_META_SIZE as usize)?)?;
+    if res_meta_end > data.len() {
         return None;
     }
     Some(word_meta_end)
@@ -497,13 +508,16 @@ fn res_meta_offset(data: &[u8]) -> Option<usize> {
 /// or `None` if the data is truncated.
 pub fn aperture_use_offset(data: &[u8]) -> Option<usize> {
     let hdr = decode(data)?;
-    let res_meta_end =
-        res_meta_offset(data)? + (hdr.res_meta_count as usize) * RES_META_SIZE as usize;
-    if res_meta_end + (hdr.aperture_count as usize) * APERTURE_USE_ENTRY_SIZE as usize > data.len()
-    {
+    let res_meta_start = res_meta_offset(data)?;
+    let aperture_start = res_meta_start
+        .checked_add((hdr.res_meta_count as usize).checked_mul(RES_META_SIZE as usize)?)?;
+    let aperture_end = aperture_start.checked_add(
+        (hdr.aperture_count as usize).checked_mul(APERTURE_USE_ENTRY_SIZE as usize)?,
+    )?;
+    if aperture_end > data.len() {
         return None;
     }
-    Some(res_meta_end)
+    Some(aperture_start)
 }
 
 /// Read one aperture-use entry by index.
@@ -538,6 +552,34 @@ mod tests {
 
     fn test_abi_hash() -> u64 {
         crate::abi_hash::compute_abi_hash(1, 8, 64, 2)
+    }
+
+    #[test]
+    fn res_meta_table_past_payload_fails_closed() {
+        // Regression (PLAN-RELEASE-1 S1 audit, 2026-09-29): this crafted
+        // 79-byte container declares res_meta_count = 20224 against a
+        // payload that ends 48 bytes in. `read_res_meta` sliced out of
+        // bounds (panic) because `res_meta_offset` validated only through
+        // word_meta_end, never the res_meta table's own end. The same
+        // input is pinned as a modinfo_decode seed in ci/fuzz-seeds/.
+        const CRASH: [u8; 79] = [
+            0x44, 0x4f, 0x4d, 0x4c, 0x0a, 0xfd, 0xfd, 0x21, 0xfd, 0x00, 0x00, 0x00, 0x00, 0xfd,
+            0x44, 0x4f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x2b, 0x00, 0x00, 0x4f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2b, 0x00, 0x00, 0x00,
+            0x44, 0x4f, 0x4d, 0x4c, 0x0a, 0x3f, 0xfd, 0xfd, 0xfd, 0xfd, 0x44, 0x4f, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0x44,
+        ];
+        let info = decode(&CRASH).expect("crafted header must still decode");
+        assert_eq!(info.res_meta_count, 20224);
+        assert_eq!(res_meta_offset(&CRASH), None);
+        assert_eq!(aperture_use_offset(&CRASH), None);
+        for index in 0..info.res_meta_count {
+            assert!(read_res_meta(&CRASH, index).is_none(), "index {index}");
+        }
+        // Well-formed-table readers on the same input: export_count = 0.
+        assert!(read_export(&CRASH, 0).is_none());
+        assert!(read_aperture_use(&CRASH, 0).is_none());
     }
 
     #[test]

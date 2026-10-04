@@ -464,8 +464,8 @@ pub fn emit_obj_driver(
 
     // Emit extrn declarations for all imported word symbols so the assembler
     // can resolve cross-module calls at link time.
-    for i in builtin_env_end..import_env_end {
-        if let Err(e) = gen.emit_extern_word(es.env[i].name.as_bytes()) {
+    for e in es.env.iter().take(import_env_end).skip(builtin_env_end) {
+        if let Err(e) = gen.emit_extern_word(e.name.as_bytes()) {
             let _ = diag::error_simple(e.code(), codegen_error_message(e.code()));
             return 2;
         }
@@ -576,10 +576,24 @@ pub fn emit_obj_driver(
         return 2;
     }
 
+    let riscv_as_candidates: [&[u8]; 4] = [
+        b"riscv32-elf-as",
+        b"riscv32-unknown-elf-as",
+        b"riscv64-unknown-elf-as",
+        b"riscv64-linux-gnu-as",
+    ];
     let assembler_bin: &[u8] = match target.spec().assembler {
         codegen_core::AssemblerKind::Fasm => b"fasm",
         codegen_core::AssemblerKind::GasArm => b"arm-none-eabi-as",
-        codegen_core::AssemblerKind::GasRiscV => b"riscv32-elf-as",
+        // distros ship different riscv assembler names (ubuntu-26.04 has no
+        // `riscv32-elf-as`; only the riscv64-prefixed binaries) — run the
+        // first that exists (S9 audit: E1017 was an ENOENT, not a codegen
+        // failure).
+        codegen_core::AssemblerKind::GasRiscV => {
+            hosted::process::resolve_executable(&riscv_as_candidates)
+                .and_then(|i| riscv_as_candidates.get(i).copied())
+                .unwrap_or(b"riscv32-elf-as")
+        }
     };
     let mut asm_args: Vec<&[u8]> = Vec::new();
     match target.spec().assembler {

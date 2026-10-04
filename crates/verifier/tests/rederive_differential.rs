@@ -257,7 +257,13 @@ fn rederive_differential_exact_agreement() {
         Err(_) => default_n,
     };
     let seed = if e2e { 0x0d15_a5e0_d15a_5e0d } else { SW_SEED };
-    let with_mem = e2e;
+    // Both paths generate with the seeded memory mix: the committed corpus was
+    // FULL-program generated with `mem = true` (the sibling test's policy and
+    // the corpus's own coverage contract — bundle models + scripted reads),
+    // so the no-exe self-check must render under the same mix or the
+    // byte-compare would diverge on the first bundle vector regardless of
+    // generator determinism.
+    let with_mem = true;
 
     let programs = generate(seed, n, with_mem);
     let doc = render_corpus(&programs);

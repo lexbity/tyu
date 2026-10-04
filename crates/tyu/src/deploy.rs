@@ -937,6 +937,11 @@ rung = "untested"
 
     #[test]
     fn deploy_recipe_executes_steps_with_placeholders() {
+        // runs deploy steps that spawn `sh`/`openocd` BY NAME — hold the
+        // shared test PATH lock so doctor's fabricated PATH is never observed.
+        let _path_guard = crate::toolchain::ambient_path_lock()
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         let root = std::env::temp_dir().join("tyu_deploy_recipe");
         let _ = fs::remove_dir_all(&root);
         let (pack, selection) = demo_pack(&root);

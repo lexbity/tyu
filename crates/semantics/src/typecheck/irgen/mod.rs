@@ -332,12 +332,10 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
 
         let mut blocks: FixedVec<lir::Block, 16> = FixedVec::new();
         let mut entry_stack: FixedVec<lir::TypeId, 32> = FixedVec::new();
-        for i in 0..(lir_sig.in_len as usize) {
-            entry_stack
-                .push(lir_sig.inputs[i])
-                .map_err(|_| TcError::TypeTableFull {
-                    span: Span::new(0, 0),
-                })?;
+        for &t in lir_sig.inputs[..lir_sig.in_len as usize].iter() {
+            entry_stack.push(t).map_err(|_| TcError::TypeTableFull {
+                span: Span::new(0, 0),
+            })?;
         }
         let entry_block = lir::Block {
             id: lir::BlockId(0),
@@ -1670,8 +1668,8 @@ pub fn build_ir_word<'r>(
 
     let mut stack: [Value; 256] = [Value::Plain(TypeAtom::EMPTY); 256];
     let mut sp: usize = 0;
-    for i in 0..(sig.in_len as usize) {
-        stack[sp] = Value::Plain(sig.inputs[i]);
+    for &ty in sig.inputs[..sig.in_len as usize].iter() {
+        stack[sp] = Value::Plain(ty);
         sp += 1;
     }
 
@@ -1748,9 +1746,9 @@ pub fn build_ir_word<'r>(
     // params with Value::Ptr carrying a synthetic param PlaceId so that
     // borrow-checking tracks aliasing through pointer parameters (D-6).
     let stack_start = 0usize;
-    for i in 0..(sig.in_len as usize) {
-        if sig.inputs[i] == TypeAtom::PTR || sig.inputs[i] == TypeAtom::PTR_MUT {
-            let mutable = sig.inputs[i] == TypeAtom::PTR_MUT;
+    for (i, ty) in sig.inputs[..sig.in_len as usize].iter().enumerate() {
+        if *ty == TypeAtom::PTR || *ty == TypeAtom::PTR_MUT {
+            let mutable = *ty == TypeAtom::PTR_MUT;
             // Build a synthetic root name for the param ledger entry.
             let mut root_buf = [0u8; 12];
             root_buf[..7].copy_from_slice(b"_param_");

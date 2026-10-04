@@ -25,8 +25,13 @@ This repository is a documentation-heavy systems workspace. The main enforcement
 - `ci/guards.sh` fails if a crate with `#[test]` reports zero runnable tests.
 - `ci/guards.sh` also fails if `test=false` or `harness=false` hides an in-source `#[test]`.
 
-## Documentation policy
 
-- `DOCS.md` is the tracked documentation index.
-- `devdocs/` is intentionally ignored in git and is not part of the versioned repository.
-- Do not cite ignored local notes as repository authority in PRs or review comments.
+## Reporting vulnerabilities
+
+- **Preferred**: GitHub security advisory
+  <https://github.com/lexbity/tyu/security/advisories/new> (private disclosure,
+  tracked, credit-granting).
+
+Please include the tyu version, the platform/target, and a minimal reproducer.
+There is no bug bounty; my expectations are: a best-effort response window of a
+few days, a fix on `main`, and an advisory/issue note.

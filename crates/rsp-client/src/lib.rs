@@ -970,8 +970,8 @@ mod tests {
     // -------------------------------------------------------------------
 
     fn tool_available(name: &str) -> bool {
-        std::process::Command::new("which")
-            .arg(name)
+        std::process::Command::new("sh")
+            .args(["-c", "command -v -- \"$1\"", "probe", name])
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)

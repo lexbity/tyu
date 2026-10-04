@@ -369,10 +369,10 @@ fn refined_worked_example_harvests_and_binds_with_refinement_context() {
     //    certificate is proof-class), and must stay OPEN with the check
     //    retained (E6421-stale, fail-closed — never a wrong discharge, never
     //    a crash) without it, proven or not.
-    let (ok, _, out) = compile_with_refinements(&root, &dir, true, true);
+    let (ok, stderr, out) = compile_with_refinements(&root, &dir, true, true);
     assert!(
         ok,
-        "langc must bind the refined verdict with --refinements in context"
+        "langc must bind the refined verdict with --refinements in context; stderr:\n{stderr}"
     );
     assert!(
         echo_discharged_proof_ids(&out)
@@ -384,7 +384,7 @@ fn refined_worked_example_harvests_and_binds_with_refinement_context() {
     let (ok_neg, stderr_neg, out_neg) = compile_with_refinements(&root, &dir, false, true);
     assert!(
         ok_neg,
-        "langc must stay healthy without the refinement in context (E6421-stale → open, check retained)"
+        "langc must stay healthy without the refinement in context (E6421-stale → open, check retained); stderr:\n{stderr_neg}"
     );
     assert!(
         !echo_discharged_proof_ids(&out_neg).iter().any(|id| id == OBL_ID),
@@ -396,10 +396,10 @@ fn refined_worked_example_harvests_and_binds_with_refinement_context() {
         "the negative must record the E6421-stale accounting (check retained)"
     );
     // The same fail-closed stance holds without the proven policy.
-    let (ok_neg2, _, out_neg2) = compile_with_refinements(&root, &dir, false, false);
+    let (ok_neg2, stderr_neg2, out_neg2) = compile_with_refinements(&root, &dir, false, false);
     assert!(
         ok_neg2,
-        "the policy-less negative must still compile (open, retained)"
+        "the policy-less negative must still compile (open, retained); stderr:\n{stderr_neg2}"
     );
     assert!(
         !echo_discharged_proof_ids(&out_neg2)

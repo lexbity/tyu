@@ -5,6 +5,7 @@ fuzz/corpus/
 target
 
 *.bak
+*.o
 .tyu-verify/
 
 # Lean port build artifacts (verification/ports/*/lakefile target outputs)

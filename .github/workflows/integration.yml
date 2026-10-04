@@ -1,18 +1,38 @@
 # Integration — heavy corpus tests (not per-commit).
 #
-# Runs the full tooling-test and loader-test suites, the diagnostic/
-# effect/encryption corpus, and cross-architecture module loading tests.
-# Triggered on push to main or manually.
+# Owner: repository maintainer. Heavy suites: tooling-test and loader-test
+# corpora, the diagnostic/effect/encryption corpus, cross-architecture
+# module loading, the Lean port gate, and the re-derivation differential.
+# Triggered on push to any branch, on PRs to main, and manually.
+#
+# Evidence-surface discipline (PLAN-RELEASE-1 Q1): a red run is triaged
+# fix-forward with `gh run view <run-id> --log-failed`; disabling a job
+# without an inline justification comment is a review-blocking change.
 #
 # Every job exports TYU_BIN_DIR so all e2e suites consume the same
 # release binary that CI built — never a stale debug binary.
+#
+# Install-tool apt names are for the ubuntu-26.04 image (baseline; container-proven):
+# package qemu-system-x provides /usr/bin/qemu-system-x86_64, package
+# qemu-system-riscv provides /usr/bin/qemu-system-riscv32 (and riscv64 — on
+# 26.04 qemu-system-misc does NOT carry the riscv binaries), and package
+# binutils provides /usr/bin/ld.
 
 name: Integration
 
 on:
   push:
+    branches: ["**"]
+  pull_request:
     branches: [main]
   workflow_dispatch:
+
+# Cancel superseded runs for the same ref; bound every job (PLAN-RELEASE-1
+# FR-2 / NFR-1: integration ≤ 90 min — the port job's 90-min timeout
+# reflects the Lean elaboration + differential budget).
+concurrency:
+  group: workflows-${{ github.ref }}-integration
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -23,20 +43,26 @@ jobs:
   # Tooling tests — langc phases, negative corpus, equivalence, loader
   # ---------------------------------------------------------------------------
   tooling:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install tools
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
             fasm \
-            qemu-system-x86_64 \
-            gcc-arm-none-eabi \
+            qemu-system-x86 \
+            binutils \
             qemu-system-arm \
+            gcc-arm-none-eabi \
             gcc-riscv64-unknown-elf \
-            qemu-system-riscv32 \
-            ld
+            qemu-system-riscv \
+            qemu-system-misc
+      - name: Bootstrap bare-metal targets + loader archives
+        # Single provisioning path for every job (targets, ARM signing
+        # archive, RISC-V build-std cache warm) — ci/bootstrap-loaders.sh.
+        run: bash ci/bootstrap-loaders.sh
       - name: Build (release)
         run: cargo build --release -p langc -p tyu -p lmod-pack -p lmod-encrypt -p lmod-sign
       - name: Tooling tests (all)
@@ -48,17 +74,26 @@ jobs:
   # Loader tests — dynamic loading, encryption, signing, ARM/RISC-V load
   # ---------------------------------------------------------------------------
   loader:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install tools
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
+            fasm \
+            binutils \
+            qemu-system-x86 \
             gcc-arm-none-eabi \
             qemu-system-arm \
             gcc-riscv64-unknown-elf \
-            qemu-system-riscv32
+            qemu-system-riscv \
+            qemu-system-misc
+      - name: Bootstrap bare-metal targets + loader archives
+        # Single provisioning path for every job (targets, ARM signing
+        # archive, RISC-V build-std cache warm) — ci/bootstrap-loaders.sh.
+        run: bash ci/bootstrap-loaders.sh
       - name: Build (release)
         run: cargo build --release -p langc -p tyu -p lmod-pack -p lmod-encrypt -p lmod-sign
       - name: Loader tests (all)
@@ -70,16 +105,29 @@ jobs:
   # Diagnostic & effect corpus — asserts correct trap codes and slot values
   # ---------------------------------------------------------------------------
   corpus:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install tools
+        # Same tool set as the `tooling` job: this job runs the full
+        # tooling-tests suite too (platform_binding compiles ARM/RISC-V
+        # modules), so it needs the cross assemblers and every QEMU ISA.
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
             fasm \
-            qemu-system-x86_64 \
-            ld
+            qemu-system-x86 \
+            binutils \
+            qemu-system-arm \
+            gcc-arm-none-eabi \
+            gcc-riscv64-unknown-elf \
+            qemu-system-riscv \
+            qemu-system-misc
+      - name: Bootstrap bare-metal targets + loader archives
+        # Single provisioning path for every job (targets, ARM signing
+        # archive, RISC-V build-std cache warm) — ci/bootstrap-loaders.sh.
+        run: bash ci/bootstrap-loaders.sh
       - name: Build (release)
         run: cargo build --release -p langc -p tyu
       - name: Diagnostic & effect corpus
@@ -98,16 +146,20 @@ jobs:
   # engine byte-agreement). These are the scripts FR-13's "per CI run"
   # refers to — wired HERE (heavy: installs the pinned Lean toolchain).
   port:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
+    timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq fasm qemu-system-x86_64 ld
+          # binutils-arm-none-eabi: langc --emit=obj for armv7m (the P13
+          # refined_proof_e2e fixture) shells out to arm-none-eabi-as (E1016
+          # without it — a missing assembler, not a codegen/binding failure).
+          sudo apt-get install -y -qq fasm qemu-system-x86 binutils binutils-arm-none-eabi
       - name: Install the pinned Lean toolchain (elan)
         run: |
-          curl -fsSL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o /tmp/elan-init.sh
+          bash ci/retry.sh -- curl -fsSL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o /tmp/elan-init.sh
           sh /tmp/elan-init.sh -y --default-toolchain none >/dev/null
           ~/.elan/bin/elan toolchain install "$(cat verification/ports/lean/lean-toolchain)" >/dev/null
       - name: Port gate (conformance + axiom audit + P14 re-derivation)
@@ -117,7 +169,10 @@ jobs:
       - name: P15 service-relativism gate (FORCED — a Lean-less skip is a failure here)
         run: |
           cargo build -q -p langc -p tyu
-          TYU_SERVICE_E2E=1 cargo test -p tooling-tests --test service_relativism
+          # elan on PATH: the test is FORCED (TYU_SERVICE_E2E=1), so the
+          # lean/lake shims must resolve here exactly as they do inside
+          # port.sh (the default toolchain was set by the port gate above).
+          PATH="$HOME/.elan/bin:$PATH" TYU_SERVICE_E2E=1 cargo test -p tooling-tests --test service_relativism
       - name: P15 hosted service-conformance leg (executes the svcvec wire fixtures)
         run: cargo test -p execution-tests --test hosted
 
@@ -125,17 +180,22 @@ jobs:
   # RSP integration — ARM and RISC-V gdbstub register/memory parity tests
   # ---------------------------------------------------------------------------
   rsp:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install tools
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
             qemu-system-arm \
             gcc-arm-none-eabi \
-            qemu-system-riscv32 \
+            qemu-system-riscv \
             gcc-riscv64-unknown-elf
+      - name: Bootstrap bare-metal targets + loader archives
+        # Single provisioning path for every job (targets, ARM signing
+        # archive, RISC-V build-std cache warm) — ci/bootstrap-loaders.sh.
+        run: bash ci/bootstrap-loaders.sh
       - name: Build (release)
         run: cargo build --release -p rsp-client
       - name: ARM RSP read register and memory
@@ -147,20 +207,26 @@ jobs:
   # Concurrency e2e — ARM and RISC-V task spawn under QEMU
   # ---------------------------------------------------------------------------
   concurrency:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install tools
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
             qemu-system-arm \
             gcc-arm-none-eabi \
-            qemu-system-riscv32 \
+            qemu-system-riscv \
+            qemu-system-misc \
             gcc-riscv64-unknown-elf \
             fasm \
-            qemu-system-x86_64 \
-            ld
+            qemu-system-x86 \
+            binutils
+      - name: Bootstrap bare-metal targets + loader archives
+        # Single provisioning path for every job (targets, ARM signing
+        # archive, RISC-V build-std cache warm) — ci/bootstrap-loaders.sh.
+        run: bash ci/bootstrap-loaders.sh
       - name: Build (release)
         run: cargo build --release -p langc -p tyu
       - name: ARM concurrency test
@@ -176,20 +242,26 @@ jobs:
   # E2E — end-to-end module packaging, signing, encryption, deployment
   # ---------------------------------------------------------------------------
   e2e:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install tools
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
             fasm \
-            qemu-system-x86_64 \
+            qemu-system-x86 \
+            binutils \
             gcc-arm-none-eabi \
             qemu-system-arm \
             gcc-riscv64-unknown-elf \
-            qemu-system-riscv32 \
-            ld
+            qemu-system-riscv \
+            qemu-system-misc
+      - name: Bootstrap bare-metal targets + loader archives
+        # Single provisioning path for every job (targets, ARM signing
+        # archive, RISC-V build-std cache warm) — ci/bootstrap-loaders.sh.
+        run: bash ci/bootstrap-loaders.sh
       - name: Build (release)
         run: cargo build --release -p langc -p tyu -p lmod-pack -p lmod-encrypt -p lmod-sign
       - name: E2E tests (all)
@@ -207,16 +279,21 @@ jobs:
   # legs as skips (the `port` job above owns those).
   # ---------------------------------------------------------------------------
   acceptance:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install tools
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
             fasm \
-            qemu-system-x86_64 \
-            ld
+            qemu-system-x86 \
+            binutils
+      - name: Bootstrap bare-metal targets + loader archives
+        # Single provisioning path for every job (targets, ARM signing
+        # archive, RISC-V build-std cache warm) — ci/bootstrap-loaders.sh.
+        run: bash ci/bootstrap-loaders.sh
       - name: Build (debug — the acceptance e2e gates resolve the in-tree bins)
         run: cargo build -p langc -p tyu
       - name: Acceptance matrix (P16.3, §11.1–§11.10)
@@ -229,12 +306,13 @@ jobs:
   # §11 criterion 8). The 24h nightly is the extend-this-job out-of-band run.
   # ---------------------------------------------------------------------------
   fuzz:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - name: Install nightly + cargo-fuzz
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install pinned nightly + cargo-fuzz
         run: |
-          rustup toolchain install nightly --profile minimal
-          cargo +nightly install cargo-fuzz --locked
+          bash ci/retry.sh -- rustup toolchain install nightly-2026-09-29 --profile minimal
+          bash ci/retry.sh -- cargo +nightly-2026-09-29 install cargo-fuzz --locked
       - name: Fuzz decode targets (seeded smoke)
         run: bash ci/fuzz.sh --seconds 20

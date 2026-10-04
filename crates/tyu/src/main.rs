@@ -86,6 +86,38 @@ fn main() {
                 }
             }
         }
+        args::Command::Doctor(doctor_args) => {
+            // S7/S8 dispatch: run the tier-scoped checks, apply --fix when
+            // requested, render (human | JSON), write --json-out, exit per
+            // FR-15.
+            let (report, fix) = tyu::doctor::run(&doctor_args, &project_manifest);
+            // The --fix report (EXECUTED/SUGGESTED/STILL-FAILING, FR-16) goes
+            // to stderr so the JSON stdout stream stays machine-clean.
+            if let Some(fix_report) = &fix {
+                eprint!("{}", tyu::doctor::render_fix(fix_report));
+            }
+            // --json-out ALWAYS writes the machine surface, regardless of
+            // --format (a silent no-op under the human format was a trap for
+            // doctor's primary consumers — agents and scripts). stdout still
+            // follows --format.
+            if let Some(path) = &doctor_args.json_out {
+                let json = tyu::doctor::render_json(&report);
+                if let Err(e) = std::fs::write(path, json.as_bytes()) {
+                    eprintln!("tyu: doctor: cannot write --json-out '{}': {}", path, e);
+                    std::process::exit(3);
+                }
+                eprintln!("tyu: doctor: json written to '{}'", path);
+            }
+            match doctor_args.format {
+                args::DoctorFormat::Json => {
+                    print!("{}", tyu::doctor::render_json(&report));
+                }
+                args::DoctorFormat::Human => {
+                    print!("{}", tyu::doctor::render_human(&report));
+                }
+            }
+            std::process::exit(report.exit_code());
+        }
         args::Command::Proof(proof_args) => {
             let result = match proof_args {
                 args::ProofArgs::Init { dir, input } => {
@@ -187,11 +219,9 @@ fn apply_project_to_build(args: &mut args::BuildArgs, manifest: &ProjectManifest
             }
         }
     }
+    // FR-21 sysroot rung: flag -> TYU_SYSROOT env -> cwd/sysroot.
     if args.sysroot.is_none() {
-        let candidate = cwd.join("sysroot");
-        if candidate.is_dir() {
-            args.sysroot = Some(candidate);
-        }
+        args.sysroot = tyu::sysroot::resolve(None, cwd);
     }
 }
 
@@ -211,11 +241,9 @@ fn apply_project_to_run(args: &mut args::RunArgs, manifest: &ProjectManifest, cw
             }
         }
     }
+    // FR-21 sysroot rung: flag -> TYU_SYSROOT env -> cwd/sysroot.
     if args.sysroot.is_none() {
-        let candidate = cwd.join("sysroot");
-        if candidate.is_dir() {
-            args.sysroot = Some(candidate);
-        }
+        args.sysroot = tyu::sysroot::resolve(None, cwd);
     }
 }
 

@@ -900,9 +900,9 @@ impl<'a> RiscVBackend<'a> {
     /// absolute constant.
     fn emit_mmio_aperture_addr(&mut self, aperture: u16, offset: u32) -> Result<(), CodegenError> {
         let mut found = None;
-        for i in 0..self.mmio_aperture_count {
-            if self.mmio_apertures[i].id == aperture {
-                found = Some(&self.mmio_apertures[i]);
+        for w in &self.mmio_apertures[..self.mmio_aperture_count] {
+            if w.id == aperture {
+                found = Some(w);
                 break;
             }
         }

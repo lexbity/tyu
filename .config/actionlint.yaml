@@ -1,0 +1,8 @@
+# GitHub-hosted runner labels beyond this pinned actionlint's built-in table.
+# ubuntu-26.04 is a real GitHub-hosted image (public preview; ubuntu-latest
+# migrates to it in 2026-11 per actions/runner-images) — declared here so the
+# label check does not false-positive. ci-lint.sh passes this file via
+# -config-file explicitly.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04

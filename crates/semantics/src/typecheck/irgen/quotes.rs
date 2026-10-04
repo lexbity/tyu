@@ -214,8 +214,8 @@ impl<'a, 'r> IrWordGen<'a, 'r> {
 
             let mut stack: [Value; 256] = [Value::Plain(TypeAtom::EMPTY); 256];
             let mut sp: usize = 0;
-            for i in 0..(sig.in_len as usize) {
-                stack[sp] = Value::Plain(sig.inputs[i]);
+            for &ty in sig.inputs[..sig.in_len as usize].iter() {
+                stack[sp] = Value::Plain(ty);
                 sp += 1;
             }
             let cur = lir::BlockId(0);
