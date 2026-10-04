@@ -23,6 +23,7 @@
 use std::fs;
 use std::path::PathBuf;
 
+use common::json::Json;
 use verifier::src_interp;
 use wasm_repl::frag;
 
@@ -35,6 +36,10 @@ fn corpus_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../verifier/test-vectors/fragment/index.json")
 }
 
+/// Does the test binary include the shared `common` module? (frag_parity is
+/// the only user of the JSON reader; the include keeps the module tree flat.)
+mod common;
+
 #[test]
 fn fragvec_corpus_agrees_with_committed_traces_and_frozen_upstream() {
     let raw = fs::read_to_string(corpus_path()).unwrap_or_else(|e| {
@@ -45,37 +50,60 @@ fn fragvec_corpus_agrees_with_committed_traces_and_frozen_upstream() {
             corpus_path().display()
         )
     });
-    let doc: serde_json::Value =
-        serde_json::from_str(&raw).expect("the fragvec corpus must parse as JSON");
-    assert_eq!(doc["schema"], FRAG_SCHEMA, "fragvec schema version pinned");
+    let doc = common::json::parse(&raw).expect("the fragvec corpus must parse as JSON");
+    assert_eq!(
+        doc.get("schema").and_then(Json::as_str),
+        Some(FRAG_SCHEMA),
+        "fragvec schema version pinned"
+    );
 
-    let programs = doc["programs"]
-        .as_array()
+    let programs = doc
+        .get("programs")
+        .and_then(Json::as_arr)
         .expect("the fragvec corpus has a programs array");
     assert!(!programs.is_empty(), "the fragvec corpus is empty");
 
     for p in programs {
-        let id = p["id"].as_str().expect("program id");
-        let blocks_text = p["blocks"].as_str().expect("canonical block text");
-        let entry = p["entry"].as_u64().expect("entry") as usize;
-        let fuel = p["fuel"].as_u64().expect("fuel") as usize;
-        let locals_cap = p["locals_cap"].as_u64().expect("locals_cap") as usize;
-        let load_oracle = p["load_oracle"].as_i64().expect("load_oracle");
-        let mmio_oracle = p["mmio_oracle"].as_i64().expect("mmio_oracle");
-        let init_stack: Vec<i64> = p["stack"]
-            .as_array()
+        let id = p.get("id").and_then(Json::as_str).expect("program id");
+        let blocks_text = p
+            .get("blocks")
+            .and_then(Json::as_str)
+            .expect("canonical block text");
+        let entry = p.get("entry").and_then(Json::as_i64).expect("entry") as usize;
+        let fuel = p.get("fuel").and_then(Json::as_i64).expect("fuel") as usize;
+        let locals_cap = p
+            .get("locals_cap")
+            .and_then(Json::as_i64)
+            .expect("locals_cap") as usize;
+        let load_oracle = p
+            .get("load_oracle")
+            .and_then(Json::as_i64)
+            .expect("load_oracle");
+        let mmio_oracle = p
+            .get("mmio_oracle")
+            .and_then(Json::as_i64)
+            .expect("mmio_oracle");
+        let init_stack: Vec<i64> = p
+            .get("stack")
+            .and_then(Json::as_arr)
             .expect("stack")
             .iter()
             .map(|v| v.as_i64().expect("stack value"))
             .collect();
-        let expect_term = p["expect"]["terminates"]
-            .as_bool()
+        let expect_term = p
+            .get("expect")
+            .and_then(|e| e.get("terminates"))
+            .and_then(Json::as_bool)
             .expect("expect.terminates");
-        let expect_stack: Option<Vec<i64>> = p["expect"]["exit_stack"].as_array().map(|a| {
-            a.iter()
-                .map(|v| v.as_i64().expect("exit_stack value"))
-                .collect()
-        });
+        let expect_stack: Option<Vec<i64>> = p
+            .get("expect")
+            .and_then(|e| e.get("exit_stack"))
+            .and_then(Json::as_arr)
+            .map(|a| {
+                a.iter()
+                    .map(|v| v.as_i64().expect("exit_stack value"))
+                    .collect()
+            });
 
         // -- the fork's live run ------------------------------------------------
         let fork_blocks = frag::blocks_from_text(blocks_text)

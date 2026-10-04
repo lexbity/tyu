@@ -1,0 +1,15 @@
+# contracts-elide — the L1/L3 layering under elision (§Q4, FR-5): with
+# `:elide`, the lowered contract guards (TrapIfFalse, trap 20) pass through,
+# while the interpreter-enforced subtype ranges (L3, trap 21) still trip —
+# guard elision flips L1 ONLY. Pinned at the transcript level (full traces).
+:fuel 100000
+subtype Percent = i64 range 0..100;
+: no-sevens ( i64 -- i64 bool ) dup 7 == not ;
+: add-safely ( i64 -- i64 ) needs [ no-sevens ] 1 + ;
+:noelide
+7 add-safely drop
+150 as Percent drop
+:elide
+7 add-safely drop
+150 as Percent drop
+:stack

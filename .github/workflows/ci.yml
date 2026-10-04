@@ -152,6 +152,41 @@ jobs:
         run: cargo test --release -p rsp-client -- qemu_read_register_and_memory
 
   # ---------------------------------------------------------------------------
+  # WASM — the browser REPL boundary (PLAN-WASM-1, ci/wasm.sh G52–G56)
+  # ---------------------------------------------------------------------------
+  # Builds the wasm32 cdylib, packs the sysroot blob, enforces the byte
+  # budgets, proves artifact reproducibility, and drives the real-browser
+  # smoke in both modes (normal + tampered red path). The selftest leg
+  # re-runs every gate's red path (AC-9).
+  wasm:
+    runs-on: ubuntu-26.04
+    needs: lint
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install tools (wasm)
+        # wasm-bindgen-cli must match the quarantined wasm-bindgen crate
+        # version exactly (crates/wasm-repl/Cargo.toml, R-4 pin).
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq brotli
+          rustup target add wasm32-unknown-unknown
+          cargo install wasm-bindgen-cli --version 0.2.108 --locked
+      - uses: actions/setup-node@6044e13b5db4789f651b0647997ca587f6d59396 # v4
+        with:
+          node-version: 22
+      - name: Install Playwright (browser smoke)
+        # `npm ci` from the committed lockfile — the smoke must not float.
+        run: |
+          cd web/test
+          npm ci --no-fund --no-audit
+          npx playwright install --with-deps chromium
+      - name: WASM gates
+        run: bash ci/wasm.sh
+      - name: WASM gates (red paths, AC-9)
+        run: bash ci/wasm.sh --selftest
+
+  # ---------------------------------------------------------------------------
   # ARM (armv7m) — cross-compiled under QEMU
   # ---------------------------------------------------------------------------
   arm:

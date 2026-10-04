@@ -10,6 +10,7 @@
 //! # comments and blank lines are ignored
 //! :fuel 1000            # set the per-phrase fuel (`0` = unlimited on host)
 //! :elide / :noelide     # toggle L1 guard elision (§Q4)
+//! :step N               # resume the fuel-suspended phrase with N ops (§Q8)
 //! :stack                # print the persistent stack (bottom-first)
 //! :ir                   # print the last-good `--emit=ir` hash (DEC-13)
 //! :irdump               # debug: print the last-good `--emit=ir` text verbatim
@@ -150,7 +151,8 @@ fn status_word(status: &Status) -> String {
         Status::Ok => "ok".to_string(),
         Status::CompileError { diag } => format!("compile-error E{}", diag.code),
         Status::Trapped { code, .. } => format!("trapped {}", ir::trap_code_u32(*code)),
-        Status::FuelExhausted => "fuel".to_string(),
+        Status::FuelExhausted { .. } => "fuel E9150".to_string(),
+        Status::Internal { diag } => format!("internal E{}", diag.code),
         Status::Exited { code } => format!("exited {code}"),
         Status::DeviceError { code, aperture, .. } => match aperture {
             Some(ap) => format!("device-error E{code} ap{ap}"),
@@ -245,6 +247,27 @@ fn replay(session: &mut ReplSession, search: &[Arc<MemTable>], script: &str) -> 
             let _ = writeln!(transcript, "elide: off");
             continue;
         }
+        if let Some(rest) = line.strip_prefix(":step") {
+            let n: u64 = rest.trim().parse().unwrap_or(0);
+            let label = if n == 0 {
+                "unlimited".to_string()
+            } else {
+                n.to_string()
+            };
+            let _ = writeln!(transcript, "step: {label}");
+            let result: SubmitResult = session.step(n);
+            let out: Vec<u8> = {
+                let start = result.output_new.start as usize;
+                let end = result.output_new.end as usize;
+                session.out_total()[start..end].to_vec()
+            };
+            let _ = write!(
+                transcript,
+                "{}",
+                status_line(&result.status, &out, &result.trace, &result.stack)
+            );
+            continue;
+        }
         if line == ":stack" {
             let _ = writeln!(transcript, "stack: {}", stack_line(&session.stack_cells()));
             continue;
@@ -284,15 +307,18 @@ fn replay(session: &mut ReplSession, search: &[Arc<MemTable>], script: &str) -> 
             "{}",
             status_line(&result.status, &out, &result.trace, &result.stack)
         );
-        if let Status::CompileError { diag } = &result.status {
-            let _ = writeln!(
-                transcript,
-                "diag: E{} @{}..{} {}",
-                diag.code,
-                diag.span.start,
-                diag.span.end,
-                String::from_utf8_lossy(&diag.message)
-            );
+        match &result.status {
+            Status::CompileError { diag } | Status::Internal { diag } => {
+                let _ = writeln!(
+                    transcript,
+                    "diag: E{} @{}..{} {}",
+                    diag.code,
+                    diag.span.start,
+                    diag.span.end,
+                    String::from_utf8_lossy(&diag.message)
+                );
+            }
+            _ => {}
         }
     }
     let _ = writeln!(transcript, "---");
@@ -331,6 +357,51 @@ fn main() {
         .unwrap_or(("help", &[]));
 
     match mode {
+        "pack-sysroot" => {
+            // Build `tyu-sysroot/1` from the hosted sysroot's `.def` sources
+            // (§Q12): the SAME in-memory table the replay mode uses, encoded
+            // content-hashed and path-sorted — deterministic, so G55's fresh
+            // re-pack byte-compare is a valid drift check (R-7).
+            let out = rest
+                .first()
+                .expect("usage: repl-cli pack-sysroot <out-blob>");
+            let mut files: Vec<(Vec<u8>, Arc<[u8]>)> = Vec::new();
+            let root = workspace_root().join("sysroot");
+            let mut stack = vec![root.clone()];
+            while let Some(dir) = stack.pop() {
+                if let Ok(entries) = std::fs::read_dir(&dir) {
+                    for e in entries.flatten() {
+                        let p = e.path();
+                        if p.is_dir() {
+                            stack.push(p);
+                        } else if p.extension().map(|x| x == "def").unwrap_or(false) {
+                            let rel = p
+                                .strip_prefix(&root)
+                                .unwrap()
+                                .to_str()
+                                .unwrap()
+                                .replace('\\', "/");
+                            if let Ok(bytes) = std::fs::read(&p) {
+                                files.push((rel.into_bytes(), Arc::from(bytes)));
+                            }
+                        }
+                    }
+                }
+            }
+            files.sort_by(|a, b| a.0.cmp(&b.0));
+            let refs: Vec<(&[u8], &[u8])> = files
+                .iter()
+                .map(|(p, c)| -> (&[u8], &[u8]) { (p.as_slice(), &**c) })
+                .collect();
+            let blob = wasm_repl::encode_blob(&refs).expect("pack");
+            std::fs::write(out, &blob).expect("write blob");
+            println!(
+                "packed {} files, {} bytes → {}",
+                files.len(),
+                blob.len(),
+                out
+            );
+        }
         "run" => {
             let file = rest.first().expect("usage: repl-cli run <session>");
             let script = std::fs::read_to_string(file).expect("read session");
@@ -368,7 +439,7 @@ fn main() {
             }
         }
         other => {
-            eprintln!("usage: repl-cli (run|replay) <session> [--check]; got '{other}'");
+            eprintln!("usage: repl-cli (run|replay|pack-sysroot) ... ; got '{other}'");
             std::process::exit(2);
         }
     }

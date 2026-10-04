@@ -398,7 +398,11 @@ fn unbound_aperture_surfaces_e9152() {
     match out {
         Outcome::Device { code, aperture, .. } => {
             assert_eq!(code, 9152, "E9152");
-            assert_eq!(aperture, Some(0), "the aperture id travels with the diagnostic");
+            assert_eq!(
+                aperture,
+                Some(0),
+                "the aperture id travels with the diagnostic"
+            );
         }
         other => panic!("expected E9152 device failure, got {other:?}"),
     }

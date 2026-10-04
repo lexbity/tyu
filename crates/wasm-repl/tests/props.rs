@@ -199,7 +199,7 @@ proptest! {
         sizes in prop::collection::vec(1u64..=4096, 1..20),
     ) {
         let mut heap = RegionHeap::new();
-        let h = heap.region_create(1 << 20).expect("big region");
+        let (h, _) = heap.region_create(1 << 20).expect("big region");
         let base = heap.region_base(h).expect("live region base");
         let mut cursor = 0u64;
         for size in sizes {
@@ -211,31 +211,48 @@ proptest! {
     }
 }
 
-/// The aliasing property (R-3 / DEC-15): a `dup`-carried address read
-/// through either copy returns the value stored through the other — the
-/// native by-ref VALUE semantics. An eager-copy engine would diverge here.
-#[test]
-fn dup_copies_the_reference_not_the_aggregate() {
-    // const 0x1234; dup; swap; const 42; store; load
-    //   store writes mem[0x1234] ← 42 (the value comes from the dup copy),
-    //   then a load of the original (surviving) address returns 42.
-    let blocks = vec![vec![
-        SrcOp::ConstInt(0x1234),
-        SrcOp::Dup,
-        SrcOp::Swap,
-        SrcOp::ConstInt(42),
-        SrcOp::Store,
-        SrcOp::Load,
-        SrcOp::Ret,
-    ]];
-    let mem = Mem::new(0, 0);
-    let st = State::fresh(4);
-    let out = frag::run_word(&blocks, 0, 8, &mem, &st).expect("terminates");
-    assert_eq!(
-        out.stack,
-        vec![42],
-        "a store through the dup copy must be visible through the original reference"
-    );
+/// The aliasing property (R-3 / DEC-15 as amended): EVERY number of
+/// reference copies aliases ONE storage cell. `k` dups of a base address,
+/// then a store through each copy in turn, must leave exactly one memory
+/// cell holding the LAST stored value, and the surviving original reference
+/// must read it back. An engine that duplicates storage per copy (the
+/// eager-copy straw model DEC-15 considered and the corpus rejected) would
+/// leave `k + 1` cells and read a stale value — diverging here by
+/// construction. The G53 aliasing probes pin the same property against the
+/// native goldens; this property pins it over arbitrary shapes.
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(128))]
+
+    #[test]
+    fn reference_copies_alias_one_storage_cell(
+        base in 0x1000i64..0x8000i64,
+        (k, vals) in (0usize..8usize).prop_flat_map(|k| {
+            (Just(k), prop::collection::vec(any::<i64>(), k + 1..=k + 1))
+        }),
+    ) {
+        // k + 2 copies of the base address (the literal + `k + 1` dups);
+        // `k + 1` stores consume the topmost copies one by one, each storing
+        // through a *different* copy of the reference; the surviving original
+        // is read back last. (With k = 0 this is the worked single-alias
+        // case: dup, store through the copy, load through the original.)
+        let mut ops: Vec<SrcOp> = vec![SrcOp::ConstInt(base)];
+        ops.extend(core::iter::repeat(SrcOp::Dup).take(k + 1));
+        for v in &vals {
+            ops.push(SrcOp::ConstInt(*v));
+            ops.push(SrcOp::Store);
+        }
+        ops.push(SrcOp::Load);
+        ops.push(SrcOp::Ret);
+        let blocks = vec![ops];
+
+        let mem = Mem::new(0, 0);
+        let st = State::fresh(4);
+        let out = frag::run_word(&blocks, 0, 128, &mem, &st).expect("terminates");
+
+        let last = *vals.last().expect("at least one store");
+        prop_assert_eq!(out.stack, vec![last],
+            "the surviving reference must read the last value stored through any copy — by-ref");
+    }
 }
 
 /// Destroyed region slots are reused with fresh (zeroed) storage — the native
@@ -243,12 +260,12 @@ fn dup_copies_the_reference_not_the_aggregate() {
 #[test]
 fn destroyed_region_slots_are_reused_fresh() {
     let mut heap = RegionHeap::new();
-    let h1 = heap.region_create(64).expect("create");
+    let (h1, _) = heap.region_create(64).expect("create");
     let (p1, _) = heap.region_alloc(h1, 8).expect("alloc");
     let _ = p1;
     heap.region_destroy(h1).expect("destroy");
 
-    let h2 = heap.region_create(64).expect("recreate");
+    let (h2, _) = heap.region_create(64).expect("recreate");
     assert_eq!(
         h1, h2,
         "the destroyed slot must be reusable (native scans size==0)"

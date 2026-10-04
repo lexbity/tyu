@@ -208,7 +208,10 @@ fn fuel_exhaustion_rolls_back() {
         submit(&mut sess, b": reloop ( i64 -- i64 ) 1 + reloop ;"),
         Status::Ok
     );
-    assert_eq!(submit(&mut sess, b"0 reloop"), Status::FuelExhausted);
+    assert!(matches!(
+        submit(&mut sess, b"0 reloop"),
+        Status::FuelExhausted { diag } if diag.code == wasm_repl::diag::code::E9150_FUEL
+    ));
     assert!(
         sess.stack_cells().is_empty(),
         "fuel rollback restores the stack"
@@ -252,7 +255,7 @@ fn journal_reversal_is_lifo() {
     // A heap with one live region (slot 0) plus a second region created
     // during the "phrase".
     let mut heap = wasm_repl::heap::RegionHeap::new();
-    let h0 = heap.region_create(64).unwrap();
+    let (h0, _) = heap.region_create(64).unwrap();
     assert_eq!(h0, 0);
     let (p0, _) = heap.region_alloc(0, 16).unwrap();
 
@@ -266,8 +269,12 @@ fn journal_reversal_is_lifo() {
         width: 8,
         old: 0,
     });
-    let h1 = state.heap.region_create(32).unwrap();
-    journal.push(Effect::RegionCreate { handle: h1 });
+    let (h1, old_cursor1) = state.heap.region_create(32).unwrap();
+    let _ = h1;
+    journal.push(Effect::RegionCreate {
+        handle: 1,
+        old_cursor: old_cursor1,
+    });
     let (p1, old_off1) = state.heap.region_alloc(1, 8).unwrap();
     let _ = (p1, old_off1);
     journal.push(Effect::RegionAlloc {
@@ -287,10 +294,13 @@ fn journal_reversal_is_lifo() {
     for e in journal.iter().rev() {
         match e {
             Effect::Store { addr, width, old } => state.heap.compensate_store(*addr, *width, *old),
-            Effect::RegionCreate { handle } => state.heap.compensate_region_create(*handle),
+            Effect::RegionCreate { handle, old_cursor } => {
+                state.heap.compensate_region_create(*handle, *old_cursor)
+            }
             Effect::RegionAlloc { handle, old_off } => {
                 state.heap.compensate_cursor(*handle, *old_off)
             }
+            Effect::Intern { addr, old_cursor } => state.heap.compensate_intern(*addr, *old_cursor),
             Effect::RegionReset { handle, old_off } => {
                 state.heap.compensate_cursor(*handle, *old_off)
             }
@@ -320,28 +330,6 @@ fn journal_reversal_is_lifo() {
 // P4: session-level MMIO — descriptor attached → phrase runs against the
 // session device; device faults roll back like traps
 // ---------------------------------------------------------------------------
-
-fn mmio_refs() -> (
-    ReplSession,
-    Vec<&'static dyn SourceTable>,
-    std::vec::Vec<std::sync::Arc<common::MemTable>>,
-) {
-    use codegen_core::compiled_desc::{decode_compiled_desc, validate_compiled_desc};
-    let mut sess = ReplSession::new(SessionOpts::default());
-    let bytes = std::fs::read(
-        common::workspace_root().join("platforms/x86_64-unknown-none/platform.desc"),
-    )
-    .expect("platform.desc committed");
-    let cd = decode_compiled_desc(&bytes).expect("decode platform.desc");
-    validate_compiled_desc(&cd).expect("validate platform.desc");
-    sess.set_descriptor(Some(Box::new(cd)));
-    sess.set_peripheral(Box::new(wasm_repl::RamDevice::new(&[0])));
-    let s = common::sysroot_search();
-    let r = refs(&s);
-    // SAFETY-free: the table lives for the test; re-derive refs per submit.
-    let r2 = unsafe { core::mem::transmute::<Vec<&dyn SourceTable>, Vec<&'static dyn SourceTable>>(r) };
-    (sess, r2, s)
-}
 
 /// The MMIO session module: same rows as the descriptor's `scratch` device
 /// (E3647 divergence otherwise). `poke-a` writes the argument to A;
@@ -376,10 +364,9 @@ fn descriptorless_mmio_session_is_e3640() {
 #[test]
 fn mmio_session_phrase_runs_against_the_session_device() {
     let mut sess = ReplSession::new(SessionOpts::default());
-    let bytes = std::fs::read(
-        common::workspace_root().join("platforms/x86_64-unknown-none/platform.desc"),
-    )
-    .expect("platform.desc committed");
+    let bytes =
+        std::fs::read(common::workspace_root().join("platforms/x86_64-unknown-none/platform.desc"))
+            .expect("platform.desc committed");
     let cd = codegen_core::compiled_desc::decode_compiled_desc(&bytes).expect("decode");
     codegen_core::compiled_desc::validate_compiled_desc(&cd).expect("validate");
     sess.set_descriptor(Some(Box::new(cd)));
@@ -387,8 +374,18 @@ fn mmio_session_phrase_runs_against_the_session_device() {
     sess.set_peripheral(Box::new(wasm_repl::ScriptedPeripheral::new(
         &[0],
         vec![
-            wasm_repl::ScriptStep::Write { aperture: 0, off: 0x0, width: 4, val: 42 },
-            wasm_repl::ScriptStep::Read { aperture: 0, off: 0x0, width: 4, reply: 42 },
+            wasm_repl::ScriptStep::Write {
+                aperture: 0,
+                off: 0x0,
+                width: 4,
+                val: 42,
+            },
+            wasm_repl::ScriptStep::Read {
+                aperture: 0,
+                off: 0x0,
+                width: 4,
+                reply: 42,
+            },
         ],
     )));
 
@@ -399,7 +396,14 @@ fn mmio_session_phrase_runs_against_the_session_device() {
     assert_eq!(st, Status::Ok, "descriptor-backed MMIO compiles");
 
     // Phrase: poke A=42 then read it back — 42 rests on the session stack.
-    let st = sess.transactional_submit(b"42 poke-a read-a", &s.iter().map(|t| t.as_ref() as &dyn SourceTable).collect::<Vec<_>>()).status;
+    let st = sess
+        .transactional_submit(
+            b"42 poke-a read-a",
+            &s.iter()
+                .map(|t| t.as_ref() as &dyn SourceTable)
+                .collect::<Vec<_>>(),
+        )
+        .status;
     assert_eq!(st, Status::Ok);
     let cells = sess.stack_cells();
     assert_eq!(cells.len(), 1);
@@ -409,30 +413,51 @@ fn mmio_session_phrase_runs_against_the_session_device() {
 #[test]
 fn mmio_session_fault_rolls_back_the_register() {
     let mut sess = ReplSession::new(SessionOpts::default());
-    let bytes = std::fs::read(
-        common::workspace_root().join("platforms/x86_64-unknown-none/platform.desc"),
-    )
-    .expect("platform.desc committed");
+    let bytes =
+        std::fs::read(common::workspace_root().join("platforms/x86_64-unknown-none/platform.desc"))
+            .expect("platform.desc committed");
     let cd = codegen_core::compiled_desc::decode_compiled_desc(&bytes).expect("decode");
     codegen_core::compiled_desc::validate_compiled_desc(&cd).expect("validate");
     sess.set_descriptor(Some(Box::new(cd)));
     sess.set_peripheral(Box::new(wasm_repl::RamDevice::new(&[0])));
 
     let s = common::sysroot_search();
-    let st = sess.transactional_submit(MMIO_SESSION_MOD, &s.iter().map(|t| t.as_ref() as &dyn SourceTable).collect::<Vec<_>>()).status;
+    let st = sess
+        .transactional_submit(
+            MMIO_SESSION_MOD,
+            &s.iter()
+                .map(|t| t.as_ref() as &dyn SourceTable)
+                .collect::<Vec<_>>(),
+        )
+        .status;
     assert_eq!(st, Status::Ok);
 
     // A phrase that pokes A=7 then recurses to a stack-overflow trap: the
-    // MMIO store rolls back with the phrase (transaction #2, §7.3) — the
-    // register must read back its phrase-entry value (0).
-    let st = sess.transactional_submit(b"fault-after-poke", &s.iter().map(|t| t.as_ref() as &dyn SourceTable).collect::<Vec<_>>()).status;
+    // stack/heap roll back (transaction #2, §7.3), but the MMIO store is a
+    // PERIPHERAL effect — never undone (DEC-6: "the LED cannot un-blink",
+    // §Q3 "what is out"). The register must read back the poked value (7).
+    let st = sess
+        .transactional_submit(
+            b"fault-after-poke",
+            &s.iter()
+                .map(|t| t.as_ref() as &dyn SourceTable)
+                .collect::<Vec<_>>(),
+        )
+        .status;
     assert!(is_trap_10(&st), "expected the recursion trap, got {st:?}");
-    let st = sess.transactional_submit(b"read-a", &s.iter().map(|t| t.as_ref() as &dyn SourceTable).collect::<Vec<_>>()).status;
+    let st = sess
+        .transactional_submit(
+            b"read-a",
+            &s.iter()
+                .map(|t| t.as_ref() as &dyn SourceTable)
+                .collect::<Vec<_>>(),
+        )
+        .status;
     assert_eq!(st, Status::Ok);
     let cells = sess.stack_cells();
     assert_eq!(cells.len(), 1, "the register reads back exactly one value");
     assert_eq!(
-        cells[0].value_hex, b"0x0000000000000000",
-        "the faulted store (A=7) rolled back — the register holds its pre-fault value"
+        cells[0].value_hex, b"0x0000000000000007",
+        "the faulted store (A=7) is a peripheral effect — it persists across the rollback (DEC-6)"
     );
 }

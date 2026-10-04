@@ -142,7 +142,30 @@ impl<'a> Env<'a> {
                         }
                         // A word with a declared effect (operator words like
                         // `+` `-` `*` `>` `<` are lexed as Idents).
-                        self.call_word(text, &mut lex, src)?;
+                        //
+                        // Dotted names (`testio.write-byte`,
+                        // `platform.mem.region-create`) lex as
+                        // `Ident (PunctDot Ident)*` — reassemble the full
+                        // call name before the lookup, or the interpreter
+                        // builtins and imported module words are
+                        // unreachable from phrases. (§7.2: this
+                        // accommodation lives in the session layer, never
+                        // the production parser.)
+                        let mut name: Vec<u8> = text.to_vec();
+                        loop {
+                            let mut look = lex;
+                            if look.next().kind != TokenKind::PunctDot {
+                                break;
+                            }
+                            let id = look.next();
+                            if id.kind != TokenKind::Ident {
+                                return None;
+                            }
+                            name.push(b'.');
+                            name.extend_from_slice(&src[id.span.start..id.span.end]);
+                            lex = look;
+                        }
+                        self.call_word(&name, &mut lex, src)?;
                     }
                 },
                 _ => return None,

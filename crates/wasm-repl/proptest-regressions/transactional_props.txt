@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc ef535e40dca35fcf56d59ee584347c07786cfe5a6f0ee095693e844afcd91573 # shrinks to acts = [Create(8)]
+cc c2b6972ac9bee2e7eeb905f3aac2f638759399299c6e9a908829f8b07dae9f75 # shrinks to toks = [Lit(-1)]

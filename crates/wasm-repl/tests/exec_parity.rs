@@ -52,15 +52,11 @@ fn tyu_exe() -> PathBuf {
 }
 
 fn tool_available(name: &str) -> bool {
-    if Command::new("which")
+    Command::new("which")
         .arg(name)
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
-    {
-        return true;
-    }
-    langc_exe().exists() || tyu_exe().exists()
 }
 
 fn require_tools() -> bool {

@@ -65,8 +65,9 @@ pub enum Outcome {
     /// `testio.exit ( i64 -- )` — the module run terminated with a code
     /// (`0` = pass); the session survives.
     Exited { code: i64, out: Vec<u8> },
-    /// Fuel exhausted (E9150 surface): deterministic, resumable.
-    Fuel { out: Vec<u8> },
+    /// Fuel exhausted (E9150 surface): deterministic, resumable. `span` is
+    /// the op that would have executed next (the E9150 diagnostic's span).
+    Fuel { span: Span, out: Vec<u8> },
     /// A device-level failure surfaced as a REPL-layer diagnostic (P4): the
     /// peripheral reported an unbound aperture (E9152), carrying the aperture
     /// id when known. Distinct from a trap (trap numerics are frozen, I-3).
@@ -77,6 +78,43 @@ pub enum Outcome {
         aperture: Option<u16>,
         out: Vec<u8>,
     },
+    /// An engine-internal fault (E9158, or E9156's runtime backstop): a
+    /// verified-IR-unreachable state. Always a bug — the page fails loudly
+    /// (§6.5). Output already emitted stays emitted.
+    Internal { fault: Fault, out: Vec<u8> },
+}
+
+/// An engine-internal fault (PLAN-WASM-1 §7.5, E9158): a state the *verified*
+/// IR cannot reach (a missing block/target, a table mismatch between the
+/// engine and the compiled artifact). Always an engine bug or an
+/// engine/lowering contract break — surfaced as a REPL-layer diagnostic, so
+/// the frozen trap numerics stay reserved for program-level traps (I-3).
+/// `E9156` reuses this shape for its runtime backstop arm (tasks/interrupts
+/// are rejected at compile; reaching the arm at all is recorded, not
+/// mis-executed, FR-3).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Fault {
+    pub code: u32,
+    pub span: Span,
+    pub message: &'static [u8],
+}
+
+impl Fault {
+    fn internal(span: Span, message: &'static [u8]) -> Fault {
+        Fault {
+            code: code::E9158_INTERNAL,
+            span,
+            message,
+        }
+    }
+
+    fn tasks(span: Span) -> Fault {
+        Fault {
+            code: code::E9156_TASKS,
+            span,
+            message: b"task/interrupt op reached the engine (must be rejected at submit)",
+        }
+    }
 }
 
 /// The execution state (§5).
@@ -97,10 +135,14 @@ pub struct ExecState {
     /// L1 guard elision (§Q4): when set, `TrapIfFalse` runs as a no-op (the
     /// emitted guard is skipped); L2/L3 are never affected.
     pub elide_guards: bool,
+    /// The cursor of the next op to execute — the resume point (§Q6/§Q8:
+    /// fuel exhaustion suspends here; `Engine::resume` continues from it).
+    pub cursor: Option<Cursor>,
     /// Interned `ConstStr` addresses: `(span.start, addr)`.
     strings: Vec<(u32, u64)>,
-    /// Resource-place storage: `(place bytes, addr)`.
-    resources: Vec<(Vec<u8>, u64)>,
+    /// Resource-place storage: `(place bytes, addr)` — phrase-scoped (the
+    /// rollback reclaims the interned reservations, so the cache must go).
+    pub(crate) resources: Vec<(Vec<u8>, u64)>,
 }
 
 impl ExecState {
@@ -133,6 +175,7 @@ impl ExecState {
             fuel: Fuel::new(crate::fuel::DEFAULT_FUEL),
             journal: Journal::new(),
             elide_guards: false,
+            cursor: None,
             strings,
             resources: Vec::new(),
         }
@@ -154,6 +197,7 @@ impl ExecState {
             fuel,
             journal: Journal::new(),
             elide_guards,
+            cursor: None,
             strings: Vec::new(),
             resources: Vec::new(),
         }
@@ -204,12 +248,18 @@ impl ExecState {
     }
 
     /// Address of a resource place: a heap-backed area allocated lazily (in
-    /// first-access order — deterministic for a given run, §Q6).
+    /// first-access order — deterministic for a given run, §Q6). The
+    /// reservation is journaled (DEC-5): a rollback reclaims it and drops
+    /// the per-run cache (`resources` is phrase-scoped — see `rollback`).
     pub fn resource_addr(&mut self, place: &[u8]) -> u64 {
         if let Some((_, a)) = self.resources.iter().find(|(p, _)| p == place) {
             return *a;
         }
+        let old_cursor = self.heap.arena_cursor();
         let addr = self.heap.intern(&[]).unwrap_or(0);
+        if addr != 0 {
+            self.journal.push(Effect::Intern { addr, old_cursor });
+        }
         self.resources.push((place.to_vec(), addr));
         addr
     }
@@ -249,16 +299,14 @@ impl<'c> Engine<'c> {
     /// module compiled with a platform descriptor (P4).
     pub fn run(&self, entry: &[u8], state: &mut ExecState, periph: &mut dyn Peripheral) -> Outcome {
         let Some(target) = self.compiled.dict_lookup(entry) else {
-            return Outcome::Trap {
-                code: TrapCode::Unreachable,
-                span: Span::UNKNOWN,
+            return Outcome::Internal {
+                fault: Fault::internal(Span::UNKNOWN, b"entry word missing from the dictionary"),
                 out: core::mem::take(&mut state.out),
             };
         };
         let DictTarget::Word(word_idx) = target else {
-            return Outcome::Trap {
-                code: TrapCode::Unreachable,
-                span: Span::UNKNOWN,
+            return Outcome::Internal {
+                fault: Fault::internal(Span::UNKNOWN, b"entry name resolves to a builtin"),
                 out: core::mem::take(&mut state.out),
             };
         };
@@ -283,11 +331,42 @@ impl<'c> Engine<'c> {
         self.drive(cursor, state, periph)
     }
 
+    /// Resume a fuel-suspended run from `state.cursor` (§Q6/§Q8 — the
+    /// stepping primitive). The state must be one that a previous
+    /// `run`/`resume` left in `Outcome::Fuel`; the cursor is stored on the
+    /// state at every step, so the engine carries no suspended-run registry.
+    pub fn resume(&self, state: &mut ExecState, periph: &mut dyn Peripheral) -> Outcome {
+        let Some(cursor) = state.cursor else {
+            return Outcome::Internal {
+                fault: Fault::internal(Span::UNKNOWN, b"resume without a stored cursor"),
+                out: core::mem::take(&mut state.out),
+            };
+        };
+        self.drive(cursor, state, periph)
+    }
+
+    /// The span of the op at `cur` (Span::UNKNOWN when the cursor itself is
+    /// out of range — which `step` will fault on immediately after).
+    fn op_span(&self, cur: Cursor) -> Span {
+        self.compiled
+            .module
+            .words
+            .get(cur.word)
+            .and_then(|w| w.blocks.get(cur.block))
+            .and_then(|b| b.ops.get(cur.op))
+            .map(|op| op.span)
+            .unwrap_or(Span::UNKNOWN)
+    }
+
     fn drive(&self, cursor: Cursor, state: &mut ExecState, periph: &mut dyn Peripheral) -> Outcome {
         let mut cur = cursor;
         loop {
+            // Record the resume point BEFORE consuming fuel: an exhaustion
+            // return leaves `state.cursor` at the op that did not run (§Q8).
+            state.cursor = Some(cur);
             if !state.fuel.take() {
                 return Outcome::Fuel {
+                    span: self.op_span(cur),
                     out: core::mem::take(&mut state.out),
                 };
             }
@@ -312,10 +391,9 @@ impl<'c> Engine<'c> {
                         out: core::mem::take(&mut state.out),
                     };
                 }
-                StepResult::Fault => {
-                    return Outcome::Trap {
-                        code: TrapCode::Unreachable,
-                        span: Span::UNKNOWN,
+                StepResult::Fault(fault) => {
+                    return Outcome::Internal {
+                        fault,
                         out: core::mem::take(&mut state.out),
                     };
                 }
@@ -334,10 +412,16 @@ impl<'c> Engine<'c> {
     fn step(&self, cur: Cursor, state: &mut ExecState, periph: &mut dyn Peripheral) -> StepResult {
         let word = &self.compiled.module.words[cur.word];
         let Some(block) = word.blocks.get(cur.block) else {
-            return StepResult::Fault;
+            return StepResult::Fault(Fault::internal(
+                Span::UNKNOWN,
+                b"cursor block out of range (verified IR cannot reach this)",
+            ));
         };
         let Some(op) = block.ops.get(cur.op) else {
-            return StepResult::Fault;
+            return StepResult::Fault(Fault::internal(
+                Span::UNKNOWN,
+                b"cursor op out of range (verified IR cannot reach this)",
+            ));
         };
         let next_op = Cursor {
             word: cur.word,
@@ -358,7 +442,7 @@ impl<'c> Engine<'c> {
                     state.stack.push(Slot::ptr(ir::TY_STR, addr));
                     StepResult::Continue(next_op)
                 }
-                None => StepResult::Fault,
+                None => StepResult::Trap(TrapCode::RegionExhausted, op.span),
             },
             OpKind::AddrOf {
                 place,
@@ -393,9 +477,9 @@ impl<'c> Engine<'c> {
             }
             OpKind::ScopedEnter { ty, len } => match self.step_scoped_enter(word, ty, len, state) {
                 Ok(()) => StepResult::Continue(next_op),
-                Err(()) => StepResult::Fault,
+                Err(fault) => StepResult::Trap(fault, op.span),
             },
-            OpKind::TaskSpawn { .. } => StepResult::Fault,
+            OpKind::TaskSpawn { .. } => StepResult::Fault(Fault::tasks(op.span)),
             OpKind::PtrAddConst { offset, .. } => match pop_ptr(state) {
                 Ok(p) => {
                     state
@@ -497,7 +581,9 @@ impl<'c> Engine<'c> {
                 }
                 Err(t) => StepResult::Trap(t, op.span),
             },
-            OpKind::InterruptDisable | OpKind::InterruptEnable => StepResult::Fault,
+            OpKind::InterruptDisable | OpKind::InterruptEnable => {
+                StepResult::Fault(Fault::tasks(op.span))
+            }
             OpKind::LocalSet { slot, ty: _ } => match pop_slot(state) {
                 Ok(v) => {
                     if let Some(f) = state.frames.last_mut() {
@@ -582,15 +668,18 @@ impl<'c> Engine<'c> {
                         op: 0,
                     })
                 }
-                None => StepResult::Fault,
+                None => StepResult::Fault(Fault::internal(
+                    op.span,
+                    b"call target out of range (dictionary resolution guarantees a word)",
+                )),
             },
-            OpKind::Load { ty } => match self.step_load(word, ty, state) {
+            OpKind::Load { ty } => match self.step_load(word, ty, op.span, state) {
                 Ok(()) => StepResult::Continue(next_op),
-                Err(()) => StepResult::Trap(TrapCode::AssertFail, op.span),
+                Err(e) => e,
             },
-            OpKind::Store { ty } => match self.step_store(word, ty, state) {
+            OpKind::Store { ty } => match self.step_store(word, ty, op.span, state) {
                 Ok(()) => StepResult::Continue(next_op),
-                Err(()) => StepResult::Trap(TrapCode::AssertFail, op.span),
+                Err(e) => e,
             },
             OpKind::MmioVolLoad {
                 place: _,
@@ -663,7 +752,10 @@ impl<'c> Engine<'c> {
                     block: b,
                     op: 0,
                 }),
-                None => StepResult::Fault,
+                None => StepResult::Fault(Fault::internal(
+                    op.span,
+                    b"branch target out of range (verified IR cannot reach this)",
+                )),
             },
             OpKind::BrIf { then_tgt, else_tgt } => {
                 let truthy = state.stack.pop().map(|s| s.val.truthy()).unwrap_or(false);
@@ -674,7 +766,10 @@ impl<'c> Engine<'c> {
                         block: b,
                         op: 0,
                     }),
-                    None => StepResult::Fault,
+                    None => StepResult::Fault(Fault::internal(
+                        op.span,
+                        b"branch target out of range (verified IR cannot reach this)",
+                    )),
                 }
             }
             OpKind::Ret => match state.frames.pop().and_then(|f| f.ret) {
@@ -690,21 +785,21 @@ impl<'c> Engine<'c> {
         ty: ir::TypeId,
         len: u32,
         state: &mut ExecState,
-    ) -> Result<(), ()> {
+    ) -> Result<(), TrapCode> {
         match word.type_classes.get(ty.0 as usize).copied() {
             // Slice: a `{ptr,len}` descriptor whose address is pushed (native
             // stores it in the frame's scoped area; the heap is the concrete
             // arena here, §6.7).
             Some(ir::TypeClass::Slice) => {
                 let base = state.stack.last().map(|s| s.val.as_u64()).unwrap_or(0);
-                let addr = state
+                let (addr, old_cursor) = state
                     .heap
                     .scoped_enter(base, u64::from(len))
-                    .map_err(|_| ())?;
+                    .map_err(|f| f.trap())?;
                 state.stack.push(Slot::ptr(ty, addr));
                 // Journal the descriptor allocation so a rollback drops its
-                // live range (§7.3).
-                state.journal.push(Effect::ScopedEnter { addr });
+                // live range and reclaims the span (§7.3).
+                state.journal.push(Effect::ScopedEnter { addr, old_cursor });
                 Ok(())
             }
             Some(ir::TypeClass::RegionRef | ir::TypeClass::RegionRefMut) => {
@@ -712,7 +807,7 @@ impl<'c> Engine<'c> {
                 state.stack.push(top);
                 Ok(())
             }
-            _ => Err(()),
+            _ => Err(TrapCode::Unreachable),
         }
     }
 
@@ -744,12 +839,23 @@ impl<'c> Engine<'c> {
         Ok(Slot { ty: to, val: v.val })
     }
 
-    fn step_load(&self, word: &ir::Word, ty: ir::TypeId, state: &mut ExecState) -> Result<(), ()> {
-        let (bits, signed) =
-            ir::storage_bits_signed(word, ty, self.spec.word_bits as u16).ok_or(())?;
+    fn step_load(
+        &self,
+        word: &ir::Word,
+        ty: ir::TypeId,
+        span: Span,
+        state: &mut ExecState,
+    ) -> Result<(), StepResult> {
+        let (bits, signed) = ir::storage_bits_signed(word, ty, self.spec.word_bits as u16)
+            .ok_or_else(|| {
+                StepResult::Fault(Fault::internal(span, b"load type has no storage encoding"))
+            })?;
         let width = bits_to_width(bits);
-        let addr = pop_ptr(state).map_err(|_| ())?;
-        let raw = state.heap.load(addr, width).map_err(|_| ())?;
+        let addr = pop_ptr(state).map_err(|t| StepResult::Trap(t, span))?;
+        let raw = state
+            .heap
+            .load(addr, width)
+            .map_err(|f| StepResult::Trap(f.trap(), span))?;
         let v = match (width, signed) {
             (1, true) => (raw as u8 as i8) as i64,
             (1, false) => (raw as u8) as i64,
@@ -758,18 +864,35 @@ impl<'c> Engine<'c> {
             (4, true) => (raw as u32 as i32) as i64,
             (4, false) => raw as u32 as i64,
             (8, _) => raw as i64,
-            _ => return Err(()),
+            _ => {
+                return Err(StepResult::Fault(Fault::internal(
+                    span,
+                    b"unreachable storage width",
+                )))
+            }
         };
         state.stack.push(Slot::int(ty, v));
         Ok(())
     }
 
-    fn step_store(&self, word: &ir::Word, ty: ir::TypeId, state: &mut ExecState) -> Result<(), ()> {
-        let (bits, _) = ir::storage_bits_signed(word, ty, self.spec.word_bits as u16).ok_or(())?;
+    fn step_store(
+        &self,
+        word: &ir::Word,
+        ty: ir::TypeId,
+        span: Span,
+        state: &mut ExecState,
+    ) -> Result<(), StepResult> {
+        let (bits, _) =
+            ir::storage_bits_signed(word, ty, self.spec.word_bits as u16).ok_or_else(|| {
+                StepResult::Fault(Fault::internal(span, b"store type has no storage encoding"))
+            })?;
         let width = bits_to_width(bits);
-        let v = pop_int(state).map_err(|_| ())?;
-        let addr = pop_ptr(state).map_err(|_| ())?;
-        let old = state.heap.store(addr, width, v as u64).map_err(|_| ())?;
+        let v = pop_int(state).map_err(|t| StepResult::Trap(t, span))?;
+        let addr = pop_ptr(state).map_err(|t| StepResult::Trap(t, span))?;
+        let old = state
+            .heap
+            .store(addr, width, v as u64)
+            .map_err(|f| StepResult::Trap(f.trap(), span))?;
         // Journal the store's old bytes — the transaction's heap undo (§7.3).
         state.journal.push(Effect::Store { addr, width, old });
         Ok(())
@@ -824,7 +947,12 @@ impl<'c> Engine<'c> {
         state: &mut ExecState,
         periph: &mut dyn Peripheral,
     ) -> Result<(), StepResult> {
-        let width = self.mmio_width(word, ty).ok_or(StepResult::Fault)?;
+        let width = self.mmio_width(word, ty).ok_or_else(|| {
+            StepResult::Fault(Fault::internal(
+                span,
+                b"mmio register width unresolved (descriptor/module mismatch)",
+            ))
+        })?;
         let addr = pop_ptr(state).map_err(|t| StepResult::Trap(t, span))?;
         let (ap, off) = self
             .mmio_target(addr)
@@ -855,7 +983,12 @@ impl<'c> Engine<'c> {
         state: &mut ExecState,
         periph: &mut dyn Peripheral,
     ) -> Result<(), StepResult> {
-        let width = self.mmio_width(word, ty).ok_or(StepResult::Fault)?;
+        let width = self.mmio_width(word, ty).ok_or_else(|| {
+            StepResult::Fault(Fault::internal(
+                span,
+                b"mmio register width unresolved (descriptor/module mismatch)",
+            ))
+        })?;
         let v = pop_int(state).map_err(|t| StepResult::Trap(t, span))?;
         let addr = pop_ptr(state).map_err(|t| StepResult::Trap(t, span))?;
         let (ap, off) = self
@@ -898,10 +1031,18 @@ impl<'c> Engine<'c> {
             ..
         } = op.kind
         else {
-            return Err(StepResult::Fault);
+            return Err(StepResult::Fault(Fault::internal(
+                op.span,
+                b"op kind mismatch on the mmio field path",
+            )));
         };
         let span = op.span;
-        let width = self.mmio_width(word, reg_ty).ok_or(StepResult::Fault)?;
+        let width = self.mmio_width(word, reg_ty).ok_or_else(|| {
+            StepResult::Fault(Fault::internal(
+                span,
+                b"mmio register width unresolved (descriptor/module mismatch)",
+            ))
+        })?;
         let addr = pop_ptr(state).map_err(|t| StepResult::Trap(t, span))?;
         let (ap, off) = self
             .mmio_target(addr)
@@ -938,10 +1079,18 @@ impl<'c> Engine<'c> {
             ..
         } = op.kind
         else {
-            return Err(StepResult::Fault);
+            return Err(StepResult::Fault(Fault::internal(
+                op.span,
+                b"op kind mismatch on the mmio field path",
+            )));
         };
         let span = op.span;
-        let width = self.mmio_width(word, reg_ty).ok_or(StepResult::Fault)?;
+        let width = self.mmio_width(word, reg_ty).ok_or_else(|| {
+            StepResult::Fault(Fault::internal(
+                span,
+                b"mmio register width unresolved (descriptor/module mismatch)",
+            ))
+        })?;
         let field = pop_int(state).map_err(|t| StepResult::Trap(t, span))?;
         let addr = pop_ptr(state).map_err(|t| StepResult::Trap(t, span))?;
         let (ap, off) = self
@@ -1017,7 +1166,7 @@ enum StepResult {
     /// A REPL-layer device diagnostic (E9152) — the peripheral rejected the
     /// access (unbound aperture), with the aperture id when known.
     Device(u32, Span, Option<u16>),
-    Fault,
+    Fault(Fault),
 }
 
 fn bits_to_width(bits: u16) -> u8 {

@@ -58,7 +58,7 @@ impl HeapFault {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct Region {
     base: u32,
     size: u32,
@@ -86,7 +86,7 @@ pub struct RegionSaved {
 /// The concrete heap. `bytes` is the flat arena (layout-shared with the wasm
 /// backend); `regions` is the 16-slot region table; `scoped` tracks
 /// frame-scoped descriptor allocations (also arena-backed).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RegionHeap {
     bytes: Vec<u8>,
     cursor: u32,
@@ -143,7 +143,9 @@ impl RegionHeap {
     // -- the native region ABI (codegen-x86_64/src/region.rs semantics) ------
 
     /// `platform.mem.region-create ( usize -- Region )`.
-    pub fn region_create(&mut self, size: u64) -> Result<u64, HeapFault> {
+    /// Returns `(handle, old_cursor)` so the caller can journal the arena
+    /// reservation (DEC-5 rollback reclaims the span, §7.3).
+    pub fn region_create(&mut self, size: u64) -> Result<(u64, u32), HeapFault> {
         if size == 0 {
             return Err(HeapFault::BadArgument);
         }
@@ -160,6 +162,7 @@ impl RegionHeap {
         } else {
             return Err(HeapFault::Exhausted);
         };
+        let old_cursor = self.cursor;
         let base = self.reserve(size)?;
         self.regions[slot] = Region {
             base,
@@ -171,7 +174,7 @@ impl RegionHeap {
             start: base,
             end: base + size as u32,
         });
-        Ok(slot as u64)
+        Ok((slot as u64, old_cursor))
     }
 
     /// `platform.mem.region-alloc ( Region usize -- ptr_mut )`.
@@ -240,6 +243,12 @@ impl RegionHeap {
         Ok(slot)
     }
 
+    /// The arena bump cursor (the caller journals it with a reservation so
+    /// a rollback reclaims the span, DEC-5).
+    pub fn arena_cursor(&self) -> u32 {
+        self.cursor
+    }
+
     /// The arena base address of a live region (for diagnostics/geometry
     /// probes; native calls it `__region_base[slot]`).
     pub fn region_base(&self, handle: u64) -> Option<u64> {
@@ -250,10 +259,12 @@ impl RegionHeap {
 
     // -- scoped descriptors (ScopedEnter slice frames, §6.7) ------------------
 
-    /// Allocate a 16-byte `{ ptr, len }` descriptor and return its address.
+    /// Allocate a 16-byte `{ ptr, len }` descriptor and return its address
+    /// with the pre-reserve cursor (journaled by the caller, DEC-5).
     /// Descriptors are live ranges so a descriptor `load` reads the frame
     /// data and any later access is bounds-checked like any other.
-    pub fn scoped_enter(&mut self, ptr: u64, len: u64) -> Result<u64, HeapFault> {
+    pub fn scoped_enter(&mut self, ptr: u64, len: u64) -> Result<(u64, u32), HeapFault> {
+        let old_cursor = self.cursor;
         let base = self.reserve(16)?;
         let lo = ptr as u32;
         let hi = len as u32;
@@ -266,7 +277,7 @@ impl RegionHeap {
             start: base,
             end: base + 16,
         });
-        Ok(u64::from(base))
+        Ok((u64::from(base), old_cursor))
     }
 
     // -- memory access ---------------------------------------------------------
@@ -353,10 +364,11 @@ impl RegionHeap {
         }
     }
 
-    /// Undo an `Effect::RegionCreate`: mark the slot free and drop its live
-    /// range (the arena bytes stay — the arena is monotonic and stale bytes
-    /// are unreachable once the range is gone).
-    pub fn compensate_region_create(&mut self, handle: u64) {
+    /// Undo an `Effect::RegionCreate`: mark the slot free, drop its live
+    /// range, and RECLAIM the arena span (§7.3 — the phrase-entry heap state
+    /// includes the allocator cursor). The reclaimed span is zeroed so a
+    /// re-reserve observes fresh storage exactly like a first reserve.
+    pub fn compensate_region_create(&mut self, handle: u64, old_cursor: u32) {
         if let Some(r) = self.regions.get_mut(handle as usize) {
             if r.alive {
                 self.live
@@ -369,6 +381,7 @@ impl RegionHeap {
                 alive: false,
             };
         }
+        self.reclaim(old_cursor);
     }
 
     /// Undo an `Effect::RegionDestroy`: restore the slot and its live range
@@ -390,11 +403,32 @@ impl RegionHeap {
         }
     }
 
-    /// Undo an `Effect::ScopedEnter`: drop the descriptor's live range
-    /// (the descriptor's arena bytes stay, unreachable).
-    pub fn compensate_scoped(&mut self, addr: u64) {
+    /// Undo an `Effect::ScopedEnter`: drop the descriptor's live range and
+    /// reclaim the 16-byte span (zeroed — see `compensate_region_create`).
+    pub fn compensate_scoped(&mut self, addr: u64, old_cursor: u32) {
         let start = addr as u32;
         self.live
             .retain(|lr| !(lr.start == start && lr.end == start + 16));
+        self.reclaim(old_cursor);
+    }
+
+    /// Undo an `Effect::Intern`: drop the interned live range and reclaim
+    /// the span (zeroed).
+    pub fn compensate_intern(&mut self, addr: u64, old_cursor: u32) {
+        let start = addr as u32;
+        self.live.retain(|lr| lr.start != start);
+        self.reclaim(old_cursor);
+    }
+
+    /// Reclaim the arena tail `[old_cursor .. cursor)`: drop it entirely
+    /// (a later `reserve` re-grows it with zero-fill, so reused storage is
+    /// indistinguishable from a first reserve) and restore the cursor. LIFO
+    /// journal reversal guarantees every live range in the span was already
+    /// dropped, so the tail is unreachable.
+    fn reclaim(&mut self, old_cursor: u32) {
+        if (old_cursor as u64) >= u64::from(NULL_PAGE_BYTES) && old_cursor <= self.cursor {
+            self.bytes.truncate(old_cursor as usize);
+            self.cursor = old_cursor;
+        }
     }
 }

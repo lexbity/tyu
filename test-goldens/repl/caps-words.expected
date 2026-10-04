@@ -1,0 +1,268 @@
+tyu.repl-transcript/1
+spec x86_64-unknown-linux-gnu
+---
+:fuel 100000
+fuel: 100000
+---
+: w1 ( -- ) ;
+status: ok
+stack: -
+---
+: w2 ( -- ) ;
+status: ok
+stack: -
+---
+: w3 ( -- ) ;
+status: ok
+stack: -
+---
+: w4 ( -- ) ;
+status: ok
+stack: -
+---
+: w5 ( -- ) ;
+status: ok
+stack: -
+---
+: w6 ( -- ) ;
+status: ok
+stack: -
+---
+: w7 ( -- ) ;
+status: ok
+stack: -
+---
+: w8 ( -- ) ;
+status: ok
+stack: -
+---
+: w9 ( -- ) ;
+status: ok
+stack: -
+---
+: w10 ( -- ) ;
+status: ok
+stack: -
+---
+: w11 ( -- ) ;
+status: ok
+stack: -
+---
+: w12 ( -- ) ;
+status: ok
+stack: -
+---
+: w13 ( -- ) ;
+status: ok
+stack: -
+---
+: w14 ( -- ) ;
+status: ok
+stack: -
+---
+: w15 ( -- ) ;
+status: ok
+stack: -
+---
+: w16 ( -- ) ;
+status: ok
+stack: -
+---
+: w17 ( -- ) ;
+status: ok
+stack: -
+---
+: w18 ( -- ) ;
+status: ok
+stack: -
+---
+: w19 ( -- ) ;
+status: ok
+stack: -
+---
+: w20 ( -- ) ;
+status: ok
+stack: -
+---
+: w21 ( -- ) ;
+status: ok
+stack: -
+---
+: w22 ( -- ) ;
+status: ok
+stack: -
+---
+: w23 ( -- ) ;
+status: ok
+stack: -
+---
+: w24 ( -- ) ;
+status: ok
+stack: -
+---
+: w25 ( -- ) ;
+status: ok
+stack: -
+---
+: w26 ( -- ) ;
+status: ok
+stack: -
+---
+: w27 ( -- ) ;
+status: ok
+stack: -
+---
+: w28 ( -- ) ;
+status: ok
+stack: -
+---
+: w29 ( -- ) ;
+status: ok
+stack: -
+---
+: w30 ( -- ) ;
+status: ok
+stack: -
+---
+: w31 ( -- ) ;
+status: ok
+stack: -
+---
+: w32 ( -- ) ;
+status: ok
+stack: -
+---
+: w33 ( -- ) ;
+status: ok
+stack: -
+---
+: w34 ( -- ) ;
+status: ok
+stack: -
+---
+: w35 ( -- ) ;
+status: ok
+stack: -
+---
+: w36 ( -- ) ;
+status: ok
+stack: -
+---
+: w37 ( -- ) ;
+status: ok
+stack: -
+---
+: w38 ( -- ) ;
+status: ok
+stack: -
+---
+: w39 ( -- ) ;
+status: ok
+stack: -
+---
+: w40 ( -- ) ;
+status: ok
+stack: -
+---
+: w41 ( -- ) ;
+status: ok
+stack: -
+---
+: w42 ( -- ) ;
+status: ok
+stack: -
+---
+: w43 ( -- ) ;
+status: ok
+stack: -
+---
+: w44 ( -- ) ;
+status: ok
+stack: -
+---
+: w45 ( -- ) ;
+status: ok
+stack: -
+---
+: w46 ( -- ) ;
+status: ok
+stack: -
+---
+: w47 ( -- ) ;
+status: ok
+stack: -
+---
+: w48 ( -- ) ;
+status: ok
+stack: -
+---
+: w49 ( -- ) ;
+status: ok
+stack: -
+---
+: w50 ( -- ) ;
+status: ok
+stack: -
+---
+: w51 ( -- ) ;
+status: ok
+stack: -
+---
+: w52 ( -- ) ;
+status: ok
+stack: -
+---
+: w53 ( -- ) ;
+status: ok
+stack: -
+---
+: w54 ( -- ) ;
+status: ok
+stack: -
+---
+: w55 ( -- ) ;
+status: ok
+stack: -
+---
+: w56 ( -- ) ;
+status: ok
+stack: -
+---
+: w57 ( -- ) ;
+status: ok
+stack: -
+---
+: w58 ( -- ) ;
+status: ok
+stack: -
+---
+: w59 ( -- ) ;
+status: ok
+stack: -
+---
+: w60 ( -- ) ;
+status: ok
+stack: -
+---
+: w61 ( -- ) ;
+status: ok
+stack: -
+---
+: w62 ( -- ) ;
+status: ok
+stack: -
+---
+: w63 ( -- ) ;
+status: ok
+stack: -
+---
+: w64 ( -- ) ;
+status: ok
+stack: -
+---
+: w65 ( -- ) ;
+status: compile-error E9157
+stack: -
+diag: E9157 @0..1 session word cap reached (64 words per module)
+---
+submits: 65

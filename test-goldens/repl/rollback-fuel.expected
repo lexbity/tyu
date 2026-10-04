@@ -9,7 +9,7 @@ status: ok
 stack: -
 ---
 0 reloop
-status: fuel
+status: fuel E9150
 stack: -
 trace: C{reloop:1}C{reloop:2}C{reloop:3}C{reloop:4}C{reloop:5}C{reloop:6}C{reloop:7}C{reloop:8}C{reloop:9}C{reloop:10}F
 ---

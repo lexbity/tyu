@@ -10,3 +10,12 @@
 # matches the main-thread default; the memory is virtual and lazily committed.
 [env]
 RUST_MIN_STACK = "8388608"
+# wasm32 stack size (P5): the compile pipeline's genuine stack need is ~4 MiB
+# (see RUST_MIN_STACK above); the wasm32-unknown-unknown default is 64 KiB,
+# which traps ("memory access out of bounds") inside the typechecker. Size the
+# wasm linear-memory stack region to the same 8 MiB the native legs get, so
+# the browser compiles with exactly the stack the pipeline is proven against.
+# Applied via rustflags so every wasm build (CI and local) is identical — the
+# artifact hash reproducibility (G55, R-4) depends on it.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "link-arg=-zstack-size=8388608"]

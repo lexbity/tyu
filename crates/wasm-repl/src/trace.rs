@@ -44,6 +44,9 @@ pub enum Event {
     Trap { code: TrapCode, span: Span },
     /// Fuel exhausted (E9150 surface).
     Fuel,
+    /// An engine-internal fault (E9158, or E9156's runtime backstop) — the
+    /// REPL-layer code is the event payload (never a frozen trap numeric).
+    Internal { code: u32 },
     /// The run's exit (natural completion = 0; `testio.exit` passes its code).
     Done { exit: i64 },
 }
@@ -98,6 +101,7 @@ impl Trace {
             }),
             Outcome::Fuel { .. } => t.events.push(Event::Fuel),
             Outcome::Device { code, .. } => t.events.push(Event::Device { code: *code }),
+            Outcome::Internal { fault, .. } => t.events.push(Event::Internal { code: fault.code }),
         }
         t
     }
@@ -139,6 +143,7 @@ impl Trace {
                     ));
                 }
                 Event::Device { code } => s.push_str(&format!("E{code}")),
+                Event::Internal { code } => s.push_str(&format!("E{code}")),
                 Event::Fuel => s.push('F'),
                 Event::Done { exit } => s.push_str(&format!("D{exit}")),
             }
@@ -147,9 +152,5 @@ impl Trace {
             s.push_str(&format!("C{{…{deep_calls}}}"));
         }
         s
-    }
-
-    pub fn events(&self) -> &[Event] {
-        &self.events
     }
 }

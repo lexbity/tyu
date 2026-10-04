@@ -1,0 +1,20 @@
+# stepping — fuel suspension and resumption (§Q6/§Q8): an exhausted phrase
+# rolls its session surface back but stays SUSPENDED at the exhaustion point;
+# `:step N` resumes it with a fresh budget and the resumed trace covers the
+# whole phrase. Also pinned: E9155 when nothing is suspended, re-suspension
+# on a second exhaustion, and a real submit discarding the suspension.
+# (`@repeat` is the CLI's list-test shorthand — the phrase is `0 1 + 1 + …`.)
+:fuel 10
+0 @repeat 40 [1 + ]
+:stack
+:step 500
+:stack
+:step 500
+:fuel 10
+@repeat 40 [1 + ]
+:step 20
+:step 20
+0 @repeat 40 [1 + ]
+:step 20
+: double ( i64 -- i64 ) dup + ;
+:step 20

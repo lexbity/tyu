@@ -1,0 +1,48 @@
+tyu.repl-transcript/1
+spec x86_64-unknown-linux-gnu
+---
+:fuel 100000
+fuel: 100000
+---
+subtype Percent = i64 range 0..100;
+status: ok
+stack: -
+---
+: no-sevens ( i64 -- i64 bool ) dup 7 == not ;
+status: ok
+stack: -
+---
+: add-safely ( i64 -- i64 ) needs [ no-sevens ] 1 + ;
+status: ok
+stack: -
+---
+:noelide
+elide: off
+---
+7 add-safely drop
+status: trapped 20
+stack: -
+trace: C{add-safely:1}C{no-sevens:2}TContractFail
+---
+150 as Percent drop
+status: trapped 21
+stack: -
+trace: TSubtypeFail
+---
+:elide
+elide: on
+---
+7 add-safely drop
+status: ok
+stack: -
+trace: C{add-safely:1}C{no-sevens:2}D0
+---
+150 as Percent drop
+status: trapped 21
+stack: -
+trace: TSubtypeFail
+---
+:stack
+stack: -
+---
+submits: 7

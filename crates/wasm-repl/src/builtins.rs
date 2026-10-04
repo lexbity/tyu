@@ -90,9 +90,9 @@ impl Builtin {
                 // ( usize -- Region )
                 let size = pop_u64(st)?;
                 match st.heap.region_create(size) {
-                    Ok(handle) => {
+                    Ok((handle, old_cursor)) => {
                         st.stack.push(Slot::int(ir::TY_I64, handle as i64));
-                        st.journal.push(Effect::RegionCreate { handle });
+                        st.journal.push(Effect::RegionCreate { handle, old_cursor });
                         Ok(())
                     }
                     Err(fault) => Err(region_fault(fault)),

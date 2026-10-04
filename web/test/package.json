@@ -1,0 +1,9 @@
+{
+  "name": "tyu-web-smoke",
+  "private": true,
+  "description": "G55 browser smoke (PLAN-WASM-1 P5): Playwright E2E for the static REPL site.",
+  "type": "module",
+  "dependencies": {
+    "playwright": "^1.63.0"
+  }
+}

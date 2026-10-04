@@ -15,7 +15,9 @@ use alloc::vec;
 use alloc::vec::Vec;
 use codegen_core::compiled_desc::CompiledDescriptor;
 use core::ops::Range;
+use frontend::lex::Lexer;
 use frontend::span::Span;
+use frontend::token::{Token, TokenKind};
 use ir::TrapCode;
 
 use crate::compile::{compile, Compiled, SourceTable};
@@ -32,6 +34,10 @@ use crate::value::Slot;
 /// Session limits (§5, NFR-4), each surfaced as its §7.5 diagnostic. The
 /// data-stack/depth caps live in the engine (`crate::fuel`, L2).
 const SOURCE_CAP: usize = 65_536; // session source (accumulated declarations)
+/// The session = one module, and the IR format caps a module at 64 words
+/// (`ir::Module`'s format contract). Native `build_ir` enforces it with
+/// E3920; the session boundary pre-checks it with E9157 (§7.5).
+const MODULE_WORD_CAP: usize = 64;
 
 /// Session options.
 #[derive(Clone, Copy, Debug)]
@@ -63,9 +69,14 @@ pub enum Status {
     CompileError { diag: crate::Diag },
     /// The phrase ran and trapped (rollback applied; output retained).
     Trapped { code: TrapCode, span: Span },
-    /// The phrase exhausted its fuel (rollback applied; output retained;
-    /// raise `:fuel` and re-run).
-    FuelExhausted,
+    /// The phrase exhausted its fuel (rollback applied; output retained).
+    /// The phrase is **suspended** at the exhaustion point: [`ReplSession::step`]
+    /// resumes it with a fresh budget (E9150 carries the suspended op's span).
+    FuelExhausted { diag: crate::Diag },
+    /// An engine-internal fault (E9158, or E9156's runtime backstop): a
+    /// state the verified IR cannot reach. Always a bug — rollback applied,
+    /// the page fails loudly (§6.5).
+    Internal { diag: crate::Diag },
     /// `testio.exit` terminated the run deliberately (session survives).
     Exited { code: i64 },
     /// A device-level failure (P4): the peripheral reported an unbound
@@ -119,13 +130,34 @@ pub struct ReplSession {
     /// it is present (E3640 parity otherwise); its aperture table resolves
     /// MMIO addresses and drives the session's IR pane.
     descriptor: Option<Box<CompiledDescriptor>>,
+    /// A fuel-suspended phrase (§Q6/§Q8): the at-exhaustion engine state plus
+    /// the phrase-entry stack checkpoint the resumed rollback restores. Any
+    /// `transactional_submit` or `reset` discards the suspension.
+    suspended: Option<Suspended>,
+    /// Is the session buffer itself a complete module (a `module`-form
+    /// submission)? Fragment submissions accumulate into a synthesized
+    /// `module repl-session;` wrapper; a module-form submission *replaces*
+    /// the buffer verbatim (DEC-3's replace rule, applied to whole-module
+    /// edits) and later content is spliced before its final `end;`.
+    module_form: bool,
+}
+
+/// A fuel-suspended phrase (the plan's `SubmitResult.snapshot`, held
+/// session-side so the wasm ABI's `repl_step` resumes it without shipping
+/// engine internals across the boundary).
+struct Suspended {
+    /// The engine state at exhaustion (journal intact; `cursor` at the op
+    /// that did not run).
+    state: ExecState,
+    /// The phrase-entry data stack (the resumed rollback's checkpoint).
+    entry_stack: Vec<Slot>,
 }
 
 /// The phrase-entry checkpoint (§7.3): the stack before the phrase (the
 /// rollback restores it exactly) and the fuel at entry.
-struct Checkpoint {
-    stack: Vec<Slot>,
-    fuel: Fuel,
+pub(crate) struct Checkpoint {
+    pub(crate) stack: Vec<Slot>,
+    pub(crate) fuel: Fuel,
 }
 
 impl ReplSession {
@@ -140,6 +172,8 @@ impl ReplSession {
             opts,
             periph: Box::new(Disabled),
             descriptor: None,
+            suspended: None,
+            module_form: false,
         }
     }
 
@@ -147,11 +181,6 @@ impl ReplSession {
     /// [`Disabled`] to keep every MMIO access an E9152.
     pub fn set_peripheral(&mut self, periph: Box<dyn Peripheral>) {
         self.periph = periph;
-    }
-
-    /// The current device boundary (shared access for inspection).
-    pub fn peripheral(&self) -> &dyn Peripheral {
-        &*self.periph
     }
 
     /// Attach (or clear) the compiled platform descriptor (P4): without it
@@ -177,6 +206,15 @@ impl ReplSession {
         &self.out_total
     }
 
+    /// The last-good `--emit=ir` render (DEC-13): the IR pane's source.
+    pub fn last_ir_text(&self) -> Option<Vec<u8>> {
+        self.compiled.as_ref().map(|c| {
+            let mut r = Vec::new();
+            crate::render_ir(&mut VecSink(&mut r), &c.module);
+            r
+        })
+    }
+
     /// Raise/lower the per-phrase fuel budget (`0` = unlimited on host/CI).
     pub fn set_fuel(&mut self, ops: u64) {
         self.fuel = Fuel::new(if ops == 0 { u64::MAX } else { ops });
@@ -200,6 +238,8 @@ impl ReplSession {
         self.heap = RegionHeap::new();
         self.out_total.clear();
         self.fuel = self.opts.fuel;
+        self.suspended = None;
+        self.module_form = false;
     }
 
     /// Execute a submission per §7.2/§7.3 (DEC-3..DEC-6).
@@ -210,9 +250,13 @@ impl ReplSession {
     ) -> SubmitResult {
         let split = split_submission(submission);
         if !split.has_content {
-            // Comment-only / empty submission: no-op re-render (DEC-3).
+            // Comment-only / empty submission: no-op re-render (DEC-3). The
+            // suspension (if any) survives: the session state did not change.
             return self.result_for(Status::Ok, None, 0..0, None);
         }
+        // Any real submission invalidates a fuel suspension (§Q8): the
+        // suspended phrase ran against the previous compiled artifact.
+        self.suspended = None;
 
         // -- transaction #1: compile (all-or-nothing) -------------------------
         let candidate_len = self.source.len() + split.decls.as_ref().map_or(0, |d| d.len());
@@ -231,21 +275,71 @@ impl ReplSession {
             );
         }
 
+        // The buffer shape AFTER this submit commits. A module-form
+        // submission REPLACES the buffer (DEC-3 replace rule, applied to
+        // whole-module edits); fragment definitions accumulate. Nothing is
+        // committed until the compile succeeds (transaction #1 is
+        // all-or-nothing).
+        let committed_module_form = split.module_form || self.module_form;
+        let committed_source: Vec<u8> = if split.module_form {
+            split.decls.clone().unwrap_or_default()
+        } else {
+            match &split.decls {
+                Some(d) => {
+                    if self.module_form {
+                        splice_before_final_end(&self.source, d)
+                    } else {
+                        let mut t = self.source.clone();
+                        t.extend_from_slice(d);
+                        t
+                    }
+                }
+                None => self.source.clone(),
+            }
+        };
+
+        // E9157 (§5/§7.5): the session word cap. The session = one module =
+        // the IR format's 64-word cap, enforced natively by `build_ir` (E3920);
+        // the session boundary rejects the offending definition BEFORE the
+        // compile, at the definition that would exceed the cap — the REPL
+        // renumbers nothing (native E3920 remains the backstop for
+        // lowering-synthesized extra words).
+        let current_words = if split.module_form {
+            0
+        } else {
+            self.compiled
+                .as_ref()
+                .map(|c| c.module.words.len())
+                .unwrap_or(0)
+        };
+        if !split.word_def_spans.is_empty()
+            && current_words + split.word_def_spans.len() > MODULE_WORD_CAP
+        {
+            let over = current_words + split.word_def_spans.len() - MODULE_WORD_CAP;
+            let span = split
+                .word_def_spans
+                .get(split.word_def_spans.len() - over)
+                .copied()
+                .unwrap_or(Span::UNKNOWN);
+            return self.result_for(
+                Status::CompileError {
+                    diag: crate::Diag::from_bytes(
+                        code::E9157_WORD_CAP,
+                        span,
+                        b"session word cap reached (64 words per module)",
+                    ),
+                },
+                None,
+                0..0,
+                None,
+            );
+        }
+
         let entry: &[u8] = b"repl-phrase";
         // The compiled platform descriptor (P4): when present, MMIO modules
         // compile (E3640 parity otherwise) and the aperture table resolves
         // MMIO accesses.
         let desc = self.descriptor.as_deref();
-        let decls_src: Vec<u8> = {
-            let mut t = alloc::string::String::with_capacity(candidate_len + 16);
-            t.push_str("module repl-session;\n");
-            t.push_str(core::str::from_utf8(&self.source).unwrap_or(""));
-            if let Some(decls) = split.decls.as_deref() {
-                t.push_str(core::str::from_utf8(decls).unwrap_or(""));
-            }
-            t.push_str("end;\n");
-            t.into_bytes()
-        };
 
         // The phrase's exact signature must be declared (the checker
         // verifies, never infers): compute it with the §7.2 effect pass. When
@@ -256,7 +350,8 @@ impl ReplSession {
         let mut phrase_sig: Option<phrase::EffectSig> = None;
         if let Some(phrase) = split.phrase.as_deref() {
             if !phrase.is_empty() {
-                let lookup_env: Option<Compiled> = if split.decls.is_some() {
+                let decls_src = assemble_module(&committed_source, committed_module_form, None);
+                let lookup_env: Option<Compiled> = if split.decls.is_some() || split.module_form {
                     // Phase A: validate + build the lookup dictionary.
                     let built = match compile(decls_src.as_slice(), search, self.opts.spec, desc) {
                         Ok(b) => Some(b),
@@ -282,30 +377,25 @@ impl ReplSession {
             }
         }
 
-        let mut module_text = alloc::string::String::with_capacity(candidate_len + 64);
-        module_text.push_str("module repl-session;\n");
-        module_text.push_str(core::str::from_utf8(&self.source).unwrap_or(""));
-        if let Some(decls) = split.decls.as_deref() {
-            module_text.push_str(core::str::from_utf8(decls).unwrap_or(""));
-        }
-        let mut phrase_present = false;
-        if let Some(phrase) = split.phrase.as_deref() {
-            if !phrase.is_empty() {
-                phrase_present = true;
-                module_text.push_str(": repl-phrase ");
-                if let Some(sig) = &phrase_sig {
-                    module_text.push_str(&sig_text(sig));
-                }
-                module_text.push(' ');
-                module_text.push_str(core::str::from_utf8(phrase).unwrap_or(""));
-                module_text.push(' ');
-                module_text.push(';');
-                module_text.push('\n');
+        // Phase B: the full module (decls + the synthetic `repl-phrase` word
+        // when a phrase is present).
+        let synthetic = split.phrase.as_deref().filter(|p| !p.is_empty()).map(|p| {
+            let mut t = alloc::string::String::from(": repl-phrase ");
+            if let Some(sig) = &phrase_sig {
+                t.push_str(&sig_text(sig));
             }
-        }
-        module_text.push_str("end;\n");
+            t.push(' ');
+            t.push_str(core::str::from_utf8(p).unwrap_or(""));
+            t.push_str(" ;\n");
+            t
+        });
+        let module_text = assemble_module(
+            &committed_source,
+            committed_module_form,
+            synthetic.as_deref(),
+        );
 
-        let built = match compile(module_text.as_bytes(), search, self.opts.spec, desc) {
+        let built = match compile(&module_text, search, self.opts.spec, desc) {
             Ok(b) => b,
             Err(diag) => {
                 // Session untouched (DEC-3: compile errors are not edits).
@@ -314,15 +404,15 @@ impl ReplSession {
         };
 
         // Commit the definitions (transaction #1 success).
-        if let Some(decls) = split.decls.as_deref() {
-            self.source.extend_from_slice(decls);
-        }
+        self.source = committed_source;
+        self.module_form = committed_module_form;
+
         let mut rendered = Vec::new();
         crate::render_ir(&mut VecSink(&mut rendered), &built.module);
         let ir_now = Some(rendered);
         self.compiled = Some(built.clone());
 
-        if !phrase_present {
+        if split.phrase.is_none() || split.phrase.as_deref().is_some_and(|p| p.is_empty()) {
             // Definitions only: no run (DEC-3); stack unchanged.
             return self.result_for(Status::Ok, ir_now, 0..0, None);
         }
@@ -346,7 +436,78 @@ impl ReplSession {
         let journal: Vec<Effect> = state.journal.iter().cloned().collect();
         let trace = Some(Trace::from_phrase(&journal, &outcome));
 
-        let (status, phrase_out) = match outcome {
+        let status = self.settle(outcome, state, &snap, out_start);
+        let out_end = self.out_total.len() as u32;
+
+        self.result_for(status, ir_now, out_start..out_end, trace)
+    }
+
+    /// Resume the fuel-suspended phrase with `ops` more ops of budget (§Q6:
+    /// "the phrase can be resumed with more fuel — this is also the stepping
+    /// primitive", §Q8). `ops == 0` means unlimited on host/CI (the wasm
+    /// boundary rejects it with E9151). With no suspension: E9155.
+    pub fn step(&mut self, ops: u64) -> SubmitResult {
+        let Some(susp) = self.suspended.take() else {
+            return self.result_for(
+                Status::CompileError {
+                    diag: crate::Diag::from_bytes(
+                        code::E9155_PHRASE,
+                        Span::UNKNOWN,
+                        b"no suspended phrase to step (step resumes a fuel-exhausted phrase)",
+                    ),
+                },
+                None,
+                0..0,
+                None,
+            );
+        };
+        let Some(built) = self.compiled.clone() else {
+            return self.result_for(
+                Status::Internal {
+                    diag: crate::Diag::from_bytes(
+                        code::E9158_INTERNAL,
+                        Span::UNKNOWN,
+                        b"suspension without a compiled module",
+                    ),
+                },
+                None,
+                0..0,
+                None,
+            );
+        };
+
+        let out_start = self.out_total.len() as u32;
+        let mut state = susp.state;
+        state.fuel = Fuel::new(if ops == 0 { u64::MAX } else { ops });
+        let snap = Checkpoint {
+            stack: susp.entry_stack,
+            fuel: state.fuel,
+        };
+        let outcome = Engine::new(&built).resume(&mut state, &mut *self.periph);
+
+        // The resumed run's journal continues the suspended phrase's journal,
+        // so the trace covers the WHOLE phrase (pre- and post-suspension).
+        let journal: Vec<Effect> = state.journal.iter().cloned().collect();
+        let trace = Some(Trace::from_phrase(&journal, &outcome));
+
+        let status = self.settle(outcome, state, &snap, out_start);
+        let out_end = self.out_total.len() as u32;
+
+        self.result_for(status, None, out_start..out_end, trace)
+    }
+
+    /// Commit (or roll back and suspend) a phrase outcome — shared by
+    /// `transactional_submit` and `step` (§7.3). `out_start` is where this
+    /// segment's output begins in `out_total` (the DEC-6 retention rule:
+    /// a faulted phrase's already-emitted output stays).
+    fn settle(
+        &mut self,
+        outcome: Outcome,
+        mut state: ExecState,
+        snap: &Checkpoint,
+        out_start: u32,
+    ) -> Status {
+        let (status, out) = match outcome {
             Outcome::Ok { out, exit_stack: _ } => {
                 // Commit: stack/heap persist; output retained (§7.3).
                 self.stack = core::mem::take(&mut state.stack);
@@ -362,16 +523,32 @@ impl ReplSession {
                 (Status::Exited { code }, out)
             }
             Outcome::Trap { code, span, out } => {
-                rollback(&mut state, &snap);
+                rollback(&mut state, snap);
                 self.stack = core::mem::take(&mut state.stack);
                 self.heap = core::mem::take(&mut state.heap);
                 (Status::Trapped { code, span }, out)
             }
-            Outcome::Fuel { out } => {
-                rollback(&mut state, &snap);
+            Outcome::Fuel { span, out } => {
+                // Suspend at the exhaustion point FIRST (the at-fault state,
+                // journal intact — the step primitive's resume point), then
+                // roll the session surface back to the phrase entry (§7.3).
+                self.suspended = Some(Suspended {
+                    state: state.clone(),
+                    entry_stack: snap.stack.clone(),
+                });
+                rollback(&mut state, snap);
                 self.stack = core::mem::take(&mut state.stack);
                 self.heap = core::mem::take(&mut state.heap);
-                (Status::FuelExhausted, out)
+                (
+                    Status::FuelExhausted {
+                        diag: crate::Diag::from_bytes(
+                            code::E9150_FUEL,
+                            span,
+                            b"phrase fuel exhausted (the phrase is suspended; step to resume)",
+                        ),
+                    },
+                    out,
+                )
             }
             Outcome::Device {
                 code,
@@ -382,25 +559,45 @@ impl ReplSession {
                 // A device-level failure (P4, e.g. E9152 unbound aperture):
                 // the same transactional treatment as a trap — state rolls
                 // back, output before the fault stays (DEC-6).
-                rollback(&mut state, &snap);
+                rollback(&mut state, snap);
                 self.stack = core::mem::take(&mut state.stack);
                 self.heap = core::mem::take(&mut state.heap);
-                (Status::DeviceError { code, span, aperture }, out)
+                (
+                    Status::DeviceError {
+                        code,
+                        span,
+                        aperture,
+                    },
+                    out,
+                )
+            }
+            Outcome::Internal { fault, out } => {
+                rollback(&mut state, snap);
+                self.stack = core::mem::take(&mut state.stack);
+                self.heap = core::mem::take(&mut state.heap);
+                (
+                    Status::Internal {
+                        diag: crate::Diag::from_bytes(fault.code, fault.span, fault.message),
+                    },
+                    out,
+                )
             }
         };
-        self.out_total.extend_from_slice(&phrase_out);
-        // DEC-6: a trapped phrase's output is retained even as stack/heap roll
-        // back — BUT never under the G56 selftest corruption.
-        if matches!(status, Status::Trapped { .. } | Status::DeviceError { .. })
-            && !selftest_retain_trap_output()
+        self.out_total.extend_from_slice(&out);
+        // DEC-6: a faulted phrase's output is retained even as stack/heap
+        // roll back — BUT never under the G56 selftest corruption.
+        if matches!(
+            status,
+            Status::Trapped { .. } | Status::DeviceError { .. } | Status::Internal { .. }
+        ) && !selftest_retain_trap_output()
         {
             self.out_total.truncate(out_start as usize);
         }
-        let out_end = self.out_total.len() as u32;
-
-        self.result_for(status, ir_now, out_start..out_end, trace)
+        status
     }
 
+    /// Package a status into a `SubmitResult` (the last-good IR render is
+    /// attached on demand — DEC-13).
     fn result_for(
         &self,
         status: Status,
@@ -537,24 +734,16 @@ fn lookup_word_in(c: &Compiled, name: &[u8]) -> EffectSig {
     EffectSig { inputs, outputs }
 }
 
-/// Render an effect signature as canonical `( in -- out )` text.
+/// Render an effect signature as canonical `( in -- out )` text — the exact
+/// form `parse_word_sig` accepts, including the empty `( -- )` shape.
 fn sig_text(sig: &EffectSig) -> alloc::string::String {
-    let mut out = alloc::string::String::from("( ");
-    for t in &sig.inputs {
-        out.push_str(core::str::from_utf8(t).unwrap_or("?"));
-        out.push(' ');
-    }
-    out.push_str("-- ");
-    if sig.outputs.is_empty() {
-        out.pop();
-    } else {
-        for t in &sig.outputs {
-            out.push_str(core::str::from_utf8(t).unwrap_or("?"));
-            out.push(' ');
-        }
-    }
-    out.push(')');
-    out
+    let names = |ts: &[Vec<u8>]| -> alloc::string::String {
+        ts.iter()
+            .map(|t| core::str::from_utf8(t).unwrap_or("?"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    alloc::format!("( {} -- {} )", names(&sig.inputs), names(&sig.outputs))
 }
 
 fn format_hex(v: u64) -> Vec<u8> {
@@ -592,24 +781,32 @@ fn selftest_retain_trap_output() -> bool {
     true
 }
 
-fn rollback(state: &mut ExecState, snap: &Checkpoint) {
+pub(crate) fn rollback(state: &mut ExecState, snap: &Checkpoint) {
     for e in state.journal.iter().rev() {
         match e {
             Effect::Store { addr, width, old } => state.heap.compensate_store(*addr, *width, *old),
-            Effect::RegionCreate { handle } => state.heap.compensate_region_create(*handle),
+            Effect::RegionCreate { handle, old_cursor } => {
+                state.heap.compensate_region_create(*handle, *old_cursor)
+            }
+            Effect::Intern { addr, old_cursor } => state.heap.compensate_intern(*addr, *old_cursor),
             Effect::RegionAlloc { handle, old_off } | Effect::RegionReset { handle, old_off } => {
                 state.heap.compensate_cursor(*handle, *old_off);
             }
             Effect::RegionDestroy { handle, saved } => {
                 state.heap.compensate_region_destroy(*handle, *saved);
             }
-            Effect::ScopedEnter { addr } => state.heap.compensate_scoped(*addr),
+            Effect::ScopedEnter { addr, old_cursor } => {
+                state.heap.compensate_scoped(*addr, *old_cursor)
+            }
             // Trace-only effects are never undone (§Q3 DEC-6).
             Effect::Output { .. } | Effect::Call { .. } | Effect::Periph { .. } => {}
         }
     }
     state.journal.clear();
     state.frames.clear();
+    // The per-run resource-place cache is phrase-scoped: a rollback reclaims
+    // the interned reservations, so cached addresses would be stale.
+    state.resources.clear();
     state.stack = snap.stack.clone();
     state.fuel = snap.fuel;
 }
@@ -623,117 +820,272 @@ fn rollback(state: &mut ExecState, snap: &Checkpoint) {
 struct Split {
     /// Any non-comment, non-whitespace content?
     has_content: bool,
-    /// Bytes to append to the session source (None = none).
+    /// The submission is a complete `module ... end;` (its declarations
+    /// region *is* the module text).
+    module_form: bool,
+    /// Bytes to append to (or, module-form, to become) the session source.
     decls: Option<Vec<u8>>,
     /// The phrase bytes (None = no phrase).
     phrase: Option<Vec<u8>>,
+    /// The spans of the top-level word-definition openers (`:`), in order —
+    /// the E9157 word-cap pre-check counts definitions with them.
+    word_def_spans: Vec<Span>,
 }
 
-/// The module-level keywords that mark a *declarations-only* submission when
-/// it has no `:`-definitions (§7.2 — the accommodation lives in the session
-/// builder, never the production parser).
-const DECL_KEYWORDS: &[&str] = &[
-    "import",
-    "export",
-    "type",
-    "subtype",
-    "struct",
-    "enum",
-    "const",
-    "resource",
-    "register-map",
-    "isr",
-];
+/// The module-level statement openers and their terminators, per the
+/// production parser's dispatch (`frontend::parse`): `;`-terminated forms
+/// and `end;`-terminated forms. Word definitions (`:` ... `;`) are tracked
+/// separately because the phrase is defined *against* them (§7.2).
+fn is_decl_keyword(k: TokenKind) -> bool {
+    matches!(
+        k,
+        TokenKind::KwImport
+            | TokenKind::KwExport
+            | TokenKind::KwType
+            | TokenKind::KwSubtype
+            | TokenKind::KwStruct
+            | TokenKind::KwEnum
+            | TokenKind::KwConst
+            | TokenKind::KwResource
+            | TokenKind::KwRegisterMap
+            | TokenKind::KwOwned
+            | TokenKind::KwIso
+    )
+}
 
-/// Split a submission per §7.2: tokenize; track `:`-definitions at top level;
-/// the phrase is the maximal top-level token run after the last definition’s
-/// closing `;`. With no definition, a keyword-leading submission is
-/// declarations-only; anything else is a phrase.
+fn decl_is_end_terminated(k: TokenKind) -> bool {
+    matches!(
+        k,
+        TokenKind::KwStruct | TokenKind::KwEnum | TokenKind::KwRegisterMap
+    )
+}
+
+fn depth_delta(k: TokenKind) -> i32 {
+    match k {
+        TokenKind::PunctLParen | TokenKind::PunctLBracket | TokenKind::PunctLBrace => 1,
+        TokenKind::PunctRParen | TokenKind::PunctRBracket | TokenKind::PunctRBrace => -1,
+        _ => 0,
+    }
+}
+
+/// Lex the whole submission (the lexer skips comments and whitespace; strings
+/// are single tokens, so punctuation inside them cannot skew depth).
+fn lex_all(src: &[u8]) -> Vec<Token> {
+    let mut lex = Lexer::new(src);
+    let mut toks = Vec::new();
+    loop {
+        let t = lex.next();
+        if t.kind == TokenKind::Eof {
+            return toks;
+        }
+        toks.push(t);
+    }
+}
+
+/// Byte offset of the token that starts the top-level run at `i` (skipping
+/// leading whitespace/comments is the lexer's job, so this is exact).
+fn run_start(src: &[u8], toks: &[Token], i: usize) -> usize {
+    if i < toks.len() {
+        toks[i].span.start
+    } else {
+        src.len()
+    }
+}
+
 fn split_submission(src: &[u8]) -> Split {
-    let mut i = 0usize;
-    let mut depth: u32 = 0;
-    let mut in_definition = false;
-    let mut last_def_semi_end: Option<usize> = None;
-    let mut has_content = false;
-    let mut first_keyword: Option<bool> = None; // is the first token a DECL_KEYWORD?
+    let toks = lex_all(src);
+    if toks.is_empty() {
+        return Split {
+            has_content: false,
+            module_form: false,
+            decls: None,
+            phrase: None,
+            word_def_spans: Vec::new(),
+        };
+    }
 
-    while i < src.len() {
-        let c = src[i];
-        // Comments: `#` to end-of-line.
-        if c == b'#' {
-            while i < src.len() && src[i] != b'\n' {
-                i += 1;
+    // -- module form: `module ... end;` (optionally + trailing phrase) -------
+    if toks[0].kind == TokenKind::KwModule {
+        // The module's closing `end;` is the LAST top-level `end;` (every
+        // inner form's own `end;` is consumed as part of that form).
+        let mut depth = 0i32;
+        let mut last_end_semi = None; // token index of the `;` after the last top-level `end;`
+        let mut i = 0usize;
+        while i < toks.len() {
+            let k = toks[i].kind;
+            if depth == 0 && k == TokenKind::KwEnd {
+                if let Some(semi) = toks.get(i + 1) {
+                    if semi.kind == TokenKind::PunctSemi {
+                        last_end_semi = Some(i + 1);
+                    }
+                }
             }
-            continue;
-        }
-        if c.is_ascii_whitespace() {
+            depth += depth_delta(k);
             i += 1;
-            continue;
         }
-        has_content = true;
-        match c {
-            b'[' | b'(' | b'{' => depth += 1,
-            b']' | b')' | b'}' => depth = depth.saturating_sub(1),
-            b':' if depth == 0 => in_definition = true,
-            b';' if depth == 0 && in_definition => {
-                last_def_semi_end = Some(i + 1);
-                in_definition = false;
+        let (decls_end, phrase) = match last_end_semi {
+            Some(si) => {
+                let phrase_start = run_start(src, &toks, si + 1);
+                (toks[si].span.end, trim_bytes(&src[phrase_start..]))
             }
-            _ if depth == 0 && first_keyword.is_none() => {
-                first_keyword = Some(word_is_decl_keyword(src, i));
+            None => (src.len(), &[][..]),
+        };
+        let word_def_spans = toks
+            .iter()
+            .filter(|t| t.kind == TokenKind::PunctColon)
+            .map(|t| t.span)
+            .collect();
+        return Split {
+            has_content: true,
+            module_form: true,
+            decls: Some(src[..decls_end].to_vec()),
+            phrase: if phrase.is_empty() {
+                None
+            } else {
+                Some(phrase.to_vec())
+            },
+            word_def_spans,
+        };
+    }
+
+    // -- fragment form: top-level declarations, then at most one phrase ------
+    let mut depth = 0i32;
+    let mut word_def_spans: Vec<Span> = Vec::new();
+    let mut i = 0usize;
+    let mut phrase_start: Option<usize> = None;
+    while i < toks.len() {
+        let k = toks[i].kind;
+        if depth == 0 {
+            match k {
+                TokenKind::PunctColon => {
+                    // A word definition runs to the next top-level `;`.
+                    word_def_spans.push(toks[i].span);
+                    i += 1;
+                    while i < toks.len() {
+                        depth += depth_delta(toks[i].kind);
+                        if depth == 0 && toks[i].kind == TokenKind::PunctSemi {
+                            break;
+                        }
+                        i += 1;
+                    }
+                }
+                k if is_decl_keyword(k) => {
+                    // A declaration statement: `;`-terminated, or `end;`-
+                    // terminated for the block forms (struct/enum/register-map).
+                    let end_term = decl_is_end_terminated(k);
+                    i += 1;
+                    while i < toks.len() {
+                        depth += depth_delta(toks[i].kind);
+                        let hit = if end_term {
+                            depth == 0
+                                && toks[i].kind == TokenKind::KwEnd
+                                && toks.get(i + 1).map(|t| t.kind) == Some(TokenKind::PunctSemi)
+                        } else {
+                            depth == 0 && toks[i].kind == TokenKind::PunctSemi
+                        };
+                        if hit {
+                            if end_term {
+                                i += 1; // consume the `end` so the `;` below ends the statement
+                            }
+                            break;
+                        }
+                        i += 1;
+                    }
+                }
+                TokenKind::Ident if src[toks[i].span.start] == b'@' => {
+                    // An attribute (`@interrupt(3)`): production-parse surface
+                    // that attaches to the next definition — never a phrase.
+                }
+                _ => {
+                    phrase_start = Some(i);
+                    break;
+                }
             }
-            _ => {}
         }
+        depth += depth_delta(k);
         i += 1;
     }
 
-    let Some(def_end) = last_def_semi_end else {
-        // No `:`-definition: keyword-leading ⇒ declarations-only; else the
-        // whole submission is the phrase (phrase-only edits, §7.2).
-        if !has_content {
-            return Split {
-                has_content: false,
-                decls: None,
-                phrase: None,
-            };
-        }
-        if first_keyword.unwrap_or(false) {
-            return Split {
+    match phrase_start {
+        Some(pi) => {
+            let ps = run_start(src, &toks, pi);
+            let phrase = trim_bytes(&src[ps..]);
+            Split {
                 has_content: true,
-                decls: Some(src.to_vec()),
-                phrase: None,
-            };
+                module_form: false,
+                decls: Some(src[..ps].to_vec()),
+                phrase: if phrase.is_empty() {
+                    None
+                } else {
+                    Some(phrase.to_vec())
+                },
+                word_def_spans,
+            }
         }
-        return Split {
+        None => Split {
             has_content: true,
-            decls: None,
-            phrase: Some(trim_bytes(src).to_vec()),
-        };
-    };
-
-    // Definitions present: the declarations region ends at the last
-    // definition’s `;`; everything after is the phrase.
-    let decls = src[..def_end].to_vec();
-    let phrase = trim_bytes(&src[def_end..]);
-    Split {
-        has_content: true,
-        decls: Some(decls),
-        phrase: if phrase.is_empty() {
-            None
-        } else {
-            Some(phrase.to_vec())
+            module_form: false,
+            decls: Some(src.to_vec()),
+            phrase: None,
+            word_def_spans,
         },
     }
 }
 
-/// Is the identifier starting at `i` one of the DECL_KEYWORDS?
-fn word_is_decl_keyword(src: &[u8], i: usize) -> bool {
-    let mut j = i;
-    while j < src.len() && (src[j].is_ascii_alphanumeric() || src[j] == b'-') {
-        j += 1;
+/// Assemble the compile unit for a session buffer: a module-form buffer
+/// compiles as itself (insertion spliced before its final `end;`); a
+/// fragment buffer compiles inside the synthesized `module repl-session;`
+/// wrapper (§7.2 — the accommodation lives in the session builder, never the
+/// production parser).
+fn assemble_module(source: &[u8], module_form: bool, insertion: Option<&str>) -> Vec<u8> {
+    if module_form {
+        match insertion.filter(|s| !s.is_empty()) {
+            Some(ins) => splice_before_final_end_str(source, ins),
+            None => source.to_vec(),
+        }
+    } else {
+        let mut t = alloc::string::String::with_capacity(source.len() + 64);
+        t.push_str("module repl-session;\n");
+        t.push_str(core::str::from_utf8(source).unwrap_or(""));
+        if let Some(ins) = insertion {
+            t.push_str(ins);
+        }
+        t.push_str("end;\n");
+        t.into_bytes()
     }
-    let w = core::str::from_utf8(&src[i..j]).unwrap_or("");
-    DECL_KEYWORDS.contains(&w)
+}
+
+/// Splice `insertion` (bytes) before a module buffer's final top-level
+/// `end;` — the session's insertion point for new content inside a
+/// module-form buffer. A buffer without a final top-level `end;` is
+/// malformed and compiles as-is (the parser reports it).
+fn splice_before_final_end(source: &[u8], insertion: &[u8]) -> Vec<u8> {
+    splice_before_final_end_str(source, core::str::from_utf8(insertion).unwrap_or(""))
+}
+
+fn splice_before_final_end_str(source: &[u8], insertion: &str) -> Vec<u8> {
+    let toks = lex_all(source);
+    let mut depth = 0i32;
+    let mut splice_at: Option<usize> = None;
+    for (i, t) in toks.iter().enumerate() {
+        if depth == 0
+            && t.kind == TokenKind::KwEnd
+            && toks.get(i + 1).map(|n| n.kind) == Some(TokenKind::PunctSemi)
+        {
+            splice_at = Some(t.span.start);
+        }
+        depth += depth_delta(t.kind);
+    }
+    match splice_at {
+        Some(at) => {
+            let mut out = Vec::with_capacity(source.len() + insertion.len());
+            out.extend_from_slice(&source[..at]);
+            out.extend_from_slice(insertion.as_bytes());
+            out.extend_from_slice(&source[at..]);
+            out
+        }
+        None => source.to_vec(),
+    }
 }
 
 fn trim_bytes(b: &[u8]) -> &[u8] {

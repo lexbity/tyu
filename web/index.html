@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!--
+    Tyu browser REPL (PLAN-WASM-1 P5): a fully static page (NFR-10).
+    default-src 'self' — every asset is same-origin; `wasm-unsafe-eval` is
+    the dedicated directive that allows WebAssembly compilation (it is NOT
+    script eval; no `eval`, no `new Function`, no inline handlers exist on
+    this page). Tutorial content (P6) is data-only and never HTML.
+  -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self'; connect-src 'self'" />
+  <title>Tyu REPL</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header id="statusbar">
+    <span id="brand">tyu repl</span>
+    <span id="status" data-state="booting">booting…</span>
+    <span id="engine-info" title="engine version + artifact SHA-256 (§10)"></span>
+  </header>
+
+  <main id="layout">
+    <section id="editor-pane">
+      <textarea id="editor" spellcheck="false"
+        placeholder="Tyu is a stack language.&#10;Try: 1 2 +&#10;Define: : double ( i64 -- i64 ) dup + ;&#10;Print:  65 testio.write-byte  (after importing platform/testio)"></textarea>
+      <div id="editor-actions">
+        <button id="submit" disabled>submit</button>
+        <button id="step" disabled title="resume a fuel-suspended phrase">step</button>
+        <span id="fuel-note" class="muted"></span>
+      </div>
+      <div id="diag" class="hidden"></div>
+    </section>
+
+    <section id="side">
+      <h2>stack <span class="muted">(bottom-first)</span></h2>
+      <ol id="stack" aria-live="polite"></ol>
+
+      <h2>output</h2>
+      <pre id="console" aria-live="polite"></pre>
+    </section>
+  </main>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

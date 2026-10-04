@@ -22,8 +22,14 @@ pub enum Effect {
     /// A typed store overwrote `width` bytes at `addr`; `old` is the prior
     /// contents (undo: rewrite `old`).
     Store { addr: u64, width: u8, old: u64 },
-    /// `region-create` allocated slot `handle` (undo: free the slot + range).
-    RegionCreate { handle: u64 },
+    /// `region-create` allocated slot `handle`, advancing the arena cursor
+    /// from `old_cursor` (undo: free the slot + range, reclaim the bytes —
+    /// §7.3 "RegionCreate (reclaim)"; the reclaimed span is zeroed so a
+    /// re-reserve observes fresh storage exactly like a first reserve).
+    RegionCreate { handle: u64, old_cursor: u32 },
+    /// A lazy `intern` (resource-place storage) reserved arena bytes at
+    /// `addr` (undo: drop the live range, reclaim + zero the span).
+    Intern { addr: u64, old_cursor: u32 },
     /// `region-alloc` advanced the cursor of `handle` from `old_off` (undo:
     /// restore the cursor).
     RegionAlloc { handle: u64, old_off: u32 },
@@ -33,9 +39,10 @@ pub enum Effect {
     /// `region-destroy` freed `handle`, whose pre-destroy state is `saved`
     /// (undo: restore the slot + its live range — §7.3).
     RegionDestroy { handle: u64, saved: RegionSaved },
-    /// A `ScopedEnter` slice descriptor was allocated at `addr` (undo: drop
-    /// its live range).
-    ScopedEnter { addr: u64 },
+    /// A `ScopedEnter` slice descriptor was allocated at `addr`, advancing
+    /// the arena cursor from `old_cursor` (undo: drop its live range and
+    /// reclaim the span).
+    ScopedEnter { addr: u64, old_cursor: u32 },
     /// Diagnostic-channel bytes written (trace-only; never undone).
     Output { start: u32, len: u32 },
     /// A word call (trace-only; the call pane). `depth_before` is the caller
@@ -52,21 +59,6 @@ pub enum Effect {
         val: u64,
         is_write: bool,
     },
-}
-
-impl Effect {
-    /// Whether this effect is reversible (has a compensation).
-    pub const fn reversible(&self) -> bool {
-        matches!(
-            self,
-            Effect::Store { .. }
-                | Effect::RegionCreate { .. }
-                | Effect::RegionAlloc { .. }
-                | Effect::RegionReset { .. }
-                | Effect::RegionDestroy { .. }
-                | Effect::ScopedEnter { .. }
-        )
-    }
 }
 
 /// The pooled per-phrase journal.
@@ -92,9 +84,5 @@ impl Journal {
 
     pub fn iter(&self) -> core::slice::Iter<'_, Effect> {
         self.effects.iter()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.effects.is_empty()
     }
 }

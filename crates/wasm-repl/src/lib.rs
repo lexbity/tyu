@@ -31,6 +31,19 @@
 
 extern crate alloc;
 
+// The wasm32 cdylib (P5) needs a global allocator and panic handler for the
+// bindgen boundary; std on `wasm32-unknown-unknown` provides both (std is an
+// in-toolchain crate, not an external dependency — I-6/R-A unaffected).
+#[cfg(target_arch = "wasm32")]
+extern crate std;
+
+// The HOST cdylib (a byproduct of the crate-type above — only the wasm32
+// build is ever consumed) links `std` for the same allocator/panic-handler
+// need: a `forbid(unsafe_code)` crate cannot hand-roll either. Every byte of
+// this crate's own code still compiles against alloc only (FR-1).
+#[cfg(not(target_arch = "wasm32"))]
+extern crate std;
+
 // Re-exported by the tests/ harnesses for the G52 differential.
 pub mod frag;
 
@@ -38,6 +51,8 @@ pub mod frag;
 /// logical surface: `frag` first for its G52 provenance role, then the
 /// compiler-front seam, the diagnostics, the engine proper, and its
 /// building blocks.
+#[cfg(target_arch = "wasm32")]
+pub mod abi;
 pub mod builtins;
 pub mod compile;
 pub mod diag;
@@ -49,6 +64,7 @@ pub mod mmio;
 pub mod periph;
 pub mod phrase;
 pub mod session;
+pub mod sysroot;
 pub mod trace;
 pub mod value;
 
@@ -63,9 +79,19 @@ pub use periph::{Access, PeriphError, Peripheral, RamDevice, ScriptStep, Scripte
 /// parity tests render through this — the SAME bytes `langc --emit=ir` prints.
 pub use semantics::typecheck::render_ir;
 pub use session::{ReplSession, SessionOpts, StackCell, Status, SubmitResult};
+pub use sysroot::{decode_blob, encode_blob, sha256, SysrootTable};
 pub use trace::Trace;
+
+/// Property tests over the crate-internal transaction machinery (P2 §7.3,
+/// R-3): in-crate so the private checkpoint/rollback surface is exercised
+/// directly. Compiled only under `cfg(test)`.
+#[cfg(test)]
+mod transactional_props;
 
 /// Engine surface version (PLAN-WASM-1 §10): bumped on any change to the
 /// REPL's execution semantics. The browser exposes it for bug reports; the
 /// wasm artifact hash plus this version identify a page's engine exactly.
-pub const ENGINE_VERSION: u32 = 4;
+pub const ENGINE_VERSION: u32 = 5;
+// v5: E9150/E9155/E9157/E9158 diagnostic surfaces, fuel suspension + step
+// (§Q8), heap-reservation rollback reclamation (§7.3), dotted-name phrase
+// calls, module-form submissions, and the wasm abi boundary (P5).

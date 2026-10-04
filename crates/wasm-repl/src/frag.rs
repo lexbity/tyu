@@ -9,7 +9,6 @@
 //! (`Tyu/Src.lean`): the fragment op set [`SrcOp`] (values, typed-stack ops,
 //! arithmetic/comparison/logic, memory over the oracles, local cells, CFG
 //! control), its *direct* concrete step semantics ([`run_block`], [`run_word`]),
-//! and the op-local transcription [`transcribe`] into the IR `OpKind` surface.
 //! The cross-surface vectors (`crates/verifier/tests/cross_surface.rs`) run the
 //! same programs under the source semantics and under the transcribed-IR
 //! semantics and require observable-trace agreement — the Rust analogue of the
@@ -39,19 +38,12 @@
 //! trace agreement. The single, documented exception is the G52 red-path
 //! instrument [`corrupted_mnemonic`] (the `wasm-selftest` feature), which is
 //! off in every default build.
-//!
-//! The transcription surface ([`transcribe`], [`ir_run_word`],
-//! [`trace_agrees`]) is kept verbatim: it is part of the fork's provenance
-//! and documents exactly where the fragment ends and the product engine (P2)
-//! diverges.
 
 use alloc::format;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
-
-use ir::{BlockId, CmpKind, OpKind, TypeId};
 
 // ---------------------------------------------------------------------------
 // G52 red-path instrument (PLAN-WASM-1 §Q10 / AC-9)
@@ -239,76 +231,6 @@ impl SrcOp {
 /// canonical one, mirroring `Tyu.Conformance.parseBlockId`).
 fn block_id(t: &str) -> Option<usize> {
     t.strip_prefix('b').unwrap_or(t).parse::<usize>().ok()
-}
-
-/// The op-local transcription: one IR op per fragment construct (mirror of
-/// `Tyu.Src.transcribeOp`).
-pub fn transcribe(op: &SrcOp) -> OpKind {
-    let t = TypeId(0);
-    match op {
-        SrcOp::ConstInt(v) => OpKind::ConstI64(*v),
-        SrcOp::ConstBool(b) => OpKind::ConstBool(*b),
-        SrcOp::Dup => OpKind::Dup { ty: t },
-        SrcOp::Drop => OpKind::Drop { ty: t },
-        SrcOp::Swap => OpKind::Swap { a: t, b: t },
-        SrcOp::Add => OpKind::AddI64,
-        SrcOp::Sub => OpKind::SubI64,
-        SrcOp::Mul => OpKind::MulI64,
-        SrcOp::CmpLt => OpKind::Cmp {
-            out: TypeId(1),
-            kind: CmpKind::Lt,
-        },
-        SrcOp::CmpLe => OpKind::Cmp {
-            out: TypeId(1),
-            kind: CmpKind::Le,
-        },
-        SrcOp::CmpGt => OpKind::Cmp {
-            out: TypeId(1),
-            kind: CmpKind::Gt,
-        },
-        SrcOp::CmpGe => OpKind::Cmp {
-            out: TypeId(1),
-            kind: CmpKind::Ge,
-        },
-        SrcOp::CmpEq => OpKind::Cmp {
-            out: TypeId(1),
-            kind: CmpKind::Eq,
-        },
-        SrcOp::CmpNe => OpKind::Cmp {
-            out: TypeId(1),
-            kind: CmpKind::Ne,
-        },
-        SrcOp::AndB => OpKind::AndBool,
-        SrcOp::OrB => OpKind::OrBool,
-        SrcOp::NotB => OpKind::NotBool,
-        SrcOp::Load => OpKind::Load { ty: t },
-        SrcOp::Store => OpKind::Store { ty: t },
-        SrcOp::VolLoad => OpKind::MmioVolLoad {
-            ty: t,
-            place: ir::Atom::new(b"dev").unwrap(),
-            read_kind: ir::ReadKind::Plain,
-            atomic_max: 64,
-            barrier: ir::BarrierKind::None,
-        },
-        SrcOp::VolStore => OpKind::MmioVolStore {
-            ty: t,
-            place: ir::Atom::new(b"dev").unwrap(),
-            write_kind: ir::WriteKind::Plain,
-            read_kind: ir::ReadKind::Plain,
-            atomic_max: 64,
-            barrier: ir::BarrierKind::None,
-        },
-        SrcOp::LocalGet(slot) => OpKind::LocalGet { slot: *slot, ty: t },
-        SrcOp::LocalSet(slot) => OpKind::LocalSet { slot: *slot, ty: t },
-        SrcOp::Br(target) => OpKind::Br {
-            target: BlockId(*target as u16),
-        },
-        SrcOp::BrIf(then_tgt, else_tgt) => OpKind::BrIf {
-            then_tgt: BlockId(*then_tgt as u16),
-            else_tgt: BlockId(*else_tgt as u16),
-        },
-        SrcOp::Ret => OpKind::Ret,
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -570,170 +492,6 @@ pub fn run_word(
     go(blocks, entry, fuel, mem, st)
 }
 
-/// The transcribed-IR side: run the same fragment program through the
-/// concrete `ir::OpKind` semantics (the Rust analogue of the IR interpreter
-/// the T-S statement compares against). Memory and stack semantics mirror
-/// the source side, so the transcription theorem's claim — step-for-step
-/// agreement on the fragment — is what the cross-surface vectors assert.
-pub fn ir_run_word(
-    blocks: &[Vec<SrcOp>],
-    entry: usize,
-    fuel: usize,
-    mem: &Mem,
-    st: &State,
-) -> Option<State> {
-    fn go(
-        blocks: &[Vec<SrcOp>],
-        entry: usize,
-        fuel: usize,
-        mem: &Mem,
-        st: &State,
-    ) -> Option<State> {
-        if fuel == 0 {
-            return None;
-        }
-        let ops: Vec<OpKind> = blocks
-            .get(entry)
-            .map(|b| b.iter().map(transcribe).collect())
-            .unwrap_or_default();
-        let mut m = mem.clone();
-        let mut s = st.clone();
-        for kind in &ops {
-            match kind {
-                OpKind::Ret | OpKind::Br { .. } | OpKind::BrIf { .. } => (),
-                _ => ir_step(&mut m, kind, &mut s),
-            }
-        }
-        // routing by the last op
-        match ops.last() {
-            Some(OpKind::Ret) => Some(s),
-            Some(OpKind::Br { target }) => go(blocks, target.0 as usize, fuel - 1, &m, &s),
-            Some(OpKind::BrIf { then_tgt, else_tgt }) => {
-                let cond = s.pop();
-                if cond != 0 {
-                    go(blocks, then_tgt.0 as usize, fuel - 1, &m, &s)
-                } else {
-                    go(blocks, else_tgt.0 as usize, fuel - 1, &m, &s)
-                }
-            }
-            _ => Some(s),
-        }
-    }
-    go(blocks, entry, fuel, mem, st)
-}
-
-/// The concrete `OpKind` step (the fragment subset only — the source and IR
-/// surfaces must agree; a non-fragment op is a test bug).
-fn ir_step(mem: &mut Mem, kind: &OpKind, s: &mut State) {
-    match kind {
-        OpKind::ConstI64(v) => s.push(*v),
-        OpKind::ConstBool(b) => s.push(if *b { 1 } else { 0 }),
-        OpKind::Dup { .. } => {
-            let v = *s.stack.last().unwrap_or(&0);
-            s.push(v);
-        }
-        OpKind::Drop { .. } => {
-            let _ = s.pop();
-        }
-        OpKind::Swap { .. } => {
-            let b = s.pop();
-            let a = s.pop();
-            s.push(b);
-            s.push(a);
-        }
-        OpKind::AddI64 => {
-            let b = s.pop();
-            let a = s.pop();
-            s.push(add(a, b));
-        }
-        OpKind::SubI64 => {
-            let b = s.pop();
-            let a = s.pop();
-            s.push(sub(a, b));
-        }
-        OpKind::MulI64 => {
-            let b = s.pop();
-            let a = s.pop();
-            s.push(mul(a, b));
-        }
-        OpKind::Cmp { kind, .. } => {
-            let b = s.pop();
-            let a = s.pop();
-            let t = match kind {
-                CmpKind::Lt => a < b,
-                CmpKind::Le => a <= b,
-                CmpKind::Gt => a > b,
-                CmpKind::Ge => a >= b,
-                CmpKind::Eq => a == b,
-                CmpKind::Ne => a != b,
-            };
-            s.push(if t { 1 } else { 0 });
-        }
-        OpKind::AndBool => {
-            let b = s.pop();
-            let a = s.pop();
-            s.push(if a != 0 && b != 0 { 1 } else { 0 });
-        }
-        OpKind::OrBool => {
-            let b = s.pop();
-            let a = s.pop();
-            s.push(if a != 0 || b != 0 { 1 } else { 0 });
-        }
-        OpKind::NotBool => {
-            let a = s.pop();
-            s.push(if a == 0 { 1 } else { 0 });
-        }
-        OpKind::Load { .. } => {
-            let addr = s.pop();
-            s.push(mem.load(addr));
-        }
-        OpKind::Store { .. } => {
-            let v = s.pop();
-            let addr = s.pop();
-            mem.record(addr, v);
-        }
-        OpKind::MmioVolLoad { .. } => {
-            let _ = s.pop();
-            s.push(mem.mmio_read());
-        }
-        OpKind::MmioVolStore { .. } => {
-            let _ = s.pop();
-            let _ = s.pop();
-        }
-        OpKind::LocalGet { slot, .. } => {
-            let idx = *slot as usize;
-            s.push(s.locals.get(idx).copied().unwrap_or(0));
-        }
-        OpKind::LocalSet { slot, .. } => {
-            let v = s.pop();
-            let idx = *slot as usize;
-            if s.locals.len() > idx {
-                s.locals[idx] = v;
-            }
-        }
-        _ => (), // control ops are routed by the caller
-    }
-}
-
-/// Observable-trace agreement: both surfaces must produce the same
-/// terminating exit stack (and same recorded memory cells, sorted) for the
-/// same fragment program, entry state and budget.
-pub fn trace_agrees(
-    blocks: &[Vec<SrcOp>],
-    entry: usize,
-    fuel: usize,
-    mem: &Mem,
-    st: &State,
-) -> bool {
-    let src = run_word(blocks, entry, fuel, mem, st);
-    let ir = ir_run_word(blocks, entry, fuel, mem, st);
-    match (src, ir) {
-        (Some(a), Some(b)) => a.stack == b.stack && a.locals == b.locals,
-        (None, None) => true,
-        _ => false,
-    }
-}
-
 // ---------------------------------------------------------------------------
 // The fragment text surface (the corpus interface): canonical `--emit=ir`
 // block text <-> program. The committed `tyu.fragvec/1` corpus
@@ -809,36 +567,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn transcription_table_is_fixed() {
-        // The op-locality transcription, pinned: one IR op per source op
-        // with the identical payload (Tyu.Src.transcribeOp's Rust mirror).
-        assert_eq!(transcribe(&SrcOp::ConstInt(42)), OpKind::ConstI64(42));
-        assert_eq!(transcribe(&SrcOp::Add), OpKind::AddI64);
-        assert_eq!(
-            transcribe(&SrcOp::LocalGet(3)),
-            OpKind::LocalGet {
-                slot: 3,
-                ty: TypeId(0)
-            }
-        );
-        assert_eq!(
-            transcribe(&SrcOp::BrIf(1, 2)),
-            OpKind::BrIf {
-                then_tgt: BlockId(1),
-                else_tgt: BlockId(2)
-            }
-        );
-        assert_eq!(transcribe(&SrcOp::Ret), OpKind::Ret);
-    }
-
-    #[test]
     fn const_word_agrees() {
         // `const 42; ret` — the Sum questionnaire shape of the worked
         // example (`tests/source-fixture/SumFix.lean`).
         let blocks = vec![vec![SrcOp::ConstInt(42), SrcOp::Ret]];
         let mem = Mem::new(0, 0);
         let st = State::fresh(4);
-        assert!(trace_agrees(&blocks, 0, 8, &mem, &st));
         let r = run_word(&blocks, 0, 8, &mem, &st).unwrap();
         assert_eq!(r.stack, vec![42]);
     }

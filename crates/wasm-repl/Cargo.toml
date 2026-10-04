@@ -21,6 +21,21 @@ name = "repl-cli"
 path = "src/bin/repl-cli.rs"
 required-features = ["cli"]
 
+# The quarantined boundary dependency (DEC-11, §Q7): wasm-bindgen compiles
+# ONLY under `cfg(target_arch = "wasm32")` and is consumed exclusively by
+# `src/abi.rs`. Host builds of this crate (and every host CI leg) never link
+# it; the exact pin is deliberate — upgrades are their own PRs (R-4).
+[lib]
+# `cdylib` produces the browser artifact (the `wasm-bindgen` input, P5) —
+# cargo builds it for every target, so the host cdylib link needs an
+# allocator too; lib.rs supplies std's under `cfg(not(target_arch =
+# "wasm32"))` with that exact rationale. The crate's own code remains
+# alloc-only (FR-1).
+crate-type = ["cdylib", "rlib"]
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "=0.2.108"
+
 [dependencies]
 # The engine's runtime dependencies (R-A; I-6): `ir`, plus the host-agnostic
 # compiler-front layers it compiles with (parse → typecheck → IR structs).
@@ -42,13 +57,11 @@ codegen-core = { path = "../codegen-core" }
 # is the verifier's existing dev-only feature: as a *dev*-dependency here it
 # is never part of a production build (FR-1).
 verifier = { path = "../verifier", features = ["test-util"] }
-serde_json = "1"
 # Property tests (P2): transaction/aliasing invariants over the engine
 # (proptest is the repo's shared dev-dep for exactly this).
 proptest = "1"
-# The G53 harness legs: the native runner (`tyu`), the target identity
-# (`codegen-core`), and the parser/IR types the fixtures exercise.
+# The G53 harness leg: the native runner (`tyu`). The other externs the
+# tests/bin use (`ir`, `frontend`, `codegen-core`) resolve through
+# [dependencies] — regular deps are visible to test targets, so re-declaring
+# them as dev-deps would be a redundant duplicate.
 tyu = { path = "../tyu" }
-codegen-core = { path = "../codegen-core" }
-frontend = { path = "../frontend" }
-ir = { path = "../ir" }
