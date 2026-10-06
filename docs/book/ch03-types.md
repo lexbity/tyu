@@ -1,19 +1,13 @@
 # Chapter 3 — Types: Making Illegal Values Unrepresentable
 
-> Every value is a claim about the world.
-> A type is the claim written where the machine can read it.
->
-> — workshop wall
-
-## 3.1 The Practice
-
-> **The Practice.** *Every value has a type, and the type says which values
-> make sense and which words may touch them. The checker rejects programs
-> that break the promise before they exist — and when a value breaks it at
-> run time anyway, the runtime traps with a name, not a shrug.*
+## 3.1 From two types to many
 
 Chapter 2 lived on two types: `i64` and `bool`. This chapter widens the
 idea — from "numbers have kinds" to *the type is where correctness lives*.
+Every value has a type, and the type says which values make sense and which
+words may touch them. The checker rejects programs that break that promise
+before they exist — and when a value breaks it at run time anyway, the
+runtime traps, and the trap has a name.
 
 ## 3.2 What a type is
 
@@ -176,11 +170,11 @@ $ ./build/engine3/image.elf; echo $?
 ```
 
 Trap code 21 is `SUBTYPE_FAIL` — the table from chapter 1, kept. The range
-was promised in the type, the value lied, and the program died at the exact
-boundary of the lie with a named verdict instead of a negative percent
+was written into the type; 150 walked in anyway; the program died right at
+the boundary, with a named verdict instead of a negative percent
 flowing deeper into the system.
 
-For the cases where out-of-range is *expected data* rather than a lie, the
+For the cases where out-of-range is *expected data* rather than a bug, the
 polite conversion asks instead of trapping:
 
 ```tyu
@@ -189,8 +183,8 @@ polite conversion asks instead of trapping:
 ```
 
 `as?` leaves the converted value *and* an `ok` boolean; the swap-and-drop
-keeps just the answer. Soft where the data warrants softness, hard where a
-lie is a lie.
+keeps just the answer. Soft where the data warrants softness; hard where
+out-of-range is a bug.
 
 One boundary on the idea itself: a word may *take* a `Percent`, but on the
 current tree it may not *promise* one — a `-- Percent` output is rejected
@@ -362,8 +356,9 @@ $ ./build/ch3-engine/image.elf; echo $?
 ```
 
 Confirm the three facts: compiles; dies before the marker; exit status 21.
-Then swap the lie for `as?` (Lab 3.3's polite form) and note that the
-program now *finishes* — same false value, handled by policy instead of verdict.
+Then swap the out-of-range cast for `as?` (Lab 3.3's polite form) and note
+that the program now *finishes* — same false value, handled by policy
+instead of verdict.
 
 ### Lab 3.5 — An enum is not its number *(red)*
 
@@ -462,7 +457,7 @@ the boundary, in the open, where the check lives.
 
 ## In more depth — the soup of bits
 
-The C pattern this chapter outlaws one topping at a time: an `int` parameter
+The C pattern this chapter outlaws, one ingredient at a time: an `int` parameter
 that carries motor state, documented as "0 = idle, 1 = run, 2 = fault" in a
 header; a status byte whose bits 0, 3, and 5 mean things, packed and
 unpacked by hand at four call sites; the "temporary" magic number `42` that

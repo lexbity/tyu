@@ -1,22 +1,14 @@
 # Chapter 4 — Contracts: Promises the Machine Reads
 
-> A type says what a value *is*.
-> A contract says what must be *true*.
-> Only one of them fits in a comment.
->
-> — workshop wall
+## 4.1 The other half of the promise
 
-## 4.1 The Practice
-
-> **The Practice.** *A contract is a checked program about a claim: the
-> checker verifies the claim's shape at compile time, the runtime verifies
-> the claim's truth at the boundary, and both verifications apply to every
-> caller, present and future.*
-
-Chapter 1 showed a `needs` clause working; chapter 3 showed ranges living in
-types. This chapter finishes the idea — both halves of the promise, the
-shape rules that make promises checkable, and the craft of writing promises
-worth checking.
+Chapter 1 showed a `needs` clause working; chapter 3 showed ranges living
+in types. This chapter finishes the idea: both halves of the promise, the
+shape rules that make promises checkable, and the craft of writing
+promises worth checking. A contract is a checked program about a claim —
+the checker verifies the claim's shape at compile time, the runtime
+verifies the claim's truth at the boundary, and both verifications apply
+to every caller, present and future.
 
 ## 4.2 What contracts add to types
 
@@ -47,12 +39,13 @@ precondition died; after it, a postcondition did.
 Both clauses are written in the same style as everything else — a
 quotation, pushed programs, stack words. There is no separate specification
 language to learn, because the contract *is* a small program. That choice
-is the chapter: since a contract is a program, it can be checked like one.
+is worth pausing on: since a contract is a program, it can be checked like
+one.
 
 ## 4.3 The shape rules: the checker checks the checks
 
-What does the checker verify about a contract? Not its truth — truth belongs
-to run time. It verifies the contract's **shape**, three rules that make a
+What does the checker verify about a contract? Its shape — the truth
+belongs to run time. Three rules make a
 predicate a well-formed claim:
 
 1. **Exactly one boolean left on top.** The predicate runs on the declared

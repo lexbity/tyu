@@ -1,21 +1,14 @@
 # Chapter 7 — Places, Borrowing, Ownership
 
-> Copying is a decision someone made.
-> Ownership is a decision someone has to answer for.
->
-> — workshop wall
-
-## 7.1 The Practice
-
-> **The Practice.** *A place has one address and a rule: one writer or many
-> readers, never both. A pointer borrows a place and lives exactly as long
-> as its block. Custody moves — it is never cloned. The checker keeps the
-> ledger, and the ledger has no rounding errors.*
+## 7.1 The bill arrives
 
 Chapter 2 closed with a promise: `dup` and `drop` are privileges, not
-rights, and chapter 7 is where the bill arrives. This is the chapter where
-Tyu's pointer story — deliberately postponed for five chapters — turns out
-to be small, sharp, and already half-familiar.
+rights, and this is the chapter where the bill arrives. Tyu's pointer
+story — deliberately postponed for five chapters — turns out to be small,
+sharp, and already half-familiar. A place has one address and a rule: one
+writer or many readers, never both. A pointer borrows a place and lives
+exactly as long as its block. Custody moves — it is never cloned. The
+checker keeps the ledger, and the ledger has no rounding errors.
 
 One note before the doors open: there is no engine lab in this chapter.
 Every failure it teaches is a *compile* failure — the runtime never even
@@ -362,7 +355,7 @@ place is a lease whose term is a lexical block (E5020 closes the escape
 routes), a mutable place is single-writer for the term of the lease
 (E5021/E5022), and a value whose meaning depends on sole ownership cannot
 be copied, dropped, or used after it moved (E5010–E5012). The ghosts are
-not harder to find; they are unrepresentable.
+unrepresentable.
 
 ### Why the rule is the rule
 

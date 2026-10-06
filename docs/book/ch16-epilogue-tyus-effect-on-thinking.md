@@ -1,11 +1,5 @@
 # Chapter 16 — Epilogue: Tyu's Effect on Thinking
 
-> The Vigilance Trap is closed.
-> Not because everyone stopped being careful —
-> because being careful stopped being the mechanism.
->
-> — workshop wall
-
 Chapter 1 opened with two ways to be careful, and promised the second.
 Look back at what "moving the promise into the program" turned out to
 mean, claim by claim:
@@ -28,9 +22,8 @@ mean, claim by claim:
 
 Thirteen claims. None of them is a comment. The daring they licensed — an
 interrupt sharing a device, signed code arriving from untrusted media —
-was not made safe by a framework or a review process. It was made safe
-because each claim got small enough to check, and then the checks got
-composed.
+was made safe because each claim got small enough to check, and then the
+checks got composed.
 
 Three habits are the book, compressed:
 
@@ -45,13 +38,15 @@ forever, for free.
 **Know the edge of every proof.** The data stack is proven; the native
 stack is not (yet). The ISR budget is checked; the end-to-end interrupt
 demo is the open edge. A guarantee that states its boundary is worth a
-dozen that pretend to be total — and chapter 14 showed the boundary
-moving: the prover exists, the contracts of chapter 4 are theorems when
-the developer (or the machine's candidate proofs) close them, and the
-boundary's remaining entries — the native stack, the borrow ledger's
-formalization, enum conversions, constant folding — are named in the
-shipped TCB document precisely so the next rung is an assignment, not a
-wish. The habits this book drilled are the diet the prover already eats.
+dozen that pretend to be total.
+
+Chapter 14 showed the boundary moving: the prover exists, and the
+contracts of chapter 4 are theorems when the developer — or the machine's
+candidate proofs — close them. The boundary's remaining entries — the
+native stack, the borrow ledger's formalization, enum conversions,
+constant folding — are named in the shipped TCB document, so the next
+rung is an assignment, already written down. The habits this book drilled
+are the diet the prover already eats.
 
 Forth taught that programs are built from words. Ada taught that promises
 can be checked. This book's bet is that the two belong together: a

@@ -1,31 +1,22 @@
 # Chapter 15 — The Machine as Witness: Emulation in Verification
 
-> A test that cannot disagree with you is not a witness.
-> The corpus is the cross-examination.
->
-> — workshop wall
-
-## 15.1 The Practice
-
-> **The Practice.** *Every semantic claim the toolchain makes is replayed
-> by at least two independent machines, and the machines are not allowed to
-> agree by construction: one proves, one executes, and a shared corpus of
-> observations is the only thing either is allowed to say. When they
-> disagree, the corpus wins and the code is wrong — and this has already
-> happened, catching a real bug.*
+## 15.1 The other half of the trust story
 
 Chapter 14 put proofs in the developer's hands. This chapter is the other
 half of the trust story, and it is about a different instrument entirely:
-emulated execution as a witness. The claim under examination is always
-the same — *"this operational semantics says what the language does"* —
-and the examination is always the same shape: run the claim through an
-independent implementation against a shared corpus of observations, and
-let the corpus refuse whichever side has drifted.
+emulated execution as a witness. Every semantic claim the toolchain makes
+is replayed by at least two independent machines, and the machines are
+built so they cannot agree by construction: one proves, one executes, and
+a shared corpus of observations is the only thing either is allowed to
+say. When they disagree, the corpus wins and the code is wrong — and this
+has already happened, catching a real bug (§15.3).
 
-The chapter's rule, which the whole toolchain observes:
-
-> Zero divergence is the only passing grade. A witness that is allowed
-> occasional disagreement is a screensaver.
+The claim under examination is always the same — *"this operational
+semantics says what the language does"* — and the examination is always
+the same shape: run the claim through an independent implementation
+against the corpus, and let the corpus refuse whichever side has drifted.
+The rule the whole toolchain observes: zero divergence is the only passing
+grade. A witness that is allowed occasional disagreement is a screensaver.
 
 ## 15.2 The conformance corpus: `tyu.vec/1`
 

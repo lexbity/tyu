@@ -1,26 +1,20 @@
 # Chapter 10 — Decomposition: Information Hiding, Enforced
 
-> Hide what might change.
-> Then let the machine check that you hid it.
->
-> — workshop wall, after Parnas
-
-## 10.1 The Practice
-
-> **The Practice.** *A module is a decision about what might change. Its
-> interface file is the promise the rest of the program is allowed to know,
-> and the checker holds both sides to it: the implementation must match the
-> interface, and callers are checked against the interface — whether or not
-> the implementation exists.*
+## 10.1 The two-file rule
 
 Half a century ago, David Parnas proposed the rule that still divides
 good systems from bad: decompose according to *what is likely to change*,
 and hide each changeable decision behind an interface. Chapters 5 and 7
-borrowed his idea for scopes and borrows. This chapter runs it at the
-scale of modules — and the Tyu difference is the second line of the
-epigraph: information hiding here is enforced by the build. The `.def`
-file is checked, the imports are checked, and a drifted mirror stops the
-build.
+borrowed his idea for scopes and borrows; this chapter runs it at the
+scale of modules. The Tyu difference: information hiding here is enforced
+by the build.
+
+A module is a decision about what might change. Its interface file is the
+promise the rest of the program is allowed to know, and the checker holds
+both sides to it: the implementation must match the interface, and callers
+are checked against the interface — whether or not the implementation
+exists. The `.def` file is checked, the imports are checked, and a
+drifted mirror stops the build.
 
 ## 10.2 The two files
 
@@ -120,7 +114,7 @@ error[E2218]: interface/implementation word signature mismatch
 This is the "forgotten mirror" — the anti-pattern where someone changes
 the implementation and the interface file, edited by hand a month ago,
 quietly describes a program that no longer exists. Chapter 1's
-post-mortem was this bug in comment form; here it is a build failure.
+In more depth was this bug in comment form; here it is a build failure.
 
 **The import past the wall.** The implementation has a `hidden` word; the
 interface does not export it; the caller imports it anyway (Lab 10.4):

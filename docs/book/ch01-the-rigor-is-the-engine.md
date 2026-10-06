@@ -1,11 +1,5 @@
 # Chapter 1 — The Rigor Is the Engine
 
-> A program is a stack of promises.
-> The only question is who checks them: the author, at 3 a.m. —
-> or the machine, before lunch.
->
-> — workshop wall
-
 ## 1.1 Two ways to be careful
 
 There are two ways to write careful software.
@@ -16,9 +10,10 @@ it down — in a comment, or a naming convention, or a README that everyone is
 *sure* to read. For a while, everyone who calls the function has read the
 comment. The code works. Then a new engineer joins, or a call site is copied
 under deadline, or the comment is updated on one side of a refactor and not
-the other. Nothing rejects the lie. The program ships. The lie ships with it,
-and the lie becomes a field failure — at a customer site, at 3 a.m., with a
-debugger that had to be driven in from nine hours away.
+the other. Nothing rejects any of it. The program ships. The stale comment
+ships with it, and months later the mismatch becomes a field failure — at a
+customer site, at 3 a.m., with a debugger that had to be driven in from nine
+hours away.
 
 Vigilance is a real skill, and for decades it was the *only* skill available.
 But it has a property that makes it dangerous as a foundation: **it does not
@@ -39,7 +34,7 @@ programs are built from **words** that transform a **data stack**, the way
 Forth programmers have composed programs for fifty years. What Tyu adds is a
 verification habit borrowed from Ada, SPARK, and Rust: nearly everything
 written down about a word — what it takes, what it returns, what it may *do*,
-what it *promises* — is a machine-checked claim, not a comment.
+what it *promises* — is a machine-checked claim the compiler reads.
 
 One idea runs the length of this book. It gets stated once, here, and then
 demonstrated for fourteen chapters:
@@ -53,8 +48,8 @@ loads signed code into a running system from untrusted media. Nobody sane
 attempts those in an unverified language. Nobody has to attempt them
 unverified again.
 
-But daring is earned in order. First, the machine has to start telling the
-truth. That starts now.
+But daring is earned in order. Before the book can dare anything, the
+machine has to start telling the truth — and that is where we begin.
 
 ## 1.2 The first ten minutes
 
@@ -90,8 +85,8 @@ named `main`, and after its name comes this:
 
 That is a **stack effect**: a claim about the data stack. Its meaning, spoken
 by the word itself: *"run me on any stack; when I am done, one signed 64-bit
-integer will sit where nothing sat before."* In Tyu this is not documentation
-— it is the first contract in the book, and the checker reads it. The hosted
+integer will sit where nothing sat before."* In Tyu this is the first
+contract in the book, and the checker reads it as one. The hosted
 runtime uses `main`'s returned value as the process exit code, so `main` ends
 by pushing `0`.
 
@@ -103,10 +98,11 @@ run it:
 - `"S\n"` and another `platform.io.log` emit two bytes, `S` and newline;
 - `0` pushes the exit code.
 
-That `S` line is not decoration. Tyu's runner and test harness listen for the
+That `S` line has a job. Tyu's runner and test harness listen for the
 **completion marker**: a program that exits *without* emitting `S\n` has not
-finished its work, whatever its exit code claims. A program dies exactly that
-way in a moment — and the marker's absence is the proof.
+finished its work, whatever its exit code claims. In a few minutes you'll
+watch a program die exactly that way — and the missing marker will be how we
+know.
 
 Build it and run it two ways:
 
@@ -263,14 +259,9 @@ damage was still one word wide, before anything downstream ever saw the
 negative level. Checked failures are the cheapest failures a program can
 have.
 
-## 1.4 The Practice
+## 1.4 What the machine checks
 
-Every chapter adds one checkable discipline, stated up front. The discipline
-of chapter 1 is the one the whole book runs on:
-
-> **The Practice.** *Everything claimed, the machine checks. Claims are
-> cheap; lies are loud.*
-
+Everything claimed, the machine checks. Claims are cheap; lies are loud.
 Three of these claims have already appeared in the last twenty minutes —
 the stack effect on `main`, the `needs` clause on `set-level`, and the
 completion marker — and the rest are waiting in the chapters ahead:
@@ -301,17 +292,17 @@ arithmetic. That discipline costs nothing today, and it is the same
 discipline the prover will check tomorrow. When the tooling lands, the
 chapter 4 habits will already be proofs in waiting.
 
-And: this book teaches Tyu **as it is**. Every green lab compiles and runs on
+And this book teaches Tyu as it is. Every green lab compiles and runs on
 the hosted target; every red lab is rejected, with the exact error code
 printed in the text; every runtime-failure lab traps with the exact trap
-code. All of it is executed in the project's CI, so the book cannot silently
-drift from the compiler. Where the language has edges — and it does — the
-edges appear in the text.
+code. Every lab lives as a file in the book's repository and runs on the
+same toolchain you are using, so the book cannot silently drift from the
+compiler. Where the language has edges — and it does — the edges appear in
+the text.
 
 ## 1.6 How to read this book
 
-Each chapter is a discipline, and each discipline comes with three kinds of
-lab:
+Each chapter teaches one discipline, and its labs come in two colors:
 
 - **Green labs** compile and run. The transcript in the text is real.
 - **Red labs** must *not* compile. The task: make the rejection happen, quote
@@ -507,7 +498,8 @@ Tyu has no quarrel with comments. Its rule is: *if a fact is load-bearing,
 it is not a comment.* `needs [ dup 0 >= ]` is the same sentence as the C
 comment, but the compiler reads it, the runtime enforces it, and the cost of
 ignoring it moved from 3 a.m. to build time — or, for claims only the running
-program can evaluate, to the exact boundary where the lie would have entered.
+program can evaluate, to the exact boundary where the bad value would have
+entered.
 
 ### Why the rule is the rule
 
@@ -538,5 +530,5 @@ property.
 ---
 
 *Next: chapter 2 — First Words. The data stack, for real this time: reading
-stack effects fluently, naming values with `=>`, and the three control words
-(`if`, `while`, `loop`) that turn a straight line into a program.*
+stack effects fluently, naming values with `=>`, and the control words
+(`if` and `while`) that turn a straight line into a program.*

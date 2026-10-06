@@ -1,26 +1,19 @@
 # Chapter 9 — Factoring: Style Becomes Proof
 
-> Until you can name it, you cannot check it.
-> Until you can check it, you were only hoping.
->
-> — workshop wall
+## 9.1 The craft chapter
 
-## 9.1 The Practice
-
-> **The Practice.** *Factor so each word can be described in one sentence —
-> and so every proof the checker makes attaches to the smallest unit that
-> can carry it. How a program is divided decides where its claims live, and
-> claims that live at interfaces get checked at every call.*
-
-This is the craft chapter. Chapters 3 through 8 supplied the checking
-machinery; this chapter is about the human half — the act of dividing a
-program into words — and the claim that makes factoring something more
-than tidiness in Tyu: the division changes what can be proven, and
-where.
+Chapters 3 through 8 supplied the checking machinery; this chapter is about
+the human half — the act of dividing a program into words — and the claim
+that makes factoring something more than tidiness in Tyu: the division
+changes what can be proven, and where. Factor so each word can be
+described in one sentence, and so every proof the checker makes attaches
+to the smallest unit that can carry it. How a program is divided decides
+where its claims live, and claims that live at interfaces get checked at
+every call.
 
 The homage is explicit. Thinking Forth's factoring chapter taught that
-good programs are re-divided constantly — that factoring is not a phase
-but the material of programming. Forty years later, in a language with a
+good programs are re-divided constantly — that re-dividing is the material
+of programming itself. Forty years later, in a language with a
 checker, the same craft gains a new property: a well-factored word has an
 interface, and interfaces are the things this book's machinery has been
 checking all along.
@@ -43,8 +36,8 @@ truthful stack effect. A word described by *"initialize…"* is a coincidental b
 — things that happen to run at the same time, which is chapter 5's
 `resource`-without-a-rule smell, promoted to a design review question.
 
-And the counterweight, also from the tradition: **do not factor for
-factoring's sake.** A one-use shim around `1 +` adds a name without adding
+And the counterweight, also from the tradition: do not factor for
+factoring's sake. A one-use shim around `1 +` adds a name without adding
 a sentence. The criteria are clarity, reuse, and — Tyu's addition —
 provability. A word that fails all three should stay inline.
 
@@ -141,7 +134,7 @@ pass the one-sentence test is a program where:
   the checker reads.
 
 The god-word — the hundred-line unit that "just does the update" — is the
-opposite organization, and chapter 8's post-mortem warned about its
+opposite organization, and chapter 5's In more depth warned about its
 cousin. Its signature hides its effects; its internal claims are
 unreachable by callers; its failure modes surface at 3 a.m. in the field.
 The factored program does not prevent bugs by magic; it *positions* them —

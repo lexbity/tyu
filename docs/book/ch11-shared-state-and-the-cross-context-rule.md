@@ -1,23 +1,15 @@
 # Chapter 11 — Shared State and the Cross-Context Rule: Interrupts
 
-> The interrupt arrives in a microsecond.
-> The race it creates ships for a year.
->
-> — workshop wall
-
-## 11.1 The Practice
-
-> **The Practice.** *Shared hardware is proven, not prayed over: if an
-> interrupt can reach a resource, every access everywhere is inside a lock,
-> the lock lowers to whatever the platform needs, and the handler's own
-> stack is budgeted at its binding. The race that ships for a year becomes
-> a compile error that ships never.*
+## 11.1 The first daring part
 
 This is the first of the daring parts — the chapter where the disciplines
 of ten chapters combine into the guarantee that justifies them. An
 interrupt handler and mainline code share a device. In C this is the most
 ordinary of dangers; in Tyu it is a proof obligation, discharged word by
-word.
+word. Shared hardware is proven: if an interrupt can reach a resource,
+every access everywhere is inside a lock, the lock lowers to whatever the
+platform needs, and the handler's own stack is budgeted at its binding.
+The race that ships for a year becomes a compile error that ships never.
 
 ## 11.2 The race, and the shape that prevents it
 

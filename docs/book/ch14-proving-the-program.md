@@ -1,16 +1,6 @@
 # Chapter 14 — Proving the Program: The Developer-Proof Pipeline
 
-> The kernel does not know who wrote the proof.
-> That is the whole security model, and the whole economy.
->
-> — workshop wall
-
-## 14.1 The Practice
-
-> **The Practice.** *A contract you wrote is a claim. A proof makes it a
-> theorem. The kernel — a small, independent checker — is the only judge;
-> the toolchain's job is to generate the claims, render them faithfully,
-> and never let an unproven claim be mistaken for a proven one.*
+## 14.1 The promised tooling
 
 Chapter 1 made a promise with an expiration date: *"write contracts the
 way the prover will want them — when the tooling lands, your chapter 4
@@ -18,7 +8,11 @@ habits will already be proofs in waiting."* The tooling has landed. This
 chapter is the discharge of that promise, and it upgrades the book's
 oldest sentence: a contract is no longer only *checked at run time* — it
 can be a theorem, kernel-verified, harvestable into the build, and
-loadable as part of a module's evidence.
+loadable as part of a module's evidence. A contract you wrote is a claim;
+a proof makes it a theorem. The kernel — a small, independent checker —
+is the only judge; the toolchain's job is to generate the claims, render
+them faithfully, and never let an unproven claim be mistaken for a proven
+one.
 
 ## 14.2 The pipeline, end to end
 
@@ -36,14 +30,17 @@ tyu: proof fill: 1 candidate file(s) written to '…/proofs/candidates'
     marker line)
 ```
 
-What happened, in order. The compiler extracted **obligations** — machine-
-readable claims about the module (`tyu.obl/v2`): subtype range promises,
-contract pre/post, each with a span, an *intent string*, and the word's
-IR. Each obligation was canonically encoded and **hashed** — the
-`statement_hash` that makes the claim un-editable in passing. The
-renderer then wrote the claims as Lean `Prop` definitions into the
-generated package (`.tyu-verify/lean/Gen/P2.lean` — regenerated every
-build, digest-checked at harvest, E6418 if anyone edits it):
+What happened, in order. First, extraction: the compiler read the module
+and wrote down its **obligations** — machine-readable claims about the
+module (`tyu.obl/v2`): subtype range promises, contract pre/post, each
+with a span, an *intent string*, and the word's IR. Each obligation was
+canonically encoded and **hashed** — the `statement_hash` that makes the
+claim un-editable in passing.
+
+Then rendering: the claims are written as Lean `Prop` definitions into
+the generated package, `.tyu-verify/lean/Gen/P2.lean`. The file is
+regenerated every build and digest-checked at harvest; editing it by hand
+is E6418:
 
 ```lean
 def stmt_P2_take_subtype_range_0 : Prop :=
@@ -63,17 +60,19 @@ Weakening the claim would require editing the generated definition — which
 the next build regenerates and the digest catches. The type system is
 the first binding; the digest is the second; neither negotiates.
 
-`lake build` elaborates everything; the **harvest** step then binds each
-theorem to its statement in the kernel environment, runs the **axiom
-audit** (the only permitted axioms are the benign logical set — `sorry`
-and friends are fail-closed errors), checks **assumption closure** (no
-proof may rest on an obligation nobody discharged), and emits
-`tyu.verdicts/v2`: per-obligation status, **trust class** (`proof`,
-`checked`, `assumed`, `open`), **method** (`certificate` — a theorem;
-`rederive` — the port re-running the toolchain's own analysis), certifier
-identity, and surface provenance. The book's oldest rule — fail closed —
-holds here too: a harvest that cannot verify its bindings emits E6416 and
-*every obligation goes open*, checks retained.
+Then `lake build` elaborates everything, and the **harvest** step does
+the checking: it binds each theorem to its statement in the kernel
+environment, runs the **axiom audit** (the only permitted axioms are the
+benign logical set — `sorry` and friends are fail-closed errors), and
+checks **assumption closure** (no proof may rest on an obligation nobody
+discharged).
+
+The result is `tyu.verdicts/v2`: per-obligation status, **trust class**
+(`proof`, `checked`, `assumed`, `open`), **method** (`certificate` — a
+theorem; `rederive` — the port re-running the toolchain's own analysis),
+certifier identity, and surface provenance. The book's oldest rule —
+fail closed — holds here too: a harvest that cannot verify its bindings
+emits E6416 and *every obligation goes open*, checks retained.
 
 ## 14.3 The dialect is load-bearing
 
@@ -320,8 +319,8 @@ verify: 1 obligations — 0 discharged, 0 assumed, 1 open
 
 **Why:** the pipeline could have rendered *something* provable — a
 tautology shaped like the claim. Instead: omitted, open, and the runtime
-check still in the binary. Compare with chapter 4's tautology
-post-mortem: this is that refusal, institutionalized.
+check still in the binary. Compare with chapter 4's contract theater:
+this is that refusal, institutionalized.
 
 ### Lab 14.6 — Tamper with the generation *(red)*
 

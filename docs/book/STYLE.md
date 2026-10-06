@@ -84,7 +84,8 @@ prose, as the material dictates.
 4. **In more depth** — the experienced-engineer subsection (see above).
 5. **Exercises** — predict-then-run preferred over filler.
 
-The v3 "**The Practice**" block dissolves into the opening.
+The v3 "**The Practice**" block dissolves: its sentence becomes ordinary
+prose in the chapter's opening section — no blockquote, no bold label.
 
 ## Integrity (unchanged and non-negotiable)
 

@@ -1,25 +1,17 @@
 # Chapter 5 — Effects and Capabilities: The Two-Sided Law
 
-> A signature can say what arrives and what leaves.
-> The interesting question is what happens *in between*.
->
-> — workshop wall
-
-## 5.1 The Practice
-
-> **The Practice.** *Declare what a word does; the caller decides. A word's
-> effects are checked against the context that calls it, and a context's
-> capabilities belong to the code lexically inside it — so the reviewer
-> reads the label on the tin, and the compiler checks that the contents
-> match.*
+## 5.1 The third thing a signature can promise
 
 Chapters 3 and 4 fenced in *values*: what they are, and what must be true
 about them. This chapter fences in *actions* — the third thing a signature
 can promise. Suspending a task, allocating memory, touching hardware,
-running forever, running inside an interrupt: these are
-**events a word can cause** — and Tyu's rule is that events
-are declared, checked, and — where the platform cannot allow them —
-forbidden.
+running forever, running inside an interrupt: these are **events a word
+can cause** — and Tyu's rule is that events are declared, checked, and —
+where the platform cannot allow them — forbidden. Declare what a word
+does; the caller decides. A word's effects are checked against the context
+that calls it, and a context's capabilities belong to the code lexically
+inside it — so the reviewer reads the label on the tin, and the compiler
+checks that the contents match.
 
 ## 5.2 The two sets
 
@@ -112,8 +104,8 @@ and says so:
   platform.mem.region-destroy ;
 ```
 
-Read the mechanics, because this is the storage story of chapter 7 in
-one-line preview: sizes cross word boundaries as `usize` (`as usize` — the
+The mechanics preview the storage story of chapter 7: sizes cross word
+boundaries as `usize` (`as usize` — the
 conversion habit from chapter 3), the region handle is `dup`-ed because it
 is needed three times, `!i64` stores and `@i64` loads through the allocated
 pointer, and the region is destroyed — allocation in Tyu is explicit,
@@ -199,8 +191,8 @@ marker, none the wiser.
 
 ## 5.7 Declared forever
 
-The engine lab deserves its own section because it is the chapter's thesis
-in runtime form. The program compiles — every declaration in order. It
+The engine lab rounds off the chapter. The program compiles — every
+declaration in order. It
 runs — the image boots. And then it does exactly what its signature said
 it might: it never returns.
 

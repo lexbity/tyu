@@ -1,19 +1,13 @@
 # Chapter 2 — First Words
 
-> Data stack, data stack, does whatever a data stack does.
-> Push a thing, push a thing, then a word consumes the two.
->
-> — workshop wall, after a hard day
-
-## 2.1 The Practice
-
-> **The Practice.** *Every word declares its effect on the stack, and the
-> checker holds the body to the declaration — one term at a time, left to
-> right, exactly the way the machine runs them.*
+## 2.1 One skill, two ideas underneath
 
 Reading a Tyu program and running a Tyu program are the same activity,
-performed at different speeds. This chapter builds that one skill — after
-building the two ideas underneath it: the stack, and the word.
+performed at different speeds. The skill this chapter builds is that: every
+word declares its effect on the stack, and the checker holds the body to the
+declaration — one term at a time, left to right, exactly the way the machine
+runs them. Underneath the skill sit two ideas, and they come first: the
+stack, and the word.
 
 ## 2.2 The data stack
 
@@ -158,8 +152,8 @@ all four, one out.
 
 A rule of thumb with the force of style: beyond two or three stack items,
 name them. The deep-juggling style that old Forth code was famous for is a
-disease Tyu makes easy to avoid — and chapter 9 turns that style rule into a
-proof obligation.
+habit this language makes easy never to pick up — and chapter 9 turns that
+style rule into a proof obligation.
 
 ## 2.6 Decisions: control flow and `if`
 

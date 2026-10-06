@@ -1,23 +1,16 @@
 # Chapter 12 — Tasks and Channels: Concurrency the Platform Provides
 
-> The scheduler is not in the language.
-> The language is what makes the scheduler safe to use.
->
-> — workshop wall
-
-## 12.1 The Practice
-
-> **The Practice.** *Concurrency is declared, not assumed: the platform
-> supplies the scheduler, the effects say who may suspend, the annotations
-> say what escapes into it, and every safety property it needs — locks,
-> custody, bounds — is one this book has already paid for.*
+## 12.1 The short chapter
 
 This chapter is short, and the shortness has a reason. Chapters 5 and 7
 already built everything concurrency safety needs: `suspend` is an effect
 with a discharging handler, shared storage is a resource with a lexically
 granted lock, and a message is custody that moves. What remains is the
-platform's scheduler — and the two places where the compiler holds the
-new pieces to the old rules.
+platform's scheduler — and the two places where the compiler holds the new
+pieces to the old rules. Concurrency here is declared: the platform
+supplies the scheduler, the effects say who may suspend, the annotations
+say what escapes into it, and every safety property it needs — locks,
+custody, bounds — is one this book has already paid for.
 
 ## 12.2 The platform supplies the scheduler
 

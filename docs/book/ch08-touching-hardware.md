@@ -1,25 +1,16 @@
 # Chapter 8 — Touching Hardware: MMIO
 
-> The datasheet is a specification.
-> Most languages make you retype it as comments.
-> Tyu makes you retype it as a contract.
->
-> — workshop wall
-
-## 8.1 The Practice
-
-> **The Practice.** *Hardware is described once, in a platform descriptor —
-> devices named, registers placed, access rules stated. The source's
-> register-map is checked against that description row by row, and every
-> access the source writes is checked against the rules. The datasheet
-> becomes a compiler input.*
+## 8.1 The datasheet becomes a compiler input
 
 This is the chapter where the book goes to metal. Every lab runs on the
 QEMU track (`x86_64-unknown-none`) — the toolchain's maintained hardware
-path — under the platform named `x86_64-unknown-none`, whose descriptor
-declares an emulated memory aperture holding a handful of devices. QEMU
-installation was recommended back in Appendix C precisely for chapters like
-this one.
+path, whose platform descriptor declares an emulated memory aperture
+holding a handful of devices. QEMU installation was recommended back in
+Appendix C precisely for chapters like this one. The idea of the chapter:
+hardware is described once, in a platform descriptor — devices named,
+registers placed, access rules stated — and the source's register-map is
+checked against that description row by row, and every access the source
+writes is checked against the rules.
 
 ## 8.2 Devices are named, not addressed
 

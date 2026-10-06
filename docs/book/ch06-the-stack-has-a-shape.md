@@ -1,21 +1,13 @@
 # Chapter 6 — The Stack Has a Shape
 
-> Every phrase has a height.
-> Most languages measure it at 3 a.m., in the field, with a broken device.
-> Tyu measures it at compile time, on paper.
->
-> — workshop wall
-
-## 6.1 The Practice
-
-> **The Practice.** *Every phrase has a shape — what it adds, what it
-> removes, and how high it reaches. The checker computes the reach for
-> every word, composes it through every call, and refuses programs whose
-> reach cannot be bounded.*
+## 6.1 From reading skill to proof
 
 Chapter 2 taught the pencil simulation: read left to right, track the
-stack. This chapter promotes that habit from a reading skill to a *proof*,
-and then shows the proof's exact edge, as an experiment.
+stack. This chapter promotes that habit into a proof. Every phrase has a
+shape — what it adds, what it removes, and how high it reaches — and the
+checker computes the reach for every word, composes it through every call,
+and refuses programs whose reach cannot be bounded. Then the chapter shows
+the proof's exact edge, as an experiment.
 
 ## 6.2 net and high
 
@@ -102,7 +94,8 @@ what "net-zero body" buys: loops get *iteration* without *growth*.
   dup 0 <= [ ] [ 1 - countdown ] if ;
 ```
 
-`countdown` — recursion, and the chapter's crux. Read its shape per level:
+`countdown` — recursion, and the hardest case for the monoid. Read its
+shape per level:
 `dup` copies, the comparison consumes the copy, and each branch is net 0 —
 the true branch does nothing, the false branch subtracts one and recurses
 with the same net. Level by level, the data stack rises by *nothing*. The
@@ -127,8 +120,7 @@ The same refusal meets a `while` body that grows (Lab 6.3, E3257): the
 loop-shaped and recursion-shaped routes to *the stack that never stops
 rising* are both compile errors.
 
-That is the chapter's central claim: on
-the data stack, unbounded growth is a sentence at compile time — the
+So on the data stack, unbounded growth is a sentence at compile time — the
 runtime never gets involved. The classic embedded death — deep recursion,
 silent growth, corrupted memory far from the cause — cannot be written in
 the first place. The runtime still keeps a trap (`STACK_OVERFLOW`, code 10)
@@ -154,8 +146,8 @@ rejected, E5040. The same logic rejects an unbounded handler shape at its
 binding site (E5100), which is how the compiler says: *this interrupt
 cannot be allowed, because its stack use cannot be promised.* Chapter 11
 returns to ISRs — the vector table, the sharing rule, and where the budgets
-come from. Here, take the principle: **the tighter the context, the
-smaller the shapes it will accept.**
+come from. Here, take the principle: the tighter the context, the
+smaller the shapes it will accept.
 
 ## 6.6 The engine: the unproven half
 
@@ -411,7 +403,7 @@ failure — because a bound that can be exceeded was never a bound.
 
 ## In more depth — the recursion that looked like a loop
 
-The C shape of this chapter's post-mortem is a fatigue-hardened reviewer's war story:
+The C shape of this chapter is a fatigue-hardened reviewer's war story:
 a parser recursive over user input, tested to depth twenty, shipped to
 depth a million — the native stack gone, memory corrupted *far* from the
 cause, and the crash dump pointing at an innocent `memcpy` three frames

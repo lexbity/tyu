@@ -1,22 +1,16 @@
 # Chapter 13 — Field Updates on Untrusted Media
 
-> Anything that can update itself can be replaced by something else.
-> The question is who gets the last word.
->
-> — workshop wall
-
-## 13.1 The Practice
-
-> **The Practice.** *A module is safe to load when everything it claims has
-> been checked or authenticated, and the loader refuses everything else —
-> so the daring operation, installing new code on a running device from
-> untrusted media, becomes a checklist the machine executes.*
+## 13.1 The capstone
 
 This is the capstone. Ten chapters of claims — types, contracts, effects,
 bounds, locks, interfaces — were never just compile-time comforts. They
 were accumulating into a list that a *loader* can hold a module to, at
 load time, on a device, from media the device's owners do not control.
-This chapter is where the list is read out loud.
+This chapter is where the list is read out loud. A module is safe to load
+when everything it claims has been checked or authenticated, and the
+loader refuses everything else — so the daring operation, installing new
+code on a running device from untrusted media, becomes a checklist the
+machine executes.
 
 ## 13.2 The two-image world
 
