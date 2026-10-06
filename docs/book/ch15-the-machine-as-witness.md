@@ -15,8 +15,8 @@
 > happened, catching a real bug.*
 
 Chapter 14 put proofs in the developer's hands. This chapter is the other
-half of the trust story, and it is not about proofs at all: it is about
-**emulated execution as a witness**. The claim under examination is always
+half of the trust story, and it is about a different instrument entirely:
+emulated execution as a witness. The claim under examination is always
 the same — *"this operational semantics says what the language does"* —
 and the examination is always the same shape: run the claim through an
 independent implementation against a shared corpus of observations, and
@@ -24,8 +24,8 @@ let the corpus refuse whichever side has drifted.
 
 The chapter's rule, which the whole toolchain observes:
 
-> **Zero divergence is the only passing grade.** A witness that is allowed
-> occasional disagreement is not a witness; it is a screensaver.
+> Zero divergence is the only passing grade. A witness that is allowed
+> occasional disagreement is a screensaver.
 
 ## 15.2 The conformance corpus: `tyu.vec/1`
 
@@ -75,8 +75,8 @@ attestations, not proofs. Recognition is continuous, which is the point.
 
 ## 15.3 The witness that earned its keep
 
-Why obeyance to a corpus is worth the machinery is not an argument — it is
-a war story, and it happened during this pipeline's own construction. The
+Why obey a corpus at all? The best answer is a war story, and it happened
+during this pipeline's own construction. The
 Lean port's fragment corpus (`tyu.fragvec/1` — whole small programs, not
 single operations) refused to agree with the port's transfer of `swap`:
 the port had implemented it as the identity. The corpus said: the
@@ -84,8 +84,8 @@ authoritative row is `( a b → b a )`, the Rust engine agrees with the row,
 and your transfer does not. The port was fixed; the corpora now agree.
 
 The deeper fact is *which side was wrong*. The corpus did not know or
-care — it is a deposition, not a judge. Any machine that drifts from the
-deposition loses, whether it is the hobby backend or the proof port. The
+care. It is a deposition, and any machine that drifts from the deposition
+loses — whether it is the hobby backend or the proof port. The
 same discipline powers the **re-derivation differential**: the port
 re-runs the toolchain's interval analysis on generated programs and must
 agree per-obligation — including agreement on the *trust class* — across
@@ -105,8 +105,8 @@ RESULT: vectors=59 mismatches=0     (exit 0)
 ```
 
 The refusal names the vector, the observed transfer, and the tampered
-expectation. This is what "zero divergence" means mechanically: not a
-dashboard, a diff.
+expectation. This is what "zero divergence" means mechanically: the runner prints a
+diff and exits 1.
 
 ## 15.4 The board as witness
 
@@ -127,7 +127,7 @@ The middle row is the true one, and it is the reason the board matters:
 machine code ends at conformance vectors and QEMU runs — the same
 combination AWS's s2n-bignum uses for hand-tuned assembly, and the same
 reason seL4's proof chain ends at a validated binary rather than an
-assumption. Empirical is not a slur; it is a scope statement. The TCB
+assumption. "Empirical" here is a scope statement. The TCB
 document ships in every certification package so that no auditor has to
 guess which claims are theorems and which are test results.
 
@@ -148,7 +148,7 @@ The proof (chapter 14) covers everything the corpus can express; the
 corpus covers the proof port's drift; the board covers the lowering no
 proof reaches yet. This is the same structure the research literature
 arrived at the hard way — verified kernels, independent checkers,
-machine-code verification — arrived at here in miniature, with the same
+machine-code verification — rebuilt here at book scale, with the same
 load-bearing wall: a small deposition both machines must repeat.
 
 ---
@@ -203,7 +203,7 @@ The port re-executes the toolchain's interval analysis and must agree
 *per obligation, including the trust class* — a `checked` that the port
 would call `open` is a divergence like any other. In CI this runs across
 generated programs at scale; on a laptop, the suite is the same
-assertion in miniature.
+assertion, scaled down.
 
 ### Lab 15.4 — The board, re-examined *(green, QEMU — already met)*
 
@@ -215,7 +215,7 @@ runtime remains the documented open edge). Re-run any one of them and
 note what it witnesses that no corpus can: the compiled artifact,
 executing.
 
-### Post-mortem — the witness that agreed with itself *(optional — for readers with C or embedded scars)*
+## In more depth — the witness that agreed with itself
 
 The C testing failure this chapter structurally refuses: the test suite
 written by importing the implementation's own header and calling its own
@@ -233,7 +233,7 @@ proof the discipline works — the deposition did not care which
 implementation was older, larger, or written by the language's author.
 It said what `swap` does; one machine disagreed; the machine was wrong.
 
-### From the workbench
+### Why the rule is the rule
 
 Why byte-exact comparison instead of "close enough"? Because semantics
 differences start small. An off-by-one in a boundary vector, a
@@ -246,7 +246,7 @@ is a reviewed diff, not a discovery. When the research literature says
 those words cost: generated corpora, byte-exact replay, and a gate that
 treats one divergence as total.
 
-### Exercises
+## Exercises
 
 1. **Read a deposition.** Pick any vector from
    `crates/verifier/test-vectors/x86_64-unknown-none/index.json` and

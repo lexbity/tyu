@@ -15,8 +15,8 @@
 This is the craft chapter. Chapters 3 through 8 supplied the checking
 machinery; this chapter is about the human half — the act of dividing a
 program into words — and the claim that makes factoring something more
-than tidiness in Tyu: **the division changes what can be proven, and
-where.**
+than tidiness in Tyu: the division changes what can be proven, and
+where.
 
 The homage is explicit. Thinking Forth's factoring chapter taught that
 good programs are re-divided constantly — that factoring is not a phase
@@ -93,8 +93,8 @@ the grammar is the shape rules.** A helper that consumes its subject
 cannot serve in a predicate. A loop body must be net-zero, so the factored
 body of a loop must be a net-zero word (§9.4). An ISR's pieces must fit
 under the handler's ceiling (chapter 6). When a factoring fails to
-compile, E3220 or its cousins are not obstructing the craft — they *are*
-the craft, stated mechanically.
+compile, the refusal *is* the craft: E3220 and its cousins are the shape
+rules, stated mechanically.
 
 ## 9.4 Reused bodies, reused proofs
 
@@ -113,8 +113,8 @@ Two loops, different bounds, one body. Each `while` demands a net-zero
 body; `tick` is net-zero *by declaration* — the shape was proven once,
 where the word was defined, and both loops inherit the proof. Inline the
 body twice and the checker proves it twice; factor it and the proof has a
-name. This is the chapter's thesis in its smallest form: **factoring is
-how proofs get reused.**
+name — proven once, at the definition, inherited by every loop that calls
+it.
 
 It scales. Chapter 6's `countdown` is a net-zero recursion whose shape
 survives because each level is stack-neutral; the neutrality is a property
@@ -125,8 +125,8 @@ declares itself where the reader can bind it to the code. And chapter 11
 will lean on the same principle from the other side: a resource touched
 inline in its lock is checkable *because* the grant is lexical, so
 factoring respects the context's grain (locked sections stay inline —
-that lesson is chapter 5's and it becomes a factoring rule here: **do not
-factor across a context boundary.** The bracket is part of the word.)
+that lesson is chapter 5's and it becomes a factoring rule here: do not
+factor across a context boundary. The bracket is part of the word.)
 
 ## 9.5 When the division is the design
 
@@ -244,7 +244,7 @@ Lab 9.1's `bounded-by`, whose signature `( i64 i64 -- i64 bool )` states
 the grammar: value stays, verdict arrives. Fixing the red lab by hand —
 before looking at 9.1 — is the exercise.
 
-### Post-mortem — the god-word and the shim *(optional — for readers with C or embedded scars)*
+## In more depth — the god-word and the shim
 
 Two anti-patterns, one principle. The god-word: the four-hundred-line
 `do_update()` whose signature is `int do_update(ctx*)` — one parameter
@@ -261,7 +261,7 @@ proof, no sentence — and the criteria of §9.2 are the review checklist.
 Between them is the factored word: one sentence, one interface, proofs
 that attach where they can be reused.
 
-### From the workbench
+### Why the rule is the rule
 
 A fair challenge: if the shape rules are associative (chapter 6's monoid),
 does factoring change *anything* the checker proves? The shapes of the
@@ -276,7 +276,7 @@ claim that is checked once at a named interface and a claim that must be
 re-argued at every use site is the difference between a specification and
 a hope.
 
-### Exercises
+## Exercises
 
 1. **Factor `dist2`.** Chapter 2's `dist2` computes two squared deltas.
    Factor the delta-square into a word, predict its `(net, high)`, and

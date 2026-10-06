@@ -41,8 +41,8 @@ verification habit borrowed from Ada, SPARK, and Rust: nearly everything
 written down about a word — what it takes, what it returns, what it may *do*,
 what it *promises* — is a machine-checked claim, not a comment.
 
-Here is the thesis of this whole book, stated once and then demonstrated for
-fourteen chapters:
+One idea runs the length of this book. It gets stated once, here, and then
+demonstrated for fourteen chapters:
 
 > **Safety is not the brake — it's the engine. The rigor is what licenses the
 > daring parts.**
@@ -135,7 +135,7 @@ $ echo $?
 0
 ```
 
-Silence, from the harness, is success. Hold that thought.
+Silence, from the harness, is success.
 
 ## 1.3 The machine that tells the truth
 
@@ -232,16 +232,22 @@ $ echo $?
 20
 ```
 
-Read that pair of facts, because they are the whole chapter.
+The transcript is worth a second look, because something odd happened in
+it. `level accepted` printed once — for the 42. Then `main` called
+`set-level` with -5, and after that… nothing. No error message, no second
+line, no `S`. The process is just gone — exit status 20, and the harness
+reported the missing marker as `NO_COMPLETION`.
 
-The first call succeeded — `level accepted` printed once. Then `-5` arrived,
-the inserted check evaluated `-5 ≥ 0` to false, and the runtime **trapped**.
-The process ended with status **20**, and the completion marker — the `S`
-that proves the program did what it set out to do — never came. The harness
-translated the missing marker into `NO_COMPLETION`. The two lines after the
-lie never ran; their output never exists.
+So where exactly did it die? `main` still had two lines left — the log and
+the exit — and neither ran. In fact, `set-level`'s body never ran either:
+the string, the log word, all of it was still ahead of the program when the
+process ended. The only thing that *did* run was the check: `needs` placed
+it at the top of the word, it asked its one question — is −5 at least
+zero? — got its answer, and ended the process right there. The buggy call
+never happened, as far as the program's own code is concerned.
 
-Tyu's runtime failures speak in small, named integers — the **trap codes**:
+The exit status is how the runtime explains that. 20 is `CONTRACT_FAIL`,
+one of a small set of named verdicts:
 
 | Code | Name             | Meaning                                   |
 |------|------------------|-------------------------------------------|
@@ -251,24 +257,23 @@ Tyu's runtime failures speak in small, named integers — the **trap codes**:
 | 22   | `ASSERT_FAIL`    | an assertion failed                        |
 | 23   | `UNREACHABLE`    | control reached a state declared impossible|
 
-Exit code 20 is not a crash. It is a *verdict*: "a promise was broken, here
-is which class of promise, and here is where the program stopped." Compare
-this with the vigilance model, where the same bug is a negative level flowing
-quietly into code written by someone who "just knew" levels are non-negative.
-The lie was caught at the boundary, early, loudly, and cheaply — and that is
-exactly the point. **Checked failures are the cheapest failures a program can
-have.**
+A crash in most languages tells you where the memory gave up. A trap like
+this tells you which promise broke — and it caught the call while the
+damage was still one word wide, before anything downstream ever saw the
+negative level. Checked failures are the cheapest failures a program can
+have.
 
 ## 1.4 The Practice
 
-Every chapter of this book opens with its practice — the one checkable
-discipline the chapter adds. The practice of chapter 1 is the practice of the
-whole book, in miniature:
+Every chapter adds one checkable discipline, stated up front. The discipline
+of chapter 1 is the one the whole book runs on:
 
 > **The Practice.** *Everything claimed, the machine checks. Claims are
 > cheap; lies are loud.*
 
-Three species of claim have already appeared, in twenty minutes:
+Three of these claims have already appeared in the last twenty minutes —
+the stack effect on `main`, the `needs` clause on `set-level`, and the
+completion marker — and the rest are waiting in the chapters ahead:
 
 | The claim                                       | Who checks it        | Where |
 |-------------------------------------------------|----------------------|-------|
@@ -287,7 +292,8 @@ discovering, over and over, that the claims are what license the daring.
 
 ## 1.5 What this book promises — and what it doesn't
 
-Contracts in Tyu are checked **at run time**, as just seen. A future
+Contracts in Tyu are checked **at run time**, as the engine lab showed. A
+future
 milestone of the project — with tooling to match — is *static discharge*:
 proving preconditions before the program ever runs, SPARK-style. This book
 teaches contracts the way the prover will want them: small, side-effect-free,
@@ -311,11 +317,10 @@ lab:
 - **Red labs** must *not* compile. The task: make the rejection happen, quote
   the error code, and name the falsified claim. (The reasoning follows each
   lab as a *Why* note.)
-- **Post-mortems** are the anti-patterns that kill real projects — shown
-  first the way they kill in C, then the way Tyu catches them.
-
-And in each chapter, a short **From the workbench** note: why the rule is the
-way it is, from the people who made it.
+- **In more depth** closes each chapter: the anti-patterns that kill real
+  projects, shown first the way they kill in C and then the way Tyu catches
+  them, alongside why the chapter's rule is the way it is. The section
+  assumes experience a newer reader doesn't need — skip it freely.
 
 ---
 
@@ -479,7 +484,7 @@ end;
 definitions. There is no "linker will find it" escape hatch, which means a
 whole class of runtime surprises becomes a compile-time sentence.
 
-### Post-mortem — the comment that lied
+## In more depth — the comment that lied
 
 Here is the C that this chapter is about. Every embedded team has a version
 of it:
@@ -498,13 +503,13 @@ Projects do not usually die of one such lie; they die of the *drift* — the
 comment updated without the call sites, the call sites written without the
 comment, until the documentation describes a program that no longer exists.
 
-Tyu's answer is not "comments are bad." It is: *if a fact is load-bearing, it
-is not a comment.* `needs [ dup 0 >= ]` is the same sentence as the C
+Tyu has no quarrel with comments. Its rule is: *if a fact is load-bearing,
+it is not a comment.* `needs [ dup 0 >= ]` is the same sentence as the C
 comment, but the compiler reads it, the runtime enforces it, and the cost of
 ignoring it moved from 3 a.m. to build time — or, for claims only the running
 program can evaluate, to the exact boundary where the lie would have entered.
 
-### From the workbench
+### Why the rule is the rule
 
 A question worth asking: *why is `needs` a separate clause, instead of
 writing the check as the first thing in the body?*
@@ -516,7 +521,7 @@ module's interface file, hashed into the module's ABI identity, and enforced
 once for every caller that will ever exist. The clause turns a habit into a
 property.
 
-### Exercises
+## Exercises
 
 1. **Predict, then run.** In Lab 1.3's swapped-call variant, exactly one
    `level accepted` prints. Explain why the second call's body — the string,

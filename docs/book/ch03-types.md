@@ -28,8 +28,8 @@ else.
 Go back to the plates of chapter 2 and add one fact: every plate is
 *stamped*. When a word runs, it reads the stamps of the top plates before it
 touches anything — `+` will take two `i64` plates and refuses a `bool`.
-None of this is a runtime scan; it is the checker, replaying the program on
-paper, refusing to let the program exist if any word is ever handed the
+There is no runtime scan here: the checker replays the program on paper,
+refusing to let the program exist if any word would ever be handed the
 wrong stamp.
 
 The primitive stamps, all fixed-size, all with the same meaning on every
@@ -55,8 +55,7 @@ conversions (§3.6). Small types are for *storage and meaning*, `i64` is for
 
 ## 3.3 Enums: a type that is exactly a set
 
-Many values in real systems are not numbers wearing costumes — they are
-choices. A motor is idle, running, or faulted. A day is one of seven. An
+Many values in real systems are choices. A motor is idle, running, or faulted. A day is one of seven. An
 `enum` writes the whole set down:
 
 ```tyu
@@ -78,8 +77,8 @@ name, and words can take a `State` as their input type:
 The power of the idea shows up when someone tries to blur it. `State.Run`
 looks like the number `1`, and a program full of C habits wants to pass it
 where an `i64` is declared. The checker refuses — Lab 3.5 makes the
-rejection happen. **An enum is not its number.** The set of legal values is
-the type, the type is checked at every call site, and "some other number
+rejection happen. The set of legal values *is* the type: it is checked at
+every call site, and "some other number
 that happens to fit in a byte" is not a `State`.
 
 Two notes about the current tree, because this book teaches Tyu as it is. Converting *out* of an enum (`State.Run as u8`) is stubbed — it
@@ -126,8 +125,8 @@ Name the struct (`=> p` empties the stack), then per field: `&` borrows the
 place, `@i32` loads its `i32`, `as i64` widens it for arithmetic — because
 `+` only speaks `i64`, exactly as §3.2 promised.
 
-The boundary, stated plainly: **structs have no literal construction on the
-current tree.** A `Point` value arrives as a word parameter, or it sits in
+The boundary, stated plainly: structs have no literal construction on the
+current tree. A `Point` value arrives as a word parameter, or it sits in
 named storage (chapter 7's `resource` story). And borrowing a *field* of a
 parameter typechecks but the x86 backend cannot yet emit it (`E8008`) — the
 words above run on paper, in the trace, but a `tyu run` lab containing them
@@ -136,8 +135,9 @@ declaration — the part this chapter is about — is already real.
 
 ## 3.5 Subtypes: ranges as types
 
-Here is the chapter's centerpiece, and the most Ada idea in the language.
-An `i64` claims to be any of roughly eighteen quintillion values — but a
+Here is the chapter's centerpiece: an idea the Ada language pioneered forty
+years ago, a range that lives in the type itself. An `i64` claims to be any
+of roughly eighteen quintillion values — but a
 battery level is *not*. It is an integer **and** it is between 0 and 100.
 That second sentence is a type:
 
@@ -235,40 +235,6 @@ Write the types as if the machinery were finished — ranges in subtypes,
 choices in enums, groupings in structs — because the machinery is the part
 that arrives on a roadmap, and the habits are the part that arrives when the
 reader decides.
-
-## 3.8 Compile-time discharge
-
-The runtime trap on the range cast is not the whole story anymore: the
-compiler also *proves* range facts when it can, and the proof has teeth.
-`150 as Percent` is the map of the boundary — the same program behaves
-differently under the two build policies:
-
-```console
-$ tyu build --verify-policy=open-ok open-cast.mod     # default — builds
-verify: obligations — ... provably-failing: cast.0
-$ tyu build --verify-policy=no-open open-cast.mod     # the norm, when adopted
-tyu: error[E6410]: open obligations (--verify-policy=no-open):
-  subtype-range — OpenCast::main::cast.0 line 11
-```
-
-Why does the *constant* 150 stay open instead of discharging? Because the
-interval engine proves it is **always** out of range — and the trap is the
-cast's semantics (§3.4). A discharge would remove a trap that must fire;
-the report names it `provably_failing` instead, and the runtime check is
-retained. The true pairing is:
-
-- value provably **in** range — discharged, no trap needed (the report
-  says `discharged`);
-- value provably **out** of range — retained, and the report says
-  `provably_failing` (a constant that can never pass);
-- value unknown at compile time (a caller's ⊤) — retained, `open`, the
-  caller or an external tool must close it.
-
-`--verify-policy=no-open` is the discipline as a gate: `tyu build` fails
-(E6410) listing every open obligation with its location. The repository's
-own corpus adopts the discipline per-module (`ci/verify-corpus/`,
-`ci/verify-allowlist.txt`): every open is justified, and a justification
-that stops happening fails `ci/guards.sh G20` (self-cleaning).
 
 ## Labs — Chapter 3
 
@@ -494,22 +460,56 @@ end;
 base type. The style that survives every version of this rule: convert at
 the boundary, in the open, where the check lives.
 
-### Post-mortem — the soup of bits *(optional — for readers with C or embedded scars)*
+## In more depth — the soup of bits
 
 The C pattern this chapter outlaws one topping at a time: an `int` parameter
 that carries motor state, documented as "0 = idle, 1 = run, 2 = fault" in a
 header; a status byte whose bits 0, 3, and 5 mean things, packed and
 unpacked by hand at four call sites; the "temporary" magic number `42` that
 outlives three rewrites. Every one of these compiles forever and documents
-itself never. The failure is not the programmer who writes `3` — it is that
-the language offered no place to say *3 is not a thing this value can be*.
+itself never. The language gave the programmer no place to say *3 is not a
+thing this value can be* — that absence is the failure.
 
 Tyu's answer is structural: the choice becomes an `enum`, so `3` is not a
 `State` and the call site refuses to compile; the range becomes a `subtype`,
 so `-1` cannot cross into `take` without passing a check that names the
 crime. The soup does not get better comments — it stops being soup.
 
-### From the workbench
+### The verification policy
+
+The runtime trap on the range cast is only half the story: the compiler
+also *proves* range facts when it can, and the proof has teeth.
+`150 as Percent` is the map of the boundary — the same program behaves
+differently under the two build policies:
+
+```console
+$ tyu build --verify-policy=open-ok open-cast.mod     # default — builds
+verify: obligations — ... provably-failing: cast.0
+$ tyu build --verify-policy=no-open open-cast.mod     # the norm, when adopted
+tyu: error[E6410]: open obligations (--verify-policy=no-open):
+  subtype-range — OpenCast::main::cast.0 line 11
+```
+
+Why does the *constant* 150 stay open instead of discharging? Because the
+interval engine proves it is always out of range — and the trap is the
+cast's semantics (§3.6). A discharge would remove a trap that must fire;
+the report names it `provably_failing` instead, and the runtime check is
+retained. The true pairing is:
+
+- value provably **in** range — discharged, no trap needed (the report
+  says `discharged`);
+- value provably **out** of range — retained, and the report says
+  `provably_failing` (a constant that can never pass);
+- value unknown at compile time (a caller's ⊤) — retained, `open`, the
+  caller or an external tool must close it.
+
+`--verify-policy=no-open` is the discipline as a gate: `tyu build` fails
+(E6410) listing every open obligation with its location. The repository's
+own corpus adopts the discipline per-module (`ci/verify-corpus/`,
+`ci/verify-allowlist.txt`): every open is justified, and a justification
+that stops happening fails `ci/guards.sh G20` (self-cleaning).
+
+### Why the rule is the rule
 
 Why does `as Percent` trap at run time instead of the checker proving it at
 compile time? Because in general it cannot: whether a value is in range is a
@@ -522,7 +522,7 @@ range on paper, and the plan is to reject `150 as Percent` at compile time.
 The habit to build now is the one that survives: say the conversion, at the
 boundary, every time.
 
-### Exercises
+## Exercises
 
 1. **A set of your own.** Declare `enum Workday : u8` with `Mon = 1` through
    `Fri = 5`. Write `announce ( Workday -- )`, call it with two variants,

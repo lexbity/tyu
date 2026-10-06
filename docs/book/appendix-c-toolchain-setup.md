@@ -80,12 +80,15 @@ directories by design — two modules with the same module name sharing one
 out-dir can silently reuse a neighbor's object.
 
 ## The proof pipeline (chapter 14)
+
+```console
 $ tyu proof init --dir=. <Module>.mod          # scaffold proofs/ once
 $ tyu build <Module>.mod --verify-tool=lean …  # generate + lake + harvest
 $ tyu proof fill --dir=. <Module>.mod          # automation candidates
 $ bash ci/port.sh lean                         # the port conformance gate
+```
 
-# The test suites the book quotes
+## The test suites the book quotes
 
 ```console
 $ cargo test -p execution-tests --test dynamic_signed      # ch. 13, signed load

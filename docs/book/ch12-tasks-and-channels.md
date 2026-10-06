@@ -12,7 +12,7 @@
 > say what escapes into it, and every safety property it needs — locks,
 > custody, bounds — is one this book has already paid for.*
 
-This chapter is short, and the shortness is the argument. Chapters 5 and 7
+This chapter is short, and the shortness has a reason. Chapters 5 and 7
 already built everything concurrency safety needs: `suspend` is an effect
 with a discharging handler, shared storage is a resource with a lexically
 granted lock, and a message is custody that moves. What remains is the
@@ -27,13 +27,13 @@ sysroot, present where the hardware and runtime provide it and absent
 where they do not. The hosted platform (this chapter's home) ships the
 full set: a four-worker work-stealing scheduler lives in its runtime.
 The bare-metal QEMU board carries task machinery too — and *no*
-`platform.channel` at all. That asymmetry is not an inconsistency; it is
-the platform interface telling the truth, and Lab 12.6 shows the compiler
+`platform.channel` at all. That asymmetry is the platform interface
+telling the truth about its hardware, and Lab 12.6 shows the compiler
 enforcing it: import `platform.channel` in a program built for the board
 and the build fails with E2201 — the interface file does not exist for
 that platform, because the capability does not exist on that platform.
-**The platform's interface is a contract about what the hardware
-provides**, the same lesson chapter 8 taught about devices, now applied
+The platform's interface is a contract about what the hardware
+provides — the same lesson chapter 8 taught about devices, now applied
 to concurrency.
 
 `run` remains the pivotal word from chapter 5: the handler whose
@@ -83,14 +83,13 @@ Counter lock [ &!Counter @i64 2 == check ]
 The execution is genuinely concurrent — two tasks, a work-stealing
 scheduler, real parallel interleavings on multi-core hosts — and the
 result is deterministic *by construction*: both workers are joined before
-the check, and both increments went through the chapter 11 lock. That
-sentence deserves unpacking, because it is the chapter's whole thesis in
-one line: **no new safety mechanism appears in this chapter.** The lock
+the check, and both increments went through the chapter 11 lock. No new
+safety mechanism appears in this chapter. The lock
 is chapter 5's grant and chapter 11's cross-context rule; the check is
 chapter 2's `check`; the determinism comes from join, whose cost is a
 declared `suspend` — visible in the interface, discharged by the visible
-handler. Concurrency safety in Tyu is not a chapter of new rules; it is
-the old rules observed from a second context.
+handler. Concurrency safety in Tyu is the old rules observed from a second
+context.
 
 ## 12.5 Sleeping
 
@@ -108,8 +107,8 @@ boundary as a `usize`:
 
 Sleep, like yield and join, performs `suspend`; it runs inside the same
 discharging handler; and the check of Lab 12.3 is the same silence that
-has marked success since chapter 1. (The sleeps here are milliseconds —
-note the argument *before* the word, stack order, and the `as usize`.)
+has marked success since chapter 1. (The duration is a `usize`, pushed
+*before* the word — stack order again, and chapter 3's conversion habit.)
 
 ## 12.6 Custody at a distance
 
@@ -282,7 +281,7 @@ platform's interface inventory as the contract. The same source compiles
 hosted and fails for the board: that is not a toolchain inconsistency,
 it is the platform asymmetry made into a compile-time fact.
 
-### Post-mortem — the thread that shared a bool *(optional — for readers with C or embedded scars)*
+## In more depth — the thread that shared a bool
 
 The C pattern this chapter refuses: two threads, one shared `int`, a
 comment saying "reads are atomic, mostly," a mutex added on the write
@@ -302,7 +301,7 @@ bracket. A concurrency bug in this language has to be an inconsistency
 between checked claims — which is the politest possible description of
 "rare."
 
-### From the workbench
+### Why the rule is the rule
 
 Why is the concurrency chapter the shortest in the book? Because the
 design pushed every hard decision earlier, where each could be checked in
@@ -312,10 +311,9 @@ that message passing would not need a new analysis here. The scheduler
 itself was pushed out of the language entirely — the platform provides
 it, the sysroot declares it, and the import resolution (E2201) keeps
 programs aligned with what their board actually has. A short chapter
-about a hard subject is not an omission; it is a receipt for work already
-done.
+about a hard subject is a receipt for work already done.
 
-### Exercises
+## Exercises
 
 1. **Three workers.** Extend Lab 12.2 to three spawns and joins, predict
    the final counter, and confirm. Then delete one `join` and predict

@@ -30,7 +30,9 @@ explicitly marked interlude.
   two-sided contract idiom (satisfies the E3310 predicate rule), hosted MMIO
   via named devices from a platform descriptor (`--platform`), subtype
   trap-21 on hosted.
-- Voice calibration: chapter 1 (post-review) is the reference.
+- Voice: `STYLE.md` (in this directory) is the authority (v4 calibration).
+  Chapter 1 is no longer the reference — it needs the same re-narration as
+  the rest of the book.
 
 ## The non-rot contract
 
@@ -151,22 +153,28 @@ E. Design dialogues *(separate session; interview format)*
 
 ## Chapter skeleton (per chapter)
 
-Style rules for all drafts: assume nothing about what the reader knows and
-never remark on what they may know; address the reader as "you" sparingly
-(prefer the imperative and declarative sentences); never call the text or the
-language "honest" — the transcripts are real, and that is for the reader to
-judge.
+Style and voice: **`STYLE.md`** is the authority (v4 calibration). The old
+grammar — "prefer the imperative and declarative sentences" — is retired; it
+produced the register the book is moving away from. The honesty rules are
+kept: transcripts are real, the text is never called "honest," and that is
+for the reader to judge.
 
-1. **The Practice** — the one checkable discipline of the chapter.
-2. Prose sections building the discipline from experience to principle.
+1. **Open** — a real moment: a transcript, a trace, a scenario. Not an
+   epigraph plus a thesis.
+2. **Development** — conversational sections building the discipline;
+   show-then-name; the chapter's metaphor carried through.
 3. **Labs** — green / red / engine, full source inline, with real transcripts.
    A green lab may be marked **(build-the-vocabulary)** when it constructs a
    missing stdlib word in Tyu.
-4. **Post-mortem** — *optional*, aimed at readers with C/embedded scars: the
-   project-killing anti-pattern, first as the C disaster it is, then as the
-   rejected compile or clean trap. Newer readers may skip.
-5. **From the workbench** — short author aside: why the rule is the rule.
-6. Exercises (predict-then-run preferred over filler).
+4. **In more depth** — the experienced-engineer subsection (C/embedded
+   scars, other systems, toolchain internals and policy). Fixed position,
+   after the labs, before the exercises; skippable linearly, never leaked
+   into the main prose.
+5. **Exercises** (predict-then-run preferred over filler).
+
+The v3 "**The Practice**", "**Post-mortem**", and "**From the workbench**"
+blocks dissolve — into the opening, into *In more depth*, and into either,
+respectively.
 
 ## Toolchain quirks discovered while drafting (for the author)
 

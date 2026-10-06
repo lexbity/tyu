@@ -15,9 +15,9 @@
 Chapter 1 made a promise with an expiration date: *"write contracts the
 way the prover will want them — when the tooling lands, your chapter 4
 habits will already be proofs in waiting."* The tooling has landed. This
-chapter is the discharge of that promise, and it changes one word in the
-book's oldest sentence: a contract is no longer *checked at run time* —
-it is a **theorem**, kernel-verified, harvestable into the build, and
+chapter is the discharge of that promise, and it upgrades the book's
+oldest sentence: a contract is no longer only *checked at run time* — it
+can be a theorem, kernel-verified, harvestable into the build, and
 loadable as part of a module's evidence.
 
 ## 14.2 The pipeline, end to end
@@ -60,8 +60,8 @@ theorem obl_P2_take_subtype_range_0 :
 ```
 
 Weakening the claim would require editing the generated definition — which
-the next build regenerates and the digest catches. **The type system is
-the first binding; the digest is the second; neither negotiates.**
+the next build regenerates and the digest catches. The type system is
+the first binding; the digest is the second; neither negotiates.
 
 `lake build` elaborates everything; the **harvest** step then binds each
 theorem to its statement in the kernel environment, runs the **axiom
@@ -92,9 +92,9 @@ E3312 — the contract-modifies-its-inputs rule, now enforced with the
 origin tracking the proof pipeline needs: a predicate that computes
 through helper calls cannot have its inputs' provenance tracked, so the
 extraction refuses it. The chapter 4 *inline* idiom passes the same pass.
-The lesson has sharpened: **the arithmetic dialect is not a style
-preference — it is the pipeline's input language.** A contract that
-wants to be a theorem must be arithmetic over the values in view.
+So the arithmetic dialect turns out to be the pipeline's input language:
+a contract that wants to be a theorem must be arithmetic over the values
+in view.
 (Lab 14.4 runs the refusal.)
 
 ## 14.4 The automation, and the marker
@@ -120,7 +120,7 @@ theorem obl_P2_take_subtype_range_0 :
   tyu_auto
 ```
 
-Read the marker line twice, because it carries the chapter's ethics. The
+The marker line carries the chapter's ethics. The
 candidate is **unreviewed, automation-generated** — and the pipeline's
 treatment of it is neither suspicion nor trust: the kernel checks it like
 any theorem (an invalid candidate fails elaboration, full stop), and the
@@ -130,8 +130,8 @@ a developer edit — move the theorem into `proofs/P2.lean` (imports to the
 top; Lean rejects mid-file imports, Lab 14.2's learned-the-hard-way
 moment) and remove the marker. The verified e2e suite pins the whole
 contract: a candidate verdict is `trust: proof`, `discharged`, and
-`authored: candidate` — **the marker never licenses an unchecked label;
-the kernel is the only gate.**
+`authored: candidate` — the marker never licenses an unchecked label;
+the kernel is the only gate.
 
 One environment note, stated as the book's contract requires: the
 candidate flow above was verified through the port's own gate (where the
@@ -155,8 +155,8 @@ verify: 1 obligations — 0 discharged, 0 assumed, 1 open
 ```
 
 The obligation stays open, the runtime check stays in the code, and the
-report says *omitted* — the machine refusing to manufacture a proof
-shaped object for a claim it cannot state (Lab 14.5).
+report says *omitted* — the machine refusing to manufacture a
+proof-shaped object for a claim it cannot state (Lab 14.5).
 
 **The tampered generation.** Harvest binds theorems to the *generated*
 statements by digest; a hand-edit to the generated file — a weakened
@@ -339,7 +339,7 @@ fails closed with a coded error document rather than harvesting a best
 guess. The weakened-claim insider, the broken-pipeline optimist, and the
 deleted-proof pessimist all meet the same wall.
 
-### Post-mortem — proving the wrong thing *(optional — for readers with C or embedded scars)*
+## In more depth — proving the wrong thing
 
 The research literature calls it specification drift: a mathematically
 valid theorem about the wrong formal definition — the proof is airtight
@@ -357,7 +357,7 @@ an older claim is *stale*, not stale-ish (E6421 at consumption) — the
 third binding. Three mechanisms, one refusal: the proof is about what
 the compiler said, or it is nothing.
 
-### From the workbench
+### Why the rule is the rule
 
 Why is the kernel the only gate — why does the pipeline not also vet
 proofs "for quality"? Because any additional gate is additional trusted
@@ -372,7 +372,7 @@ strings, the attribution markers, the candidate ratios in the deploy
 report — is for the humans, who get exactly what the developer declared:
 no more, and never less.
 
-### Exercises
+## Exercises
 
 1. **Read the receipt.** Lab 14.1's report says `1 discharged` before any
    theorem exists. Using the trust table (§14.2), name the method and

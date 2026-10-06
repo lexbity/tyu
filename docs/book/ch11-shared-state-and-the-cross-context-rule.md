@@ -53,7 +53,7 @@ That pair — handler and mainline, each inside its own lock — is the
 *compliant shape*, and Lab 11.1 builds it clean. The lock does double
 duty: it grants the write capability (chapter 5's two-sided law) and it
 *lowers* to the mutual-exclusion mechanism the sharing actually requires.
-That lowering is not one-size-fits-all; it is chosen per resource by the
+The lowering is chosen per resource by the
 cross-context analysis:
 
 | Who reaches the resource            | The lock lowers to                    |
@@ -103,8 +103,8 @@ Two quiet consequences of the rule, both design-shaping:
   it.
 - **Removing the ISR's access removes the rule.** If no interrupt can
   reach `Counter`, the resource is not shared, and main's unlocked access
-  compiles. The rule tracks reachability, not ritual — exercise 1 asks
-  the reader to walk both directions.
+  compiles. The rule tracks reachability — the ceremony is beside the
+  point — and exercise 1 asks the reader to walk both directions.
 
 ## 11.4 The handler's own discipline
 
@@ -152,9 +152,9 @@ targets the ARM board's SysTick timer, and is gated opt-in with the
 tree's own comment: the interrupt delivery needs debugging; the
 assertion currently loses the race against the test timeout.
 
-The book's contract says to show the edge, so: **the daring part's
+The book's contract says to show the edge, so: the daring part's
 compile-time half is done and demonstrated; its end-to-end runtime half
-is the known open edge**, exactly like chapter 6's native stack. The
+is the known open edge — exactly like chapter 6's native stack. The
 compliant shape is proven; the hardware interrupt that would exercise it
 is the workstream. Nothing in this chapter's claims exceeds that.
 
@@ -319,7 +319,7 @@ meeting it is the handler author's job. (This lab's rejection is checked
 with the inspection path; see the chapter's note on the production
 pipeline's masking quirk.)
 
-### Post-mortem — the lost update *(optional — for readers with C or embedded scars)*
+## In more depth — the lost update
 
 The canonical C incident: a multi-byte counter or a flag bundle touched by
 a timer ISR and by mainline, "protected" by disabling interrupts on one
@@ -331,25 +331,25 @@ regression-tested because nobody could reproduce the interleaving.
 The cross-context rule replaces that whole genre with one question the
 compiler answers before the program exists: *which contexts reach this
 storage, and is every one of them inside the correct lock?* The unlocked
-straggler is E5031 — not a code review comment, not a race to reproduce,
-but a rejected program. And the nesting ban (E5002) closes the adjacent
+straggler is E5031, a rejected program — in place of a code review
+comment and a race nobody can reproduce. And the nesting ban (E5002)
+closes the adjacent
 graveyard where the fix for one race was a second lock and the fix for
 that was a deadlock.
 
-### From the workbench
+### Why the rule is the rule
 
 Why can a dynamically loaded module not install an ISR? Because this
 chapter's central check is whole-program: it must see every reacher of a
 resource at once, and a runtime-installed handler is a reacher that
-appears after the proof has closed. The static-ISR rule is not a
-limitation bolted onto the loader — it is what makes the cross-context
-rule *decidable*, and therefore what makes the field-update story of
-chapter 13 safe at all. Loaded code computes under the interrupt regime
-the static program proved; it cannot change the regime. Every check in
-this book has been buying exactly this: the next chapter's daring is only
-daring because the last chapter's proof closed first.
+appears after the proof has closed. The static-ISR rule is what makes the
+cross-context rule *decidable*, and therefore what makes the field-update
+story of chapter 13 safe at all. Loaded code computes under the interrupt
+regime the static program proved; it cannot change the regime. Every check
+in this book has been buying exactly this: the next chapter's daring is
+only daring because the last chapter's proof closed first.
 
-### Exercises
+## Exercises
 
 1. **Both directions of the rule.** Take Lab 11.4 and fix it two ways:
    first by locking main's access; then by deleting the ISR's access to

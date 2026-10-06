@@ -62,7 +62,7 @@ and §2.4 shows the tool that prints its homework.
 Values on the stack are typed. This chapter lives on two types: `i64`, the
 signed 64-bit integer — the everyday counting number — and `bool`, which is
 `true` or `false` and nothing else. Chapter 3 adds many more; these two
-carry the whole chapter.
+carry the chapter.
 
 ## 2.3 Words: the vocabulary of the language
 
@@ -71,8 +71,8 @@ definition, and it is worth slowing down to see why such a small idea can
 carry a language.
 
 `+` is a word: it takes two numbers off the top and leaves their sum. `dup`
-is a word: it takes the top value and leaves two of it. `check` — from
-chapter 1 — is a word. `main` is a word. Even the program itself is, in the
+is a word: it takes the top value and leaves two of it. `check` — which the
+labs below use for every test — is a word. `main` is a word. Even the program itself is, in the
 end, just a word called `main` that the runtime calls. The language has two
 kinds of steps and nothing more: **literals**, which put a value on the
 stack, and **words**, which transform it.
@@ -132,8 +132,8 @@ word main (  -- i64 )
 
 Left to right, one term per line, stack contents after each. When a red lab
 rejects with `E32xx` and does not name the word — E3220, met below, is
-notoriously quiet — `--emit=tc` names it, line by line. Keep the habit: **on
-any typecheck error, read the trace before touching the code.**
+notoriously quiet — `--emit=tc` names it, line by line. Keep the habit: on
+any typecheck error, read the trace before touching the code.
 
 ## 2.5 Naming values
 
@@ -152,12 +152,12 @@ Tyu's answer is the binding word `=>`:
 
 Each `=> name` pops the top value and gives it a name, scoped to the word.
 The four bindings empty the stack; the body then reads like the formula it
-is. Naming is not a convenience bolted onto the language — it is how the
+is. Naming is how the
 stack effect stays truthful at a glance: four in, the bindings account for
 all four, one out.
 
-A rule of thumb with the force of style: **beyond two or three stack items,
-name them.** The deep-juggling style that old Forth code was famous for is a
+A rule of thumb with the force of style: beyond two or three stack items,
+name them. The deep-juggling style that old Forth code was famous for is a
 disease Tyu makes easy to avoid — and chapter 9 turns that style rule into a
 proof obligation.
 
@@ -193,7 +193,7 @@ it is pushed — it is a plan, written down and waiting. `if` is the word that
 executes one plan: it takes the boolean, takes the two quotations, runs one,
 and discards the other, unopened.
 
-Now chapter 1's `check` word can be read in full:
+Now the `check` word the labs below keep calling can be read in full:
 
 ```tyu
 : check ( bool -- )
@@ -270,8 +270,8 @@ stop — and `count-up`'s result is the limit itself.
 
 The builtin table is tiny on purpose — three shuffles, comparisons, logic.
 Everything else in the vocabulary is written in Tyu, including the whole
-sysroot. That has a consequence worth more than its size suggests: **when a
-word is missing, the fix is to write the word.**
+sysroot. That has a consequence worth more than its size suggests: when a
+word is missing, the fix is to write the word.
 
 `over` is the most-missed shuffle — `( i64 i64 -- i64 i64 i64 )`, a copy of
 the *second* item over the top. The shuffles that ship cannot build it; `dup`
@@ -518,7 +518,7 @@ the other leaves two, and no single prediction of the program's future stack
 exists. The checker refuses to guess. (A condition that isn't a boolean is a
 different rejection, E3243 — try `1 [ … ] [ … ] if` and compare.)
 
-### Post-mortem — stack rot *(optional — for readers with C or embedded scars)*
+## In more depth — stack rot
 
 The old Forth sin this chapter quietly outlaws: `over rot swap - rot! tuck`
 spaghetti, where the third item's meaning depends on the line's *length*. The
@@ -532,7 +532,7 @@ write the formula. The compiler enforces the declaration at every call site,
 so a signature change is not a puzzle but a list of compile errors — each
 one a call site that was quietly assuming the old world.
 
-### From the workbench
+### Why the rule is the rule
 
 Why ship only three shuffles? Two reasons, one principle. The principle: a
 tiny trusted core, with everything else written in the language itself, is
@@ -543,7 +543,7 @@ reason: `dup` and `drop` are where the language's linearity rules live
 introduces types for which they are crimes), so the fewer built-in ways to
 copy and destroy, the smaller the trusted surface that enforces the rules.
 
-### Exercises
+## Exercises
 
 1. **Trace by hand.** For `1 2 3 swap drop dup +`, write the stack state
    after each term, then confirm with `langc --emit=tc`. What is the final

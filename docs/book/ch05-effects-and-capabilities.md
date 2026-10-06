@@ -16,8 +16,8 @@
 Chapters 3 and 4 fenced in *values*: what they are, and what must be true
 about them. This chapter fences in *actions* — the third thing a signature
 can promise. Suspending a task, allocating memory, touching hardware,
-running forever, running inside an interrupt: these are not values and not
-facts, they are **events a word can cause**, and Tyu's rule is that events
+running forever, running inside an interrupt: these are
+**events a word can cause** — and Tyu's rule is that events
 are declared, checked, and — where the platform cannot allow them —
 forbidden.
 
@@ -64,8 +64,9 @@ matrix, made executable.
 
 ## 5.3 The matrix
 
-The context × effect table below is the chapter's centerpiece. Two of its
-rows are behind this chapter's labs; the ISR row arrives in chapter 11.
+The context × effect table below is the chapter's centerpiece. The labs
+below check the first three rows; the ISR row arrives in chapter 11 and
+the borrow row in chapter 7.
 
 | Context              | Grants                | Forbids              | Verified in |
 |----------------------|-----------------------|----------------------|-------------|
@@ -81,8 +82,8 @@ the same access rejected E5004) and *may not suspend* (that is the forbid —
 holding a device while yielding is how deadlocks are born; Lab 5.8 shows
 the rejection). One row, one deadlock prevented, statically.
 
-Two verified facts about how the checking flows, worth memorizing because
-they shape how code decomposes:
+Two verified facts about how the checking flows — both shape how code
+decomposes:
 
 - **Declared effects travel with calls.** A word declared `performs
   {suspend}` that is called from `main` triggers the same rejection as a
@@ -97,7 +98,7 @@ they shape how code decomposes:
 ## 5.4 Saying what a word does
 
 The label on the tin is a clause on the signature. Lab 5.1's word
-allocates a region, rounds-trips one value through it, and destroys it —
+allocates a region, round-trips one value through it, and destroys it —
 and says so:
 
 ```tyu
@@ -169,17 +170,18 @@ both verified, both worth designing around:
   The lock's contents stay inline. This is a deliberate trade: the grant's
   lifetime is *visible as text*, which is exactly the property that makes
   the cross-context rule of chapter 11 provable.
-- **`requires {…}` today is a recorded promise, not an enforced gate.** The
-  clause lands in the word's interface and its ABI identity, but the
-  current tree enforces capability obligations only through the lexical
+- **`requires {…}` today is a recorded promise.** The
+  clause lands in the word's interface and its ABI identity, while
+  enforcement of capabilities currently happens only through the lexical
   contexts above. Treat `requires` as the label for the world the word
- *expects* — the enforcement story is roadmap.
+  *expects* — the enforcement story is roadmap.
 
 ## 5.6 The discharge
 
-The most elegant row of the matrix is `platform.task.run`. `suspend` is
+The row of the matrix that ties the chapter together is
+`platform.task.run`. `suspend` is
 forbidden in `main` (Lab 5.7) and forbidden in a lock (Lab 5.8) — and yet
-tasks yield all the time. The resolution is not an exception; it is a
+tasks yield all the time. The resolution is a
 context:
 
 ```tyu
@@ -188,10 +190,10 @@ context:
 
 `platform.task.run`'s quotation is a context that **grants `suspendable`**
 and — the crucial move — *discharges* the `suspend` effect: code inside may
-yield without any caller above `run` needing to know or care. This is the
-"no colored functions" trick, stated structurally: suspension does not
-infect every caller up the stack, because the handler is a visible lexical
-boundary where the effect ends. Lab 5.3 runs it — the quotation prints,
+yield without any caller above `run` needing to know or care. Stated
+structurally, this is the move that async systems wish they had: suspension
+does not infect every caller up the stack, because the handler is a visible
+lexical boundary where the effect ends. Lab 5.3 runs it — the quotation prints,
 yields twice to the scheduler, finishes, and `main` continues to the
 marker, none the wiser.
 
@@ -421,7 +423,7 @@ forbids it, and forbids accumulate over grants. Yielding while holding a
 device is the classic "works on my desk, locks the fleet in the field"
 bug; here it is a compile error with a row of the matrix as its citation.
 
-### Post-mortem — the action hero *(optional — for readers with C or embedded scars)*
+## In more depth — the action hero
 
 The C function that reviews well and does everything: `sensor_read()` that
 also takes a lock; `log_msg()` that also allocates; `timer_start()` that
@@ -437,7 +439,7 @@ incident report says "the handler suspended while holding the device," the
 Tyu answer is Lab 5.8: that program does not compile, and the citation is a
 row of a table.
 
-### From the workbench
+### Why the rule is the rule
 
 Why closed sets? Because a safety claim that can be enumerated is a safety claim that
 can be tested. Five effects, a handful of capabilities, a short list of
@@ -448,11 +450,11 @@ keeps `dup` and `drop` a tiny trusted core keeps the action vocabulary
 small: the language says *no* to new effects so that *yes* stays
 meaningful.
 
-### Exercises
+## Exercises
 
 1. **Label the tin.** Add `performs {alloc}` to a word that does *not*
    allocate, and a word that calls Lab 5.1's `grab`. Both compile — explain
-   what each declaration promises, and which one the §5.4's "local
+   what each declaration promises, and which one §5.4's "local
    obligation" rule would actually demand.
 2. **Two locks.** Write `resource A : i64;` and `resource B : i64;` with a
    `main` that locks `A`, then (separately) locks `B` and increments both.

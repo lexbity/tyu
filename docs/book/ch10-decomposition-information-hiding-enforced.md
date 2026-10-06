@@ -18,9 +18,9 @@ good systems from bad: decompose according to *what is likely to change*,
 and hide each changeable decision behind an interface. Chapters 5 and 7
 borrowed his idea for scopes and borrows. This chapter runs it at the
 scale of modules — and the Tyu difference is the second line of the
-epigraph: information hiding here is not a convention enforced by review
-meetings. The `.def` file is checked, the imports are checked, and a
-drifted mirror stops the build.
+epigraph: information hiding here is enforced by the build. The `.def`
+file is checked, the imports are checked, and a drifted mirror stops the
+build.
 
 ## 10.2 The two files
 
@@ -157,8 +157,8 @@ Chapter 4 asked for contracts to be part of the word's interface, and the
 `.def` is where that lands: `needs`, `performs`, and the stack bound all
 project into the interface record, all of it folded into the word's ABI
 identity — the hash that chapter 13's loader will check before a module
-is allowed to load. The practical reading for a module author: **your
-`.def` is your module's constitution.** Callers compile against it; the
+is allowed to load. The practical reading for a module author: your
+`.def` is your module's constitution. Callers compile against it; the
 loader authenticates by it; and its diff is the truthful changelog of what the module
 promises.
 
@@ -240,8 +240,8 @@ $ tyu build labs/ch10/red-01/App.mod -I labs/ch10/red-01 …
 error[E2218]: interface/implementation word signature mismatch
 ```
 
-**Why:** the interface is not decorative — it is checked against the
-implementation on every build of the pair. Fix it in the interface (the
+**Why:** the interface is checked against the
+implementation on every build of the pair — decoration would not be. Fix it in the interface (the
 truth is the implementation's) and the build heals; fix it in the
 implementation (matching the interface's fiction) and the build heals
 *wrong* — which is why the diff that matters is the `.def`'s.
@@ -278,7 +278,7 @@ directions: an implementation that does more than its interface declares
 is caught, and one that does less than the interface reserves is caught
 too, because the reservation is a promise to callers.
 
-### Post-mortem — the god-module *(optional — for readers with C or embedded scars)*
+## In more depth — the god-module
 
 Chapter 9's god-word grown to file scale: the C module that exports
 forty functions and three hundred lines of globals in a header, where
@@ -297,7 +297,7 @@ export list can change — body, helpers, algorithms — with the certainty
 that no caller anywhere could have depended on it. That certainty is
 Parnas's "hide what might change," delivered as a compiler guarantee.
 
-### From the workbench
+### Why the rule is the rule
 
 Why check the interface against the implementation at all? The caller
 never sees the implementation — so why care if they disagree? Because
@@ -311,7 +311,7 @@ promise is a *different module* to every consumer: chapter 13's loader
 will refuse a module whose promises no longer match the program that
 built against them. The mirror, the wall, and the seal are one mechanism.
 
-### Exercises
+## Exercises
 
 1. **Split a chapter-2 lab.** Take Lab 2.4's `Over` program and split it
    into `Over.mod`/`Over.def` plus an `App` caller. Then add a *second*

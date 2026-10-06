@@ -39,10 +39,10 @@ net  (A ; B) = net A + net B
 high (A ; B) = max( high A ,  net A + high B )
 ```
 
-The second line deserves a slow read: B's peak is *shifted up* by whatever
-A left behind. Running `dup dup` after `dup` reaches higher than `dup dup`
-alone — not because either phrase changed, but because each starts from
-where the last ended. The law composes arbitrarily: three phrases, thirty,
+The second line is the one that surprises people: B's peak is *shifted up*
+by whatever A left behind. Running `dup dup` after `dup` reaches higher
+than `dup dup` alone, because each phrase starts from where the last one
+ended. The law composes arbitrarily: three phrases, thirty,
 a whole word body, a whole call tree — the same two-line rule folds them
 all. It is associative (the compiler's own test suite checks this the way
 chapter 4's shape rules are checked), and it has an identity — the empty
@@ -56,10 +56,9 @@ whose body grew the stack would have an uncomputable peak), so a loop's
 shape is its body's shape, once.
 
 And there is a third value in the system, for the phrase whose reach has no
-bound: **top**, written `⊤`. Unbounded is not a big number; it is a
-different answer, and it is absorbing — compose anything with ⊤ and the
-result is ⊤. One unbounded word anywhere below makes everything above it
-unbounded — that is the answer, not a failure to answer.
+bound: **top**, written `⊤`. Unbounded is a different answer than any big
+number, and it is absorbing — compose anything with ⊤ and the result is
+⊤. One unbounded word anywhere below makes everything above it unbounded.
 
 ## 6.3 The shapes, in person
 
@@ -128,9 +127,9 @@ The same refusal meets a `while` body that grows (Lab 6.3, E3257): the
 loop-shaped and recursion-shaped routes to *the stack that never stops
 rising* are both compile errors.
 
-Sit with that for a moment, because it is the chapter's central claim: on
-the data stack, **unbounded growth is not a runtime event. It is a
-sentence at compile time.** The classic embedded death — deep recursion,
+That is the chapter's central claim: on
+the data stack, unbounded growth is a sentence at compile time — the
+runtime never gets involved. The classic embedded death — deep recursion,
 silent growth, corrupted memory far from the cause — cannot be written in
 the first place. The runtime still keeps a trap (`STACK_OVERFLOW`, code 10)
 as a second line of defense, but from checked code, the shapes that would
@@ -176,7 +175,7 @@ tyu: NO_COMPLETION — exited with code -1 but no `S\n` marker
 No trap code. No diagnostic frame. The process died by the operating
 system's hand — because each recursive level, while stack-neutral on the
 *data* stack, is a **native call**: it takes a frame on the CPU's own
-return stack, and nothing in the current compiler measures that stack. Ten
+return stack, and nothing in the current compiler measures that stack. A hundred
 million frames later, the OS ends the experiment.
 
 This is the boundary of the proof, and the book's contract says to show it
@@ -186,14 +185,13 @@ cell. The **native stack** — exception frames, call frames, the CPU's own
 plumbing — is a separate obligation, analysis for it is a committed
 workstream, and until it lands, a bounded shape is a proof about one stack
 in a machine with two. The distinction between *proven* and *unproven* is
-the whole game in safety work: chapter 11 will rely on the data-stack
+what safety work turns on: chapter 11 will rely on the data-stack
 proof for ISR budgets; nothing in this book will claim the native half.
 
-Read the engine lab once more for its real lesson. The data-stack proof
-held — every plate accounted for, exactly as computed. The crash came from
-the stack the proof never claimed. A proof that scopes itself precisely is
-not weaker than a guarantee that overreaches; it is the only kind that can
-be checked.
+The engine lab's lesson is easy to miss, so it is worth spelling out: the
+data-stack proof held — every plate accounted for, exactly as computed. The
+crash came from the stack the proof never claimed. Only a proof that scopes
+itself precisely can be checked.
 
 ## 6.7 Interlude — watching the measurement *(QEMU)*
 
@@ -411,7 +409,7 @@ found it inside. The harness's own alarm is one-directional on purpose: a
 measured peak *over* the declared bound is treated as unsoundness — a hard
 failure — because a bound that can be exceeded was never a bound.
 
-### Post-mortem — the recursion that looked like a loop *(optional — for readers with C or embedded scars)*
+## In more depth — the recursion that looked like a loop
 
 The C shape of this chapter's post-mortem is a fatigue-hardened reviewer's war story:
 a parser recursive over user input, tested to depth twenty, shipped to
@@ -428,7 +426,7 @@ A split this precise is more useful than a blanket guarantee: it says
 exactly what is safe, exactly what is not, and exactly which workstream
 closes the gap.
 
-### From the workbench
+### Why the rule is the rule
 
 Why a monoid? Because folding is checking, and checking must not depend on
 how the program is parenthesized. The composition law is associative — the
@@ -437,13 +435,13 @@ name, the way chapter 4's shape rules are enforced by code — so a word's
 shape comes out the same whether it is analyzed alone or inlined into its
 caller. ⊤ is absorbing for the same reason a proof must be: one unbounded
 callee makes the caller's bound a guess, and guesses do not ship. The
-computed bound is not a report for humans; it is stamped into the module's
+computed bound is stamped into the module's
 interface, hashed into its ABI identity, carried to the loader, and — on
 the QEMU track — measured against the runtime's own high-water cell. A
 claim this central should not be able to fall out of sync with anything,
 and this one cannot.
 
-### Exercises
+## Exercises
 
 1. **Fold by hand.** For the phrase `1 dup dup drop drop drop`, compute
    `(net, high)` step by step using the composition law — including the

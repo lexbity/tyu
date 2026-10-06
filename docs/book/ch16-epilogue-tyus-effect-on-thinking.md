@@ -1,4 +1,4 @@
-# Chapter 14 — Epilogue: Tyu's Effect on Thinking
+# Chapter 16 — Epilogue: Tyu's Effect on Thinking
 
 > The Vigilance Trap is closed.
 > Not because everyone stopped being careful —
@@ -26,7 +26,7 @@ mean, claim by claim:
 | "this module may run here"                         | the loader's gates         | ch. 13 |
 | "this contract is a theorem"                       | the proof pipeline         | ch. 14 |
 
-Twelve claims. None of them is a comment. The daring they licensed — an
+Thirteen claims. None of them is a comment. The daring they licensed — an
 interrupt sharing a device, signed code arriving from untrusted media —
 was not made safe by a framework or a review process. It was made safe
 because each claim got small enough to check, and then the checks got

@@ -24,9 +24,9 @@ this one.
 ## 8.2 Devices are named, not addressed
 
 Embedded C is full of magic numbers whose meaning lives in a header
-somewhere: `#define GPIO_OUT_SET (*(volatile uint32_t*)0x3FF44004)`. The
-address is the documentation, the cast is the type, and nothing connects
-them to the datasheet but a comment.
+somewhere — an address typed into the source by hand, a cast to make the
+compiler accept it, and a comment (if the author was lucky) tying it to
+the datasheet. Nothing checks any of it.
 
 Tyu splits the job in two. The **platform descriptor** — a checked-in file
 per board — states what exists:
@@ -59,8 +59,8 @@ hardware does not compile. The `board.scratch` on the right of `@` is a
 name resolved against the descriptor — `board.gpio_io` (a real device of a
 *different* board in this repo) fails with E3644, Lab 8.3.
 
-And the payoff line, the one worth memorizing: **the source never mentions
-an address.** The descriptor owns addresses; the source owns intent.
+And the line the rest of the chapter builds on: the source never mentions
+an address. The descriptor owns addresses; the source owns intent.
 
 ## 8.3 The access, word by word
 
@@ -81,7 +81,8 @@ The `volatile` keyword on each row is a promise the *backend* must keep:
 volatile accesses compile to real loads and stores, never elided, never
 merged, never reordered across other volatile accesses. This matters more
 than almost anything else in the chapter — an optimized-away status poll
-is the classic "works with -O0, hangs with -O2" bug — and it is enforced
+is the classic bug that appears the day someone turns the optimizer on —
+and it is enforced
 below the source, where the programmer cannot accidentally defeat it.
 
 Lab 8.1 runs the round-trip on both registers under QEMU.
@@ -102,8 +103,8 @@ register's write behavior, and the lowering obeys:
 | `write_kind = "xor"`   | XORs the written bits in              |
 | `read_kind = "effectful"` | reading has side effects (a FIFO pop) |
 
-Lab 8.2 demonstrates all of it, and its most beautiful check is the xor
-round-trip: write `0x5`, see `0x5`; write `0x2`, see `0x7`; write `0x2`
+Lab 8.2 demonstrates all of it, and the xor round-trip is the one to watch
+closely: write `0x5`, see `0x5`; write `0x2`, see `0x7`; write `0x2`
 *again*, see `0x5` — the register came back where it started, which no
 plain store can produce. The w1c section seeds a status register, clears
 one bit, and checks the others survived. These are datasheet semantics,
@@ -343,11 +344,11 @@ end;
 ```
 
 **Why:** build it *without* `--platform` and the compiler refuses (E3640):
-`board.scratch` cannot resolve against a description that was not given,
-and unchecked hardware access is not a degraded mode — it is no mode. The
-refusal is the chapter in miniature.
+`board.scratch` cannot resolve against a description that was not given —
+and unchecked hardware access is no mode at all. That refusal, in one
+line, is the chapter's argument.
 
-### Post-mortem — the read-modify-write that cleared the flags *(optional — for readers with C or embedded scars)*
+## In more depth — the read-modify-write that cleared the flags
 
 The C original: a status register documented as "write 1 to clear," read
 into a local, a bit OR-ed in, written back — and every flag that was set
@@ -365,7 +366,7 @@ does not remember the rule — the register *is* the rule, from declaration
 through lowering to the QEMU run that asserts the XOR round-trip no plain
 store could pass.
 
-### From the workbench
+### Why the rule is the rule
 
 Why bind devices by *name* instead of letting the source carry addresses?
 Because the address is the part most likely to be wrong and least likely
@@ -379,7 +380,7 @@ the program — so two programs on one board cannot disagree about the
 board, and one board's truths are checked once, centrally, where a fix
 reaches everyone.
 
-### Exercises
+## Exercises
 
 1. **Add a register.** Extend Lab 8.1: declare row `0x08 C u32 rw` in the
    source map only. Compile against the descriptor, meet the mismatch

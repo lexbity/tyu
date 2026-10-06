@@ -25,8 +25,8 @@ A type bounds what a value *can be*: a `Percent` is an integer in 0..100, a
 value's range — they are about **relationships**: *the result is never
 negative*, *this buffer is at least as long as that count*, *the motor is
 stopped whenever the lid is open*. No type expresses "the result is never
-negative," because negativity is not a kind of value — it is a *fact that
-must hold at a moment in time*.
+negative," because a fact that
+must hold at a moment in time is a different thing from a kind of value.
 
 Tyu's words for those facts are the two halves of a contract, and they
 divide a word's life exactly in two:
@@ -38,7 +38,7 @@ divide a word's life exactly in two:
   checked *after the body runs, before the word returns*. The check lives in
   the word itself, so a word cannot break its own promise quietly.
 
-The division of labor is the classic one, and it is worth memorizing as an
+The division of labor is the classic one, and it is worth holding onto as an
 obligation pair: **the caller must satisfy `needs`; the word must satisfy
 `ensures`.** When a call misbehaves, the trap names which side broke —
 the check that failed names its clause by position: before the body, a
@@ -72,7 +72,7 @@ Break a rule and the rejection is immediate and coded:
 | E3311 | the final value is not a boolean      |
 | E3312 | the inputs were modified or lost      |
 
-Read the three rules once more and notice what they buy: a contract
+What the three rules buy, together: a contract
 *cannot be vague*. It must compute one boolean from the values it claims
 about, without side roads. Vagueness is the natural habitat of the
 un-enforced promise; the shape rules evict it. (One boundary, stated in the
@@ -92,7 +92,7 @@ needs [ dup 0 >= swap 100 <= and ]   # reads perfectly, checks nothing
 Trace it as a pencil simulation: `dup 0 >=` consumes the input and leaves
 one boolean; the input is *gone* before `swap 100 <=` runs, and the final
 `and` eats even the booleans. Net effect: zero — no verdict, no inputs. The
-checker rejects it with E3310 (Lab 4.4), and the rejection is the lesson: a
+checker rejects it with E3310 (Lab 4.4), and the rejection shows why: a
 contract is stack code, and stack code that reads well is not the same as
 stack code that checks well.
 
@@ -118,11 +118,12 @@ range: pass `0`, `50`, or `100` and the word runs; pass anything outside —
 Lab 4.1's companion — and the runtime stops the program with
 `NO_COMPLETION — exited with code 20`.
 
-Why `0 0 ==` for the false branch? Because the answer to "is it in range?"
-is already settled — no — and the branch must still produce a boolean
-without disturbing the input. It is the stack idiom for *"already lost"*.
-The style reads slightly foreign once and then forever after reads as
-exactly what it is.
+Why `0 0 ==` for the false branch, when a plain `false` literal would do
+the same job? Only habit — this clause was written before the book noticed
+that the literal reads better, and chapter 9's factored version uses it.
+Both compile; whatever the branch pushes, it must leave one boolean and
+the surviving input alone, and `0 0 ==` shows the mechanics in full. Once
+you have seen why, write `false`.
 
 ## 4.5 ensures: the promise about results
 
@@ -367,7 +368,7 @@ end;
 4.4's crime, on the other side of the body. The fix is the copy-first idiom:
 `ensures [ dup 0 >= ]`, which Lab 4.2 already runs.
 
-### Post-mortem — contract theater *(optional — for readers with C or embedded scars)*
+## In more depth — contract theater
 
 Every long-lived C codebase grows a collection of assertions that cannot
 fail: `assert(ptr != NULL)` on a pointer dereferenced three lines earlier;
@@ -385,36 +386,7 @@ rejects no call is decoration. The review habit to take from both halves —
 *machinery checks shape; humans check content* — is exactly the division
 the obligation pair already teaches.
 
-### From the workbench
-
-Why are contracts ordinary programs instead of a specification language?
-One mechanism, three payoffs. There is nothing new to learn — the predicate
-uses the words chapter 2 taught. There is nothing new to trust — the
-checker simulates a predicate exactly as it simulates any word, rules and
-error codes and all. And there is nothing to translate — when the static
-discharge tooling arrives, the prover will read the same program the
-runtime runs today, because they are the same program. A separate spec
-language would have to be parsed, checked, and *proven equivalent to the
-code it describes*; Tyu skips the equivalence proof by refusing to have two
-things.
-
-### Exercises
-
-1. **Read the shape.** For each predicate, decide *before compiling* which
-   rule fails and with which code: `[ dup dup 0 >= and ]`,
-   `[ 0 drop ]`, `[ dup 0 >= dup ]`. Confirm with `langc`, then write one
-   sentence per predicate naming what it was trying to claim.
-2. **A two-sided contract of your own.** Declare `subtype Millivolts = i64
-   range 0 .. 5000` (chapter 3) and write `: set-v ( i64 -- i64 )` with a
-   two-sided `needs` clause guarding that range, using the `if` idiom.
-   Verify both edges pass (`0`, `5000`) and one value outside traps.
-3. **The obligation pair, in prose.** A teammate's code calls `bump` with
-   an arbitrary integer and then stores the result "knowing" it is
-   non-negative. Using the words *precondition*, *postcondition*, *caller*,
-   and *callee*, write the two-sentence contract explanation: what each
-   side owes, and which trap fires when each side breaks its word.
-
-## 4.8 Contract obligations and elision
+### Obligations and elision
 
 A contract is also a *proof obligation* (chapter 3 introduced the range
 half of this story). Every `needs`/`ensures` site is recorded by the
@@ -439,6 +411,35 @@ One elision boundary is a policy, not a proof: under `module-loading`, a
 dynamically-exported contracted word is a *runtime surface* no build-time
 discharge may remove, so its contract checks are retained and the report
 lists the site under `retained` with the reason.
+
+### Why the rule is the rule
+
+Why are contracts ordinary programs instead of a specification language?
+One mechanism, three payoffs. There is nothing new to learn — the predicate
+uses the words chapter 2 taught. There is nothing new to trust — the
+checker simulates a predicate exactly as it simulates any word, rules and
+error codes and all. And there is nothing to translate — when the static
+discharge tooling arrives, the prover will read the same program the
+runtime runs today, because they are the same program. A separate spec
+language would have to be parsed, checked, and *proven equivalent to the
+code it describes*; Tyu skips the equivalence proof by refusing to have two
+things.
+
+## Exercises
+
+1. **Read the shape.** For each predicate, decide *before compiling* which
+   rule fails and with which code: `[ dup dup 0 >= and ]`,
+   `[ 0 drop ]`, `[ dup 0 >= dup ]`. Confirm with `langc`, then write one
+   sentence per predicate naming what it was trying to claim.
+2. **A two-sided contract of your own.** Declare `subtype Millivolts = i64
+   range 0 .. 5000` (chapter 3) and write `: set-v ( i64 -- i64 )` with a
+   two-sided `needs` clause guarding that range, using the `if` idiom.
+   Verify both edges pass (`0`, `5000`) and one value outside traps.
+3. **The obligation pair, in prose.** A teammate's code calls `bump` with
+   an arbitrary integer and then stores the result "knowing" it is
+   non-negative. Using the words *precondition*, *postcondition*, *caller*,
+   and *callee*, write the two-sentence contract explanation: what each
+   side owes, and which trap fires when each side breaks its word.
 
 ---
 

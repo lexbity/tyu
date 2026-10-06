@@ -115,15 +115,15 @@ signed /tmp/tyu_ch13/pkg/Ping.lmod -> /tmp/tyu_ch13/pkg/Ping.signed.lmod
 Confidentiality is orthogonal and layered *on top of* authenticity:
 ChaCha20-Poly1305 encryption, applied after signing, with the content key
 wrapped per device or per fleet; the loader decrypts only after the
-signature verifies. **Authenticity before confidentiality** — the loader
+signature verifies. Authenticity before confidentiality: the loader
 never decrypts data whose origin it has not established. Lab 13.3 runs
 the encrypted-load suite.
 
 ## 13.6 The refusals
 
 The negative suite is the chapter's red lab, and it inverts the usual
-polarity: **each of its ten tests is an attempted crime, and the suite
-passes because every crime is refused.** The verified refusal table:
+polarity: each of its ten tests is an attempted crime, and the suite
+passes because every crime is refused. The verified refusal table:
 
 | Attempted crime                                    | Loader verdict |
 |-----------------------------------------------------|----------------|
@@ -140,11 +140,11 @@ passes because every crime is refused.** The verified refusal table:
 Read row three again — the static-ISR rule from chapter 11, enforced at
 load time.
 
-> **Afterword (chapter 14):** the loader grows one more gate after this
-> book's capstone — the `verify_manifest`, carrying each module's proof
-> verdicts and a `proven` admission policy that can refuse any module
-> whose obligations are not discharged or runtime-checked. Chapter 14
-> builds that machinery and the theorems it consumes. The rows around it are chapter 10 (interface identity), the
+One more gate arrives after this book's capstone: the `verify_manifest`,
+carrying each module's proof verdicts and a `proven` admission policy
+that can refuse any module whose obligations are not discharged or
+runtime-checked. Chapter 14 builds that machinery and the theorems it
+consumes. The rows around it are chapter 10 (interface identity), the
 layout discipline of §13.3, and the platform descriptor of chapter 8
 (apertures), each one re-checked by the untrusting party.
 
@@ -157,16 +157,9 @@ with malformed structure (integrity, always on), nor read the payload
 (confidentiality, when deployed), nor smuggle a different ABI (the hash
 gate), nor change the interrupt regime (the static-ISR rule).
 
-What it does not defend, stated plainly. HMAC is *symmetric*: the device
-that verifies holds the key, so the signing key's custody is the real
-perimeter, and public-key signatures — verify without hold — are the
-roadmap's known direction. A physically present attacker who extracts
-the key defeats authenticity for future updates; the defenses assume key
-custody. Load-once means a module cannot be swapped underneath a running
-system — but also that updating means restarting. And none of this
-extends the chapter 6 boundary: the loaded module's *native* stack is as
-unproven as the base image's. The loader checks every claim a module
-carries; it cannot check claims nobody wrote down.
+What the loader does *not* defend — the key-custody caveat, the load-once
+trade, and the native-stack boundary — is taken up *In more depth*,
+below.
 
 ## 13.8 Why this is the capstone
 
@@ -248,12 +241,12 @@ test result: ok. 10 passed; 0 failed
 **Why:** each test attempts one crime from §13.6's table — a tampered
 container, a module from a different ABI, a module that declares an
 interrupt handler, a modinfo from the future — and asserts the exact
-loader verdict. The suite *passes* when every crime is refused; that
-inversion is the loader's whole personality. The star for this book's
+loader verdict. The suite *passes* when every crime is refused; every
+refusal is the loader doing its job. The star for this book's
 narrative is E5203: chapter 11 proved the interrupt regime static, and
 here is the loader holding the door.
 
-### Post-mortem — the checksum is not a signature *(optional — for readers with C or embedded scars)*
+## In more depth — the checksum that verified an attacker
 
 The C update story this chapter refuses: a raw binary and a CRC — "we
 verify integrity before flashing." A CRC defends against corruption, and
@@ -271,7 +264,20 @@ authentication (oracle avoidance), and the static-ISR rule (regime
 change). Each is a *refusal with a code* — and the negative suite is the
 proof that the refusals fire, not a design document hoping they would.
 
-### From the workbench
+### What the loader does not defend
+
+HMAC is *symmetric*: the device that verifies holds the key, so the
+signing key's custody is the real perimeter, and public-key signatures —
+verify without hold — are the roadmap's known direction. A physically
+present attacker who extracts the key defeats authenticity for future
+updates; the defenses assume key custody. Load-once means a module cannot
+be swapped underneath a running system — but also that updating means
+restarting. And none of this extends the chapter 6 boundary: the loaded
+module's *native* stack is as unproven as the base image's. The loader
+checks every claim a module carries; it cannot check claims nobody wrote
+down.
+
+### Why the rule is the rule
 
 Why refuse rather than negotiate? Two architectures existed at design
 time: negotiate (the module and runtime compare versions and agree on a
@@ -286,7 +292,7 @@ admitted — chapter 10's interface drift shows the same face — but
 brittle-and-total beats flexible-and-arguable when the subject is what
 code may run on a device in the field.
 
-### Exercises
+## Exercises
 
 1. **Break the seal.** Take Lab 13.1's signed container and flip one byte
    inside the code region. Before checking: which property does the flip
@@ -306,6 +312,5 @@ code may run on a device in the field.
 
 ---
 
-*Next: chapter 14 — Tyu's Effect on Thinking. The epilogue: the style
-distilled, the vigilance trap closed, and the map from checked claims to
-provable ones.*
+*Next: chapter 14 — Proving the Program. The developer-proof pipeline:
+the tooling that turns chapter 4's contracts into theorems.*

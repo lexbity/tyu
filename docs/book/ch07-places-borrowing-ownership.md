@@ -18,7 +18,8 @@ Tyu's pointer story — deliberately postponed for five chapters — turns out
 to be small, sharp, and already half-familiar.
 
 One note before the doors open: there is no engine lab in this chapter.
-Every failure it teaches is a *compile* failure. That absence is the thesis.
+Every failure it teaches is a *compile* failure — the runtime never even
+gets a turn.
 
 ## 7.2 Places and pointers
 
@@ -57,21 +58,22 @@ paying its rent.
 
 ## 7.3 The two borrows
 
-The rule that runs the whole chapter fits in one line: **one writer or many
+The rule that runs this chapter fits in one line: **one writer or many
 readers, never both.** Any number of shared borrows (`&`) may be alive at
 once. A mutable borrow (`&!`) demands to be alone.
 
 The checker enforces the rule with a ledger. Mint a `&!` and the ledger
 records the place as *held for writing*; any conflicting mint while the
 first is alive is a compile error. Hold a `&!` and `dup` it, and the ledger
-rejects the copy — duplicating a writer would de-anonymize the rule
+rejects the copy — duplicating the borrow would put the write lease in two
+hands at once
 (E5022, verified: `Counter lock [ &!Counter dup … ]` does not compile).
 
 What the ledger *permits* matters as much. Sequential uses are free — close
 one borrow, open the next, as many times as the program likes (Lab 7.3).
-Shared-plus-shared coexists. The rule is not "touch things rarely"; it is
-"never let a writer and a reader disagree about the truth at the same
-instant." E5021, Lab 7.8, is the shape of the refusal: two live mutable
+Shared-plus-shared coexists. The rule allows plenty of touching — in sequence, or in
+shared company. What it refuses is a writer and a reader disagreeing about
+the truth at the same instant. E5021, Lab 7.8, is the shape of the refusal: two live mutable
 mints of the same root, one block, no chance of compiling.
 
 ## 7.4 The block is the scope
@@ -121,7 +123,7 @@ code:
   and the name is spent; pushing it again is a phantom.
 
 Why would a language *want* values it forbids copying? Because some values
-are not facts — they are **handshakes**. A message in flight, a capability
+are **handshakes**. A message in flight, a capability
 token, a page of memory being donated to another task: each means something
 only while exactly one party holds it. Copy the handshake and both sides
 believe; drop it and nobody does. `iso` makes the handshake uncopyable, and
@@ -138,8 +140,8 @@ platform.channel.recv 42 == check
 `send` *consumes* the value — a move, not a copy — and `recv` receives it
 from the same channel. Between the two words, `42` exists in exactly one
 place the checker can name: the channel. Note what `dup` was for: the
-*channel handle* may be copied freely — it is a doorway, not the custody.
-The value that passed through moved.
+*channel handle* may be copied freely — it is a doorway, and doorways are
+copyable. The value that passed through moved.
 
 ## 7.6 The boundary, named
 
@@ -346,7 +348,7 @@ holding the place for writing, and the second mint conflicts. Rewrite the
 body sequentially (`&!Counter drop &!Counter drop`, consuming each borrow)
 and it compiles: the rule was never about the count, only about the overlap.
 
-### Post-mortem — the ghost pointer *(optional — for readers with C or embedded scars)*
+## In more depth — the ghost pointer
 
 The C family of ghosts this chapter exorcises: the iterator invalidated by
 the very call that was supposed to append safely; the callback's context
@@ -355,14 +357,14 @@ allocation that returns a pointer someone *will* decrement. Each ghost has
 the same skeleton — a pointer that outlived its place — and each is found
 by the same unreliable method: someone reproduces it eventually.
 
-Tyu's answer is not discipline; it is the ledger. A pointer minted from a
+Tyu's answer is the ledger. A pointer minted from a
 place is a lease whose term is a lexical block (E5020 closes the escape
 routes), a mutable place is single-writer for the term of the lease
 (E5021/E5022), and a value whose meaning depends on sole ownership cannot
 be copied, dropped, or used after it moved (E5010–E5012). The ghosts are
 not harder to find; they are unrepresentable.
 
-### From the workbench
+### Why the rule is the rule
 
 Chapter 2 promised that `dup` and `drop` being builtins was about a small
 trusted surface. Here is the payoff: *copyability is a property the
@@ -374,7 +376,7 @@ manual says the borrow rules are enforced by a fixed-capacity ledger, the
 embedded reader should hear: the safety machinery itself fits this
 language's own rules for embedded code.
 
-### Exercises
+## Exercises
 
 1. **Make it legal.** Rewrite Lab 7.8's body so both borrows happen —
    sequentially — and the word compiles. Then explain, using the words
