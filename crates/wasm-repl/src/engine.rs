@@ -29,7 +29,8 @@ use crate::heap::RegionHeap;
 use crate::journal::{Effect, Journal};
 use crate::mmio::{apply_write_kind, extract_field, insert_field, width_mask};
 use crate::periph::Peripheral;
-use crate::value::{Slot, Value};
+use crate::session::StackCell;
+use crate::value::{Slot, ValKind, Value};
 
 // ---------------------------------------------------------------------------
 // G53 red-path instrument (PLAN-WASM-1 §Q10 / AC-9)
@@ -53,13 +54,16 @@ fn selftest_corrupt_add() -> bool {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Outcome {
     /// The run reached a top-level `ret`: `out` holds the diagnostic-channel
-    /// bytes (the `testio` surface), `exit_stack` the data stack at exit.
-    Ok { out: Vec<u8>, exit_stack: Vec<Slot> },
+    /// bytes (the `testio` surface).
+    Ok { out: Vec<u8> },
     /// A trap with the frozen numeric `TrapCode` + the faulting op's span.
-    /// Output already emitted stays emitted (§Q3 DEC-6).
+    /// Output already emitted stays emitted (§Q3 DEC-6). Contract failures
+    /// (trap 20, L2a/L2c and the lowered `needs` guards) carry the §Q6/DEC-22
+    /// `TrapDetail` — which word declared what, and what the stack held.
     Trap {
         code: TrapCode,
         span: Span,
+        detail: Option<TrapDetail>,
         out: Vec<u8>,
     },
     /// `testio.exit ( i64 -- )` — the module run terminated with a code
@@ -116,6 +120,52 @@ impl Fault {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// TrapDetail (PLAN-WASM-2 §Q6/DEC-22, §5.3): the runtime-diagnostic-protocol
+// v1.1 additive optional `detail` field's payload. Closed `kind` set; every
+// consumer MUST ignore an unknown kind (render "unknown detail", never guess).
+// ---------------------------------------------------------------------------
+
+/// The closed `kind` set of a [`TrapDetail`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DetailKind {
+    /// A word's declared input contract vs the stack it actually observed —
+    /// the L2a/L2c checked-pop/Call form, and the lowered `needs` guard.
+    SigMismatch,
+    /// A depth contract failed (reserved: call-depth/`StackBound` surfaces
+    /// report frozen trap 10 today; the kind is part of the versioned set).
+    Depth,
+    /// A stack-bound contract failed (same reserved status as `Depth`).
+    Bound,
+}
+
+impl DetailKind {
+    /// The kind's wire name (protocol v1.1 §5.3).
+    pub fn name(&self) -> &'static [u8] {
+        match self {
+            DetailKind::SigMismatch => b"sig-mismatch",
+            DetailKind::Depth => b"depth",
+            DetailKind::Bound => b"bound",
+        }
+    }
+}
+
+/// Which word declared what, and what the stack actually held at a contract
+/// failure. `word`/`declared`/`actual` are present for `SigMismatch`; the
+/// top-of-stack cells are capped (render-side caps are §Q9/DEC-25's job —
+/// the engine emits at most `DETAIL_ACTUAL_CAP` cells).
+#[derive(Clone, Debug, PartialEq)]
+pub struct TrapDetail {
+    pub kind: DetailKind,
+    pub word: Vec<u8>,
+    pub declared: Vec<u8>,
+    pub actual: Vec<StackCell>,
+}
+
+/// The engine-side cap on a detail's `actual` cells (the stack *below* the
+/// cap exists in ABI payloads — §Q9's data-side completeness rule).
+pub const DETAIL_ACTUAL_CAP: usize = 8;
 
 /// The execution state (§5).
 #[derive(Clone, Debug)]
@@ -182,20 +232,28 @@ impl ExecState {
     }
 
     /// A state seeded with the session's persistent stack + heap for one
-    /// phrase run (the session holds the committed baseline; §7.3).
+    /// phrase run (the session holds the committed baseline; §7.3). `journal`
+    /// and `out` come from the session's pool (D-W4): capacity persists
+    /// across phrases; contents are cleared here.
     pub fn in_session(
         stack: Vec<Slot>,
         heap: RegionHeap,
         fuel: Fuel,
         elide_guards: bool,
+        journal: Journal,
+        out: Vec<u8>,
     ) -> ExecState {
+        let mut journal = journal;
+        journal.clear();
+        let mut out = out;
+        out.clear();
         ExecState {
             stack,
             frames: Vec::new(),
             heap,
-            out: Vec::new(),
+            out,
             fuel,
-            journal: Journal::new(),
+            journal,
             elide_guards,
             cursor: None,
             strings: Vec::new(),
@@ -251,17 +309,21 @@ impl ExecState {
     /// first-access order — deterministic for a given run, §Q6). The
     /// reservation is journaled (DEC-5): a rollback reclaims it and drops
     /// the per-run cache (`resources` is phrase-scoped — see `rollback`).
-    pub fn resource_addr(&mut self, place: &[u8]) -> u64 {
+    /// An arena-exhausted intern is a `RegionExhausted` trap — never a
+    /// fabricated address (D-W5: the zero-default intern path is deleted).
+    pub fn resource_addr(&mut self, place: &[u8]) -> Result<u64, TrapCode> {
         if let Some((_, a)) = self.resources.iter().find(|(p, _)| p == place) {
-            return *a;
+            return Ok(*a);
         }
         let old_cursor = self.heap.arena_cursor();
-        let addr = self.heap.intern(&[]).unwrap_or(0);
-        if addr != 0 {
-            self.journal.push(Effect::Intern { addr, old_cursor });
+        match self.heap.intern(&[]) {
+            Ok(addr) => {
+                self.journal.push(Effect::Intern { addr, old_cursor });
+                self.resources.push((place.to_vec(), addr));
+                Ok(addr)
+            }
+            Err(_) => Err(TrapCode::RegionExhausted),
         }
-        self.resources.push((place.to_vec(), addr));
-        addr
     }
 }
 
@@ -314,6 +376,7 @@ impl<'c> Engine<'c> {
             return Outcome::Trap {
                 code: TrapCode::StackOverflow,
                 span: Span::UNKNOWN,
+                detail: None,
                 out: core::mem::take(&mut state.out),
             };
         }
@@ -375,13 +438,21 @@ impl<'c> Engine<'c> {
                 StepResult::Done => {
                     return Outcome::Ok {
                         out: core::mem::take(&mut state.out),
-                        exit_stack: state.stack.clone(),
                     };
                 }
                 StepResult::Trap(code, span) => {
                     return Outcome::Trap {
                         code,
                         span,
+                        detail: None,
+                        out: core::mem::take(&mut state.out),
+                    };
+                }
+                StepResult::Contract(span, detail) => {
+                    return Outcome::Trap {
+                        code: TrapCode::ContractFail,
+                        span,
+                        detail: Some(detail),
                         out: core::mem::take(&mut state.out),
                     };
                 }
@@ -449,11 +520,15 @@ impl<'c> Engine<'c> {
                 mutable: _,
                 base,
             } => match base {
-                ir::AddrOfBase::Runtime => {
-                    let addr = state.resource_addr(place.as_bytes());
-                    state.stack.push(Slot::ptr(ir::TY_PTR_MUT, addr));
-                    StepResult::Continue(next_op)
-                }
+                ir::AddrOfBase::Runtime => match state.resource_addr(place.as_bytes()) {
+                    Ok(addr) => {
+                        state.stack.push(Slot::ptr(ir::TY_PTR_MUT, addr));
+                        StepResult::Continue(next_op)
+                    }
+                    // Arena exhausted: a real trap, never a fabricated address
+                    // (D-W5 — the zero-default intern path is deleted).
+                    Err(t) => StepResult::Trap(t, op.span),
+                },
                 ir::AddrOfBase::Mmio { aperture, offset } => {
                     // A register address: the aperture's bound base plus the
                     // register offset (P4). Resolved through the compiled
@@ -480,77 +555,117 @@ impl<'c> Engine<'c> {
                 Err(fault) => StepResult::Trap(fault, op.span),
             },
             OpKind::TaskSpawn { .. } => StepResult::Fault(Fault::tasks(op.span)),
-            OpKind::PtrAddConst { offset, .. } => match pop_ptr(state) {
+            OpKind::PtrAddConst { offset, .. } => match pop_checked(state, ValKind::Ptr) {
                 Ok(p) => {
+                    let Value::Ptr(base) = p.val else {
+                        unreachable!("pop_checked(Ptr) returned a non-pointer")
+                    };
                     state
                         .stack
-                        .push(Slot::ptr(ir::TY_PTR_MUT, p.wrapping_add(u64::from(offset))));
+                        .push(Slot::ptr(ir::TY_PTR_MUT, base.wrapping_add(u64::from(offset))));
                     StepResult::Continue(next_op)
                 }
-                Err(t) => StepResult::Trap(t, op.span),
+                Err(f) => self.pop_fault(f, op.span, word, ValKind::Ptr),
             },
-            OpKind::PtrAddIndex { scale, .. } => match (pop_int(state), pop_ptr(state)) {
-                (Ok(idx), Ok(base)) => {
-                    let addr = base.wrapping_add((idx as u64).wrapping_mul(u64::from(scale)));
-                    state.stack.push(Slot::ptr(ir::TY_PTR_MUT, addr));
-                    StepResult::Continue(next_op)
+            OpKind::PtrAddIndex { scale, .. } => {
+                match (pop_checked(state, ValKind::Int), pop_checked(state, ValKind::Ptr)) {
+                    (Ok(idx), Ok(base)) => {
+                        let Value::Int(i) = idx.val else {
+                            unreachable!("pop_checked(Int) returned a non-int")
+                        };
+                        let Value::Ptr(bp) = base.val else {
+                            unreachable!("pop_checked(Ptr) returned a non-pointer")
+                        };
+                        let addr = bp.wrapping_add((i as u64).wrapping_mul(u64::from(scale)));
+                        state.stack.push(Slot::ptr(ir::TY_PTR_MUT, addr));
+                        StepResult::Continue(next_op)
+                    }
+                    (Err(f), _) => self.pop_fault(f, op.span, word, ValKind::Int),
+                    (_, Err(f)) => self.pop_fault(f, op.span, word, ValKind::Ptr),
                 }
-                (Err(t), _) | (_, Err(t)) => StepResult::Trap(t, op.span),
-            },
+            }
             OpKind::Dup { .. } => {
-                // Single-slot reference/value copy (native `emit_dup`).
-                let top = *state.stack.last().unwrap_or(&Slot::int(ir::TY_I64, 0));
-                state.stack.push(top);
-                StepResult::Continue(next_op)
+                // Single-slot reference/value copy (native `emit_dup`). Empty
+                // stack is a real underflow (trap 10) — never a fabricated
+                // zero (D-W5).
+                match state.stack.last() {
+                    Some(&top) => {
+                        state.stack.push(top);
+                        StepResult::Continue(next_op)
+                    }
+                    None => StepResult::Trap(TrapCode::StackOverflow, op.span),
+                }
             }
-            OpKind::Drop { .. } => {
-                let _ = state.stack.pop();
-                StepResult::Continue(next_op)
-            }
+            OpKind::Drop { .. } => match pop_any(state) {
+                Ok(_) => StepResult::Continue(next_op),
+                Err(f) => self.pop_fault(f, op.span, word, ValKind::Int),
+            },
             OpKind::Swap { .. } => {
                 let n = state.stack.len();
                 if n >= 2 {
                     state.stack.swap(n - 1, n - 2);
+                    StepResult::Continue(next_op)
+                } else {
+                    // A silent no-op on underflow is deleted (D-W5).
+                    StepResult::Trap(TrapCode::StackOverflow, op.span)
                 }
-                StepResult::Continue(next_op)
             }
-            OpKind::AddI64 => match (pop_int(state), pop_int(state)) {
+            OpKind::AddI64 => match (pop_checked(state, ValKind::Int), pop_checked(state, ValKind::Int))
+            {
                 (Ok(b), Ok(a)) => {
+                    let Value::Int(bv) = b.val else {
+                        unreachable!("pop_checked(Int) returned a non-int")
+                    };
+                    let Value::Int(av) = a.val else {
+                        unreachable!("pop_checked(Int) returned a non-int")
+                    };
                     // G53 red-path instrument: under `wasm-selftest` this arm
                     // subtracts so the execution differential MUST fail.
                     let r = if selftest_corrupt_add() {
-                        a.wrapping_sub(b)
+                        av.wrapping_sub(bv)
                     } else {
-                        a.wrapping_add(b)
+                        av.wrapping_add(bv)
                     };
                     state.stack.push(Slot::int(ir::TY_I64, r));
                     StepResult::Continue(next_op)
                 }
-                (Err(t), _) | (_, Err(t)) => StepResult::Trap(t, op.span),
+                (Err(f), _) | (_, Err(f)) => self.pop_fault(f, op.span, word, ValKind::Int),
             },
-            OpKind::SubI64 => match (pop_int(state), pop_int(state)) {
+            OpKind::SubI64 => match (pop_checked(state, ValKind::Int), pop_checked(state, ValKind::Int))
+            {
                 (Ok(b), Ok(a)) => {
-                    state.stack.push(Slot::int(ir::TY_I64, a.wrapping_sub(b)));
+                    let (Value::Int(bv), Value::Int(av)) = (b.val, a.val) else {
+                        unreachable!("pop_checked(Int) returned a non-int")
+                    };
+                    state.stack.push(Slot::int(ir::TY_I64, av.wrapping_sub(bv)));
                     StepResult::Continue(next_op)
                 }
-                (Err(t), _) | (_, Err(t)) => StepResult::Trap(t, op.span),
+                (Err(f), _) | (_, Err(f)) => self.pop_fault(f, op.span, word, ValKind::Int),
             },
-            OpKind::MulI64 => match (pop_int(state), pop_int(state)) {
+            OpKind::MulI64 => match (pop_checked(state, ValKind::Int), pop_checked(state, ValKind::Int))
+            {
                 (Ok(b), Ok(a)) => {
-                    state.stack.push(Slot::int(ir::TY_I64, a.wrapping_mul(b)));
+                    let (Value::Int(bv), Value::Int(av)) = (b.val, a.val) else {
+                        unreachable!("pop_checked(Int) returned a non-int")
+                    };
+                    state.stack.push(Slot::int(ir::TY_I64, av.wrapping_mul(bv)));
                     StepResult::Continue(next_op)
                 }
-                (Err(t), _) | (_, Err(t)) => StepResult::Trap(t, op.span),
+                (Err(f), _) | (_, Err(f)) => self.pop_fault(f, op.span, word, ValKind::Int),
             },
-            OpKind::Cmp { out, kind } => match (pop_int(state), pop_int(state)) {
+            OpKind::Cmp { out, kind } => match (pop_checked(state, ValKind::Int), pop_checked(state, ValKind::Int))
+            {
                 (Ok(b), Ok(a)) => {
+                    let (Value::Int(bv), Value::Int(av)) = (b.val, a.val) else {
+                        unreachable!("pop_checked(Int) returned a non-int")
+                    };
                     let r = match kind {
-                        ir::CmpKind::Lt => a < b,
-                        ir::CmpKind::Le => a <= b,
-                        ir::CmpKind::Gt => a > b,
-                        ir::CmpKind::Ge => a >= b,
-                        ir::CmpKind::Eq => a == b,
-                        ir::CmpKind::Ne => a != b,
+                        ir::CmpKind::Lt => av < bv,
+                        ir::CmpKind::Le => av <= bv,
+                        ir::CmpKind::Gt => av > bv,
+                        ir::CmpKind::Ge => av >= bv,
+                        ir::CmpKind::Eq => av == bv,
+                        ir::CmpKind::Ne => av != bv,
                     };
                     state.stack.push(Slot {
                         ty: out,
@@ -558,56 +673,76 @@ impl<'c> Engine<'c> {
                     });
                     StepResult::Continue(next_op)
                 }
-                (Err(t), _) | (_, Err(t)) => StepResult::Trap(t, op.span),
+                (Err(f), _) | (_, Err(f)) => self.pop_fault(f, op.span, word, ValKind::Int),
             },
-            OpKind::AndBool => match (pop_truthy(state), pop_truthy(state)) {
-                (Ok(b), Ok(a)) => {
-                    state.stack.push(Slot::bool(a && b));
-                    StepResult::Continue(next_op)
+            OpKind::AndBool => {
+                match (pop_checked(state, ValKind::Bool), pop_checked(state, ValKind::Bool)) {
+                    (Ok(b), Ok(a)) => {
+                        let (Value::Bool(bv), Value::Bool(av)) = (b.val, a.val) else {
+                            unreachable!("pop_checked(Bool) returned a non-bool")
+                        };
+                        state.stack.push(Slot::bool(av && bv));
+                        StepResult::Continue(next_op)
+                    }
+                    (Err(f), _) | (_, Err(f)) => self.pop_fault(f, op.span, word, ValKind::Bool),
                 }
-                (Err(t), _) | (_, Err(t)) => StepResult::Trap(t, op.span),
-            },
-            OpKind::OrBool => match (pop_truthy(state), pop_truthy(state)) {
-                (Ok(b), Ok(a)) => {
-                    state.stack.push(Slot::bool(a || b));
-                    StepResult::Continue(next_op)
+            }
+            OpKind::OrBool => {
+                match (pop_checked(state, ValKind::Bool), pop_checked(state, ValKind::Bool)) {
+                    (Ok(b), Ok(a)) => {
+                        let (Value::Bool(bv), Value::Bool(av)) = (b.val, a.val) else {
+                            unreachable!("pop_checked(Bool) returned a non-bool")
+                        };
+                        state.stack.push(Slot::bool(av || bv));
+                        StepResult::Continue(next_op)
+                    }
+                    (Err(f), _) | (_, Err(f)) => self.pop_fault(f, op.span, word, ValKind::Bool),
                 }
-                (Err(t), _) | (_, Err(t)) => StepResult::Trap(t, op.span),
-            },
-            OpKind::NotBool => match pop_truthy(state) {
+            }
+            OpKind::NotBool => match pop_checked(state, ValKind::Bool) {
                 Ok(a) => {
-                    state.stack.push(Slot::bool(!a));
+                    let Value::Bool(av) = a.val else {
+                        unreachable!("pop_checked(Bool) returned a non-bool")
+                    };
+                    state.stack.push(Slot::bool(!av));
                     StepResult::Continue(next_op)
                 }
-                Err(t) => StepResult::Trap(t, op.span),
+                Err(f) => self.pop_fault(f, op.span, word, ValKind::Bool),
             },
             OpKind::InterruptDisable | OpKind::InterruptEnable => {
                 StepResult::Fault(Fault::tasks(op.span))
             }
-            OpKind::LocalSet { slot, ty: _ } => match pop_slot(state) {
+            OpKind::LocalSet { slot, ty: _ } => match pop_any(state) {
                 Ok(v) => {
-                    if let Some(f) = state.frames.last_mut() {
-                        let idx = slot as usize;
-                        if f.locals.len() <= idx {
-                            f.locals.resize(idx + 1, Slot::int(ir::TY_I64, 0));
+                    match state.frames.last_mut() {
+                        Some(f) => {
+                            let idx = slot as usize;
+                            if f.locals.len() <= idx {
+                                f.locals.resize(idx + 1, Slot::int(ir::TY_I64, 0));
+                            }
+                            f.locals[idx] = v;
                         }
-                        f.locals[idx] = v;
+                        // A store with no frame is a real underflow (trap 10),
+                        // never a silent drop (D-W5).
+                        None => return StepResult::Trap(TrapCode::StackOverflow, op.span),
                     }
                     StepResult::Continue(next_op)
                 }
-                Err(t) => StepResult::Trap(t, op.span),
+                Err(f) => self.pop_fault(f, op.span, word, ValKind::Int),
             },
-            OpKind::LocalGet { slot, ty } => {
-                let v = state
-                    .frames
-                    .last()
-                    .and_then(|f| f.locals.get(slot as usize))
-                    .copied()
-                    .unwrap_or(Slot::int(ty, 0));
-                state.stack.push(v);
-                StepResult::Continue(next_op)
+            OpKind::LocalGet { slot, ty: _ } => {
+                // A missing frame/local is a real underflow (trap 10) — the
+                // fabricated-zero path is deleted (D-W5). The local's own type
+                // travels with it (set by the LocalSet that wrote it).
+                match state.frames.last().and_then(|f| f.locals.get(slot as usize)).copied() {
+                    Some(v) => {
+                        state.stack.push(v);
+                        StepResult::Continue(next_op)
+                    }
+                    None => StepResult::Trap(TrapCode::StackOverflow, op.span),
+                }
             }
-            OpKind::Cast { from, to } => match pop_slot(state) {
+            OpKind::Cast { from, to } => match pop_any(state) {
                 Ok(v) => match self.step_cast(word, from, to, v) {
                     Ok(out_slot) => {
                         state.stack.push(out_slot);
@@ -615,23 +750,63 @@ impl<'c> Engine<'c> {
                     }
                     Err(()) => StepResult::Trap(TrapCode::SubtypeFail, op.span),
                 },
-                Err(t) => StepResult::Trap(t, op.span),
+                Err(f) => self.pop_fault(f, op.span, word, ValKind::Int),
             },
-            OpKind::Bitcast { to, .. } => match pop_slot(state) {
+            OpKind::Bitcast { to, .. } => match pop_any(state) {
                 Ok(v) => {
+                    // No range check (§Q7's resolved reading: the checker
+                    // admits a bitcast exactly where no runtime check is
+                    // needed); the value retags and L2 tracking follows it.
                     state.stack.push(Slot { ty: to, val: v.val });
                     StepResult::Continue(next_op)
                 }
-                Err(t) => StepResult::Trap(t, op.span),
+                Err(f) => self.pop_fault(f, op.span, word, ValKind::Int),
             },
             OpKind::Call { name, sig, .. } => match self.compiled.dict_lookup(name.as_bytes()) {
-                Some(DictTarget::Builtin(b)) => match self.call_builtin(b, state) {
-                    Ok(()) => StepResult::Continue(next_op),
-                    Err(BuiltinSignal::Exit(code)) => StepResult::Exit(code),
-                    Err(BuiltinSignal::Trap(code)) => StepResult::Trap(code, op.span),
-                },
+                Some(DictTarget::Builtin(b)) => {
+                    // L2c, builtin form: the interpreter builtins declare their
+                    // argument kinds; a mismatch is trap 20 with detail — the
+                    // same defense-in-depth as word calls (never a coercion).
+                    if let Err(fault) = b.check_args(state) {
+                        return match fault {
+                            None => StepResult::Trap(TrapCode::StackOverflow, op.span),
+                            Some(want) => StepResult::Contract(
+                                op.span,
+                                TrapDetail {
+                                    kind: DetailKind::SigMismatch,
+                                    word: name.as_bytes().to_vec(),
+                                    declared: want.name().to_vec(),
+                                    actual: top_cells(state, word, DETAIL_ACTUAL_CAP),
+                                },
+                            ),
+                        };
+                    }
+                    match self.call_builtin(b, state) {
+                        Ok(()) => {
+                            // Retag the pushed outputs to the declared
+                            // signature: builtins push raw prim-tagged slots
+                            // (e.g. a region handle as `i64`), but the
+                            // checker verified this call site against the
+                            // import table's declared outputs — those are
+                            // exact, and the L2 block-entry checks downstream
+                            // compare against them.
+                            let out_len = sig.out_len as usize;
+                            if out_len > 0 {
+                                let base = state.stack.len() - out_len;
+                                for i in 0..out_len {
+                                    state.stack[base + i].ty = sig.outputs[i];
+                                }
+                            }
+                            StepResult::Continue(next_op)
+                        }
+                        Err(BuiltinSignal::Exit(code)) => StepResult::Exit(code),
+                        Err(BuiltinSignal::Trap(code)) => StepResult::Trap(code, op.span),
+                    }
+                }
                 Some(DictTarget::Word(callee)) => {
-                    // L2: stack depth ≥ sig.in_len (never elidable).
+                    // L2: stack depth ≥ sig.in_len (never elidable). Depth
+                    // shortfall remains trap 10 — underflow is the stack
+                    // error (PLAN-WASM-1 §7.8).
                     if state.stack.len() < sig.in_len as usize {
                         return StepResult::Trap(TrapCode::StackOverflow, op.span);
                     }
@@ -640,6 +815,54 @@ impl<'c> Engine<'c> {
                     }
                     if !self.bound_ok(callee, state) {
                         return StepResult::Trap(TrapCode::StackOverflow, op.span);
+                    }
+                    // L2c (DEC-23): per-slot input contract. Type ids are
+                    // word-local (each `ir::Word` interns its own table; the
+                    // prim slots 0..6 are the only globally fixed ids), so the
+                    // check compares *atoms* through each word's table — and
+                    // on success retags each incoming slot into the callee's
+                    // table (ids are interpreted per current word; the retag
+                    // is what keeps L2 tracking consistent across the call).
+                    let callee_word = &self.compiled.module.words[callee];
+                    let in_len = sig.in_len as usize;
+                    let base = state.stack.len() - in_len;
+                    for i in 0..in_len {
+                        let want = sig.inputs[i];
+                        let slot = state.stack[base + i];
+                        let Some(caller_atom) = word.types.get(slot.ty.0 as usize) else {
+                            return StepResult::Fault(Fault::internal(
+                                op.span,
+                                b"argument type id out of the caller's type table (engine bug)",
+                            ));
+                        };
+                        let Some(callee_id) = callee_word
+                            .types
+                            .iter()
+                            .position(|a| a.as_bytes() == caller_atom.as_bytes())
+                            .map(|p| ir::TypeId(p as u8))
+                        else {
+                            return StepResult::Fault(Fault::internal(
+                                op.span,
+                                b"argument type missing from the callee's type table (engine bug)",
+                            ));
+                        };
+                        if callee_id != want {
+                            let actual = state.stack[base..]
+                                .iter()
+                                .take(DETAIL_ACTUAL_CAP)
+                                .map(|&s| cell_of(word, s))
+                                .collect();
+                            return StepResult::Contract(
+                                op.span,
+                                TrapDetail {
+                                    kind: DetailKind::SigMismatch,
+                                    word: callee_word.name.as_bytes().to_vec(),
+                                    declared: sig_text_of(callee_word),
+                                    actual,
+                                },
+                            );
+                        }
+                        state.stack[base + i].ty = callee_id;
                     }
                     let caller = Cursor {
                         word: cur.word,
@@ -662,9 +885,20 @@ impl<'c> Engine<'c> {
                         word: name,
                         depth_before,
                     });
+                    let callee_entry = self.entry_block(callee);
+                    // L2b (DEC-23) at the callee's entry block: the runtime
+                    // top-of-stack types must equal the block's checked
+                    // `entry_stack`. Ids are consistent here — the inputs were
+                    // just retagged into the callee's table. A mismatch is
+                    // *definitionally* an engine bug (§Q7's reachability
+                    // argument): post-typecheck IR cannot express it, so it
+                    // pages fails as E9158, never as a student-facing trap.
+                    if let Err(e) = self.check_block_entry(callee, callee_entry, state, op.span) {
+                        return e;
+                    }
                     StepResult::Continue(Cursor {
                         word: callee,
-                        block: self.entry_block(callee),
+                        block: callee_entry,
                         op: 0,
                     })
                 }
@@ -732,50 +966,138 @@ impl<'c> Engine<'c> {
                     Err(e) => e,
                 }
             }
-            OpKind::TrapIfFalse { code } => {
-                let v = state.stack.pop();
-                if state.elide_guards {
-                    // L1 elision (§Q4): the emitted guard is skipped — the
-                    // bool is consumed, control falls through. L2/L3
-                    // interpreter invariants are unaffected.
-                    StepResult::Continue(next_op)
-                } else {
-                    match v {
-                        Some(slot) if slot.val.truthy() => StepResult::Continue(next_op),
-                        _ => StepResult::Trap(code, op.span),
+            OpKind::TrapIfFalse { code } => match pop_checked(state, ValKind::Bool) {
+                Err(f) => self.pop_fault(f, op.span, word, ValKind::Bool),
+                Ok(slot) => {
+                    let Value::Bool(b) = slot.val else {
+                        unreachable!("pop_checked(Bool) returned a non-bool")
+                    };
+                    if state.elide_guards {
+                        // L1 elision (§Q4): the emitted guard is skipped — the
+                        // bool is consumed, control falls through. L2/L3
+                        // interpreter invariants are unaffected.
+                        StepResult::Continue(next_op)
+                    } else if b {
+                        StepResult::Continue(next_op)
+                    } else if code == TrapCode::ContractFail {
+                        // A lowered `needs` guard failed (L1, trap 20): the
+                        // §Q6 detail names the word whose contract failed, its
+                        // declared signature, and the stack it observed.
+                        StepResult::Contract(
+                            op.span,
+                            TrapDetail {
+                                kind: DetailKind::SigMismatch,
+                                word: word.name.as_bytes().to_vec(),
+                                declared: sig_text_of(word),
+                                actual: top_cells(state, word, DETAIL_ACTUAL_CAP),
+                            },
+                        )
+                    } else {
+                        StepResult::Trap(code, op.span)
                     }
                 }
-            }
-            OpKind::Br { target } => match self.block_index(word, target) {
-                Some(b) => StepResult::Continue(Cursor {
+            },
+            OpKind::Br { target } => {
+                let b = match self.block_index(word, target) {
+                    Some(b) => b,
+                    None => {
+                        return StepResult::Fault(Fault::internal(
+                            op.span,
+                            b"branch target out of range (verified IR cannot reach this)",
+                        ))
+                    }
+                };
+                // L2b (DEC-23) at the branch target — same contract as the
+                // callee entry above (mismatch = engine bug = E9158).
+                if let Err(e) = self.check_block_entry(cur.word, b, state, op.span) {
+                    return e;
+                }
+                StepResult::Continue(Cursor {
                     word: cur.word,
                     block: b,
                     op: 0,
-                }),
-                None => StepResult::Fault(Fault::internal(
-                    op.span,
-                    b"branch target out of range (verified IR cannot reach this)",
-                )),
-            },
+                })
+            }
             OpKind::BrIf { then_tgt, else_tgt } => {
-                let truthy = state.stack.pop().map(|s| s.val.truthy()).unwrap_or(false);
-                let target = if truthy { then_tgt } else { else_tgt };
-                match self.block_index(word, target) {
-                    Some(b) => StepResult::Continue(Cursor {
-                        word: cur.word,
-                        block: b,
-                        op: 0,
-                    }),
-                    None => StepResult::Fault(Fault::internal(
-                        op.span,
-                        b"branch target out of range (verified IR cannot reach this)",
-                    )),
+                let target = match pop_checked(state, ValKind::Bool) {
+                    Ok(slot) => {
+                        let Value::Bool(b) = slot.val else {
+                            unreachable!("pop_checked(Bool) returned a non-bool")
+                        };
+                        if b { then_tgt } else { else_tgt }
+                    }
+                    // An empty stack at a conditional branch is a real
+                    // underflow (trap 10) — the silent-false path is deleted
+                    // (D-W5); a kind mismatch is the L2a contract trap.
+                    Err(PopFault::Underflow) => {
+                        return StepResult::Trap(TrapCode::StackOverflow, op.span)
+                    }
+                    Err(f) => return self.pop_fault(f, op.span, word, ValKind::Bool),
+                };
+                let b = match self.block_index(word, target) {
+                    Some(b) => b,
+                    None => {
+                        return StepResult::Fault(Fault::internal(
+                            op.span,
+                            b"branch target out of range (verified IR cannot reach this)",
+                        ))
+                    }
+                };
+                if let Err(e) = self.check_block_entry(cur.word, b, state, op.span) {
+                    return e;
+                }
+                StepResult::Continue(Cursor {
+                    word: cur.word,
+                    block: b,
+                    op: 0,
+                })
+            }
+            OpKind::Ret => {
+                let Some(frame) = state.frames.pop() else {
+                    return StepResult::Done;
+                };
+                // Retag the frame's outputs into the CALLER's type table (ids
+                // are word-local; this is the return-side half of the Call
+                // entry retag). The entry frame's pop ends the run (Done).
+                if frame.ret.is_some() {
+                    let callee = &self.compiled.module.words[cur.word];
+                    let out_len = callee.sig.out_len as usize;
+                    if out_len > 0 {
+                        let Some(caller_idx) = state.frames.last().map(|f| f.word) else {
+                            return StepResult::Fault(Fault::internal(
+                                op.span,
+                                b"return without a caller frame (engine bug)",
+                            ));
+                        };
+                        let caller = &self.compiled.module.words[caller_idx];
+                        let base = state.stack.len().saturating_sub(out_len);
+                        for slot in state.stack[base..].iter_mut() {
+                            let Some(atom) = callee.types.get(slot.ty.0 as usize) else {
+                                return StepResult::Fault(Fault::internal(
+                                    op.span,
+                                    b"return type id out of the callee's type table (engine bug)",
+                                ));
+                            };
+                            let bytes = atom.as_bytes();
+                            let Some(pos) = caller
+                                .types
+                                .iter()
+                                .position(|a| a.as_bytes() == bytes)
+                            else {
+                                return StepResult::Fault(Fault::internal(
+                                    op.span,
+                                    b"return type missing from the caller's type table (engine bug)",
+                                ));
+                            };
+                            slot.ty = ir::TypeId(pos as u8);
+                        }
+                    }
+                }
+                match frame.ret {
+                    Some(ret) => StepResult::Continue(ret),
+                    None => StepResult::Done,
                 }
             }
-            OpKind::Ret => match state.frames.pop().and_then(|f| f.ret) {
-                Some(ret) => StepResult::Continue(ret),
-                None => StepResult::Done,
-            },
         }
     }
 
@@ -791,7 +1113,19 @@ impl<'c> Engine<'c> {
             // stores it in the frame's scoped area; the heap is the concrete
             // arena here, §6.7).
             Some(ir::TypeClass::Slice) => {
-                let base = state.stack.last().map(|s| s.val.as_u64()).unwrap_or(0);
+                // The descriptor's base is the pointer on top of the stack —
+                // a checked peek (L2a): underflow is trap 10, a non-pointer
+                // top is the contract trap. No fabricated zero (D-W5).
+                let top = match state.stack.last() {
+                    Some(&s) => s,
+                    None => return Err(TrapCode::StackOverflow),
+                };
+                let Value::Ptr(base) = top.val else {
+                    // The caller needs the StepResult shape, so the contract
+                    // fault is reported through the scoped-enter error path's
+                    // trap channel with the op's span.
+                    return Err(TrapCode::ContractFail);
+                };
                 let (addr, old_cursor) = state
                     .heap
                     .scoped_enter(base, u64::from(len))
@@ -803,9 +1137,13 @@ impl<'c> Engine<'c> {
                 Ok(())
             }
             Some(ir::TypeClass::RegionRef | ir::TypeClass::RegionRefMut) => {
-                let top = *state.stack.last().unwrap_or(&Slot::int(ir::TY_I64, 0));
-                state.stack.push(top);
-                Ok(())
+                match state.stack.last() {
+                    Some(&top) => {
+                        state.stack.push(top);
+                        Ok(())
+                    }
+                    None => Err(TrapCode::StackOverflow),
+                }
             }
             _ => Err(TrapCode::Unreachable),
         }
@@ -851,7 +1189,7 @@ impl<'c> Engine<'c> {
                 StepResult::Fault(Fault::internal(span, b"load type has no storage encoding"))
             })?;
         let width = bits_to_width(bits);
-        let addr = pop_ptr(state).map_err(|t| StepResult::Trap(t, span))?;
+        let addr = self.pop_ptr_or(state, span, word)?;
         let raw = state
             .heap
             .load(addr, width)
@@ -887,8 +1225,8 @@ impl<'c> Engine<'c> {
                 StepResult::Fault(Fault::internal(span, b"store type has no storage encoding"))
             })?;
         let width = bits_to_width(bits);
-        let v = pop_int(state).map_err(|t| StepResult::Trap(t, span))?;
-        let addr = pop_ptr(state).map_err(|t| StepResult::Trap(t, span))?;
+        let v = self.pop_int_or(state, span, word)?;
+        let addr = self.pop_ptr_or(state, span, word)?;
         let old = state
             .heap
             .store(addr, width, v as u64)
@@ -953,7 +1291,7 @@ impl<'c> Engine<'c> {
                 b"mmio register width unresolved (descriptor/module mismatch)",
             ))
         })?;
-        let addr = pop_ptr(state).map_err(|t| StepResult::Trap(t, span))?;
+        let addr = self.pop_ptr_or(state, span, word)?;
         let (ap, off) = self
             .mmio_target(addr)
             .ok_or_else(|| Self::device_err(span, None))?;
@@ -989,8 +1327,8 @@ impl<'c> Engine<'c> {
                 b"mmio register width unresolved (descriptor/module mismatch)",
             ))
         })?;
-        let v = pop_int(state).map_err(|t| StepResult::Trap(t, span))?;
-        let addr = pop_ptr(state).map_err(|t| StepResult::Trap(t, span))?;
+        let v = self.pop_int_or(state, span, word)?;
+        let addr = self.pop_ptr_or(state, span, word)?;
         let (ap, off) = self
             .mmio_target(addr)
             .ok_or_else(|| Self::device_err(span, None))?;
@@ -1043,7 +1381,7 @@ impl<'c> Engine<'c> {
                 b"mmio register width unresolved (descriptor/module mismatch)",
             ))
         })?;
-        let addr = pop_ptr(state).map_err(|t| StepResult::Trap(t, span))?;
+        let addr = self.pop_ptr_or(state, span, word)?;
         let (ap, off) = self
             .mmio_target(addr)
             .ok_or_else(|| Self::device_err(span, None))?;
@@ -1091,8 +1429,8 @@ impl<'c> Engine<'c> {
                 b"mmio register width unresolved (descriptor/module mismatch)",
             ))
         })?;
-        let field = pop_int(state).map_err(|t| StepResult::Trap(t, span))?;
-        let addr = pop_ptr(state).map_err(|t| StepResult::Trap(t, span))?;
+        let field = self.pop_int_or(state, span, word)?;
+        let addr = self.pop_ptr_or(state, span, word)?;
         let (ap, off) = self
             .mmio_target(addr)
             .ok_or_else(|| Self::device_err(span, None))?;
@@ -1150,7 +1488,11 @@ impl<'c> Engine<'c> {
 
     fn entry_block(&self, word_idx: usize) -> usize {
         let word = &self.compiled.module.words[word_idx];
-        self.block_index(word, word.entry).unwrap_or(0)
+        // The verifier rejects a word whose entry block id is unresolvable
+        // (EntryBlockNotFound), so this arm is engine-bug-only; routing it to
+        // an impossible cursor makes `step` fault loudly (E9158) instead of
+        // silently entering block 0 (D-W5: no silent defaults).
+        self.block_index(word, word.entry).unwrap_or(usize::MAX)
     }
 
     fn block_index(&self, word: &ir::Word, id: BlockId) -> Option<usize> {
@@ -1162,6 +1504,8 @@ enum StepResult {
     Continue(Cursor),
     Done,
     Trap(TrapCode, Span),
+    /// A contract failure (trap 20, never elidable) carrying the §Q6 detail.
+    Contract(Span, TrapDetail),
     Exit(i64),
     /// A REPL-layer device diagnostic (E9152) — the peripheral rejected the
     /// access (unbound aperture), with the aperture id when known.
@@ -1173,27 +1517,169 @@ fn bits_to_width(bits: u16) -> u8 {
     core::cmp::max(1, bits / 8) as u8
 }
 
-fn pop_int(state: &mut ExecState) -> Result<i64, TrapCode> {
-    match state.stack.pop() {
-        Some(s) => Ok(s.val.as_i64()),
-        None => Err(TrapCode::StackOverflow),
+// ---------------------------------------------------------------------------
+// L2a checked pops (DEC-23): every pop names the value kind it expects; a
+// mismatch is the contract trap with detail. There is no coercing pop left in
+// the engine — the raw-slot accessors on `Value` are display/builtin-surface
+// only (the grep gate pins this).
+// ---------------------------------------------------------------------------
+
+/// Why a checked pop failed: a real underflow (trap 10) or a kind mismatch
+/// (trap 20 with detail).
+enum PopFault {
+    Underflow,
+    Kind(Slot),
+}
+
+fn pop_checked(state: &mut ExecState, want: ValKind) -> Result<Slot, PopFault> {
+    let s = state.stack.pop().ok_or(PopFault::Underflow)?;
+    if s.val.kind() != want {
+        return Err(PopFault::Kind(s));
+    }
+    Ok(s)
+}
+
+/// A pop that accepts any kind — depth is still checked (underflow → trap 10).
+fn pop_any(state: &mut ExecState) -> Result<Slot, PopFault> {
+    state.stack.pop().ok_or(PopFault::Underflow)
+}
+
+impl<'c> Engine<'c> {
+    /// Convert a pop failure into the step result: underflow keeps the frozen
+    /// stack-error numeric (trap 10); a kind mismatch is trap 20 with the
+    /// op's span and the §Q6 detail (which word, declared what, actual cell).
+    fn pop_fault(&self, f: PopFault, span: Span, word: &ir::Word, want: ValKind) -> StepResult {
+        match f {
+            PopFault::Underflow => StepResult::Trap(TrapCode::StackOverflow, span),
+            PopFault::Kind(s) => StepResult::Contract(
+                span,
+                TrapDetail {
+                    kind: DetailKind::SigMismatch,
+                    word: word.name.as_bytes().to_vec(),
+                    declared: want.name().to_vec(),
+                    actual: vec![cell_of(word, s)],
+                },
+            ),
+        }
+    }
+
+    /// Checked pointer pop for the load/store/mmio helpers.
+    fn pop_ptr_or(
+        &self,
+        state: &mut ExecState,
+        span: Span,
+        word: &ir::Word,
+    ) -> Result<u64, StepResult> {
+        match pop_checked(state, ValKind::Ptr) {
+            Ok(s) => match s.val {
+                Value::Ptr(p) => Ok(p),
+                _ => unreachable!("pop_checked(Ptr) returned a non-pointer"),
+            },
+            Err(f) => Err(self.pop_fault(f, span, word, ValKind::Ptr)),
+        }
+    }
+
+    /// Checked integer pop for the load/store/mmio helpers.
+    fn pop_int_or(
+        &self,
+        state: &mut ExecState,
+        span: Span,
+        word: &ir::Word,
+    ) -> Result<i64, StepResult> {
+        match pop_checked(state, ValKind::Int) {
+            Ok(s) => match s.val {
+                Value::Int(v) => Ok(v),
+                _ => unreachable!("pop_checked(Int) returned a non-int"),
+            },
+            Err(f) => Err(self.pop_fault(f, span, word, ValKind::Int)),
+        }
+    }
+
+    /// L2b (DEC-23): at a block entry, the runtime top-of-stack types must
+    /// equal the block's checked `entry_stack` (types + min depth). Ids are
+    /// consistent at every call site of this helper: branch targets live in
+    /// the executing word, and a callee's inputs were just retagged into its
+    /// table. A mismatch is unreachable from verified IR (§Q7) — an engine
+    /// bug, surfaced as E9158 (page-fail), never a student-facing trap.
+    fn check_block_entry(
+        &self,
+        word_idx: usize,
+        block_idx: usize,
+        state: &ExecState,
+        span: Span,
+    ) -> Result<(), StepResult> {
+        let word = &self.compiled.module.words[word_idx];
+        let Some(block) = word.blocks.get(block_idx) else {
+            // A bad cursor faults in `step` immediately after; nothing extra
+            // to check here.
+            return Ok(());
+        };
+        let n = block.entry_stack.len();
+        if state.stack.len() < n {
+            return Err(StepResult::Fault(Fault::internal(
+                span,
+                b"block entry below its checked entry-stack depth (engine bug; see the plan, Q7)",
+            )));
+        }
+        let base = state.stack.len() - n;
+        for (i, want) in block.entry_stack.iter().enumerate() {
+            if state.stack[base + i].ty != *want {
+                return Err(StepResult::Fault(Fault::internal(
+                    span,
+                    b"block-entry stack types diverge from the checked IR (engine bug; see the plan, Q7)",
+                )));
+            }
+        }
+        Ok(())
     }
 }
 
-fn pop_ptr(state: &mut ExecState) -> Result<u64, TrapCode> {
-    match state.stack.pop() {
-        Some(s) => Ok(s.val.as_u64()),
-        None => Err(TrapCode::StackOverflow),
+/// One stack cell for a `TrapDetail`/debug payload, rendered through the
+/// word's own type table (I-8: engine-derived, never reconstructed).
+fn cell_of(word: &ir::Word, s: Slot) -> StackCell {
+    StackCell {
+        ty_name: type_name_of(word, s.ty),
+        value_hex: s.val.hex(),
     }
 }
 
-fn pop_slot(state: &mut ExecState) -> Result<Slot, TrapCode> {
-    state.stack.pop().ok_or(TrapCode::StackOverflow)
+/// The atom name of a word-local `TypeId` (or `?` — never a guess). Public:
+/// the debug projection renders through the same name resolution (I-11).
+pub fn type_name_of(word: &ir::Word, ty: ir::TypeId) -> Vec<u8> {
+    word.types
+        .get(ty.0 as usize)
+        .map(|a| a.as_bytes().to_vec())
+        .unwrap_or_else(|| b"?".to_vec())
 }
 
-fn pop_truthy(state: &mut ExecState) -> Result<bool, TrapCode> {
-    match state.stack.pop() {
-        Some(s) => Ok(s.val.truthy()),
-        None => Err(TrapCode::StackOverflow),
+/// The word's declared signature as canonical `( in -- out )` text (the §5.3
+/// `declared` field; the same shape `parse_word_sig` accepts).
+pub fn sig_text_of(word: &ir::Word) -> Vec<u8> {
+    let mut out = alloc::vec::Vec::new();
+    out.extend_from_slice(b"( ");
+    for i in 0..word.sig.in_len as usize {
+        if i != 0 {
+            out.push(b' ');
+        }
+        out.extend_from_slice(&type_name_of(word, word.sig.inputs[i]));
     }
+    out.extend_from_slice(b" --");
+    if word.sig.out_len > 0 {
+        out.push(b' ');
+    }
+    for i in 0..word.sig.out_len as usize {
+        if i != 0 {
+            out.push(b' ');
+        }
+        out.extend_from_slice(&type_name_of(word, word.sig.outputs[i]));
+    }
+    out.extend_from_slice(b" )");
+    out
+}
+
+/// The top `cap` stack cells, bottom-first within the window (for a
+/// `TrapDetail.actual`).
+fn top_cells(state: &ExecState, word: &ir::Word, cap: usize) -> Vec<StackCell> {
+    let start = state.stack.len().saturating_sub(cap);
+    state.stack[start..].iter().map(|&s| cell_of(word, s)).collect()
 }

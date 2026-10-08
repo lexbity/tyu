@@ -259,7 +259,8 @@ fn journal_reversal_is_lifo() {
     assert_eq!(h0, 0);
     let (p0, _) = heap.region_alloc(0, 16).unwrap();
 
-    let mut state = ExecState::in_session(Vec::new(), heap, Fuel::new(1000), false);
+    let mut state =
+    ExecState::in_session(Vec::new(), heap, Fuel::new(1000), false, Journal::new(), Vec::new());
     let mut journal = Journal::new();
     // Simulated phrase effects, in execution order: store, create,
     // store (overwrites region 0's bytes), destroy.
@@ -460,4 +461,251 @@ fn mmio_session_fault_rolls_back_the_register() {
         cells[0].value_hex, b"0x0000000000000007",
         "the faulted store (A=7) is a peripheral effect — it persists across the rollback (DEC-6)"
     );
+}
+
+// ---------------------------------------------------------------------------
+// W1 L2 enforcement (DEC-23), engine-level: the failure classes the
+// typechecker cannot produce are driven through hand-built IR via
+// `Compiled::for_engine` — these pin the contract traps as defense-in-depth
+// and the L2b divergence as an E9158 engine bug (never a student trap).
+// ---------------------------------------------------------------------------
+
+use wasm_repl::engine::{DetailKind, Engine, ExecState, Outcome};
+use wasm_repl::compile::Compiled;
+
+/// A hand-built IR word with the standard 7-prim type table prefix (the
+/// irgen seeding order: empty, i64, bool, str, ptr, ptr_mut, mmio).
+fn hand_word(
+    name: &[u8],
+    inputs: &[ir::TypeId],
+    outputs: &[ir::TypeId],
+    blocks: Vec<(ir::BlockId, Vec<ir::TypeId>, Vec<ir::OpKind>)>,
+) -> ir::Word {
+    use frontend::fixed::FixedVec;
+    let mut types: FixedVec<ir::Atom, 64> = FixedVec::new();
+    for a in [
+        ir::AT_EMPTY,
+        ir::AT_I64,
+        ir::AT_BOOL,
+        ir::AT_STR,
+        ir::AT_PTR,
+        ir::AT_PTR_MUT,
+        ir::AT_MMIO,
+    ] {
+        types.push(a).expect("prim table");
+    }
+    let mut type_sizes: FixedVec<u32, 64> = FixedVec::new();
+    let mut subtype_bases: FixedVec<ir::TypeId, 64> = FixedVec::new();
+    for _ in 0..7 {
+        type_sizes.push(0).expect("sizes");
+        subtype_bases.push(ir::TY_EMPTY).expect("bases");
+    }
+    let mut sig = ir::Sig::empty();
+    sig.in_len = inputs.len() as u8;
+    sig.out_len = outputs.len() as u8;
+    for (i, t) in inputs.iter().enumerate() {
+        sig.inputs[i] = *t;
+    }
+    for (i, t) in outputs.iter().enumerate() {
+        sig.outputs[i] = *t;
+    }
+    let mut bs: FixedVec<ir::Block, 16> = FixedVec::new();
+    for (id, entry, ops) in blocks {
+        let mut es: FixedVec<ir::TypeId, 32> = FixedVec::new();
+        for t in &entry {
+            es.push(*t).expect("entry stack");
+        }
+        let mut bos: FixedVec<ir::Op, 96> = FixedVec::new();
+        for k in ops {
+            bos.push(ir::Op {
+                kind: k,
+                span: ir::Span::new(0, 0),
+            })
+            .expect("ops");
+        }
+        bs.push(ir::Block {
+            id,
+            entry_stack: es,
+            ops: bos,
+        })
+        .expect("blocks");
+    }
+    ir::Word {
+        name: ir::Atom::new(name).unwrap(),
+        sig,
+        performs: ir::EffectSet::empty(),
+        requires: ir::CapSet::empty(),
+        bound: ir::StackBound::ID,
+        entry: ir::BlockId(0),
+        types,
+        type_sizes,
+        type_classes: FixedVec::new(),
+        apertures: FixedVec::new(),
+        subtype_bases,
+        blocks: bs,
+    }
+}
+
+fn hand_module(words: Vec<ir::Word>) -> Compiled {
+    Compiled::for_engine(
+        ir::Module {
+            name: ir::Atom::new(b"hand").unwrap(),
+            words,
+            apertures: frontend::fixed::FixedVec::new(),
+        },
+        wasm_repl::compile::X86_64_LINUX_SPEC,
+        Vec::new(),
+    )
+}
+
+/// L2a (DEC-23): a kind-mismatched operand is trap 20 with the op's span and
+/// the sig-mismatch detail — never the coercion the old `as_i64` pop did.
+/// The checker rejects this program (bools into `+`); only hand-built IR
+/// reaches the arm, which is what makes the check defense-in-depth.
+#[test]
+fn l2a_kind_mismatch_is_trap_20_with_detail() {
+    let compiled = hand_module(vec![hand_word(
+        b"main",
+        &[],
+        &[],
+        vec![(
+            ir::BlockId(0),
+            vec![],
+            vec![ir::OpKind::ConstBool(true), ir::OpKind::ConstBool(true), ir::OpKind::AddI64],
+        )],
+    )]);
+    let mut state = ExecState::new(&compiled);
+    let outcome = Engine::new(&compiled).run(b"main", &mut state, &mut wasm_repl::periph::Disabled);
+    let Outcome::Trap { code, detail, .. } = outcome else {
+        panic!("expected a trap, got {outcome:?}");
+    };
+    assert_eq!(ir::trap_code_u32(code), 20);
+    let d = detail.expect("L2a carries the Q6 detail");
+    assert_eq!(d.kind, DetailKind::SigMismatch);
+    assert_eq!(d.declared, b"i64");
+    assert_eq!(d.actual.len(), 1, "the offending cell");
+    assert_eq!(d.actual[0].ty_name, b"bool");
+}
+
+/// L2c (DEC-23): a per-slot input mismatch at `Call` is trap 20 with the
+/// callee's word name, declared signature, and the actual argument cells.
+/// A depth shortfall stays trap 10.
+#[test]
+fn l2c_call_slot_mismatch_is_trap_20_with_detail() {
+    let callee = hand_word(
+        b"add-two",
+        &[ir::TY_I64, ir::TY_I64],
+        &[ir::TY_I64, ir::TY_I64],
+        vec![(ir::BlockId(0), vec![ir::TY_I64, ir::TY_I64], vec![ir::OpKind::AddI64])],
+    );
+    let sig = callee.sig;
+    let main = hand_word(
+        b"main",
+        &[],
+        &[],
+        vec![(
+            ir::BlockId(0),
+            vec![],
+            vec![
+                ir::OpKind::ConstBool(true),
+                ir::OpKind::ConstI64(5),
+                ir::OpKind::Call {
+                    name: ir::Atom::new(b"add-two").unwrap(),
+                    sig,
+                    performs: ir::EffectSet::empty(),
+                    requires: ir::CapSet::empty(),
+                    bound: ir::StackBound::ID,
+                },
+            ],
+        )],
+    );
+    let compiled = hand_module(vec![main, callee]);
+    let mut state = ExecState::new(&compiled);
+    let outcome = Engine::new(&compiled).run(b"main", &mut state, &mut wasm_repl::periph::Disabled);
+    let Outcome::Trap { code, detail, .. } = outcome else {
+        panic!("expected a trap, got {outcome:?}");
+    };
+    assert_eq!(ir::trap_code_u32(code), 20);
+    let d = detail.expect("L2c carries the Q6 detail");
+    assert_eq!(d.word, b"add-two");
+    assert_eq!(d.declared, b"( i64 i64 -- i64 i64 )");
+    assert_eq!(d.actual.len(), 2);
+    assert_eq!(d.actual[0].ty_name, b"bool", "slot 0 is the mismatch");
+}
+
+#[test]
+fn l2c_depth_shortfall_stays_trap_10() {
+    let callee = hand_word(
+        b"add-two",
+        &[ir::TY_I64, ir::TY_I64],
+        &[ir::TY_I64],
+        vec![(ir::BlockId(0), vec![ir::TY_I64, ir::TY_I64], vec![ir::OpKind::AddI64])],
+    );
+    let sig = callee.sig;
+    let main = hand_word(
+        b"main",
+        &[],
+        &[],
+        vec![(
+            ir::BlockId(0),
+            vec![],
+            vec![ir::OpKind::Call {
+                name: ir::Atom::new(b"add-two").unwrap(),
+                sig,
+                performs: ir::EffectSet::empty(),
+                requires: ir::CapSet::empty(),
+                bound: ir::StackBound::ID,
+            }],
+        )],
+    );
+    let compiled = hand_module(vec![main, callee]);
+    let mut state = ExecState::new(&compiled);
+    let outcome = Engine::new(&compiled).run(b"main", &mut state, &mut wasm_repl::periph::Disabled);
+    let Outcome::Trap { code, detail, .. } = outcome else {
+        panic!("expected a trap, got {outcome:?}");
+    };
+    assert_eq!(code, ir::TrapCode::StackOverflow, "underflow is trap 10");
+    assert!(detail.is_none());
+}
+
+/// L2b (DEC-23): a block-entry divergence from the checked `entry_stack` is
+/// `Outcome::Internal` / E9158 — an engine bug, page-fail, never a
+/// student-facing contract failure (the Q7 reachability rationale).
+#[test]
+fn l2b_entry_divergence_is_internal_e9158() {
+    // A target block whose checked entry stack says `bool` — no verified
+    // program can branch into it with an i64 (the checker enforces the
+    // branch contract); the divergence is manufactured by hand.
+    let mut main = hand_word(
+        b"main",
+        &[],
+        &[],
+        vec![
+            (ir::BlockId(0), vec![], vec![ir::OpKind::Br { target: ir::BlockId(1) }]),
+            (ir::BlockId(1), vec![ir::TY_BOOL], vec![ir::OpKind::Ret]),
+        ],
+    );
+    let _ = &mut main;
+    let compiled = hand_module(vec![main]);
+    let mut state = ExecState::new(&compiled);
+    let outcome = Engine::new(&compiled).run(b"main", &mut state, &mut wasm_repl::periph::Disabled);
+    let Outcome::Internal { fault, .. } = outcome else {
+        panic!("expected an internal fault, got {outcome:?}");
+    };
+    assert_eq!(fault.code, wasm_repl::diag::code::E9158_INTERNAL);
+}
+
+/// D-W5: the fabricated-value paths are gone — `Dup` on an empty stack and a
+/// `LocalGet` of a missing local are real underflows (trap 10), session-level.
+#[test]
+fn fabricated_value_paths_are_traps_session_level() {
+    let mut sess = session();
+    // `dup` on an empty persistent stack: the checker admits the phrase
+    // (dup's declared input is assumed ambient), the engine now faults the
+    // underflow instead of fabricating a zero.
+    let st = submit(&mut sess, b"dup");
+    assert!(is_trap_10(&st), "expected trap 10, got {st:?}");
+    // After a drop, `dup` on an empty stack faults the same way.
+    let st2 = submit(&mut sess, b"1 drop dup");
+    assert!(is_trap_10(&st2), "expected trap 10, got {st2:?}");
 }

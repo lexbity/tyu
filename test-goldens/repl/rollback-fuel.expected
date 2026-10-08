@@ -11,7 +11,7 @@ stack: -
 0 reloop
 status: fuel E9150
 stack: -
-trace: C{reloop:1}C{reloop:2}C{reloop:3}C{reloop:4}C{reloop:5}C{reloop:6}C{reloop:7}C{reloop:8}C{reloop:9}C{reloop:10}F
+trace: v1 spec=x86_64-unknown-linux-gnu src=93eb72c7f6ef0b796d78150cbb35dc380e04dfe7db52a45a9f2233a35b35821a fuel=50|C{reloop:1}C{reloop:2}C{reloop:3}C{reloop:4}C{reloop:5}C{reloop:6}C{reloop:7}C{reloop:8}C{reloop:9}C{reloop:10}F
 ---
 :stack
 stack: -
@@ -22,7 +22,7 @@ fuel: 100000
 0 reloop
 status: trapped 10
 stack: -
-trace: C{reloop:1}C{reloop:2}C{reloop:3}C{reloop:4}C{reloop:5}C{reloop:6}C{reloop:7}C{reloop:8}C{reloop:9}C{reloop:10}C{reloop:11}C{reloop:12}C{reloop:13}C{reloop:14}C{reloop:15}C{reloop:16}C{reloop:17}C{reloop:18}C{reloop:19}C{reloop:20}C{reloop:21}C{reloop:22}C{reloop:23}C{reloop:24}C{reloop:25}C{reloop:26}C{reloop:27}C{reloop:28}C{reloop:29}C{reloop:30}C{reloop:31}C{reloop:32}TStackOverflowC{…222}
+trace: v1 spec=x86_64-unknown-linux-gnu src=93eb72c7f6ef0b796d78150cbb35dc380e04dfe7db52a45a9f2233a35b35821a fuel=100000|C{reloop:1}C{reloop:2}C{reloop:3}C{reloop:4}C{reloop:5}C{reloop:6}C{reloop:7}C{reloop:8}C{reloop:9}C{reloop:10}C{reloop:11}C{reloop:12}C{reloop:13}C{reloop:14}C{reloop:15}C{reloop:16}C{reloop:17}C{reloop:18}C{reloop:19}C{reloop:20}C{reloop:21}C{reloop:22}C{reloop:23}C{reloop:24}C{reloop:25}C{reloop:26}C{reloop:27}C{reloop:28}C{reloop:29}C{reloop:30}C{reloop:31}C{reloop:32}TStackOverflowC{…222}
 ---
 :stack
 stack: -

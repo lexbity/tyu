@@ -7,7 +7,7 @@ fuel: 10
 0 @repeat 40 [1 + ]
 status: fuel E9150
 stack: -
-trace: F
+trace: v1 spec=x86_64-unknown-linux-gnu src=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 fuel=10|F
 ---
 :stack
 stack: -
@@ -16,7 +16,7 @@ stack: -
 step: 500
 status: ok
 stack: i64:0x0000000000000028
-trace: D0
+trace: v1 spec=x86_64-unknown-linux-gnu src=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 fuel=500|D0
 ---
 :stack
 stack: i64:0x0000000000000028
@@ -32,30 +32,30 @@ fuel: 10
 @repeat 40 [1 + ]
 status: fuel E9150
 stack: i64:0x0000000000000028
-trace: F
+trace: v1 spec=x86_64-unknown-linux-gnu src=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 fuel=10|F
 ---
 :step 20
 step: 20
 status: fuel E9150
 stack: i64:0x0000000000000028
-trace: F
+trace: v1 spec=x86_64-unknown-linux-gnu src=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 fuel=20|F
 ---
 :step 20
 step: 20
 status: fuel E9150
 stack: i64:0x0000000000000028
-trace: F
+trace: v1 spec=x86_64-unknown-linux-gnu src=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 fuel=20|F
 ---
 0 @repeat 40 [1 + ]
 status: fuel E9150
 stack: i64:0x0000000000000028
-trace: F
+trace: v1 spec=x86_64-unknown-linux-gnu src=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 fuel=10|F
 ---
 :step 20
 step: 20
 status: fuel E9150
 stack: i64:0x0000000000000028
-trace: F
+trace: v1 spec=x86_64-unknown-linux-gnu src=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 fuel=20|F
 ---
 : double ( i64 -- i64 ) dup + ;
 status: ok

@@ -11,12 +11,12 @@ stack: -
 21 double
 status: ok
 stack: i64:0x000000000000002a
-trace: C{double:1}D0
+trace: v1 spec=x86_64-unknown-linux-gnu src=fcbe34acf48724741c2143073fbb47dba114902beb04fadd2f4c17145724add3 fuel=100000|C{double:1}D0
 ---
 42 double
 status: ok
 stack: i64:0x000000000000002a i64:0x0000000000000054
-trace: C{double:1}D0
+trace: v1 spec=x86_64-unknown-linux-gnu src=fcbe34acf48724741c2143073fbb47dba114902beb04fadd2f4c17145724add3 fuel=100000|C{double:1}D0
 ---
 :stack
 stack: i64:0x000000000000002a i64:0x0000000000000054

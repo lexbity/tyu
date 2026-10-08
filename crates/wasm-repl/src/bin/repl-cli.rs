@@ -143,6 +143,36 @@ fn status_line(
     if let Some(t) = trace {
         let _ = writeln!(s, "trace: {}", t.normalize());
     }
+    // The Q6/DEC-22 contract detail, as trailing fields ONLY when present
+    // (existing goldens stay byte-stable except the contract-trap ones).
+    if let Status::Trapped {
+        detail: Some(d), ..
+    } = status
+    {
+        let _ = write!(
+            s,
+            "detail: {} word={} declared={} actual=",
+            String::from_utf8_lossy(d.kind.name()),
+            String::from_utf8_lossy(&d.word),
+            String::from_utf8_lossy(&d.declared),
+        );
+        if d.actual.is_empty() {
+            let _ = writeln!(s, "-");
+        } else {
+            let rendered: Vec<String> = d
+                .actual
+                .iter()
+                .map(|c| {
+                    format!(
+                        "{}:{}",
+                        String::from_utf8_lossy(&c.ty_name),
+                        String::from_utf8_lossy(&c.value_hex)
+                    )
+                })
+                .collect();
+            let _ = writeln!(s, "{}", rendered.join(" "));
+        }
+    }
     s
 }
 
@@ -280,7 +310,7 @@ fn replay(session: &mut ReplSession, search: &[Arc<MemTable>], script: &str) -> 
             // Debug-only: print the last-good `--emit=ir` text verbatim.
             if let Some(c) = session.compiled() {
                 let mut rendered = Vec::new();
-                let mut sink = Sink(&mut rendered);
+                let mut sink = wasm_repl::session::VecSink(&mut rendered);
                 wasm_repl::render_ir(&mut sink, &c.module);
                 let _ = writeln!(transcript, "{}", String::from_utf8_lossy(&rendered));
             }
@@ -333,16 +363,222 @@ fn ir_hash(session: &ReplSession) -> String {
         return "none".to_string();
     };
     let mut rendered = Vec::new();
-    let mut sink = Sink(&mut rendered);
+    let mut sink = wasm_repl::session::VecSink(&mut rendered);
     wasm_repl::render_ir(&mut sink, &c.module);
     format!("{:016x}", fnv1a(&rendered))
 }
 
-struct Sink<'a>(&'a mut Vec<u8>);
-impl frontend::parse::Output for Sink<'_> {
-    fn write(&mut self, bytes: &[u8]) {
-        self.0.extend_from_slice(bytes);
+
+// ---------------------------------------------------------------------------
+// Debug-dump JSON (PLAN-WASM-2 W1, FR-27): per submission, the exact snapshot
+// payloads the wasm ABI exports (`debug` projections) — the G57 fixture
+// source. Hand-rolled deterministic JSON encoder; std allowed in the bin.
+// ---------------------------------------------------------------------------
+
+fn json_escape(b: &[u8]) -> String {
+    let mut s = String::from("\"");
+    for &c in b {
+        match c {
+            b'"' => s.push_str("\\\""),
+            b'\\' => s.push_str("\\\\"),
+            b'\n' => s.push_str("\\n"),
+            b'\r' => s.push_str("\\r"),
+            b'\t' => s.push_str("\\t"),
+            0x20..=0x7e => s.push(c as char),
+            _ => s.push_str(&format!("\\u{:04x}", c)),
+        }
     }
+    s.push('"');
+    s
+}
+
+fn json_cell(c: &wasm_repl::StackCell) -> String {
+    format!(
+        "{{\"ty_name\":{},\"value_hex\":{}}}",
+        json_escape(&c.ty_name),
+        json_escape(&c.value_hex)
+    )
+}
+
+fn json_span(sp: frontend::span::Span) -> String {
+    format!(
+        "{{\"start\":{},\"len\":{}}}",
+        sp.start,
+        sp.end.saturating_sub(sp.start)
+    )
+}
+
+fn json_detail(d: &wasm_repl::TrapDetail) -> String {
+    let actual: Vec<String> = d.actual.iter().map(json_cell).collect();
+    format!(
+        "{{\"kind\":{},\"word\":{},\"declared\":{},\"actual\":[{}]}}",
+        json_escape(d.kind.name()),
+        json_escape(&d.word),
+        json_escape(&d.declared),
+        actual.join(",")
+    )
+}
+
+fn json_event(e: &wasm_repl::debug::TraceEventView) -> String {
+    use wasm_repl::debug::TraceEventView as Ev;
+    match e {
+        Ev::Output { start, len } => {
+            format!("{{\"kind\":\"output\",\"start\":{start},\"len\":{len}}}")
+        }
+        Ev::Periph {
+            ap,
+            off,
+            width,
+            val,
+            is_write,
+        } => format!(
+            "{{\"kind\":\"periph\",\"ap\":{ap},\"off\":{off},\"width\":{width},\"val\":{val:#x},\"is_write\":{is_write}}}"
+        ),
+        Ev::Call { word, depth } => format!(
+            "{{\"kind\":\"call\",\"word\":{},\"depth\":{}}}",
+            json_escape(word),
+            depth
+        ),
+        Ev::Trap { code, span, detail } => {
+            let d = detail
+                .as_ref()
+                .map(json_detail)
+                .unwrap_or_else(|| "null".to_string());
+            format!(
+                "{{\"kind\":\"trap\",\"code\":{code},\"span\":{},\"detail\":{d}}}",
+                json_span(*span)
+            )
+        }
+        Ev::Device { code } => format!("{{\"kind\":\"device\",\"code\":{code}}}"),
+        Ev::Internal { code } => format!("{{\"kind\":\"internal\",\"code\":{code}}}"),
+        Ev::Fuel => "{\"kind\":\"fuel\"}".to_string(),
+        Ev::Done { exit } => format!("{{\"kind\":\"done\",\"exit\":{exit}}}"),
+    }
+}
+
+fn status_word_json(status: Option<&Status>) -> String {
+    match status {
+        None => "fresh".to_string(),
+        Some(st) => status_word(st),
+    }
+}
+
+/// The debug-dump mode: replay a session script, printing after every
+/// submission the §5.2 snapshot JSON (frames / trace events / words /
+/// regions / status) — the same `debug` projections the wasm ABI wraps
+/// (R-E: one core, both surfaces, I-11).
+fn debug_dump(session: &mut ReplSession, search: &[Arc<MemTable>], script: &str) -> String {
+    use std::fmt::Write;
+    let refs: Vec<&dyn SourceTable> = search
+        .iter()
+        .map(|t| t.as_ref() as &dyn SourceTable)
+        .collect();
+    let mut out = String::new();
+    let _ = writeln!(out, "{{\"v\":1,\"engine\":{}}}", wasm_repl::ENGINE_VERSION);
+    let mut submit_index = 0usize;
+    for raw in script.lines() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line.starts_with(':')
+            && [
+                ":fuel", ":elide", ":noelide", ":step", ":stack", ":ir", ":irdump", ":reset",
+            ]
+            .iter()
+            .any(|d| line.starts_with(d))
+        {
+            // A session directive (no submission to dump).
+            continue;
+        }
+        let expanded = expand_line(line);
+        let line_display = expanded.trim();
+        if line_display.is_empty() {
+            continue;
+        }
+        let _result = session.transactional_submit(line_display.as_bytes(), &refs);
+        submit_index += 1;
+
+        let compiled = session.compiled();
+        let frames: Vec<String> = match session.suspended_state().zip(compiled) {
+            Some((st, c)) => wasm_repl::debug::frames(c, st)
+                .iter()
+                .map(|f| {
+                    format!(
+                        "{{\"index\":{},\"word\":{},\"sig\":{},\"call_span\":{},\"locals\":[{}]}}",
+                        f.index,
+                        json_escape(&f.word),
+                        json_escape(&f.sig),
+                        json_span(f.call_span),
+                        f.locals
+                            .iter()
+                            .map(json_cell)
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    )
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+        let events: Vec<String> = match session.last_trace() {
+            Some(t) => wasm_repl::debug::trace_events(t)
+                .iter()
+                .map(json_event)
+                .collect(),
+            None => Vec::new(),
+        };
+        let words: Vec<String> = match compiled {
+            Some(c) => wasm_repl::debug::words(c, session.source())
+                .iter()
+                .map(|w| {
+                    let origin = match &w.origin {
+                        wasm_repl::debug::WordOrigin::Session { def_span } => format!(
+                            "{{\"origin\":\"session\",\"def_span\":{}}}",
+                            json_span(*def_span)
+                        ),
+                        wasm_repl::debug::WordOrigin::Sysroot { path } => format!(
+                            "{{\"origin\":\"sysroot\",\"path\":{}}}",
+                            json_escape(path)
+                        ),
+                    };
+                    format!(
+                        "{{\"name\":{},\"sig\":{},\"effects\":{},\"origin\":{}}}",
+                        json_escape(&w.name),
+                        json_escape(&w.sig),
+                        json_escape(&w.effects),
+                        origin
+                    )
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+        let regions: Vec<String> = wasm_repl::debug::regions(session.heap())
+            .iter()
+            .filter(|r| r.alive)
+            .map(|r| {
+                format!(
+                    "{{\"id\":{},\"off\":{:#x},\"len\":{:#x},\"cursor\":{:#x},\"kind\":{},\"alive\":{}}}",
+                    r.id, r.off, r.len, r.cursor, r.kind, r.alive
+                )
+            })
+            .collect();
+        let st = wasm_repl::debug::status(session.stack_cells().len(), compiled, session.fuel());
+        let _ = writeln!(
+            out,
+            "{{\"submit\":{},\"source\":{},\"status\":{},\"stack_depth\":{},\"words_count\":{},\"fuel\":{},\"frames\":[{}],\"trace_events\":[{}],\"words\":[{}],\"regions\":[{}]}}",
+            submit_index,
+            json_escape(line_display.as_bytes()),
+            json_escape(status_word_json(session.last_status()).as_bytes()),
+            st.stack_depth,
+            st.word_count,
+            st.fuel_ops,
+            frames.join(","),
+            events.join(","),
+            words.join(","),
+            regions.join(","),
+        );
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -438,8 +674,15 @@ fn main() {
                 print!("{transcript}");
             }
         }
+        "debug-dump" => {
+            let file = rest.first().expect("usage: repl-cli debug-dump <session>");
+            let script = std::fs::read_to_string(file).expect("read session");
+            let mut session = ReplSession::new(SessionOpts::default());
+            let search = sysroot_search();
+            print!("{}", debug_dump(&mut session, &search, &script));
+        }
         other => {
-            eprintln!("usage: repl-cli (run|replay|pack-sysroot) ... ; got '{other}'");
+            eprintln!("usage: repl-cli (run|replay|debug-dump|pack-sysroot) ... ; got '{other}'");
             std::process::exit(2);
         }
     }

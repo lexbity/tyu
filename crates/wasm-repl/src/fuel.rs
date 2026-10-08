@@ -37,4 +37,9 @@ impl Fuel {
         self.0 -= 1;
         true
     }
+
+    /// The remaining units (the trace header's `fuel` field, FR-35).
+    pub fn remaining(self) -> u64 {
+        self.0
+    }
 }

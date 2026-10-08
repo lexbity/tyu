@@ -22,12 +22,13 @@ elide: off
 7 add-safely drop
 status: trapped 20
 stack: -
-trace: C{add-safely:1}C{no-sevens:2}TContractFail
+trace: v1 spec=x86_64-unknown-linux-gnu src=d30da64189b5c9208e157f8c8cdc9d0c2fc98756a67186fd313ecbd26159df05 fuel=100000|C{add-safely:1}C{no-sevens:2}TContractFail[sig-mismatch add-safely]
+detail: sig-mismatch word=add-safely declared=( i64 -- i64 ) actual=i64:0x0000000000000007
 ---
 150 as Percent drop
 status: trapped 21
 stack: -
-trace: TSubtypeFail
+trace: v1 spec=x86_64-unknown-linux-gnu src=d30da64189b5c9208e157f8c8cdc9d0c2fc98756a67186fd313ecbd26159df05 fuel=100000|TSubtypeFail
 ---
 :elide
 elide: on
@@ -35,12 +36,12 @@ elide: on
 7 add-safely drop
 status: ok
 stack: -
-trace: C{add-safely:1}C{no-sevens:2}D0
+trace: v1 spec=x86_64-unknown-linux-gnu src=d30da64189b5c9208e157f8c8cdc9d0c2fc98756a67186fd313ecbd26159df05 fuel=100000|C{add-safely:1}C{no-sevens:2}D0
 ---
 150 as Percent drop
 status: trapped 21
 stack: -
-trace: TSubtypeFail
+trace: v1 spec=x86_64-unknown-linux-gnu src=d30da64189b5c9208e157f8c8cdc9d0c2fc98756a67186fd313ecbd26159df05 fuel=100000|TSubtypeFail
 ---
 :stack
 stack: -

@@ -11,7 +11,7 @@ use ir::TrapCode;
 use crate::engine::ExecState;
 use crate::heap::HeapFault;
 use crate::journal::Effect;
-use crate::value::Slot;
+use crate::value::{Slot, ValKind};
 
 /// What a builtin signals instead of a normal return.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -46,6 +46,40 @@ impl Builtin {
             b"platform.mem.region-destroy" => Some(Builtin::RegionDestroy),
             _ => None,
         }
+    }
+
+    /// The expected value kinds of the builtin's inputs, in pop order (the
+    /// L2c argument contract the engine checks before execution — DEC-23).
+    /// The internal pops below remain raw-slot reads: the kind contract is
+    /// enforced here, once, at the call boundary.
+    pub fn arg_kinds(&self) -> &'static [ValKind] {
+        match self {
+            Builtin::TestioWriteByte => &[ValKind::Int],
+            Builtin::TestioWriteStr => &[ValKind::Ptr],
+            Builtin::TestioExit => &[ValKind::Int],
+            Builtin::RegionCreate => &[ValKind::Int],
+            Builtin::RegionAlloc => &[ValKind::Int, ValKind::Int],
+            Builtin::RegionReset => &[ValKind::Int],
+            Builtin::RegionDestroy => &[ValKind::Int],
+        }
+    }
+
+    /// L2c for builtins (DEC-23): the top args' kinds must match
+    /// [`Builtin::arg_kinds`]. `Err(None)` = underflow (trap 10);
+    /// `Err(Some(want))` = the first kind mismatch (trap 20 with detail).
+    /// No values are consumed.
+    pub fn check_args(&self, st: &ExecState) -> Result<(), Option<ValKind>> {
+        let kinds = self.arg_kinds();
+        if st.stack.len() < kinds.len() {
+            return Err(None);
+        }
+        let base = st.stack.len() - kinds.len();
+        for (i, want) in kinds.iter().enumerate() {
+            if st.stack[base + i].val.kind() != *want {
+                return Err(Some(*want));
+            }
+        }
+        Ok(())
     }
 
     /// Execute the builtin against the live state.

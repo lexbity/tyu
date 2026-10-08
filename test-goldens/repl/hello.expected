@@ -7,7 +7,7 @@ fuel: 100000
 1 2 +
 status: ok
 stack: i64:0x0000000000000003
-trace: D0
+trace: v1 spec=x86_64-unknown-linux-gnu src=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 fuel=100000|D0
 ---
 :stack
 stack: i64:0x0000000000000003
@@ -15,7 +15,7 @@ stack: i64:0x0000000000000003
 3 +
 status: ok
 stack: i64:0x0000000000000006
-trace: D0
+trace: v1 spec=x86_64-unknown-linux-gnu src=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 fuel=100000|D0
 ---
 :stack
 stack: i64:0x0000000000000006
@@ -23,7 +23,7 @@ stack: i64:0x0000000000000006
 4 +
 status: ok
 stack: i64:0x000000000000000a
-trace: D0
+trace: v1 spec=x86_64-unknown-linux-gnu src=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 fuel=100000|D0
 ---
 :stack
 stack: i64:0x000000000000000a

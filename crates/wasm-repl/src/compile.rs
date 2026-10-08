@@ -75,6 +75,39 @@ impl Compiled {
     pub fn subtype_range(&self, name: &[u8]) -> Option<&SubtypeRange> {
         self.subtypes.iter().find(|s| s.name == name)
     }
+
+    /// A `Compiled` over an already-built module (W1 engine-level testing:
+    /// the L2a/L2b/L2c failure classes are reachable only through hand-built
+    /// IR the typechecker cannot produce). The dictionary is assembled
+    /// exactly as `compile` does — module words, then the interpreter
+    /// builtins.
+    pub fn for_engine(
+        module: ir::Module,
+        spec: verifier::target::TargetSpec,
+        src: Vec<u8>,
+    ) -> Compiled {
+        let mut dict: Vec<(ir::Atom, DictTarget)> = Vec::new();
+        for (i, w) in module.words.iter().enumerate() {
+            dict.push((w.name, DictTarget::Word(i)));
+        }
+        for name in BUILTIN_NAMES {
+            if let Some(b) = Builtin::from_name(name) {
+                if let Some(atom) = ir::Atom::new(name) {
+                    if !dict.iter().any(|(n, _)| *n == atom) {
+                        dict.push((atom, DictTarget::Builtin(b)));
+                    }
+                }
+            }
+        }
+        Compiled {
+            module,
+            spec,
+            src,
+            apertures: Vec::new(),
+            dict,
+            subtypes: Vec::new(),
+        }
+    }
 }
 
 /// Compile a session source buffer. `search_dirs` are the sysroot/include

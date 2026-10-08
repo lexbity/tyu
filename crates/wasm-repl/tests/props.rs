@@ -211,15 +211,15 @@ proptest! {
     }
 }
 
-/// The aliasing property (R-3 / DEC-15 as amended): EVERY number of
-/// reference copies aliases ONE storage cell. `k` dups of a base address,
-/// then a store through each copy in turn, must leave exactly one memory
-/// cell holding the LAST stored value, and the surviving original reference
-/// must read it back. An engine that duplicates storage per copy (the
-/// eager-copy straw model DEC-15 considered and the corpus rejected) would
-/// leave `k + 1` cells and read a stale value — diverging here by
-/// construction. The G53 aliasing probes pin the same property against the
-/// native goldens; this property pins it over arbitrary shapes.
+// The aliasing property (R-3 / DEC-15 as amended): EVERY number of
+// reference copies aliases ONE storage cell. `k` dups of a base address,
+// then a store through each copy in turn, must leave exactly one memory
+// cell holding the LAST stored value, and the surviving original reference
+// must read it back. An engine that duplicates storage per copy (the
+// eager-copy straw model DEC-15 considered and the corpus rejected) would
+// leave `k + 1` cells and read a stale value — diverging here by
+// construction. The G53 aliasing probes pin the same property against the
+// native goldens; this property pins it over arbitrary shapes.
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(128))]
 
@@ -236,7 +236,7 @@ proptest! {
         // is read back last. (With k = 0 this is the worked single-alias
         // case: dup, store through the copy, load through the original.)
         let mut ops: Vec<SrcOp> = vec![SrcOp::ConstInt(base)];
-        ops.extend(core::iter::repeat(SrcOp::Dup).take(k + 1));
+        ops.extend(core::iter::repeat_n(SrcOp::Dup, k + 1));
         for v in &vals {
             ops.push(SrcOp::ConstInt(*v));
             ops.push(SrcOp::Store);

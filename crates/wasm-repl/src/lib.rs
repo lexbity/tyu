@@ -55,6 +55,7 @@ pub mod frag;
 pub mod abi;
 pub mod builtins;
 pub mod compile;
+pub mod debug;
 pub mod diag;
 pub mod engine;
 pub mod fuel;
@@ -70,7 +71,7 @@ pub mod value;
 
 pub use compile::{compile, Compiled, DictTarget, SourceTable, X86_64_LINUX_SPEC};
 pub use diag::Diag;
-pub use engine::{Engine, ExecState, Outcome};
+pub use engine::{DetailKind, Engine, ExecState, Outcome, TrapDetail};
 pub use fuel::Fuel;
 pub use journal::{Effect, Journal};
 pub use mmio::{apply_write_kind, extract_field, insert_field, ApertureEntry};
@@ -91,7 +92,13 @@ mod transactional_props;
 /// Engine surface version (PLAN-WASM-1 §10): bumped on any change to the
 /// REPL's execution semantics. The browser exposes it for bug reports; the
 /// wasm artifact hash plus this version identify a page's engine exactly.
-pub const ENGINE_VERSION: u32 = 5;
+pub const ENGINE_VERSION: u32 = 6;
+// v6 (PLAN-WASM-2 W1): L2 completed — checked pops (L2a), per-slot Call
+// input contracts + word-local type retagging (L2c), block-entry validation
+// (L2b, E9158); fabricated-value paths deleted; contract traps carry the
+// §Q6/DEC-22 TrapDetail; `tyu.trace/1` gains the FR-35 version+header record;
+// the debug snapshot projections (`debug`) and the pooled phrase buffers
+// (D-W4) land. Correct programs are unaffected (G53 zero-delta is the proof).
 // v5: E9150/E9155/E9157/E9158 diagnostic surfaces, fuel suspension + step
 // (§Q8), heap-reservation rollback reclamation (§7.3), dotted-name phrase
 // calls, module-form submissions, and the wasm abi boundary (P5).

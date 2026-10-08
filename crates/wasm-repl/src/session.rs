@@ -11,7 +11,6 @@
 //! transcripts byte-exactly (G56).
 
 use alloc::boxed::Box;
-use alloc::vec;
 use alloc::vec::Vec;
 use codegen_core::compiled_desc::CompiledDescriptor;
 use core::ops::Range;
@@ -22,14 +21,14 @@ use ir::TrapCode;
 
 use crate::compile::{compile, Compiled, SourceTable};
 use crate::diag::code;
-use crate::engine::{Engine, ExecState, Outcome};
+use crate::engine::{Engine, ExecState, Outcome, TrapDetail};
 use crate::fuel::Fuel;
 use crate::heap::RegionHeap;
-use crate::journal::Effect;
+use crate::journal::{Effect, Journal};
 use crate::periph::{Disabled, Peripheral};
 use crate::phrase::{self, EffectSig};
-use crate::trace::Trace;
-use crate::value::Slot;
+use crate::trace::{Trace, TraceHeader};
+use crate::value::{format_hex, Slot};
 
 /// Session limits (§5, NFR-4), each surfaced as its §7.5 diagnostic. The
 /// data-stack/depth caps live in the engine (`crate::fuel`, L2).
@@ -67,8 +66,14 @@ pub enum Status {
     Ok,
     /// The submission did not compile; the session is untouched.
     CompileError { diag: crate::Diag },
-    /// The phrase ran and trapped (rollback applied; output retained).
-    Trapped { code: TrapCode, span: Span },
+    /// The phrase ran and trapped (rollback applied; output retained). A
+    /// contract failure (trap 20) carries the §Q6/DEC-22 `TrapDetail`; every
+    /// other trap's detail is absent.
+    Trapped {
+        code: TrapCode,
+        span: Span,
+        detail: Option<TrapDetail>,
+    },
     /// The phrase exhausted its fuel (rollback applied; output retained).
     /// The phrase is **suspended** at the exhaustion point: [`ReplSession::step`]
     /// resumes it with a fresh budget (E9150 carries the suspended op's span).
@@ -140,6 +145,19 @@ pub struct ReplSession {
     /// the buffer verbatim (DEC-3's replace rule, applied to whole-module
     /// edits) and later content is spliced before its final `end;`.
     module_form: bool,
+    /// The last submission's phrase trace (the `trace_events` ABI snapshot's
+    /// source — the LAST submission only, DEC-20).
+    last_trace: Option<Trace>,
+    /// The last submission's status (the `last_status` ABI snapshot's source;
+    /// the status bar re-renders without re-submitting).
+    last_status: Option<Status>,
+    /// The pooled phrase journal (D-W4): capacity persists across phrases,
+    /// contents are cleared — the container comes from the session, never a
+    /// fresh allocation per phrase (journal docs are now true).
+    scratch_journal: Journal,
+    /// The pooled diagnostic-output buffer (D-W4): same pooling discipline as
+    /// the journal.
+    out_pool: Vec<u8>,
 }
 
 /// A fuel-suspended phrase (the plan's `SubmitResult.snapshot`, held
@@ -174,6 +192,10 @@ impl ReplSession {
             descriptor: None,
             suspended: None,
             module_form: false,
+            last_trace: None,
+            last_status: None,
+            scratch_journal: Journal::new(),
+            out_pool: Vec::new(),
         }
     }
 
@@ -240,6 +262,31 @@ impl ReplSession {
         self.fuel = self.opts.fuel;
         self.suspended = None;
         self.module_form = false;
+        self.last_trace = None;
+        self.last_status = None;
+    }
+
+    /// The last submission's phrase trace (the `trace_events` snapshot's
+    /// source; `None` when the last submission had no phrase — DEC-20).
+    pub fn last_trace(&self) -> Option<&Trace> {
+        self.last_trace.as_ref()
+    }
+
+    /// The last submission's status (the `last_status` snapshot's source).
+    pub fn last_status(&self) -> Option<&Status> {
+        self.last_status.as_ref()
+    }
+
+    /// The persistent region heap (the `regions` snapshot's source).
+    pub fn heap(&self) -> &RegionHeap {
+        &self.heap
+    }
+
+    /// The live engine state of a fuel-suspended phrase, if any (the
+    /// `frames_snapshot` ABI's live-frames source — post-`step` or
+    /// post-suspension; a completed or rolled-back phrase has no frames, §Q8).
+    pub fn suspended_state(&self) -> Option<&ExecState> {
+        self.suspended.as_ref().map(|s| &s.state)
     }
 
     /// Execute a submission per §7.2/§7.3 (DEC-3..DEC-6).
@@ -368,11 +415,19 @@ impl ReplSession {
                 } else {
                     self.compiled.clone()
                 };
-                phrase_sig = phrase::phrase_effect(phrase, |name| match &lookup_env {
-                    Some(c) if c.module.words.iter().any(|w| w.name.as_bytes() == name) => {
-                        Some(lookup_word_in(c, name))
-                    }
-                    _ => self.lookup_word(name),
+                // The ambient inputs are the ACTUAL persistent stack (the W1
+                // reconciliation — see `phrase_effect`): the synthetic phrase
+                // word's declared inputs are what the runtime stack really
+                // holds, so the checker verifies the phrase against reality.
+                let ambient: Vec<Vec<u8>> = self
+                    .stack
+                    .iter()
+                    .rev()
+                    .map(|s| self.type_name(s.ty))
+                    .collect();
+                phrase_sig = phrase::phrase_effect(phrase, &ambient, |name| match &lookup_env {
+                    Some(c) => lookup_word_in(c, name).or_else(|| self.lookup_word(name)),
+                    None => self.lookup_word(name),
                 });
             }
         }
@@ -403,7 +458,9 @@ impl ReplSession {
             }
         };
 
-        // Commit the definitions (transaction #1 success).
+        // Commit the definitions (transaction #1 success). The trace header
+        // pins the SHA-256 of the exact buffer this submit produced (FR-35).
+        let committed_hash = crate::sysroot::sha256(&committed_source);
         self.source = committed_source;
         self.module_form = committed_module_form;
 
@@ -413,7 +470,10 @@ impl ReplSession {
         self.compiled = Some(built.clone());
 
         if split.phrase.is_none() || split.phrase.as_deref().is_some_and(|p| p.is_empty()) {
-            // Definitions only: no run (DEC-3); stack unchanged.
+            // Definitions only: no run (DEC-3); stack unchanged. The trace
+            // snapshot covers the LAST submission only (DEC-20) — this
+            // submission had no phrase.
+            self.last_trace = None;
             return self.result_for(Status::Ok, ir_now, 0..0, None);
         }
 
@@ -424,22 +484,34 @@ impl ReplSession {
             core::mem::take(&mut self.heap),
             self.fuel,
             self.opts.elide_guards,
+            core::mem::take(&mut self.scratch_journal),
+            core::mem::take(&mut self.out_pool),
         );
         state.intern_compiled(&built);
         let snap = Checkpoint {
             stack: state.stack.clone(),
             fuel: state.fuel,
         };
+        let entry_fuel = state.fuel.remaining();
         let outcome = Engine::new(&built).run(entry, &mut state, &mut *self.periph);
 
-        // The phrase trace is derived from the journal + outcome (§7.4).
-        let journal: Vec<Effect> = state.journal.iter().cloned().collect();
-        let trace = Some(Trace::from_phrase(&journal, &outcome));
+        // The phrase trace is derived from the journal + outcome (§7.4) — a
+        // walk over the journal, never a clone (D-W4). The header pins the
+        // FR-35 facts: schema version, target, exact submitted bytes, budget.
+        let header = TraceHeader {
+            v: crate::trace::TRACE_VERSION,
+            spec: alloc::string::String::from(self.opts.spec.triple),
+            source_hash: hex_32(&committed_hash),
+            fuel: entry_fuel,
+        };
+        let trace = Trace::from_phrase(header, &state.journal, &outcome);
+        self.last_trace = Some(trace.clone());
 
-        let status = self.settle(outcome, state, &snap, out_start);
+        let status = self.settle(outcome, &mut state, &snap, out_start);
         let out_end = self.out_total.len() as u32;
+        self.reclaim_phrase_buffers(&mut state);
 
-        self.result_for(status, ir_now, out_start..out_end, trace)
+        self.result_for(status, ir_now, out_start..out_end, Some(trace))
     }
 
     /// Resume the fuel-suspended phrase with `ops` more ops of budget (§Q6:
@@ -483,17 +555,36 @@ impl ReplSession {
             stack: susp.entry_stack,
             fuel: state.fuel,
         };
+        let entry_fuel = state.fuel.remaining();
         let outcome = Engine::new(&built).resume(&mut state, &mut *self.periph);
 
         // The resumed run's journal continues the suspended phrase's journal,
         // so the trace covers the WHOLE phrase (pre- and post-suspension).
-        let journal: Vec<Effect> = state.journal.iter().cloned().collect();
-        let trace = Some(Trace::from_phrase(&journal, &outcome));
+        // The header's `fuel` is the resumed budget (the trace covers the
+        // whole phrase; the budget shown is the step's).
+        let header = TraceHeader {
+            v: crate::trace::TRACE_VERSION,
+            spec: alloc::string::String::from(self.opts.spec.triple),
+            source_hash: hex_32(&crate::sysroot::sha256(&self.source)),
+            fuel: entry_fuel,
+        };
+        let trace = Trace::from_phrase(header, &state.journal, &outcome);
+        self.last_trace = Some(trace.clone());
 
-        let status = self.settle(outcome, state, &snap, out_start);
+        let status = self.settle(outcome, &mut state, &snap, out_start);
         let out_end = self.out_total.len() as u32;
+        self.reclaim_phrase_buffers(&mut state);
 
-        self.result_for(status, None, out_start..out_end, trace)
+        self.result_for(status, None, out_start..out_end, Some(trace))
+    }
+
+    /// Return the phrase-run buffers to the session pool (D-W4): the journal
+    /// and the diagnostic-output `Vec` keep their capacity across phrases;
+    /// contents are cleared.
+    fn reclaim_phrase_buffers(&mut self, state: &mut ExecState) {
+        state.journal.clear();
+        self.scratch_journal = core::mem::take(&mut state.journal);
+        self.out_pool = core::mem::take(&mut state.out);
     }
 
     /// Commit (or roll back and suspend) a phrase outcome — shared by
@@ -503,12 +594,12 @@ impl ReplSession {
     fn settle(
         &mut self,
         outcome: Outcome,
-        mut state: ExecState,
+        state: &mut ExecState,
         snap: &Checkpoint,
         out_start: u32,
     ) -> Status {
-        let (status, out) = match outcome {
-            Outcome::Ok { out, exit_stack: _ } => {
+        let (status, mut out) = match outcome {
+            Outcome::Ok { out } => {
                 // Commit: stack/heap persist; output retained (§7.3).
                 self.stack = core::mem::take(&mut state.stack);
                 self.heap = core::mem::take(&mut state.heap);
@@ -522,11 +613,16 @@ impl ReplSession {
                 self.heap = core::mem::take(&mut state.heap);
                 (Status::Exited { code }, out)
             }
-            Outcome::Trap { code, span, out } => {
-                rollback(&mut state, snap);
+            Outcome::Trap {
+                code,
+                span,
+                detail,
+                out,
+            } => {
+                rollback(state, snap);
                 self.stack = core::mem::take(&mut state.stack);
                 self.heap = core::mem::take(&mut state.heap);
-                (Status::Trapped { code, span }, out)
+                (Status::Trapped { code, span, detail }, out)
             }
             Outcome::Fuel { span, out } => {
                 // Suspend at the exhaustion point FIRST (the at-fault state,
@@ -536,7 +632,7 @@ impl ReplSession {
                     state: state.clone(),
                     entry_stack: snap.stack.clone(),
                 });
-                rollback(&mut state, snap);
+                rollback(state, snap);
                 self.stack = core::mem::take(&mut state.stack);
                 self.heap = core::mem::take(&mut state.heap);
                 (
@@ -559,7 +655,7 @@ impl ReplSession {
                 // A device-level failure (P4, e.g. E9152 unbound aperture):
                 // the same transactional treatment as a trap — state rolls
                 // back, output before the fault stays (DEC-6).
-                rollback(&mut state, snap);
+                rollback(state, snap);
                 self.stack = core::mem::take(&mut state.stack);
                 self.heap = core::mem::take(&mut state.heap);
                 (
@@ -572,7 +668,7 @@ impl ReplSession {
                 )
             }
             Outcome::Internal { fault, out } => {
-                rollback(&mut state, snap);
+                rollback(state, snap);
                 self.stack = core::mem::take(&mut state.stack);
                 self.heap = core::mem::take(&mut state.heap);
                 (
@@ -584,6 +680,9 @@ impl ReplSession {
             }
         };
         self.out_total.extend_from_slice(&out);
+        // Return the output buffer's capacity to the pool (D-W4).
+        out.clear();
+        self.out_pool = out;
         // DEC-6: a faulted phrase's output is retained even as stack/heap
         // roll back — BUT never under the G56 selftest corruption.
         if matches!(
@@ -597,14 +696,16 @@ impl ReplSession {
     }
 
     /// Package a status into a `SubmitResult` (the last-good IR render is
-    /// attached on demand — DEC-13).
+    /// attached on demand — DEC-13). The status is retained as the
+    /// `last_status` snapshot (the status bar re-renders without re-submit).
     fn result_for(
-        &self,
+        &mut self,
         status: Status,
         ir_now: Option<Vec<u8>>,
         output_new: Range<u32>,
         trace: Option<Trace>,
     ) -> SubmitResult {
+        self.last_status = Some(status.clone());
         let ir_text = ir_now.or_else(|| {
             self.compiled.as_ref().map(|c| {
                 let mut r = Vec::new();
@@ -709,30 +810,31 @@ fn builtin_word_effect(name: &[u8]) -> Option<EffectSig> {
     })
 }
 
-/// Resolve a word's declared effect from a `Compiled` module (the phrase's
-/// lookup against the decls-only compile).
-fn lookup_word_in(c: &Compiled, name: &[u8]) -> EffectSig {
-    let w = c
-        .module
-        .words
-        .iter()
-        .find(|w| w.name.as_bytes() == name)
-        .expect("lookup_word_in called only for a known word");
-    let sig = &w.sig;
-    let ty_name = |id: ir::TypeId| -> Vec<u8> {
-        w.types
-            .get(id.0 as usize)
-            .map(|a| a.as_bytes().to_vec())
-            .unwrap_or_else(|| b"i64".to_vec())
-    };
-    let inputs = (0..sig.in_len as usize)
-        .map(|i| ty_name(sig.inputs[i]))
-        .collect();
-    let outputs = (0..sig.out_len as usize)
-        .map(|i| ty_name(sig.outputs[i]))
-        .collect();
-    EffectSig { inputs, outputs }
-}
+    /// Resolve a word's declared effect from a `Compiled` module (the phrase's
+    /// lookup against the decls-only compile). `None` when the module does not
+    /// define the name — the caller falls through to the builtin tables; no
+    /// pre-scan double lookup, no `expect`, no silent default (D-W6).
+    fn lookup_word_in(c: &Compiled, name: &[u8]) -> Option<EffectSig> {
+        let w = c
+            .module
+            .words
+            .iter()
+            .find(|w| w.name.as_bytes() == name)?;
+        let sig = &w.sig;
+        let ty_name = |id: ir::TypeId| -> Vec<u8> {
+            w.types
+                .get(id.0 as usize)
+                .map(|a| a.as_bytes().to_vec())
+                .unwrap_or_else(|| b"?".to_vec())
+        };
+        let inputs = (0..sig.in_len as usize)
+            .map(|i| ty_name(sig.inputs[i]))
+            .collect();
+        let outputs = (0..sig.out_len as usize)
+            .map(|i| ty_name(sig.outputs[i]))
+            .collect();
+        Some(EffectSig { inputs, outputs })
+    }
 
 /// Render an effect signature as canonical `( in -- out )` text — the exact
 /// form `parse_word_sig` accepts, including the empty `( -- )` shape.
@@ -746,19 +848,14 @@ fn sig_text(sig: &EffectSig) -> alloc::string::String {
     alloc::format!("( {} -- {} )", names(&sig.inputs), names(&sig.outputs))
 }
 
-fn format_hex(v: u64) -> Vec<u8> {
-    let mut out = vec![b'0', b'x'];
-    let mut digits = [0u8; 16];
-    for (i, d) in digits.iter_mut().enumerate() {
-        let nib = ((v >> (4 * (15 - i))) & 0xF) as u8;
-        *d = if nib < 10 {
-            b'0' + nib
-        } else {
-            b'a' + (nib - 10)
-        };
+/// A SHA-256 digest as 64 lowercase hex bytes (the trace header's
+/// `source_hash`, FR-35).
+fn hex_32(d: &[u8; 32]) -> alloc::string::String {
+    let mut s = alloc::string::String::with_capacity(64);
+    for b in d {
+        s.push_str(&alloc::format!("{b:02x}"));
     }
-    out.extend_from_slice(&digits);
-    out
+    s
 }
 
 // ---------------------------------------------------------------------------
@@ -1089,18 +1186,22 @@ fn splice_before_final_end_str(source: &[u8], insertion: &str) -> Vec<u8> {
 }
 
 fn trim_bytes(b: &[u8]) -> &[u8] {
+    // `is_ascii_whitespace` already covers `\n` (the redundant arm is gone,
+    // D-W6).
     let mut s = 0usize;
     let mut e = b.len();
-    while s < e && (b[s].is_ascii_whitespace() || b[s] == b'\n') {
+    while s < e && b[s].is_ascii_whitespace() {
         s += 1;
     }
-    while e > s && (b[e - 1].is_ascii_whitespace() || b[e - 1] == b'\n') {
+    while e > s && b[e - 1].is_ascii_whitespace() {
         e -= 1;
     }
     &b[s..e]
 }
 
-struct VecSink<'a>(&'a mut Vec<u8>);
+/// The IR-render output sink (D-W7): one implementation in the lib — the
+/// session, the ABI, and `repl-cli` all render through this type.
+pub struct VecSink<'a>(pub &'a mut Vec<u8>);
 impl frontend::parse::Output for VecSink<'_> {
     fn write(&mut self, bytes: &[u8]) {
         self.0.extend_from_slice(bytes);

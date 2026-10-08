@@ -38,13 +38,6 @@ pub struct ApertureEntry {
     pub size: u32,
 }
 
-impl ApertureEntry {
-    pub const EMPTY: ApertureEntry = ApertureEntry {
-        id: 0,
-        base: 0,
-        size: 0,
-    };
-}
 
 /// The deterministic base for a descriptor aperture: its absolute `base`
 /// when bus-bound, or the emulated constant indexed by aperture id.

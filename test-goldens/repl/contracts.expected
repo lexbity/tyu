@@ -31,7 +31,7 @@ stack: -
 50 as Percent pct-add drop
 status: ok
 stack: -
-trace: C{pct-add:1}C{pct-in-range:2}D0
+trace: v1 spec=x86_64-unknown-linux-gnu src=35798c49d251572952c390b459dadd6e84decee6a044352e0a27d82c62c08677 fuel=100000|C{pct-add:1}C{pct-in-range:2}D0
 ---
 :stack
 stack: -
@@ -39,7 +39,7 @@ stack: -
 150 as Percent drop
 status: trapped 21
 stack: -
-trace: TSubtypeFail
+trace: v1 spec=x86_64-unknown-linux-gnu src=35798c49d251572952c390b459dadd6e84decee6a044352e0a27d82c62c08677 fuel=100000|TSubtypeFail
 ---
 :stack
 stack: -
@@ -47,7 +47,8 @@ stack: -
 7 add-safely drop
 status: trapped 20
 stack: -
-trace: C{add-safely:1}C{no-sevens:2}TContractFail
+trace: v1 spec=x86_64-unknown-linux-gnu src=35798c49d251572952c390b459dadd6e84decee6a044352e0a27d82c62c08677 fuel=100000|C{add-safely:1}C{no-sevens:2}TContractFail[sig-mismatch add-safely]
+detail: sig-mismatch word=add-safely declared=( i64 -- i64 ) actual=i64:0x0000000000000007
 ---
 :stack
 stack: -

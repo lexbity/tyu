@@ -472,13 +472,15 @@ fn mmio_trace_contains_periph_events() {
     let _ = engine.run(b"mmio-smoke-x86-run", &mut state, &mut dev);
 
     // Journal → trace projection: every device access is a periph event.
-    let effects: Vec<wasm_repl::Effect> = state.journal.iter().cloned().collect();
     let trace = wasm_repl::Trace::from_phrase(
-        &effects,
-        &Outcome::Ok {
-            out: Vec::new(),
-            exit_stack: Vec::new(),
+        wasm_repl::trace::TraceHeader {
+            v: wasm_repl::trace::TRACE_VERSION,
+            spec: "x86_64-unknown-linux-gnu".into(),
+            source_hash: "".into(),
+            fuel: 0,
         },
+        &state.journal,
+        &Outcome::Ok { out: Vec::new() },
     );
     let norm = trace.normalize();
     assert!(

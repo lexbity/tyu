@@ -24,7 +24,7 @@ dance
 status: trapped 10
 output: 4142
 stack: -
-trace: C{dance:1}O1O1C{recurse:2}C{recurse:3}C{recurse:4}C{recurse:5}C{recurse:6}C{recurse:7}C{recurse:8}C{recurse:9}C{recurse:10}C{recurse:11}C{recurse:12}C{recurse:13}C{recurse:14}C{recurse:15}C{recurse:16}C{recurse:17}C{recurse:18}C{recurse:19}C{recurse:20}C{recurse:21}C{recurse:22}C{recurse:23}C{recurse:24}C{recurse:25}C{recurse:26}C{recurse:27}C{recurse:28}C{recurse:29}C{recurse:30}C{recurse:31}C{recurse:32}TStackOverflowC{…222}
+trace: v1 spec=x86_64-unknown-linux-gnu src=bb676d8777c347eabb6a72d58bdecf09553a93df0ff02d11ced0278d02b859f3 fuel=100000|C{dance:1}O1O1C{recurse:2}C{recurse:3}C{recurse:4}C{recurse:5}C{recurse:6}C{recurse:7}C{recurse:8}C{recurse:9}C{recurse:10}C{recurse:11}C{recurse:12}C{recurse:13}C{recurse:14}C{recurse:15}C{recurse:16}C{recurse:17}C{recurse:18}C{recurse:19}C{recurse:20}C{recurse:21}C{recurse:22}C{recurse:23}C{recurse:24}C{recurse:25}C{recurse:26}C{recurse:27}C{recurse:28}C{recurse:29}C{recurse:30}C{recurse:31}C{recurse:32}TStackOverflowC{…222}
 ---
 :stack
 stack: -
@@ -37,7 +37,7 @@ verify
 status: ok
 output: 43
 stack: -
-trace: C{verify:1}O1D0
+trace: v1 spec=x86_64-unknown-linux-gnu src=e987c210bf985d1502cb9660e835df02fabc1b6223adc487407ef951fd40ff27 fuel=100000|C{verify:1}O1D0
 ---
 :stack
 stack: -
@@ -50,7 +50,7 @@ heap-ok
 status: ok
 output: 44
 stack: -
-trace: C{heap-ok:1}O1D0
+trace: v1 spec=x86_64-unknown-linux-gnu src=00c6f76cdbdc4a1bf51a210af0b93f42ecfa82dd037893aa4f6560f768774378 fuel=100000|C{heap-ok:1}O1D0
 ---
 :stack
 stack: -

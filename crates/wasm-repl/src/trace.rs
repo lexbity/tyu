@@ -15,13 +15,42 @@ use alloc::vec::Vec;
 use ir::{Span, TrapCode};
 
 use crate::engine::Outcome;
-use crate::journal::Effect;
+use crate::journal::{Effect, Journal};
 
 /// The trace schema version (fail-closed: consumers reject unknown versions).
 pub const TRACE_SCHEMA: &str = "tyu.trace/1";
+/// The header record's version number (FR-35): the first record of every
+/// `tyu.trace/1` output.
+pub const TRACE_VERSION: u32 = 1;
+
+/// The header record (FR-35): `{v, spec, source_hash, fuel}` — target
+/// identity, the SHA-256 of the exact submitted buffer (the I-9 span anchor),
+/// and the phrase's op budget. Fuel checkpoints were considered and DROPPED
+/// (oracle machinery, PLAN-WASM-2 §14 item 8) — the header is the only
+/// fuel-facing record.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TraceHeader {
+    pub v: u32,
+    pub spec: String,
+    /// Full hex SHA-256 of the submitted source buffer.
+    pub source_hash: String,
+    /// The op budget the phrase ran under (remaining units at entry).
+    pub fuel: u64,
+}
+
+impl TraceHeader {
+    /// The normalized header text (the first field of `normalize`'s output):
+    /// `v1 spec=<triple> src=<sha256> fuel=<n>`.
+    pub fn normalize(&self) -> String {
+        format!(
+            "v{} spec={} src={} fuel={}",
+            self.v, self.spec, self.source_hash, self.fuel
+        )
+    }
+}
 
 /// One derived trace event.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Event {
     /// Diagnostic-channel bytes for the range `[start..start+len)` of the
     /// phrase output.
@@ -40,8 +69,15 @@ pub enum Event {
     /// A device-level failure (P4, E9152-family) — the run ended on a
     /// peripheral diagnostic rather than a trap.
     Device { code: u32 },
-    /// A trap with its frozen code + the faulting op's span.
-    Trap { code: TrapCode, span: Span },
+    /// A trap with its frozen code + the faulting op's span. Contract
+    /// failures (trap 20) carry the §Q6/DEC-22 detail (which word declared
+    /// what, actual stack); every other trap's detail is absent, and
+    /// consumers MUST treat absent detail as "not a contract failure".
+    Trap {
+        code: TrapCode,
+        span: Span,
+        detail: Option<crate::engine::TrapDetail>,
+    },
     /// Fuel exhausted (E9150 surface).
     Fuel,
     /// An engine-internal fault (E9158, or E9156's runtime backstop) — the
@@ -51,22 +87,33 @@ pub enum Event {
     Done { exit: i64 },
 }
 
-/// A phrase trace, derived from the journal and the outcome.
-#[derive(Clone, Debug, Default)]
+/// A phrase trace, derived from the journal and the outcome. The header
+/// (FR-35) is the first record; consumers reject unknown versions fail-closed.
+#[derive(Clone, Debug)]
 pub struct Trace {
+    pub header: TraceHeader,
     events: Vec<Event>,
 }
 
 impl Trace {
-    pub fn new() -> Trace {
-        Trace { events: Vec::new() }
+    pub fn new(header: TraceHeader) -> Trace {
+        Trace {
+            header,
+            events: Vec::new(),
+        }
     }
 
-    /// Project a phrase's observable trace: journal `Output`/`Call` events
-    /// plus the run outcome's trap/fuel/done tail.
-    pub fn from_phrase(journal_effects: &[Effect], outcome: &Outcome) -> Trace {
-        let mut t = Trace::new();
-        for e in journal_effects {
+    /// Project a phrase's observable trace: the version+header record, then
+    /// journal `Output`/`Call` events plus the run outcome's trap/fuel/done
+    /// tail. The journal is *walked*, not cloned (D-W4: the full-journal
+    /// clone for trace derivation is gone — this is a view).
+    pub fn from_phrase(
+        header: TraceHeader,
+        journal_effects: &Journal,
+        outcome: &Outcome,
+    ) -> Trace {
+        let mut t = Trace::new(header);
+        for e in journal_effects.iter() {
             match e {
                 Effect::Output { start, len } => t.events.push(Event::Output {
                     start: *start,
@@ -95,9 +142,15 @@ impl Trace {
         match outcome {
             Outcome::Ok { .. } => t.events.push(Event::Done { exit: 0 }),
             Outcome::Exited { code, .. } => t.events.push(Event::Done { exit: *code }),
-            Outcome::Trap { code, span, .. } => t.events.push(Event::Trap {
+            Outcome::Trap {
+                code,
+                span,
+                detail,
+                ..
+            } => t.events.push(Event::Trap {
                 code: *code,
                 span: *span,
+                detail: detail.clone(),
             }),
             Outcome::Fuel { .. } => t.events.push(Event::Fuel),
             Outcome::Device { code, .. } => t.events.push(Event::Device { code: *code }),
@@ -106,12 +159,17 @@ impl Trace {
         t
     }
 
-    /// The normalized comparison text (golden-comparable, §7.4): event
-    /// structure only — no timings, no fuel-internal counters. Call events
-    /// above depth 32 are elided with a single `…` marker (the §7.4
-    /// bound — a >32-deep tail renders as `C{…}`, not per-frame noise).
+    /// The normalized comparison text (golden-comparable, §7.4): the FR-35
+    /// header record first, then event structure only — no timings, no
+    /// fuel-internal counters. Call events above depth 32 are elided with a
+    /// single `…` marker (the §7.4 bound — a >32-deep tail renders as
+    /// `C{…}`, not per-frame noise). A contract trap's detail renders as a
+    /// bracketed suffix (`[sig-mismatch word]`) — the only golden-visible
+    /// delta the §Q6/DEC-22 extension admits.
     pub fn normalize(&self) -> String {
         let mut s = String::new();
+        s.push_str(&self.header.normalize());
+        s.push('|');
         let mut deep_calls = 0u32;
         let mut seen_deep = false;
         for e in &self.events {
@@ -125,7 +183,16 @@ impl Trace {
                         s.push_str(&format!("C{{{word}:{depth}}}"));
                     }
                 }
-                Event::Trap { code, .. } => s.push_str(&format!("T{:?}", code)),
+                Event::Trap { code, detail, .. } => {
+                    s.push_str(&format!("T{:?}", code));
+                    if let Some(d) = detail {
+                        s.push_str(&format!(
+                            "[{} {}]",
+                            String::from_utf8_lossy(d.kind.name()),
+                            String::from_utf8_lossy(&d.word)
+                        ));
+                    }
+                }
                 Event::Periph {
                     aperture,
                     off,
@@ -152,5 +219,10 @@ impl Trace {
             s.push_str(&format!("C{{…{deep_calls}}}"));
         }
         s
+    }
+
+    /// The event records (read-only; the debug projection's source).
+    pub fn events(&self) -> &[Event] {
+        &self.events
     }
 }

@@ -249,6 +249,16 @@ impl RegionHeap {
         self.cursor
     }
 
+    /// Read-only region-table walk for the debug projection (W1): visits
+    /// every slot (handle = index) with `(base, size, off, alive)`. The table
+    /// is the engine's own state — the debug surface derives from it, never
+    /// reconstructs it (I-8).
+    pub fn for_each_region(&self, mut f: impl FnMut(u64, u32, u32, u32, bool)) {
+        for (i, r) in self.regions.iter().enumerate() {
+            f(i as u64, r.base, r.size, r.off, r.alive);
+        }
+    }
+
     /// The arena base address of a live region (for diagnostics/geometry
     /// probes; native calls it `__region_base[slot]`).
     pub fn region_base(&self, handle: u64) -> Option<u64> {

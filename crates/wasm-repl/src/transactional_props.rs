@@ -189,7 +189,14 @@ proptest! {
     #[test]
     fn rollback_completeness_over_generated_effect_sequences(acts in acts_strategy()) {
         let mut state =
-            ExecState::in_session(Vec::new(), RegionHeap::new(), Fuel::new(0), false);
+            ExecState::in_session(
+            Vec::new(),
+            RegionHeap::new(),
+            Fuel::new(0),
+            false,
+            Journal::new(),
+            Vec::new(),
+        );
         let snap = Checkpoint {
             stack: Vec::new(),
             fuel: state.fuel,

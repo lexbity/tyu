@@ -38,13 +38,26 @@ enum Slot {
 
 /// Compute the net effect of a phrase; `lookup` resolves word names to their
 /// declared effects (builtins + interpreter builtins + session words).
+///
+/// `ambient` is the ACTUAL persistent stack, top-first as type names: the
+/// session passes its real stack so the synthetic phrase word's declared
+/// inputs are what the stack actually holds — not what the first consuming
+/// word's signature wishes for (the W1 reconciliation: this boundary was the
+/// hole in §Q7's reachability argument — an ambient-mismatched phrase would
+/// have compiled and run loose; now the checker verifies the phrase against
+/// the real stack, keeping L2's engine-only checks genuinely unreachable).
+/// When a phrase consumes below the stack's depth the declared `want` type is
+/// the fallback (the checker then rejects the underflow, as before).
 pub fn phrase_effect(
     src: &[u8],
+    ambient: &[Vec<u8>],
     mut lookup: impl FnMut(&[u8]) -> Option<EffectSig>,
 ) -> Option<EffectSig> {
     let mut env = Env {
         stack: Vec::new(),
         ambient: Vec::new(),
+        ambient_actual: ambient,
+        ambient_idx: 0,
         locals: Vec::new(),
         lookup: &mut lookup,
     };
@@ -60,6 +73,10 @@ struct Env<'a> {
     stack: Vec<Slot>,
     /// Input slots consumed from the session stack, in pop order.
     ambient: Vec<Vec<u8>>,
+    /// The session's actual stack types, top-first (see `phrase_effect`).
+    ambient_actual: &'a [Vec<u8>],
+    /// How many ambient pops have happened so far (indexes `ambient_actual`).
+    ambient_idx: usize,
     locals: Vec<(Vec<u8>, Vec<u8>)>,
     lookup: &'a mut dyn FnMut(&[u8]) -> Option<EffectSig>,
 }
@@ -91,16 +108,19 @@ impl<'a> Env<'a> {
                 }
                 TokenKind::PunctLBracket => {
                     let (body, rest) = split_quote(src, tok.span.end)?;
-                    let body_sig = phrase_effect(body, &mut *self.lookup)?;
+                    // A quotation body cannot consume the ambient stack — its
+                    // ambient slice is empty (an ambient pop inside a quote is
+                    // the `want` fallback, which the checker rejects).
+                    let body_sig = phrase_effect(body, &[], &mut *self.lookup)?;
                     self.stack.push(Slot::Quot(body_sig));
                     self.run_tokens(rest)?;
                     return Some(());
                 }
-                TokenKind::PunctGe => self.call_word(b">=", &mut lex, src)?,
-                TokenKind::PunctLe => self.call_word(b"<=", &mut lex, src)?,
-                TokenKind::PunctEqEq => self.call_word(b"==", &mut lex, src)?,
-                TokenKind::PunctNe => self.call_word(b"!=", &mut lex, src)?,
-                TokenKind::PunctSlash => self.call_word(b"/", &mut lex, src)?,
+                TokenKind::PunctGe => self.call_word(b">=")?,
+                TokenKind::PunctLe => self.call_word(b"<=")?,
+                TokenKind::PunctEqEq => self.call_word(b"==")?,
+                TokenKind::PunctNe => self.call_word(b"!=")?,
+                TokenKind::PunctSlash => self.call_word(b"/")?,
                 TokenKind::Ident => match text {
                     b"true" | b"false" => self.stack.push(Slot::Ty(b"bool".to_vec())),
                     b"as" => {
@@ -165,7 +185,7 @@ impl<'a> Env<'a> {
                             name.extend_from_slice(&src[id.span.start..id.span.end]);
                             lex = look;
                         }
-                        self.call_word(&name, &mut lex, src)?;
+                        self.call_word(&name)?;
                     }
                 },
                 _ => return None,
@@ -174,7 +194,7 @@ impl<'a> Env<'a> {
     }
 
     /// Resolve and apply a word (an operator name or an identifier).
-    fn call_word(&mut self, name: &[u8], _lex: &mut Lexer<'_>, _src: &[u8]) -> Option<()> {
+    fn call_word(&mut self, name: &[u8]) -> Option<()> {
         let sig = (self.lookup)(name)?;
         self.apply_sig(sig);
         Some(())
@@ -201,7 +221,14 @@ impl<'a> Env<'a> {
             return Some(s);
         }
         // An ambient pop: a value the phrase consumes from the session stack.
-        let ty = want.unwrap_or(b"i64").to_vec();
+        // The ACTUAL stack type wins (that is what will be on the runtime
+        // stack); the consuming word's declared type is the fallback when the
+        // phrase pops deeper than the stack (the checker then rejects it).
+        let ty = match self.ambient_actual.get(self.ambient_idx) {
+            Some(actual) => actual.clone(),
+            None => want.unwrap_or(b"i64").to_vec(),
+        };
+        self.ambient_idx += 1;
         self.ambient.push(ty.clone());
         Some(Slot::Ty(ty))
     }
