@@ -16,6 +16,10 @@ import { fileURLToPath } from "node:url";
 
 const WEB = fileURLToPath(new URL("..", import.meta.url));
 const TAMPERED = process.argv.includes("--tampered");
+// The W6 FR-33 leg: force a post-boot wasm exception (a pathological
+// buffer exhausts the wasm stack inside submit — a genuine boundary trap,
+// not a hook) and require the full-page failure view.
+const PAGEFAIL = process.argv.includes("--pagefail");
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -74,6 +78,40 @@ const assert = (cond, msg) => {
 
 const browser = await chromium.launch();
 try {
+  if (PAGEFAIL) {
+    const page = await browser.newPage();
+    const errors = []; // uncaught pageerrors — must stay empty (the guard catches)
+    page.on("pageerror", (e) => errors.push(e.message));
+    await page.goto(base, { waitUntil: "load" });
+    await page.waitForFunction(
+      () => document.getElementById("status")?.dataset.state === "ready",
+      null,
+      { timeout: 15_000 }
+    );
+    // The un-guarded submit path is closed: a wasm exception from submit
+    // (wasm-stack exhaustion on a pathological buffer) routes to the
+    // full-page failure view with the artifact hashes + engine version.
+    await page.click(".cm-content");
+    await page.keyboard.press("ControlOrMeta+a");
+    await page.keyboard.insertText("1 " + "[".repeat(50_000) + "]".repeat(50_000));
+    await page.click("#run");
+    await page.waitForSelector("#boot-failure", { timeout: 15_000 });
+    const banner = await page.textContent("#boot-failure");
+    assert(banner.includes("post-boot"), "page-fail banner names the post-boot path");
+    assert(banner.includes("engine: v"), "banner carries the engine version (§10)");
+    assert(banner.includes("wasm sha256"), "banner carries the artifact hash (§10)");
+    const layoutHidden = await page.$eval("#layout", (el) => el.hidden);
+    assert(layoutHidden, "the shell is hidden (layout replaced by the failure view)");
+    const status = await page.textContent("#status");
+    assert(status.includes("page failed"), "status bar shows the page failure");
+    console.log("  ok: post-boot wasm exception routes to the page-fail view (FR-33)");
+    assert(errors.length === 0, "the boundary exception was CAUGHT, not an uncaught pageerror");
+    await browser.close();
+    server.close();
+    console.log("G55 smoke (page-fail red path): green");
+    process.exit(0);
+  }
+
   const page = await browser.newPage();
   page.on("console", (m) => {
     if (m.type() === "error") consoleErrors.push(m.text());
@@ -425,6 +463,21 @@ try {
       trText.includes("example") && trText.includes("→ ok"),
       `transcript reflects submissions with statuses (${JSON.stringify(trText.slice(0, 200))})`
     );
+
+    // W6 / FR-32: the IR pane renders the last-good --emit=ir render,
+    // collapsible, after every submission.
+    await page.click(".cm-content");
+    await page.keyboard.press("ControlOrMeta+a");
+    await page.keyboard.insertText("1 2 +");
+    await page.click("#run");
+    await page.waitForFunction(() =>
+      (document.getElementById("ir")?.textContent ?? "").length > 0, null,
+      { timeout: 10_000 });
+    const irOpen = await page.$eval("#ir-pane", (el) => el.open || el.hasAttribute("open"));
+    await page.$eval("#ir-pane", (el) => { el.open = true; });
+    const irText = await page.textContent("#ir");
+    assert(irText.includes("format_ver"), `IR pane renders the emit=ir text (${irText.slice(0, 60)})`);
+    assert(irText.includes("repl-session"), "the session module's IR renders");
 
     // Reload resets (Fresh state, §4.2).
     await page.reload({ waitUntil: "load" });

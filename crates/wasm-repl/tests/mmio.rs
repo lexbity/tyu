@@ -1,4 +1,4 @@
-//! MMIO unit + fixture tests (PLAN-WASM-1 P4).
+//! MMIO unit + fixture tests (PLAN-WASM-1 P4, archived: `devdocs/plans/done/wasm-repl.md`).
 //!
 //! Engine-side MMIO semantics: the `WriteKind` RMW bit math (table test),
 //! field mask/shift extraction, the aperture resolution, and the negative

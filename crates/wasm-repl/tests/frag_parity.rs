@@ -1,4 +1,4 @@
-//! G52 — the fork ↔ frozen-upstream fragvec differential (PLAN-WASM-1 §Q1).
+//! G52 — the fork ↔ frozen-upstream fragvec differential (PLAN-WASM-1 §Q1, archived: `devdocs/plans/done/wasm-repl.md`).
 //!
 //! Every program in the committed `tyu.fragvec/1` corpus
 //! (`crates/verifier/test-vectors/fragment/index.json`) is executed by BOTH

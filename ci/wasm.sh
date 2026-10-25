@@ -7,15 +7,25 @@
 #
 #   G52  Fork ↔ `src_interp` fragvec corpus trace agreement            (P1)
 #   G53  Interpreter ↔ native execution goldens (+IR render parity)    (P2/P6)
-#   G54  codegen-wasm: wasmtime validate + run, trace parity            (P7/P8)
+#   G54  codegen-wasm: wasmtime validate + run, trace parity            (B1/B2)
 #   G55  Browser bundle budgets, artifact hashes, now_ms grep, smoke    (P5)
 #   G56  REPL session goldens byte-exact                                (P3)
 #
-# Implemented: G52 (P1), G53(a) (P2: execution differential + props +
-# IR-render byte-parity vs `langc --emit=ir`), G56 (P3: session goldens),
-# G55 (P5: build-web, budgets, hashes, now_ms grep, wasm clippy, browser
-# smoke). G54 awaits P7/P8. ci/guards.sh carries a pointer comment for the
-# G52-G56 numbering overlap with PLAN-RELEASE-1's G52-G55 (DEC-14 note).
+# PLAN-WASM-2 (devdocs/plans/web-ide.md) appends to the registry here:
+#   G57  Debug-surface parity: native `debug-dump` == core API, and the
+#        browser debug panel == the committed native dump                (W4)
+#   G58  Examples integrity: total classification, byte-determinism,
+#        hash pin, behavioral expectation legs (green→Ok, red→E<code>)   (W3/W5)
+# W4 also pins the G57(a) debug-dump parity into the G53 test leg; W6 adds
+# the labs-corpus IR-parity test (examples_ir_parity) and the FR-33
+# page-fail demonstration to the selftest.
+#
+# Implemented: G52 (P1), G53 (P2 + W6's labs-corpus IR parity + the G57(a)
+# debug-dump parity pin), G56 (P3), G55 (P5 + W2/W4/W6: editor build+budgets,
+# debug-console smoke legs, the FR-33 page-fail demonstration), G58 (W3/W5:
+# pack, determinism, behavioral legs). G54 awaits B1/B2. ci/guards.sh
+# carries a pointer comment for the G52-G56 numbering overlap with
+# PLAN-RELEASE-1's G52-G55 (DEC-14 note).
 #
 # Usage:
 #   bash ci/wasm.sh            run every gate defined so far
@@ -184,8 +194,9 @@ g53_green() {
     msg $YELLOW "G53: interpreter ↔ native execution goldens"
 
     if cargo test -p wasm-repl --features cli --test exec_parity --test mmio --test props \
-        --test debug_dump_parity --release > /tmp/g53-parity.log 2>&1; then
-        msg $GREEN "  G53: execution differential + property tests green (byte-identical to native; alias probes pinned; MMIO fixture differential green; G57(a) debug-dump parity pinned)"
+        --test debug_dump_parity --test examples_ir_parity --test examples_expectations \
+        --release > /tmp/g53-parity.log 2>&1; then
+        msg $GREEN "  G53: execution differential + property tests green (byte-identical to native; alias probes pinned; MMIO fixture differential green; G57(a) debug-dump parity pinned; W6 labs IR parity + W5 G58 behavioral expectations pinned)"
     else
         fail "execution differential (see /tmp/g53-parity.log)"
     fi
@@ -486,6 +497,15 @@ g55_selftest() {
     # asserts the failure banner appears and no engine boots).
     msg $YELLOW "G55 selftest: tampered wasm artifact must red the page's integrity check"
     smoke "--tampered"
+
+    # Red-path demo (W6/FR-33): a post-boot wasm exception must route to
+    # the full-page failure view — the un-guarded submit path is closed.
+    msg $YELLOW "G55 selftest: a post-boot wasm exception must page-fail loudly"
+    if (cd web/test && node smoke.mjs --pagefail > /tmp/g55-pagefail.log 2>&1); then
+        msg $GREEN "  G55 selftest: the page-fail path correctly demonstrated"
+    else
+        fail "page-fail demonstration (see /tmp/g55-pagefail.log)"
+    fi
 
     # Red-path demo (W3/G58): the drift detector — a lab outside the
     # classification convention must FAIL the pack (never a silent drop).

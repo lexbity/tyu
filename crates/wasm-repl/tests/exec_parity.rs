@@ -1,4 +1,4 @@
-//! G53(a) — the interpreter ↔ hosted-native differential (PLAN-WASM-1 §7.7).
+//! G53(a) — the interpreter ↔ hosted-native differential (PLAN-WASM-1 §7.7, archived: `devdocs/plans/done/wasm-repl.md`).
 //!
 //! For every in-scope fixture: the native leg (hosted x86_64 binary via the
 //! `tyu` runner, merging stdout+stderr onto the `testio` channel) and the

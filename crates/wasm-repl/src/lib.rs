@@ -1,4 +1,6 @@
-//! The Tyu console interpreter fork (PLAN-WASM-1, `devdocs/plans/wasm-repl.md`).
+//! The Tyu console interpreter fork (PLAN-WASM-1, archived at
+//! `devdocs/plans/done/wasm-repl.md`; the plan of record is
+//! `devdocs/plans/web-ide.md`).
 //!
 //! `wasm-repl` is a *fork* of the verifier's test-only source-fragment
 //! interpreter (`crates/verifier/src/src_interp.rs`, frozen upstream) reworked

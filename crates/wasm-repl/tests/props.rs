@@ -1,4 +1,4 @@
-//! Property tests over the engine (PLAN-WASM-1 P2: §Q11 R-1/R-3, §Q6).
+//! Property tests over the engine (PLAN-WASM-1 P2: §Q11 R-1/R-3, §Q6 — archive: `devdocs/plans/done/wasm-repl.md`).
 //!
 //! Ships these properties:
 //!

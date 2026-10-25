@@ -1,7 +1,7 @@
 //! The Rust source-fragment interpreter — FORK of
 //! `crates/verifier/src/src_interp.rs` @ c9d19177c541d7a7a42112ded2a0624d47b2d719
 //! (frozen upstream; divergence is deliberate — see
-//! `devdocs/plans/wasm-repl.md` §Q1/DEC-1). The file's content snapshots the
+//! `devdocs/plans/done/wasm-repl.md` §Q1/DEC-1 (archived; the successor plan is `devdocs/plans/web-ide.md`)). The file's content snapshots the
 //! upstream as of commit c046539f1744e6eef5dd6a42d4d6afcbeca7a853 ("merge
 //! mnemonic — fragment mapping relative to IR"), the last commit to touch it.
 //!

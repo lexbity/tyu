@@ -42,6 +42,8 @@ const stackEl = $("stack");
 const consoleEl = $("console");
 const examplesEl = $("examples");
 const framesEl = $("frames");
+const irEl = $("ir");
+const irPaneEl = $("ir-pane");
 const transcriptEl = $("transcript");
 const debugPaneEl = $("debug-pane");
 
@@ -58,6 +60,25 @@ function showDiag(text) {
     diagEl.classList.remove("hidden");
     diagEl.textContent = text;
   }
+}
+
+// FR-33: the PAGE-FAIL view — a post-boot wasm trap (a thrown boundary
+// call) or an E9158-family status fails the page loudly with the artifact
+// hashes + engine version (§10). The un-guarded submit path is closed:
+// every repl interaction runs through this guard.
+function pageFail(reason) {
+  setStatus("error", "page failed");
+  const layout = $("layout");
+  layout.hidden = true;
+  const el = document.createElement("pre");
+  el.id = "boot-failure";
+  el.textContent =
+    `REPL FAILED (post-boot): ${reason}\n` +
+    `A wasm trap or an internal-invariant violation is an engine bug — ` +
+    `please report with this header.\n` +
+    `engine: v${ARTIFACTS.engine_version} · wasm sha256 ${ARTIFACTS.wasm_sha256}\n` +
+    `sysroot: v${ARTIFACTS.sysroot_version} · sha256 ${ARTIFACTS.sysroot_sha256}`;
+  document.body.insertBefore(el, layout);
 }
 
 function bootFailure(reason) {
@@ -272,8 +293,13 @@ async function loadExample(ex) {
   editor.setDoc(ex.source);
   editor.setReadOnly(ex.kind === "native-only");
   loadedSource = ex.source;
-  const result = replInstance.submit(ex.source);
-  renderResult(replInstance, result, `example ${ex.id.split("/")[1]}`);
+  try {
+    const result = replInstance.submit(ex.source);
+    renderResult(replInstance, result, `example ${ex.id.split("/")[1]}`);
+  } catch (e) {
+    pageFail(`wasm exception from submit: ${e.message ?? e}`);
+    return;
+  }
   if (ex.kind === "native-only") {
     showDiag(`native-only — ${ex.reason ?? ""}`);
   } else {
@@ -356,7 +382,19 @@ function renderResult(repl, result, mode) {
   ];
   setStatus("ready", parts.join(" · "));
 
+  // FR-32: the IR pane renders the last-good --emit=ir text (the result's
+  // own render on success; the last-good one after a failure — DEC-13).
+  if (result.ir_text != null) {
+    irEl.textContent = result.ir_text;
+  }
+
   const d = result.diag_code;
+  if (result.status === "internal") {
+    // FR-33: an E9158-family status is an engine bug — the page fails
+    // loudly, it never renders the failure as a student outcome.
+    pageFail(`internal-invariant violation (E${d}): ${result.diag_message}`);
+    return;
+  }
   if (result.status === "ok" || result.status === "exited") {
     showDiag("");
   } else if (result.status === "fuel") {
@@ -603,17 +641,26 @@ function wire(repl) {
     // The session model (DEC-19): submit without reset — the accumulating
     // module + persistent stack.
     beginSubmit();
-    const result = repl.submit(localEditor.currentDoc());
-    renderResult(repl, result, "session");
+    try {
+      const result = repl.submit(localEditor.currentDoc());
+      renderResult(repl, result, "session");
+    } catch (e) {
+      // A throw crossing the boundary is a wasm trap — an engine bug (§10).
+      pageFail(`wasm exception from submit: ${e.message ?? e}`);
+    }
   };
   const runProgram = () => {
     // The program model (DEC-19): reset + submit the whole buffer — every
     // run a deterministic, shareable demo.
     beginSubmit();
-    repl.reset();
-    consoleEl.textContent = "";
-    const result = repl.submit(localEditor.currentDoc());
-    renderResult(repl, result, "run");
+    try {
+      repl.reset();
+      consoleEl.textContent = "";
+      const result = repl.submit(localEditor.currentDoc());
+      renderResult(repl, result, "run");
+    } catch (e) {
+      pageFail(`wasm exception from submit: ${e.message ?? e}`);
+    }
   };
 
   submitBtn.disabled = false;
@@ -625,7 +672,9 @@ function wire(repl) {
       const result = repl.step(stepBudget);
       renderResult(repl, result, "session");
     } catch (e) {
-      showDiag(`step failed: ${e.message ?? e}`);
+      // A step throw is either the E9151 boundary rejection (a status, not
+      // a bug) or a wasm trap — page-fail like every other trap (FR-33).
+      pageFail(`wasm exception from step: ${e.message ?? e}`);
     }
   });
 
