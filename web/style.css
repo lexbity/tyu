@@ -193,3 +193,47 @@ button:disabled { background: #33415a; color: var(--muted); cursor: default; }
   border-radius: 4px;
   white-space: pre-wrap;
 }
+
+/* The debug console (W4): frames/backtrace, transcript, ?debug=1 pane. */
+#frames, #transcript {
+  background: var(--panel);
+  border: 1px solid #2a3040;
+  border-radius: 4px;
+  padding: 0.4rem;
+  max-height: 10rem;
+  overflow-y: auto;
+  font-size: 12px;
+  margin-bottom: 0.75rem;
+  flex-shrink: 0;
+  min-height: 1.5rem;
+}
+#frames h3, #transcript .tr-head {
+  margin: 0 0 0.2rem;
+  font-size: 12px;
+  color: var(--accent);
+}
+#frames ol { margin: 0; padding-left: 1.2rem; }
+#frames .bt-row { color: var(--ink); }
+#frames .trap-row { margin-top: 0.3rem; color: var(--err); }
+#frames .trap-row .bt-row { color: var(--warn); }
+#frames .overflow-note, #transcript .overflow-note, #stack .overflow-note {
+  color: var(--muted);
+  font-size: 11px;
+}
+#transcript .tr-row { margin-bottom: 0.3rem; }
+#transcript .tr-src {
+  color: var(--muted);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+#debug-pane {
+  background: var(--panel);
+  border: 1px solid #2a3040;
+  border-radius: 4px;
+  padding: 0.4rem;
+  font-size: 11px;
+  color: var(--muted);
+  word-break: break-all;
+}
+#debug-pane.hidden { display: none; }
+#debug-pane button { margin-top: 0.3rem; padding: 0.2rem 0.6rem; font-size: 11px; }

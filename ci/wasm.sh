@@ -183,9 +183,9 @@ g52_selftest() {
 g53_green() {
     msg $YELLOW "G53: interpreter ↔ native execution goldens"
 
-    if cargo test -p wasm-repl --test exec_parity --test mmio --test props --release \
-        > /tmp/g53-parity.log 2>&1; then
-        msg $GREEN "  G53: execution differential + property tests green (byte-identical to native; alias probes pinned; MMIO fixture differential green)"
+    if cargo test -p wasm-repl --features cli --test exec_parity --test mmio --test props \
+        --test debug_dump_parity --release > /tmp/g53-parity.log 2>&1; then
+        msg $GREEN "  G53: execution differential + property tests green (byte-identical to native; alias probes pinned; MMIO fixture differential green; G57(a) debug-dump parity pinned)"
     else
         fail "execution differential (see /tmp/g53-parity.log)"
     fi

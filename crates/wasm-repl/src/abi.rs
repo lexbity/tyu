@@ -162,7 +162,7 @@ impl WasmRepl {
         let tables: [&dyn SourceTable; 1] = [&self.search];
         let result = self.session.transactional_submit(src.as_bytes(), &tables);
         self.stream_output(&result);
-        JsSubmitResult::of(result)
+        JsSubmitResult::of(&self.session, result)
     }
 
     /// `repl_step` (§6.2): resume the fuel-suspended phrase with `ops` more
@@ -174,7 +174,7 @@ impl WasmRepl {
         }
         let result = self.session.step(ops);
         self.stream_output(&result);
-        Ok(JsSubmitResult::of(result))
+        Ok(JsSubmitResult::of(&self.session, result))
     }
 
     /// Set the per-phrase fuel budget. `0` (= unlimited on host/CI) is
@@ -250,12 +250,14 @@ impl WasmRepl {
         match (self.session.compiled(), self.session.suspended_state()) {
             (Some(c), Some(st)) => crate::debug::frames(c, st)
                 .into_iter()
-                .map(|f| JsFrameCell {
+                .map(|f| {
+                    let span = doc_span(&self.session, f.call_span);
+                    JsFrameCell {
                     index: f.index,
                     word: String::from_utf8_lossy(&f.word).into_owned(),
                     sig: String::from_utf8_lossy(&f.sig).into_owned(),
-                    call_span_start: f.call_span.start as u32,
-                    call_span_end: f.call_span.end as u32,
+                    call_span_start: span.start as u32,
+                    call_span_end: span.end as u32,
                     locals: f
                         .locals
                         .iter()
@@ -264,6 +266,7 @@ impl WasmRepl {
                             value_hex: String::from_utf8_lossy(&c.value_hex).into_owned(),
                         })
                         .collect(),
+                    }
                 })
                 .collect(),
             _ => Vec::new(),
@@ -271,7 +274,9 @@ impl WasmRepl {
     }
 
     /// `trace_events`: the normalized trace of the LAST submission (DEC-20).
+    /// Spans are doc-relative (I-9).
     pub fn trace_events(&self) -> Vec<JsTraceEvent> {
+        let repl = &self.session;
         match self.session.last_trace() {
             Some(t) => crate::debug::trace_events(t)
                 .into_iter()
@@ -298,7 +303,9 @@ impl WasmRepl {
                         crate::debug::TraceEventView::Call { word, depth } => {
                             ("call", 0, 0, 0, String::from_utf8_lossy(&word).into_owned(), depth, None, 0)
                         }
-                        crate::debug::TraceEventView::Trap { code, span, detail } => (
+                        crate::debug::TraceEventView::Trap { code, span, detail } => {
+                            let span = doc_span(repl, span);
+                            (
                             "trap",
                             code,
                             span.start as u32,
@@ -320,7 +327,8 @@ impl WasmRepl {
                                     .collect(),
                             }),
                             0,
-                        ),
+                        )
+                        }
                         crate::debug::TraceEventView::Device { code } => {
                             ("device", code, 0, 0, String::new(), 0, None, 0)
                         }
@@ -364,12 +372,15 @@ impl WasmRepl {
                 .into_iter()
                 .map(|w| {
                     let (origin, def_start, def_len, path) = match &w.origin {
-                        crate::debug::WordOrigin::Session { def_span } => (
+                        crate::debug::WordOrigin::Session { def_span } => {
+                            let span = doc_span(&self.session, *def_span);
+                            (
                             "session",
-                            def_span.start as u32,
-                            def_span.end.saturating_sub(def_span.start) as u32,
+                            span.start as u32,
+                            span.end.saturating_sub(span.start) as u32,
                             String::new(),
-                        ),
+                        )
+                        }
                         crate::debug::WordOrigin::Sysroot { path } => (
                             "sysroot",
                             0,
@@ -403,13 +414,16 @@ impl WasmRepl {
             sysroot,
             name.as_bytes(),
         ) {
-            crate::debug::WordSource::Session { def_span } => JsWordSource {
+            crate::debug::WordSource::Session { def_span } => {
+                let span = doc_span(&self.session, def_span);
+                JsWordSource {
                 origin: "session".to_string(),
                 path: String::new(),
                 source: String::new(),
-                def_span_start: def_span.start as u32,
-                def_span_len: def_span.end.saturating_sub(def_span.start) as u32,
-            },
+                def_span_start: span.start as u32,
+                def_span_len: span.end.saturating_sub(span.start) as u32,
+                }
+            }
             crate::debug::WordSource::Sysroot { path, source } => JsWordSource {
                 origin: "sysroot".to_string(),
                 path: String::from_utf8_lossy(&path).into_owned(),
@@ -458,19 +472,18 @@ impl WasmRepl {
         );
         let (status, exit_code, diag_code) = match self.session.last_status() {
             None => ("fresh".to_string(), 0i64, 0u32),
-            Some(s) => match s {
-                Status::Ok => ("ok".to_string(), 0, 0),
-                Status::Exited { code } => ("exited".to_string(), *code, 0),
-                Status::CompileError { diag } => ("compile-error".to_string(), 0, diag.code),
-                Status::FuelExhausted { diag } => ("fuel".to_string(), 0, diag.code),
-                Status::Internal { diag } => ("internal".to_string(), 0, diag.code),
-                Status::DeviceError { code, .. } => ("device-error".to_string(), 0, *code),
-                Status::Trapped { code, .. } => (
-                    "trapped".to_string(),
-                    0,
-                    ir::trap_code_u32(*code),
-                ),
-            },
+            Some(s) => {
+                // One renderer (I-11): the outcome word is `Status::word`,
+                // the same text the transcript and the debug dump print.
+                let code = match s {
+                    Status::CompileError { diag } | Status::Internal { diag } => diag.code,
+                    Status::FuelExhausted { diag } => diag.code,
+                    Status::DeviceError { code: c, .. } => *c,
+                    Status::Trapped { code: c, .. } => ir::trap_code_u32(*c),
+                    _ => 0,
+                };
+                (s.word(), 0i64, code)
+            }
         };
         JsStatusSummary {
             status,
@@ -519,6 +532,14 @@ impl SourceTable for SysrootSearch {
     }
 }
 
+/// I-9: spans crossing the ABI are DOC-relative (the submitted buffer).
+/// A span that lives in session machinery (the module prefix, the synthetic
+/// phrase word's own tokens) has no doc home and collapses to UNKNOWN —
+/// the UI never sees an anchor offset it cannot resolve.
+fn doc_span(repl: &ReplSession, span: frontend::span::Span) -> frontend::span::Span {
+    repl.doc_span(span).unwrap_or(frontend::span::Span::UNKNOWN)
+}
+
 fn e9151() -> String {
     format!(
         "E{}: unlimited fuel is rejected on wasm (§Q6)",
@@ -540,6 +561,7 @@ pub struct JsSubmitResult {
     diag_span_start: u32,
     diag_span_end: u32,
     diag_message: String,
+    detail: Option<JsTrapDetail>,
     output_start: u32,
     output_end: u32,
     ir_text: Option<String>,
@@ -577,6 +599,13 @@ impl JsSubmitResult {
         self.diag_message.clone()
     }
 
+    /// The §Q6 contract detail (FR-29): present ONLY on contract failures
+    /// (trap 20); absent (`null`) on every other status.
+    #[wasm_bindgen(getter)]
+    pub fn detail(&self) -> Option<JsTrapDetail> {
+        self.detail.clone()
+    }
+
     #[wasm_bindgen(getter)]
     pub fn output_start(&self) -> u32 {
         self.output_start
@@ -594,7 +623,7 @@ impl JsSubmitResult {
 }
 
 impl JsSubmitResult {
-    fn of(result: SubmitResult) -> JsSubmitResult {
+    fn of(repl: &ReplSession, result: SubmitResult) -> JsSubmitResult {
         // The §7.5 envelope for every non-ok status: compile diagnostics are
         // native codes verbatim; traps are frozen numerics (I-3); 9150+ are
         // the REPL-layer registry.
@@ -613,6 +642,29 @@ impl JsSubmitResult {
             )),
             Status::Ok | Status::Exited { .. } => None,
         };
+        let dstart = match &result.status {
+            Status::CompileError { diag } | Status::Internal { diag } => doc_span(repl, diag.span),
+            Status::FuelExhausted { diag } => doc_span(repl, diag.span),
+            Status::Trapped { span, .. } => doc_span(repl, *span),
+            Status::DeviceError { span, .. } => doc_span(repl, *span),
+            _ => frontend::span::Span::UNKNOWN,
+        };
+        let detail = match &result.status {
+            Status::Trapped { detail: Some(d), .. } => Some(JsTrapDetail {
+                kind: String::from_utf8_lossy(d.kind.name()).into_owned(),
+                word: String::from_utf8_lossy(&d.word).into_owned(),
+                declared: String::from_utf8_lossy(&d.declared).into_owned(),
+                actual: d
+                    .actual
+                    .iter()
+                    .map(|c| JsStackCell {
+                        ty_name: String::from_utf8_lossy(&c.ty_name).into_owned(),
+                        value_hex: String::from_utf8_lossy(&c.value_hex).into_owned(),
+                    })
+                    .collect(),
+            }),
+            _ => None,
+        };
         let status = match &result.status {
             Status::Ok => "ok",
             Status::Exited { .. } => "exited",
@@ -630,12 +682,13 @@ impl JsSubmitResult {
             status: status.to_string(),
             exit_code,
             diag_code: diag.as_ref().map(|d| d.code).unwrap_or(0),
-            diag_span_start: diag.as_ref().map(|d| d.span.start as u32).unwrap_or(0),
-            diag_span_end: diag.as_ref().map(|d| d.span.end as u32).unwrap_or(0),
+            diag_span_start: dstart.start as u32,
+            diag_span_end: dstart.end as u32,
             diag_message: diag
                 .as_ref()
                 .map(|d| String::from_utf8_lossy(&d.message).into_owned())
                 .unwrap_or_default(),
+            detail,
             output_start: result.output_new.start,
             output_end: result.output_new.end,
             ir_text: result

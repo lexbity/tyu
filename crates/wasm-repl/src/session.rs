@@ -158,6 +158,67 @@ pub struct ReplSession {
     /// The pooled diagnostic-output buffer (D-W4): same pooling discipline as
     /// the journal.
     out_pool: Vec<u8>,
+    /// The last submit's anchor map (I-9, as-built): the engine's spans
+    /// index the COMPILED module text (`Compiled.src`), not the submitted
+    /// buffer — the session built that text, so the session is the one place
+    /// that can map anchor offsets back onto the doc (`doc_span`). Fields
+    /// describe the module text of the most recent submit attempt.
+    anchor: AnchorMap,
+}
+
+/// The anchor→doc mapping of one submit attempt (see `ReplSession::anchor`).
+#[derive(Clone, Debug, Default)]
+struct AnchorMap {
+    /// The submitted buffer (the I-9 doc).
+    doc: Vec<u8>,
+    /// Anchor offset of doc[0] (the `module repl-session;\n` prefix width
+    /// for fragment sessions, 0 for module-form without an insertion).
+    base: usize,
+    /// The synthetic phrase word's placement, when a phrase was spliced in:
+    /// (anchor offset of the synthetic, anchor offset of the phrase INSIDE
+    /// the synthetic, doc offset of the phrase, phrase byte length).
+    synthetic: Option<(usize, usize, usize, usize)>,
+    /// The synthetic's total anchor width (0 when none) — offsets past it
+    /// shift left by this much.
+    synthetic_len: usize,
+}
+
+impl AnchorMap {
+    /// Map an anchor-relative span onto the submitted buffer. `None` for
+    /// offsets that live in session machinery (the prefix, the synthetic
+    /// word's own tokens) — never a guess (I-8: no JS-side reconstruction).
+    fn doc_span(&self, span: Span) -> Option<Span> {
+        let map_off = |off: usize| -> Option<usize> {
+            if off < self.base {
+                return None; // the module prefix
+            }
+            let d = off - self.base;
+            if d < self.doc.len() {
+                return Some(d);
+            }
+            if let Some((at, phrase_at, phrase_doc, phrase_len)) = self.synthetic {
+                if off < at {
+                    return None;
+                }
+                if off >= phrase_at && off <= phrase_at + phrase_len {
+                    return Some(phrase_doc + (off - phrase_at));
+                }
+                if off >= at + self.synthetic_len {
+                    return Some(off - self.synthetic_len);
+                }
+                return None; // the synthetic word's own name/sig tokens
+            }
+            // Past the doc with no synthetic: the trailing `end;`/insertions
+            // region — machinery, unless it is exactly the doc end.
+            if d == self.doc.len() {
+                return Some(d);
+            }
+            None
+        };
+        let start = map_off(span.start)?;
+        let end = map_off(span.end)?;
+        Some(Span::new(start, end.max(start)))
+    }
 }
 
 /// A fuel-suspended phrase (the plan's `SubmitResult.snapshot`, held
@@ -196,6 +257,7 @@ impl ReplSession {
             last_status: None,
             scratch_journal: Journal::new(),
             out_pool: Vec::new(),
+            anchor: AnchorMap::default(),
         }
     }
 
@@ -280,6 +342,13 @@ impl ReplSession {
     /// The persistent region heap (the `regions` snapshot's source).
     pub fn heap(&self) -> &RegionHeap {
         &self.heap
+    }
+
+    /// Map an anchor-relative span (engine spans index the compiled module
+    /// text) onto the last submitted buffer (I-9). `None` for machinery
+    /// offsets — never a guess.
+    pub fn doc_span(&self, span: Span) -> Option<Span> {
+        self.anchor.doc_span(span)
     }
 
     /// The live engine state of a fuel-suspended phrase, if any (the
@@ -449,6 +518,47 @@ impl ReplSession {
             committed_module_form,
             synthetic.as_deref(),
         );
+        // The anchor map for THIS attempt (the engine's spans will index
+        // `module_text`; `doc_span` maps them back onto the submitted
+        // buffer). Phrase geometry: the synthetic embeds the phrase bytes
+        // verbatim before its trailing `" ;\n"`.
+        self.anchor = {
+            let doc = submission.to_vec();
+            let mut map = AnchorMap {
+                doc: doc.clone(),
+                base: if committed_module_form { 0 } else { "module repl-session;
+".len() },
+                synthetic: None,
+                synthetic_len: 0,
+            };
+            if let (Some(syn), Some(phrase)) = (synthetic.as_deref(), split.phrase.as_deref()) {
+                let phrase_len = phrase.len();
+                let phrase_in_doc = if committed_module_form {
+                    // Module form: the buffer's phrase region is everything
+                    // after the module's final `end;`.
+                    doc.len().saturating_sub(phrase_len)
+                } else {
+                    committed_source.len()
+                };
+                let synthetic_at = if committed_module_form {
+                    // Spliced before the final top-level `end;` — its exact
+                    // offset is the doc's `end` token position, which the
+                    // assembler found; recompute the same way it did.
+                    splice_offset(&doc).unwrap_or(0)
+                } else {
+                    map.base + committed_source.len()
+                };
+                map.synthetic_len = syn.len();
+                map.synthetic = Some((
+                    synthetic_at,
+                    synthetic_at + syn.len() - phrase_len - " ;
+".len(),
+                    phrase_in_doc,
+                    phrase_len,
+                ));
+            }
+            map
+        };
 
         let built = match compile(&module_text, search, self.opts.spec, desc) {
             Ok(b) => b,
@@ -787,6 +897,28 @@ impl ReplSession {
             }
         }
         None
+    }
+}
+
+impl Status {
+    /// The status bar's outcome word (§7.4): one canonical rendering shared
+    /// by the transcript (G56), the debug dump (G57) and the wasm ABI — one
+    /// renderer per fact (I-11).
+    pub fn word(&self) -> alloc::string::String {
+        match self {
+            Status::Ok => "ok".into(),
+            Status::CompileError { diag } => alloc::format!("compile-error E{}", diag.code),
+            Status::Trapped { code, .. } => {
+                alloc::format!("trapped {}", ir::trap_code_u32(*code))
+            }
+            Status::FuelExhausted { .. } => "fuel E9150".into(),
+            Status::Internal { diag } => alloc::format!("internal E{}", diag.code),
+            Status::Exited { code } => alloc::format!("exited {code}"),
+            Status::DeviceError { code, aperture, .. } => match aperture {
+                Some(ap) => alloc::format!("device-error E{code} ap{ap}"),
+                None => alloc::format!("device-error E{code}"),
+            },
+        }
     }
 }
 
@@ -1150,6 +1282,28 @@ fn assemble_module(source: &[u8], module_form: bool, insertion: Option<&str>) ->
         t.push_str("end;\n");
         t.into_bytes()
     }
+}
+
+/// The byte offset of a module buffer's final top-level `end;` token (the
+/// assembler's splice point; recomputed for the anchor map).
+fn splice_offset(source: &[u8]) -> Option<usize> {
+    let toks = lex_all(source);
+    let mut depth = 0i32;
+    let mut at = None;
+    for t in &toks {
+        if depth == 0
+            && t.kind == TokenKind::KwEnd
+            && toks.get(
+                toks.iter().position(|x| x == t).unwrap_or(usize::MAX) + 1,
+            )
+            .map(|n| n.kind)
+            == Some(TokenKind::PunctSemi)
+        {
+            at = Some(t.span.start);
+        }
+        depth += depth_delta(t.kind);
+    }
+    at
 }
 
 /// Splice `insertion` (bytes) before a module buffer's final top-level

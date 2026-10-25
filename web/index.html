@@ -30,7 +30,7 @@
     (DEC-26); it never blanks.
   -->
   <link rel="stylesheet" href="pkg/vendor/editor.css" />
-  <script src="pkg/vendor/editor.js" integrity="sha384-kJMFQOmLmO7jzuNXmFrMcXAkgq0EK2ZJ7Y4OYYQWPvN+uPcQgGH1KDWTr+LI+4Yx" crossorigin="anonymous"></script>
+  <script src="pkg/vendor/editor.js" integrity="sha384-34c9oporzd2+slrlnRcOddMvAyFK5f2oRXooI+4dJrGQWk3ICw7HiXsU6bIhdR04" crossorigin="anonymous"></script>
 </head>
 <body>
   <header id="statusbar">
@@ -61,6 +61,14 @@
 
       <h2>output</h2>
       <pre id="console" aria-live="polite"></pre>
+
+      <h2>call stack <span class="muted">(live frames / post-mortem backtrace)</span></h2>
+      <div id="frames" aria-live="polite"></div>
+
+      <h2>transcript <span class="muted">(this session's submissions)</span></h2>
+      <div id="transcript" aria-live="polite"></div>
+
+      <div id="debug-pane" class="hidden"></div>
     </section>
   </main>
 

@@ -135,7 +135,7 @@ fn status_line(
     use std::fmt::Write;
     let mut s = String::new();
     // output first makes the retained-output-on-trap asymmetry visible.
-    let _ = writeln!(s, "status: {}", status_word(status));
+    let _ = writeln!(s, "status: {}", status.word());
     if !out.is_empty() {
         let _ = writeln!(s, "output: {}", hex(out));
     }
@@ -176,20 +176,8 @@ fn status_line(
     s
 }
 
-fn status_word(status: &Status) -> String {
-    match status {
-        Status::Ok => "ok".to_string(),
-        Status::CompileError { diag } => format!("compile-error E{}", diag.code),
-        Status::Trapped { code, .. } => format!("trapped {}", ir::trap_code_u32(*code)),
-        Status::FuelExhausted { .. } => "fuel E9150".to_string(),
-        Status::Internal { diag } => format!("internal E{}", diag.code),
-        Status::Exited { code } => format!("exited {code}"),
-        Status::DeviceError { code, aperture, .. } => match aperture {
-            Some(ap) => format!("device-error E{code} ap{ap}"),
-            None => format!("device-error E{code}"),
-        },
-    }
-}
+// The status rendering (`Status::word`) lives on the lib type — one
+// renderer shared with the debug dump and the wasm ABI (I-11).
 
 // ---------------------------------------------------------------------------
 // Replay
@@ -370,103 +358,13 @@ fn ir_hash(session: &ReplSession) -> String {
 
 
 // ---------------------------------------------------------------------------
-// Debug-dump JSON (PLAN-WASM-2 W1, FR-27): per submission, the exact snapshot
-// payloads the wasm ABI exports (`debug` projections) — the G57 fixture
-// source. Hand-rolled deterministic JSON encoder; std allowed in the bin.
+// Debug-dump mode (FR-27/G57): drives the session script and prints, after
+// every submission, the lib-encoded snapshot line (`debug::dump_submission`
+// — the SAME encoder a Rust test through the core API runs, I-11).
 // ---------------------------------------------------------------------------
 
-fn json_escape(b: &[u8]) -> String {
-    let mut s = String::from("\"");
-    for &c in b {
-        match c {
-            b'"' => s.push_str("\\\""),
-            b'\\' => s.push_str("\\\\"),
-            b'\n' => s.push_str("\\n"),
-            b'\r' => s.push_str("\\r"),
-            b'\t' => s.push_str("\\t"),
-            0x20..=0x7e => s.push(c as char),
-            _ => s.push_str(&format!("\\u{:04x}", c)),
-        }
-    }
-    s.push('"');
-    s
-}
-
-fn json_cell(c: &wasm_repl::StackCell) -> String {
-    format!(
-        "{{\"ty_name\":{},\"value_hex\":{}}}",
-        json_escape(&c.ty_name),
-        json_escape(&c.value_hex)
-    )
-}
-
-fn json_span(sp: frontend::span::Span) -> String {
-    format!(
-        "{{\"start\":{},\"len\":{}}}",
-        sp.start,
-        sp.end.saturating_sub(sp.start)
-    )
-}
-
-fn json_detail(d: &wasm_repl::TrapDetail) -> String {
-    let actual: Vec<String> = d.actual.iter().map(json_cell).collect();
-    format!(
-        "{{\"kind\":{},\"word\":{},\"declared\":{},\"actual\":[{}]}}",
-        json_escape(d.kind.name()),
-        json_escape(&d.word),
-        json_escape(&d.declared),
-        actual.join(",")
-    )
-}
-
-fn json_event(e: &wasm_repl::debug::TraceEventView) -> String {
-    use wasm_repl::debug::TraceEventView as Ev;
-    match e {
-        Ev::Output { start, len } => {
-            format!("{{\"kind\":\"output\",\"start\":{start},\"len\":{len}}}")
-        }
-        Ev::Periph {
-            ap,
-            off,
-            width,
-            val,
-            is_write,
-        } => format!(
-            "{{\"kind\":\"periph\",\"ap\":{ap},\"off\":{off},\"width\":{width},\"val\":{val:#x},\"is_write\":{is_write}}}"
-        ),
-        Ev::Call { word, depth } => format!(
-            "{{\"kind\":\"call\",\"word\":{},\"depth\":{}}}",
-            json_escape(word),
-            depth
-        ),
-        Ev::Trap { code, span, detail } => {
-            let d = detail
-                .as_ref()
-                .map(json_detail)
-                .unwrap_or_else(|| "null".to_string());
-            format!(
-                "{{\"kind\":\"trap\",\"code\":{code},\"span\":{},\"detail\":{d}}}",
-                json_span(*span)
-            )
-        }
-        Ev::Device { code } => format!("{{\"kind\":\"device\",\"code\":{code}}}"),
-        Ev::Internal { code } => format!("{{\"kind\":\"internal\",\"code\":{code}}}"),
-        Ev::Fuel => "{\"kind\":\"fuel\"}".to_string(),
-        Ev::Done { exit } => format!("{{\"kind\":\"done\",\"exit\":{exit}}}"),
-    }
-}
-
-fn status_word_json(status: Option<&Status>) -> String {
-    match status {
-        None => "fresh".to_string(),
-        Some(st) => status_word(st),
-    }
-}
-
-/// The debug-dump mode: replay a session script, printing after every
-/// submission the §5.2 snapshot JSON (frames / trace events / words /
-/// regions / status) — the same `debug` projections the wasm ABI wraps
-/// (R-E: one core, both surfaces, I-11).
+/// Replay a session script, printing after every submission the §5.2
+/// snapshot JSON.
 fn debug_dump(session: &mut ReplSession, search: &[Arc<MemTable>], script: &str) -> String {
     use std::fmt::Write;
     let refs: Vec<&dyn SourceTable> = search
@@ -498,84 +396,10 @@ fn debug_dump(session: &mut ReplSession, search: &[Arc<MemTable>], script: &str)
         }
         let _result = session.transactional_submit(line_display.as_bytes(), &refs);
         submit_index += 1;
-
-        let compiled = session.compiled();
-        let frames: Vec<String> = match session.suspended_state().zip(compiled) {
-            Some((st, c)) => wasm_repl::debug::frames(c, st)
-                .iter()
-                .map(|f| {
-                    format!(
-                        "{{\"index\":{},\"word\":{},\"sig\":{},\"call_span\":{},\"locals\":[{}]}}",
-                        f.index,
-                        json_escape(&f.word),
-                        json_escape(&f.sig),
-                        json_span(f.call_span),
-                        f.locals
-                            .iter()
-                            .map(json_cell)
-                            .collect::<Vec<_>>()
-                            .join(",")
-                    )
-                })
-                .collect(),
-            None => Vec::new(),
-        };
-        let events: Vec<String> = match session.last_trace() {
-            Some(t) => wasm_repl::debug::trace_events(t)
-                .iter()
-                .map(json_event)
-                .collect(),
-            None => Vec::new(),
-        };
-        let words: Vec<String> = match compiled {
-            Some(c) => wasm_repl::debug::words(c, session.source())
-                .iter()
-                .map(|w| {
-                    let origin = match &w.origin {
-                        wasm_repl::debug::WordOrigin::Session { def_span } => format!(
-                            "{{\"origin\":\"session\",\"def_span\":{}}}",
-                            json_span(*def_span)
-                        ),
-                        wasm_repl::debug::WordOrigin::Sysroot { path } => format!(
-                            "{{\"origin\":\"sysroot\",\"path\":{}}}",
-                            json_escape(path)
-                        ),
-                    };
-                    format!(
-                        "{{\"name\":{},\"sig\":{},\"effects\":{},\"origin\":{}}}",
-                        json_escape(&w.name),
-                        json_escape(&w.sig),
-                        json_escape(&w.effects),
-                        origin
-                    )
-                })
-                .collect(),
-            None => Vec::new(),
-        };
-        let regions: Vec<String> = wasm_repl::debug::regions(session.heap())
-            .iter()
-            .filter(|r| r.alive)
-            .map(|r| {
-                format!(
-                    "{{\"id\":{},\"off\":{:#x},\"len\":{:#x},\"cursor\":{:#x},\"kind\":{},\"alive\":{}}}",
-                    r.id, r.off, r.len, r.cursor, r.kind, r.alive
-                )
-            })
-            .collect();
-        let st = wasm_repl::debug::status(session.stack_cells().len(), compiled, session.fuel());
         let _ = writeln!(
             out,
-            "{{\"submit\":{},\"source\":{},\"status\":{},\"stack_depth\":{},\"words_count\":{},\"fuel\":{},\"frames\":[{}],\"trace_events\":[{}],\"words\":[{}],\"regions\":[{}]}}",
-            submit_index,
-            json_escape(line_display.as_bytes()),
-            json_escape(status_word_json(session.last_status()).as_bytes()),
-            st.stack_depth,
-            st.word_count,
-            st.fuel_ops,
-            frames.join(","),
-            events.join(","),
-            words.join(","),
-            regions.join(","),
+            "{}",
+            wasm_repl::debug::dump_submission(session, submit_index, line_display.as_bytes())
         );
     }
     out

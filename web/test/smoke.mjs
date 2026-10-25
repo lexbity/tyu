@@ -270,6 +270,96 @@ try {
     const stillReady = await page.textContent("#status");
     assert(!stillReady.includes("boot failed"), "unknown id does not fail the page");
 
+    // ---------------------------------------------------------------
+    // W4 / G57(b): the debug panel against the committed native dump. The
+    // fixture (test-goldens/repl/debug/console-fixture.*) is one whole-
+    // buffer submission whose every span anchors into the editor doc (I-9),
+    // so the browser can be compared field-for-field with the native dump.
+    // ---------------------------------------------------------------
+    const { readFileSync } = await import("node:fs");
+    const GOLDENS = join(WEB, "..", "test-goldens", "repl", "debug");
+    const dumpLines = readFileSync(join(GOLDENS, "console-fixture.dump"), "utf8")
+      .trim()
+      .split("\n");
+    const dump = JSON.parse(dumpLines[1]);
+    const repl_fuel_from_dump = (d) => `${Math.round(d.fuel / 1_000_000)}M`;
+    const dumpCalls = dump.trace_events.filter((e) => e.kind === "call");
+    const dumpTrap = dump.trace_events.find((e) => e.kind === "trap");
+
+    await page.goto(base); // drop the deep-link hash
+    await page.waitForFunction(
+      () => document.getElementById("status")?.dataset.state === "ready",
+      null,
+      { timeout: 15_000 }
+    );
+    const fixtureSource = readFileSync(join(GOLDENS, "console-fixture.session"), "utf8")
+      .trim()
+      .split("\n")
+      .pop();
+    await page.click(".cm-content");
+    await page.keyboard.press("ControlOrMeta+a");
+    await page.keyboard.insertText(fixtureSource);
+    await page.click("#run");
+    await page.waitForFunction(() =>
+      document.getElementById("frames")?.textContent.includes("backtrace"),
+      null,
+      { timeout: 10_000 }
+    );
+
+    // Frame order (innermost first — gdb order) matches the dump.
+    const frameRows = await page.$$eval("#frames ol li", (els) =>
+      els.map((el) => el.textContent.trim())
+    );
+    const expectedFrames = [...dumpCalls].reverse().map((c) => `at ${c.word} (depth ${c.depth})`);
+    assert(
+      JSON.stringify(frameRows) === JSON.stringify(expectedFrames),
+      `frame order vs native dump: ${JSON.stringify(frameRows)}`
+    );
+
+    // The trap row: code + the sig-vs-actual detail fields (FR-29).
+    const trapText = await page.$eval("#frames .trap-row", (el) => el.textContent);
+    assert(trapText.includes(`trap ${dumpTrap.code}`), `trap code rendered (${trapText})`);
+    assert(trapText.includes(dumpTrap.detail.kind), `detail kind (${trapText})`);
+    assert(trapText.includes(dumpTrap.detail.word), `detail word (${trapText})`);
+    assert(trapText.includes(dumpTrap.detail.declared), `detail declared (${trapText})`);
+    assert(trapText.includes(dumpTrap.detail.actual[0].value_hex),
+      `detail actual cell (${trapText})`);
+
+    // Stack depth and §7.4 status line vs the dump.
+    const statusLine = await page.textContent("#status");
+    assert(statusLine.includes(`stack ${dump.stack_depth}`), `stack depth in status (${statusLine})`);
+    assert(statusLine.includes(`words ${dump.words_count}`), `word count in status (${statusLine})`);
+    assert(statusLine.includes("trapped 20"), `outcome in status (${statusLine})`);
+
+    // FR-29 in the diag banner: the trap detail is wherever the diagnostic
+    // is shown.
+    const diagText = await page.textContent("#diag");
+    assert(diagText.includes("sig-mismatch") && diagText.includes("add-safely"),
+      `sig-vs-actual in the diag banner (${JSON.stringify(diagText)})`);
+
+    // Click-to-source: the trap row's jump selects the span in the editor
+    // (doc-anchored, I-9) — the selection equals the span's text.
+    await page.click("#frames .trap-row button");
+    const selected = await page.evaluate(() => {
+      const cm = document.querySelector(".cm-content");
+      const sel = window.getSelection();
+      return sel ? sel.toString() : "";
+    });
+    const src = fixtureSource;
+    const expectedSlice = src.slice(dumpTrap.span.start, dumpTrap.span.start + dumpTrap.span.len);
+    assert(
+      selected === expectedSlice,
+      `click-to-source selects the trap span (${JSON.stringify(selected)} vs ${JSON.stringify(expectedSlice)})`
+    );
+
+    // FR-31: the transcript records the submissions.
+    const trRows = await page.$$eval("#transcript .tr-row", (els) => els.length);
+    assert(trRows >= 1, `transcript has entries (${trRows})`);
+
+    // D-W9: the fuel note renders ABI numbers, not a JS constant.
+    const fuelNote = await page.textContent("#fuel-note");
+    assert(fuelNote.includes(repl_fuel_from_dump(dump)), `fuel note from ABI (${fuelNote})`);
+
     // Reload resets (Fresh state, §4.2).
     await page.reload({ waitUntil: "load" });
     await page.waitForFunction(

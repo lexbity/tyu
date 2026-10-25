@@ -1,0 +1,7 @@
+# console-fixture — the G57 debug-surface fixture (PLAN-WASM-2 W4): the
+# whole program + phrase as ONE submission (the DEC-19 run model), so every
+# engine span anchors into the exact buffer the editor holds (I-9) and the
+# browser's debug panel can be compared field-for-field against the native
+# dump (G57). One line = one submission (the session-script convention);
+# definitions first, the phrase last.
+: no-sevens ( i64 -- i64 bool ) dup 7 == not ; : add-safely ( i64 -- i64 ) needs [ no-sevens ] 1 + ; : wrap ( i64 -- i64 ) add-safely ; : double ( i64 -- i64 ) dup + ; 7 wrap drop 2 double

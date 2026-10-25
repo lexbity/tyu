@@ -366,3 +366,192 @@ fn def_span(source: &[u8], name: &[u8]) -> Option<Span> {
 fn defines_word(source: &[u8], name: &[u8]) -> bool {
     def_span(source, name).is_some()
 }
+
+// ---------------------------------------------------------------------------
+// The debug dump (PLAN-WASM-2 FR-27/G57): per submission, the exact snapshot
+// payloads the wasm ABI exports, as one deterministic JSON line. The encoder
+// lives HERE — the native CLI (`repl-cli debug-dump`) and any test through
+// the core API emit the same bytes (R-E / I-11: one core, both surfaces,
+// one renderer per fact). Hand-rolled deterministic JSON; std not required.
+// ---------------------------------------------------------------------------
+
+use alloc::format;
+use alloc::string::{String, ToString};
+
+fn json_escape(b: &[u8]) -> String {
+    let mut s = String::from("\"");
+    for &c in b {
+        match c {
+            b'"' => s.push_str("\\\""),
+            b'\\' => s.push_str("\\\\"),
+            b'\n' => s.push_str("\\n"),
+            b'\r' => s.push_str("\\r"),
+            b'\t' => s.push_str("\\t"),
+            0x20..=0x7e => s.push(c as char),
+            _ => s.push_str(&format!("\\u{:04x}", c)),
+        }
+    }
+    s.push('"');
+    s
+}
+
+fn json_cell(c: &StackCell) -> String {
+    format!(
+        "{{\"ty_name\":{},\"value_hex\":{}}}",
+        json_escape(&c.ty_name),
+        json_escape(&c.value_hex)
+    )
+}
+
+fn json_span(sp: Span) -> String {
+    format!(
+        "{{\"start\":{},\"len\":{}}}",
+        sp.start,
+        sp.end.saturating_sub(sp.start)
+    )
+}
+
+fn json_detail(d: &crate::engine::TrapDetail) -> String {
+    let actual: Vec<String> = d.actual.iter().map(json_cell).collect();
+    format!(
+        "{{\"kind\":{},\"word\":{},\"declared\":{},\"actual\":[{}]}}",
+        json_escape(d.kind.name()),
+        json_escape(&d.word),
+        json_escape(&d.declared),
+        actual.join(",")
+    )
+}
+
+fn json_event_doc(e: &TraceEventView, doc: &dyn Fn(Span) -> Span) -> String {
+    match e {
+        TraceEventView::Output { start, len } => {
+            format!("{{\"kind\":\"output\",\"start\":{start},\"len\":{len}}}")
+        }
+        TraceEventView::Periph {
+            ap,
+            off,
+            width,
+            val,
+            is_write,
+        } => format!(
+            "{{\"kind\":\"periph\",\"ap\":{ap},\"off\":{off},\"width\":{width},\"val\":{val:#x},\"is_write\":{is_write}}}"
+        ),
+        TraceEventView::Call { word, depth } => format!(
+            "{{\"kind\":\"call\",\"word\":{},\"depth\":{}}}",
+            json_escape(word),
+            depth
+        ),
+        TraceEventView::Trap { code, span, detail } => {
+            let d = detail
+                .as_ref()
+                .map(json_detail)
+                .unwrap_or_else(|| "null".to_string());
+            format!(
+                "{{\"kind\":\"trap\",\"code\":{code},\"span\":{},\"detail\":{d}}}",
+                json_span(doc(*span))
+            )
+        }
+        TraceEventView::Device { code } => format!("{{\"kind\":\"device\",\"code\":{code}}}"),
+        TraceEventView::Internal { code } => format!("{{\"kind\":\"internal\",\"code\":{code}}}"),
+        TraceEventView::Fuel => "{\"kind\":\"fuel\"}".to_string(),
+        TraceEventView::Done { exit } => format!("{{\"kind\":\"done\",\"exit\":{exit}}}"),
+    }
+}
+
+fn json_word(w: &WordInfo) -> String {
+    let origin = match &w.origin {
+        WordOrigin::Session { def_span } => {
+            format!("{{\"origin\":\"session\",\"def_span\":{}}}", json_span(*def_span))
+        }
+        WordOrigin::Sysroot { path } => {
+            format!("{{\"origin\":\"sysroot\",\"path\":{}}}", json_escape(path))
+        }
+    };
+    format!(
+        "{{\"name\":{},\"sig\":{},\"effects\":{},\"origin\":{}}}",
+        json_escape(&w.name),
+        json_escape(&w.sig),
+        json_escape(&w.effects),
+        origin
+    )
+}
+
+fn json_region(r: &RegionInfo) -> String {
+    format!(
+        "{{\"id\":{},\"off\":{:#x},\"len\":{:#x},\"cursor\":{:#x},\"kind\":{},\"alive\":{}}}",
+        r.id, r.off, r.len, r.cursor, r.kind, r.alive
+    )
+}
+
+/// One submission's snapshot line (§5.2): frames / trace events / words /
+/// regions / status — derived ONLY from the session's own accessors (I-8),
+/// the same data the wasm ABI wraps. The G57(a) parity test compares this
+/// byte-for-byte against the CLI's output.
+pub fn dump_submission(session: &crate::session::ReplSession, submit_index: usize, source: &[u8]) -> String {
+    // I-9: every span in the dump is DOC-relative — the same mapping the
+    // wasm ABI applies (I-11: one mapper, both surfaces; unmappable
+    // machinery spans collapse to UNKNOWN, never an anchor offset).
+    let doc = |span: Span| -> Span {
+        session.doc_span(span).unwrap_or(Span::UNKNOWN)
+    };
+    let compiled = session.compiled();
+    let frames: Vec<String> = match session.suspended_state().zip(compiled) {
+        Some((st, c)) => frames(c, st)
+            .iter()
+            .map(|f| {
+                format!(
+                    "{{\"index\":{},\"word\":{},\"sig\":{},\"call_span\":{},\"locals\":[{}]}}",
+                    f.index,
+                    json_escape(&f.word),
+                    json_escape(&f.sig),
+                    json_span(doc(f.call_span)),
+                    f.locals.iter().map(json_cell).collect::<Vec<_>>().join(",")
+                )
+            })
+            .collect(),
+        None => Vec::new(),
+    };
+    let events: Vec<String> = match session.last_trace() {
+        Some(t) => trace_events(t)
+            .iter()
+            .map(|e| json_event_doc(e, &doc))
+            .collect(),
+        None => Vec::new(),
+    };
+    let words: Vec<String> = match compiled {
+        Some(c) => words(c, session.source())
+            .iter()
+            .map(|w| {
+                let mut w = w.clone();
+                if let WordOrigin::Session { def_span } = &mut w.origin {
+                    *def_span = doc(*def_span);
+                }
+                json_word(&w)
+            })
+            .collect(),
+        None => Vec::new(),
+    };
+    let regions: Vec<String> = regions(session.heap())
+        .iter()
+        .filter(|r| r.alive)
+        .map(json_region)
+        .collect();
+    let st = status(session.stack_cells().len(), compiled, session.fuel());
+    let status_text = match session.last_status() {
+        None => alloc::borrow::ToOwned::to_owned("fresh"),
+        Some(s) => s.word(),
+    };
+    format!(
+        "{{\"submit\":{},\"source\":{},\"status\":{},\"stack_depth\":{},\"words_count\":{},\"fuel\":{},\"frames\":[{}],\"trace_events\":[{}],\"words\":[{}],\"regions\":[{}]}}",
+        submit_index,
+        json_escape(source),
+        json_escape(status_text.as_bytes()),
+        st.stack_depth,
+        st.word_count,
+        st.fuel_ops,
+        frames.join(","),
+        events.join(","),
+        words.join(","),
+        regions.join(","),
+    )
+}

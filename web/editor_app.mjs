@@ -26,10 +26,12 @@ function fallbackEditor(textareaEl, host) {
     // Degraded mode keeps spans honest by selection: the textarea API is
     // byte-faithful for ASCII (the corpus), which is the only content the
     // W2 diagnostics path marks anyway (the general bridge lands in W4).
-    jumpTo(span) {
+    // UTF-16 positions (the app translates engine byte spans; DEC-21).
+    jumpTo(fromPos, toPos) {
       textareaEl.focus();
-      const start = Math.min(span.start | 0, textareaEl.value.length);
-      const end = Math.min(start + (span.len | 0), textareaEl.value.length);
+      const len = textareaEl.value.length;
+      const start = Math.max(0, Math.min(fromPos | 0, len));
+      const end = Math.max(start, Math.min(toPos | 0, len));
       textareaEl.setSelectionRange(start, end);
     },
     focus() {
@@ -65,6 +67,7 @@ function cm6Editor(parentEl, textareaEl, host) {
     focus: () => api.focus(),
     refreshLint: () => api.refreshLint(),
     setReadOnly: (v) => api.setReadOnly(v),
+    jumpTo: (fromPos, toPos) => api.jumpTo(fromPos, toPos),
     degraded: false,
   };
 }

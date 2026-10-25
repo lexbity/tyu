@@ -13,13 +13,13 @@
 //                        bridge and its property tests land in W4, and no
 //                        non-ASCII fixture ships before it).
 
-import { EditorView, keymap, lineNumbers, highlightActiveLine, drawSelection, dropCursor, rectangularSelection, crosshairCursor, highlightSpecialChars } from "@codemirror/view";
+import { EditorView, keymap, lineNumbers, highlightActiveLine, drawSelection, dropCursor } from "@codemirror/view";
 import { Compartment, EditorState } from "@codemirror/state";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { syntaxHighlighting } from "@codemirror/language";
 import { linter } from "@codemirror/lint";
 import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
-import { highlightSelectionMatches, searchKeymap } from "@codemirror/search";
+
 import { tyu, tyuHighlightStyle } from "./index.mjs";
 
 function diagnosticsLinter(host) {
@@ -30,25 +30,16 @@ function diagnosticsLinter(host) {
   const linter_ = linter(
     (view) => {
       lintedEpoch = epoch;
-      const diags = host.getDiagnostics() ?? [];
+      // Positioned diagnostics from the app (span-bridge output, DEC-21).
+      // The zero-width point marker remains the honest render for a span
+      // anchored outside the visible buffer.
       const docLen = view.state.doc.length;
-      return diags
-        .map((d) => {
-          // W2 span path: Tyu sources are ASCII (the shipped corpus is), so
-          // byte offsets are UTF-16 offsets — asserted, never assumed: a
-          // non-ASCII buffer renders nothing rather than a wrong mark.
-          let from = Math.max(0, Math.min(d.span_start | 0, docLen));
-          let to = Math.max(from, Math.min(from + (d.span_len | 0), docLen));
-          if (!isAscii(view.state.doc)) return null;
-          if (from === to) to = Math.min(docLen, from + 1);
-          return {
-            from,
-            to,
-            message: d.message,
-            severity: d.severity ?? "error",
-          };
-        })
-        .filter(Boolean);
+      return (host.getDiagnostics() ?? []).map((d) => {
+        let from = Math.max(0, Math.min(d.from | 0, docLen));
+        let to = Math.max(from, Math.min(d.to | 0, docLen));
+        if (from === to) to = Math.min(docLen, from + 1);
+        return { from, to, message: d.message, severity: d.severity ?? "error" };
+      });
     },
     {
       delay: 250,
@@ -59,14 +50,6 @@ function diagnosticsLinter(host) {
     epoch++;
   };
   return linter_;
-}
-
-function isAscii(doc) {
-  const s = doc.toString();
-  for (let i = 0; i < s.length; i++) {
-    if (s.charCodeAt(i) > 0x7f) return false;
-  }
-  return true;
 }
 
 export function mount(parent, host) {
@@ -97,15 +80,11 @@ export function mount(parent, host) {
       doc: "",
       extensions: [
         lineNumbers(),
-        highlightSpecialChars(),
         history(),
         drawSelection(),
         dropCursor(),
         EditorState.allowMultipleSelections.of(true),
-        rectangularSelection(),
-        crosshairCursor(),
         highlightActiveLine(),
-        highlightSelectionMatches(),
         closeBrackets(),
         readOnly.of([]),
         tyu(),
@@ -114,7 +93,7 @@ export function mount(parent, host) {
         runKeymap,
         // `indentWithTab` is a key BINDING (not an extension): it lives in
         // the base keymap's `of` list.
-        keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap, indentWithTab]),
+        keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...historyKeymap, indentWithTab]),
       ],
     }),
   });
@@ -133,10 +112,12 @@ export function mount(parent, host) {
     currentDoc() {
       return view.state.doc.toString();
     },
-    jumpTo(span) {
+    // UTF-16 positions (the app translates engine byte spans; DEC-21 —
+    // the facade never sees bytes).
+    jumpTo(fromPos, toPos) {
       const docLen = view.state.doc.length;
-      const from = Math.max(0, Math.min(span.start | 0, docLen));
-      const to = Math.max(from, Math.min(from + (span.len | 0), docLen));
+      const from = Math.max(0, Math.min(fromPos | 0, docLen));
+      const to = Math.max(from, Math.min(toPos | 0, docLen));
       view.dispatch({
         selection: { anchor: from, head: to },
         scrollIntoView: true,
