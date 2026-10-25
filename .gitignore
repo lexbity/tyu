@@ -25,3 +25,10 @@ verification/ports/*/tests/*/lean-toolchain
 # against. Never hand-edited; G55 regenerates and re-verifies them.
 web/pkg/
 web/test/node_modules/
+
+# The editor stack's build intermediates (PLAN-WASM-2 W2): the generated
+# Lezer parser + terms (rebuilt by `node web/editor/build.mjs`; the vendor
+# bundle under web/pkg/vendor/ is covered by the web/pkg/ rule above).
+web/editor/lang-tyu/src/parser.js
+web/editor/lang-tyu/src/parser.terms.js
+web/editor/node_modules/

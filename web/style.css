@@ -98,6 +98,53 @@ button:disabled { background: #33415a; color: var(--muted); cursor: default; }
 
 #side { display: flex; flex-direction: column; min-height: 0; }
 
+/* The examples sidebar (W3): chapter groups, kind badges, deep-link target. */
+#examples {
+  overflow-y: auto;
+  max-height: 14rem;
+  background: var(--panel);
+  border: 1px solid #2a3040;
+  border-radius: 4px;
+  padding: 0.25rem;
+  margin-bottom: 0.75rem;
+  flex-shrink: 0;
+}
+#examples details > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 0.2rem 0.4rem;
+  list-style: none;
+}
+#examples details > summary::before { content: "▸ "; }
+#examples details[open] > summary::before { content: "▾ "; }
+#examples .example {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  width: 100%;
+  text-align: left;
+  background: none;
+  color: var(--ink);
+  border: none;
+  padding: 0.15rem 0.4rem 0.15rem 1.2rem;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+#examples .example:hover { background: #232939; }
+#examples .example.target { outline: 1px solid var(--accent); }
+#examples .badge {
+  font-size: 10px;
+  padding: 0 0.3rem;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+#examples .badge.ok { background: #1d3324; color: var(--ok); }
+#examples .badge.diag { background: #33261d; color: var(--warn); }
+#examples .badge.native-only { background: #2a2033; color: #b48ead; }
+#examples .examples-note { color: var(--muted); font-size: 12px; padding: 0.4rem; }
+
 #side h2 {
   font-size: 12px;
   text-transform: uppercase;
@@ -146,5 +193,3 @@ button:disabled { background: #33415a; color: var(--muted); cursor: default; }
   border-radius: 4px;
   white-space: pre-wrap;
 }
-
-#boot-failure.hidden { display: none; }

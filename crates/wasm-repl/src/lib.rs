@@ -57,6 +57,7 @@ pub mod builtins;
 pub mod compile;
 pub mod debug;
 pub mod diag;
+pub mod examples_pack;
 pub mod engine;
 pub mod fuel;
 pub mod heap;

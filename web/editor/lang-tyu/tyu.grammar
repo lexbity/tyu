@@ -1,0 +1,118 @@
+// The Tyu Lezer grammar (PLAN-WASM-2 FR-21): node set Module, WordDef, Sig,
+// StackEffectComment, Quotation, String, Number, Ident, keywords, comments.
+// The module knows neither the REPL nor the DOM (R-G): inputs are text,
+// outputs are editor facets.
+//
+// Stack-effect comments are tokenized ATOMICALLY (R-W3): the external
+// tokenizer in ./src/stack-tokens.mjs scans to the balanced `)` and claims
+// the whole `( a b -- c )` as one token whenever an outermost `--` occurs
+// inside — a bare paren group (`@interrupt(3)`) falls through to `(`.
+
+@top Module { statement* }
+
+@skip { spaces | LineComment }
+
+// Keywords first: equal-length ties against Ident resolve to the earlier
+// declaration. `register-map` (the only dashed keyword) is its own token.
+@tokens {
+  spaces { $[ \t\r\n]+ }
+  LineComment { "#" ![\n]* }
+
+  KwModule      { "module" }
+  KwImport      { "import" }
+  KwExport      { "export" }
+  KwEnd         { "end" }
+  KwAs          { "as" }
+  KwNeeds       { "needs" }
+  KwType        { "type" }
+  KwSubtype     { "subtype" }
+  KwStruct      { "struct" }
+  KwEnum        { "enum" }
+  KwConst       { "const" }
+  KwResource    { "resource" }
+  KwRegisterMap { "register-map" }
+  KwOwned       { "owned" }
+  KwIso         { "iso" }
+
+  Number { $[0-9]+ }
+  String { '"' (!["\\\n] | "\\" _)* '"' }
+  Ident  { $[a-zA-Z_] ($[a-zA-Z0-9_-])* }
+
+  ArrowBind { "=>" }
+  LBracket  { "[" }
+  RBracket  { "]" }
+  LBrace    { "{" }
+  RBrace    { "}" }
+  // `(` is the external tokenizer's non-signature paren group opener; the
+  // matching `)` (and stray ones) are this token.
+  RParen    { ")" }
+  Semi      { ";" }
+  Colon     { ":" }
+  AtSign    { "@" }
+  Dot       { "." }
+
+  OpGe { ">=" }
+  OpLe { "<=" }
+  OpEq { "==" }
+  OpNe { "!=" }
+  OpLt { "<" }
+  OpGt { ">" }
+  OpPlus  { "+" }
+  OpMinus { "-" }
+  OpStar  { "*" }
+  OpSlash { "/" }
+
+  // Keyword-vs-identifier ties resolve to the keyword (declared precedence,
+  // earliest wins).
+  @precedence {
+    KwModule KwImport KwExport KwEnd KwAs KwNeeds KwType KwSubtype
+    KwStruct KwEnum KwConst KwResource KwRegisterMap KwOwned KwIso Ident
+  }
+}
+
+@external tokens stackToks from "./stack-tokens.mjs" {
+  StackEffectComment,
+  LParen
+}
+
+// The top-level statement stream: definitions, declarations' keywords,
+// phrases, and the raw punctuation between them. The checker owns the real
+// syntax — the grammar's job is structure for highlight/indent/fold.
+statement {
+  WordDef |
+  Quotation |
+  KwModule | KwImport | KwExport | KwEnd | KwAs | KwNeeds |
+  KwType | KwSubtype | KwStruct | KwEnum | KwConst | KwResource |
+  KwRegisterMap | KwOwned | KwIso |
+  StackEffectComment |
+  String | Number | Ident |
+  ArrowBind | AtSign | Dot | Semi | LBrace | RBrace | RParen |
+  LParen |
+  OpGe | OpLe | OpEq | OpNe | OpLt | OpGt | OpPlus | OpMinus | OpStar | OpSlash
+}
+
+// `: name ( in -- out ) body ;` — the body never nests a definition (the
+// language has no nested `:`), so the terminating `;` is unambiguous. The
+// signature is the definition's direct StackEffectComment child.
+WordDef {
+  Colon Ident
+  bodyItem*
+  Semi
+}
+
+// A quotation body: the same atom stream, bracketed. Bare `[`/`]` exist
+// ONLY as Quotation markers (they are never atoms) — that is what keeps the
+// body grammar unambiguous.
+Quotation { LBracket bodyItem* RBracket }
+
+bodyItem {
+  Quotation |
+  StackEffectComment |
+  KwModule | KwImport | KwExport | KwEnd | KwAs | KwNeeds |
+  KwType | KwSubtype | KwStruct | KwEnum | KwConst | KwResource |
+  KwRegisterMap | KwOwned | KwIso |
+  String | Number | Ident |
+  ArrowBind | Colon | AtSign | Dot | LBrace | RBrace | RParen |
+  LParen |
+  OpGe | OpLe | OpEq | OpNe | OpLt | OpGt | OpPlus | OpMinus | OpStar | OpSlash
+}

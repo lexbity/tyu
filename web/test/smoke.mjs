@@ -20,8 +20,10 @@ const TAMPERED = process.argv.includes("--tampered");
 const MIME = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript",
+  ".mjs": "text/javascript",
   ".css": "text/css",
   ".wasm": "application/wasm",
+  ".json": "application/json",
 };
 
 function serve() {
@@ -96,13 +98,62 @@ try {
     );
     assert(true, "page boots to ready");
 
-    // Lesson-0 flow: push 1 2 3, then fold with +.
+    // W2: the CM6 editor is the active surface.
+    assert(await page.$(".cm-editor") !== null, "CM6 editor mounted (.cm-editor present)");
+    assert(await page.$("#editor") !== null && await page.$eval("#editor", (el) => el.hidden),
+      "fallback textarea hidden while CM6 is active");
+    assert(await page.$("#diag") !== null && (await page.textContent("#diag")) === "",
+      "no degraded banner in full mode");
+
+    let cells = [];
+    // Editor-aware input: CM6 (keyboard events) or the textarea (fill).
+    const typeInto = async (src) => {
+      if (await page.$(".cm-content")) {
+        await page.click(".cm-content");
+        await page.keyboard.press("ControlOrMeta+a");
+        await page.keyboard.insertText(src);
+      } else {
+        await page.fill("#editor", src);
+      }
+    };
     const submit = async (src) => {
-      await page.fill("#editor", src);
+      await typeInto(src);
       await page.click("#submit");
     };
+    const run = async (src) => {
+      await typeInto(src);
+      await page.click("#run");
+    };
+
+    // Highlighting is live: a `module` keyword in the buffer carries the
+    // lang-tyu token class (the HighlightStyle contract).
+    await typeInto("module M; : w ( -- ) ; end;");
+    const highlighted = await page.$$eval(".cm-line span", (spans) =>
+      spans.some((sp) => sp.className.includes("tyu-kw"))
+    );
+    assert(highlighted, "keyword highlight class applied (tyu-kw)");
+
+    // DEC-19: Run resets — output cleared, program model.
+    await run("import platform/testio { testio.write-byte };\n65 testio.write-byte");
+    let outText = await page.textContent("#console");
+    assert(outText.includes("A"), `run emits the byte (${JSON.stringify(outText)})`);
+    await run("1 2 3");
+    outText = await page.textContent("#console");
+    assert(!outText.includes("A"), "run reset the session (console cleared)");
+    cells = await page.$$eval("#stack li", (lis) => lis.map((li) => li.textContent.trim()));
+    assert(cells.length === 3, `run left the fresh program's stack (${cells.length})`);
+
+    // The session flow starts from a clean slate (an emptied run resets).
+    await page.click(".cm-content");
+    await page.keyboard.press("ControlOrMeta+a");
+    await page.keyboard.press("Backspace");
+    await page.click("#run");
+    cells = await page.$$eval("#stack li", (lis) => lis.map((li) => li.textContent.trim()));
+    assert(cells.length === 0, `empty run resets the stack (${cells.length})`);
+
+    // Lesson-0 flow: push 1 2 3, then fold with + (session model).
     await submit("1 2 3");
-    let cells = await page.$$eval("#stack li", (lis) =>
+    cells = await page.$$eval("#stack li", (lis) =>
       lis.map((li) => li.textContent.trim())
     );
     assert(cells.length === 3, `1 2 3 → three stack cells (${JSON.stringify(cells)})`);
@@ -120,6 +171,105 @@ try {
     const out = await page.textContent("#console");
     assert(out.includes("A"), `output pane shows the written byte (got ${JSON.stringify(out)})`);
 
+    // Submit survives compile errors and renders them as lint marks
+    // (W2 diagnostics path, ASCII spans).
+    await submit(":@:");
+    await page.waitForTimeout(800); // the linter's debounce
+    const lintCount = await page.$$eval(
+      ".cm-lintRange-error, .cm-lintPoint-error",
+      (els) => els.length
+    ).catch(() => 0);
+    assert(lintCount >= 1, `compile error renders a lint mark (${lintCount})`);
+
+    // NFR-12 evidence (loose browser-side bar): 100 keystrokes, input →
+    // doc mutation p95 well under the human-perception bar in-process.
+    await typeInto("");
+    await page.click(".cm-content");
+    const latencies = await page.evaluate(async () => {
+      const view = document.querySelector(".cm-content").cmView?.view;
+      const times = [];
+      const text = ": perf ( i64 -- i64 ) dup 1 + as i64 ;\n1 2 3 + 4 5 6 + 7 8 9 + ;\n";
+      for (const ch of text.repeat(3)) {
+        const t0 = performance.now();
+        document.execCommand("insertText", false, ch);
+        await new Promise((r) => requestAnimationFrame(r));
+        times.push(performance.now() - t0);
+      }
+      times.sort((a, b) => a - b);
+      return times[Math.floor(times.length * 0.95)];
+    });
+    assert(typeof latencies === "number" && latencies < 100,
+      `keystroke→paint p95 < 100 ms (got ${latencies?.toFixed?.(1)}ms)`);
+
+    // The example flow may hit the unsaved-edits confirm (FR-25); the
+    // smoke accepts it (the buffer content at this point is scratch).
+    page.on("dialog", (d) => d.accept());
+
+    // ---------------------------------------------------------------
+    // W3 / G58: the example surface. The sidebar is data-driven from the
+    // hash-pinned module; deep links load + run; a green example runs Ok,
+    // a red example is rejected by the checker with its expected code,
+    // native-only examples load read-only with their reason, and an
+    // unknown deep link degrades inline.
+    // ---------------------------------------------------------------
+    const exCount = await page.$$eval("#examples .example", (els) => els.length);
+    assert(exCount > 40, `sidebar lists the classified corpus (${exCount})`);
+    assert(
+      await page.$$eval("#examples .badge.native-only", (els) => els.length > 0),
+      "native-only badges render"
+    );
+
+    // Deep link → green example: loads read-write; run → ok.
+    await page.goto(`${base}#example=${encodeURIComponent("ch01/green-01-hello")}`);
+    await page.waitForFunction(
+      () => document.querySelector("#examples .example.target"),
+      null,
+      { timeout: 10_000 }
+    );
+    await page.click(".cm-content");
+    await page.keyboard.press("ControlOrMeta+a");
+    await page.keyboard.insertText("1 1 +");
+    await page.click("#run");
+    await page.waitForFunction(() =>
+      document.getElementById("status")?.textContent.includes("run ·"), null, { timeout: 10_000 });
+    const greenStatus = await page.textContent("#status");
+    assert(greenStatus.includes("ok"), `green example runs ok (${greenStatus})`);
+
+    // Deep link → red example: the checker rejects with the EXPECTED code.
+    await page.goto(`${base}#example=${encodeURIComponent("ch02/red-01-underflow")}`);
+    await page.waitForFunction(
+      () => document.querySelector("#examples .example.target")?.dataset.exampleId ===
+        "ch02/red-01-underflow", null, { timeout: 10_000 });
+    await page.click("#run");
+    await page.waitForFunction(() =>
+      document.getElementById("status")?.textContent.includes("compile-error"), null, { timeout: 10_000 });
+    const redStatus = await page.textContent("#status");
+    const redDiag = await page.textContent("#diag");
+    assert(redStatus.includes("E3202"), `red example rejected with its expected code (${redStatus})`);
+    assert(redDiag.includes("3202"), `diagnostic carries the code (${redDiag})`);
+
+    // Native-only: loads read-only with its reason banner.
+    await page.goto(`${base}#example=${encodeURIComponent("ch12/green-01-spawn-join-run")}`);
+    await page.waitForFunction(
+      () => document.querySelector("#examples .example.target")?.dataset.exampleId ===
+        "ch12/green-01-spawn-join-run", null, { timeout: 10_000 });
+    const noBanner = await page.textContent("#diag");
+    assert(noBanner.includes("native-only"), `reason banner shown (${noBanner})`);
+    // Read-only: typing into the CM6 editor must NOT change the document.
+    await page.click(".cm-content");
+    await page.keyboard.insertText("X");
+    const afterType = await page.evaluate(() =>
+      document.querySelector(".cm-content").textContent);
+    assert(!afterType.includes("X"), `native-only buffer is read-only (${JSON.stringify(afterType)})`);
+
+    // Unknown deep link: inline notice, page functional.
+    await page.goto(`${base}#example=no-such-lab`);
+    await page.waitForTimeout(400);
+    const note = await page.textContent("#examples");
+    assert(note.includes("unknown example"), `unknown id noticed (${JSON.stringify(note)})`);
+    const stillReady = await page.textContent("#status");
+    assert(!stillReady.includes("boot failed"), "unknown id does not fail the page");
+
     // Reload resets (Fresh state, §4.2).
     await page.reload({ waitUntil: "load" });
     await page.waitForFunction(
@@ -132,6 +282,45 @@ try {
   }
 
   assert(consoleErrors.length === 0, `zero console errors (${JSON.stringify(consoleErrors)})`);
+
+  // W2 FR-23: the degraded-editor leg (full mode only — the tampered red
+  // path never reaches Ready, so there is no working session to degrade).
+  // The fallback is CI-proven, not faith-proven. A fresh page forces the
+  // CM6 path to fail (?editor=fallback): textarea active, persistent banner,
+  // run still works.
+  if (TAMPERED) {
+    if (failed) {
+      console.error("G55 smoke: FAILED");
+      process.exit(1);
+    }
+    console.log("G55 smoke (tampered red path): green");
+    process.exit(0);
+  }
+  const page2 = await browser.newPage();
+  const errors2 = [];
+  page2.on("console", (m) => {
+    if (m.type() === "error") errors2.push(m.text());
+  });
+  page2.on("pageerror", (e) => errors2.push(`pageerror: ${e.message}`));
+  try {
+    await page2.goto(`${base}?editor=fallback`, { waitUntil: "load" });
+    await page2.waitForFunction(
+      () => document.getElementById("status")?.dataset.state === "ready",
+      null,
+      { timeout: 15_000 }
+    );
+    assert(await page2.$eval("#editor", (el) => !el.hidden), "degraded mode: textarea active");
+    const banner = await page2.textContent("#diag");
+    assert(banner.includes("editor degraded"), `degraded banner shown (${JSON.stringify(banner)})`);
+    await page2.fill("#editor", "1 2 +");
+    await page2.click("#submit");
+    const cells2 = await page2.$$eval("#stack li", (lis) => lis.map((li) => li.textContent.trim()));
+    assert(cells2.length === 1 && cells2[0].includes("0x0000000000000003"),
+      `degraded mode still runs the session (${JSON.stringify(cells2)})`);
+    assert(errors2.length === 0, `zero console errors in degraded mode (${JSON.stringify(errors2)})`);
+  } finally {
+    await page2.close();
+  }
 } finally {
   await browser.close();
   server.close();

@@ -8,11 +8,29 @@
     default-src 'self' — every asset is same-origin; `wasm-unsafe-eval` is
     the dedicated directive that allows WebAssembly compilation (it is NOT
     script eval; no `eval`, no `new Function`, no inline handlers exist on
-    this page). Tutorial content (P6) is data-only and never HTML.
+    this page).
   -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self'; connect-src 'self'" />
+  <!--
+    style-src 'unsafe-inline' (PLAN-WASM-2 W2 as-built amendment): the
+    CodeMirror 6 stack mounts <style> elements for its themes (StyleModule).
+    A static page has no per-response nonce to offer, and style-src
+    'unsafe-inline' admits stylesheets only — never script execution
+    (script-src stays 'self' 'wasm-unsafe-eval'; no eval, no inline handlers).
+  -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'self'" />
   <title>Tyu REPL</title>
   <link rel="stylesheet" href="style.css" />
+  <!--
+    The editor stack (PLAN-WASM-2 W2, DEC-17): served ONLY as the build-
+    generated vendor bundle + stylesheet (R-F), with the script's integrity
+    pinned by SRI (the JS-integrity mechanism that works; hash-pinning-
+    executed-JS-from-JS is circular). The integrity attribute is written by
+    `ci/wasm.sh build-web` from the vendor manifest — never hand-edited. If
+    this check fails, the page degrades to the textarea with a banner
+    (DEC-26); it never blanks.
+  -->
+  <link rel="stylesheet" href="pkg/vendor/editor.css" />
+  <script src="pkg/vendor/editor.js" integrity="sha384-kJMFQOmLmO7jzuNXmFrMcXAkgq0EK2ZJ7Y4OYYQWPvN+uPcQgGH1KDWTr+LI+4Yx" crossorigin="anonymous"></script>
 </head>
 <body>
   <header id="statusbar">
@@ -26,7 +44,8 @@
       <textarea id="editor" spellcheck="false"
         placeholder="Tyu is a stack language.&#10;Try: 1 2 +&#10;Define: : double ( i64 -- i64 ) dup + ;&#10;Print:  65 testio.write-byte  (after importing platform/testio)"></textarea>
       <div id="editor-actions">
-        <button id="submit" disabled>submit</button>
+        <button id="run" disabled title="reset the session and run the whole buffer (Mod-Enter)">run</button>
+        <button id="submit" disabled title="submit into the live session (Shift-Mod-Enter)">submit</button>
         <button id="step" disabled title="resume a fuel-suspended phrase">step</button>
         <span id="fuel-note" class="muted"></span>
       </div>
@@ -34,6 +53,9 @@
     </section>
 
     <section id="side">
+      <h2>examples <span class="muted">(the book's labs)</span></h2>
+      <nav id="examples" aria-label="examples"></nav>
+
       <h2>stack <span class="muted">(bottom-first)</span></h2>
       <ol id="stack" aria-live="polite"></ol>
 

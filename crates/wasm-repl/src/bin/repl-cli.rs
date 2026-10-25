@@ -674,6 +674,59 @@ fn main() {
                 print!("{transcript}");
             }
         }
+        "pack-examples" => {
+            // Build `web/pkg/examples.js` from the book's lab corpus (W3,
+            // DEC-18): every `.mod` classified, none dropped (an
+            // unclassifiable file fails the build — the drift detector).
+            let (labs_root, out) = match (rest.first(), rest.get(1)) {
+                (Some(a), Some(b)) => (a.clone(), b.clone()),
+                _ => {
+                    eprintln!("usage: repl-cli pack-examples <labs-root> <out-file>");
+                    std::process::exit(2);
+                }
+            };
+            let mut files: Vec<wasm_repl::examples_pack::LabFile> = Vec::new();
+            let mut stack = vec![PathBuf::from(&labs_root)];
+            while let Some(dir) = stack.pop() {
+                if let Ok(entries) = std::fs::read_dir(&dir) {
+                    for e in entries.flatten() {
+                        let p = e.path();
+                        if p.is_dir() {
+                            stack.push(p);
+                        } else if p.extension().map(|x| x == "mod" || x == "toml").unwrap_or(false) {
+                            let rel = p
+                                .strip_prefix(&labs_root)
+                                .unwrap()
+                                .to_str()
+                                .unwrap()
+                                .replace('\\', "/");
+                            if let Ok(bytes) = std::fs::read(&p) {
+                                if let Ok(text) = String::from_utf8(bytes) {
+                                    files.push(wasm_repl::examples_pack::LabFile {
+                                        path: rel,
+                                        content: text,
+                                    });
+                                } else {
+                                    eprintln!("pack-examples: non-UTF-8 lab: {rel}");
+                                    std::process::exit(1);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            let out_bytes = wasm_repl::examples_pack::pack_examples(&files)
+                .unwrap_or_else(|e| {
+                    eprintln!("pack-examples: {e}");
+                    std::process::exit(1);
+                });
+            std::fs::write(&out, &out_bytes).expect("write examples.js");
+            let runnable = out_bytes.windows(b"kind: \"runnable\"".len())
+                .filter(|w| w == b"kind: \"runnable\"").count();
+            let native = out_bytes.windows(b"kind: \"native-only\"".len())
+                .filter(|w| w == b"kind: \"native-only\"").count();
+            println!("packed {} runnable / {native} native-only → {out} ({} bytes)", runnable, out_bytes.len());
+        }
         "debug-dump" => {
             let file = rest.first().expect("usage: repl-cli debug-dump <session>");
             let script = std::fs::read_to_string(file).expect("read session");
@@ -682,7 +735,7 @@ fn main() {
             print!("{}", debug_dump(&mut session, &search, &script));
         }
         other => {
-            eprintln!("usage: repl-cli (run|replay|debug-dump|pack-sysroot) ... ; got '{other}'");
+            eprintln!("usage: repl-cli (run|replay|debug-dump|pack-examples|pack-sysroot) ... ; got '{other}'");
             std::process::exit(2);
         }
     }

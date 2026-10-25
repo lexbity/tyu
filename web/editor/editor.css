@@ -1,0 +1,50 @@
+/*
+ * The editor surface (PLAN-WASM-2 W2): copied verbatim to
+ * web/pkg/vendor/editor.css by build.mjs. The token class names are the
+ * contract with lang-tyu's HighlightStyle (tyu-*); the .cm-editor sizing
+ * rules adapt CM6 to the REPL's editor pane.
+ */
+
+#editor-pane .cm-editor {
+  flex: 1;
+  min-height: 0;
+  font-family: "SFMono-Regular", ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
+  font-size: 13px;
+  background: transparent;
+}
+#editor-pane .cm-editor.cm-focused {
+  outline: none;
+}
+#editor-pane .cm-scroller {
+  overflow: auto;
+  line-height: 1.5;
+}
+#editor-pane .cm-gutters {
+  background: transparent;
+  border-right: 1px solid var(--edge, #2a2a34);
+  color: var(--muted, #7a7a8c);
+}
+#editor-pane .cm-activeLineGutter,
+#editor-pane .cm-activeLine {
+  background: rgba(128, 128, 160, 0.08);
+}
+
+/* lang-tyu token classes (tyuHighlightStyle contract) */
+.tyu-kw { color: #c792ea; }
+.tyu-def { color: #82aaff; }
+.tyu-number { color: #f78c6c; }
+.tyu-string { color: #c3e88d; }
+.tyu-comment { color: #5c6370; font-style: italic; }
+.tyu-sig { color: #7fb4c9; font-style: italic; }
+.tyu-op { color: #89ddff; }
+.tyu-meta { color: #ffcb6b; }
+
+/* lint mark accents (the diagnostics bridge renders severities) */
+#editor-pane .cm-lintRange-error {
+  background: rgba(255, 96, 96, 0.18);
+  text-decoration: underline wavy #ff6060;
+}
+#editor-pane .cm-lintRange-warning {
+  background: rgba(255, 200, 87, 0.14);
+  text-decoration: underline wavy #ffc857;
+}
