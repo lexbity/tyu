@@ -885,6 +885,9 @@ fn discover_manifest_paths(root: &Path) -> Result<Vec<PathBuf>, TyuError> {
                 TyuError::Platform(format!("reading '{}': {}", runtime.display(), e))
             })?;
             let path = entry.path();
+            if is_ignored_discovery_entry(&path) {
+                continue;
+            }
             if path.is_dir() {
                 let candidate = path.join("platform.toml");
                 if candidate.is_file() {
@@ -905,6 +908,13 @@ fn discover_manifest_paths(root: &Path) -> Result<Vec<PathBuf>, TyuError> {
                 TyuError::Platform(format!("reading '{}': {}", platforms.display(), e))
             })?;
             let path = entry.path();
+            // Editors and build tools commonly leave hidden or `.bak`
+            // siblings while replacing a pack. Parsing those transient copies
+            // can make unrelated compiler commands fail on an incomplete
+            // manifest.
+            if is_ignored_discovery_entry(&path) {
+                continue;
+            }
             if path.is_dir() {
                 let candidate = path.join("platform.toml");
                 if candidate.is_file() {
@@ -917,6 +927,13 @@ fn discover_manifest_paths(root: &Path) -> Result<Vec<PathBuf>, TyuError> {
     paths.sort();
     paths.dedup();
     Ok(paths)
+}
+
+fn is_ignored_discovery_entry(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    name.starts_with('.') || name.ends_with(".bak")
 }
 
 fn is_platform_manifest_file(path: &Path) -> bool {

@@ -94,6 +94,7 @@ pub fn langc_exe() -> PathBuf {
     workspace_root().join("target").join("debug").join("langc")
 }
 
+#[allow(dead_code)]
 pub fn temp_dir(label: &str) -> PathBuf {
     let dir = std::env::temp_dir().join("tyu_exec_tests").join(format!(
         "{}_{}",
@@ -348,6 +349,12 @@ pub fn assemble_runtime(target: Target, out_dir: &Path) -> Vec<PathBuf> {
                     .status()
                     .unwrap_or_else(|_| panic!("{as_bin} invocation failed"));
                 assert!(status.success(), "{as_bin} failed to assemble {stem}");
+            }
+            AssemblerKind::None => {
+                // wasm32 target: the backend emits binary WebAssembly directly;
+                // no assemble stage (PLAN-WASM-2 B1, D-W14). The .asm output is
+                // NOT produced by the wasm backend; skip this stage.
+                // The wasm file is written by the langc driver directly.
             }
         }
         objs.push(out);

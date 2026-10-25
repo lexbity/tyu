@@ -917,7 +917,7 @@ fi
 # The exact corpus set (distinct modules per triple): verify-corpus modules
 # + the authored-intent / casts inline fixtures.
 expected_set="Bank Clean Contract EventLoop Lending OpenCast"
-for triple in x86_64-unknown-linux-gnu x86_64-unknown-none armv7m-unknown-none riscv32-unknown-none; do
+for triple in x86_64-unknown-linux-gnu x86_64-unknown-none armv7m-unknown-none riscv32-unknown-none wasm32-unknown-unknown; do
     dir="test-goldens/statements/$triple"
     if [ ! -d "$dir" ]; then
         msg $RED "  G25 FAIL: statement-golden directory missing for $triple"
@@ -979,7 +979,7 @@ for triple in x86_64-unknown-linux-gnu x86_64-unknown-none armv7m-unknown-none r
         g27_fail=1
     fi
 done
-[ "$g27_fail" -eq 0 ] && msg $GREEN "  G27: per-target vector corpus (tyu.vec/1) present for all four triples"
+[ "$g27_fail" -eq 0 ] && msg $GREEN "  G27: per-target vector corpus (tyu.vec/1) present for all five triples"
 failures=$((failures + g27_fail))
 
 # --- G32: PLAN-VERIFY-3 P4.2 — T-C substrate surface ---

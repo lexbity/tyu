@@ -83,25 +83,32 @@ impl TargetSpec {
     pub const RISCV32_UNKNOWN_NONE: TargetSpec = TargetSpec::new("riscv32-unknown-none", 4, 32, 3);
 }
 
-/// The four recognized target records, in parity with the backend's static
+/// The recognized target records, in parity with the backend's static
 /// target table (constants — no heap).
 pub const X86_64_UNKNOWN_LINUX_GNU: TargetSpec = TargetSpec::X86_64_UNKNOWN_LINUX_GNU;
 pub const X86_64_UNKNOWN_NONE: TargetSpec = TargetSpec::X86_64_UNKNOWN_NONE;
 pub const ARM_V7M_UNKNOWN_NONE: TargetSpec = TargetSpec::ARM_V7M_UNKNOWN_NONE;
 pub const RISCV32_UNKNOWN_NONE: TargetSpec = TargetSpec::RISCV32_UNKNOWN_NONE;
+/// wasm32 (browser/sandbox target, PLAN-WASM-2 B1): 64-bit word,
+/// 8-byte slots, arch_tag 4 (never loader-met).
+pub const WASM32_UNKNOWN_UNKNOWN: TargetSpec = TargetSpec::new("wasm32-unknown-unknown", 8, 64, 4);
 
 /// Every recognized target, in a deterministic order.
-pub const TARGETS: [TargetSpec; 4] = [
+pub const TARGETS: [TargetSpec; 5] = [
     X86_64_UNKNOWN_LINUX_GNU,
     X86_64_UNKNOWN_NONE,
     ARM_V7M_UNKNOWN_NONE,
     RISCV32_UNKNOWN_NONE,
+    WASM32_UNKNOWN_UNKNOWN,
 ];
 
 /// Resolve a recognized target by its triple string.
 pub fn for_triple(triple: &str) -> Option<TargetSpec> {
     TARGETS.iter().copied().find(|t| t.triple == triple)
 }
+
+/// The wasm32 target (PLAN-WASM-2 B1) as a module-level convenience.
+pub const WASM32: TargetSpec = WASM32_UNKNOWN_UNKNOWN;
 
 /// The x86_64 reference target (module-level alias, same record as
 /// `TargetSpec::X86_64`).

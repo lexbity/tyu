@@ -77,6 +77,10 @@ pub const SCOPED_STRIDE: i64 = 16;
 /// module's mutable global 0).
 pub const ARENA_BASE: i64 = 256 * 1024;
 
+/// Region helper function encoding: name, parameter valtypes, result
+/// valtypes, and body bytes.
+pub type RegionHelper = (&'static [u8], Vec<u8>, Vec<u8>, Vec<u8>);
+
 /// Linear memory pages (§6.6): initial 16 (1 MiB), max 256 (16 MiB).
 pub const MEMORY_MIN_PAGES: u64 = 16;
 pub const MEMORY_MAX_PAGES: u64 = 256;
@@ -250,7 +254,7 @@ fn emit_handle_guards(h: u32, size_param: Option<u32>, ss: u32, sl: u32, out: &m
 /// The region-heap helper functions, in the fixed `HELPER_*` order. Each
 /// entry: (name, param valtypes, result valtypes, body). The trailing i32
 /// pair on every trapping helper is the call-site span (DEC-40).
-pub fn emit_region_helpers() -> Vec<(&'static [u8], Vec<u8>, Vec<u8>, Vec<u8>)> {
+pub fn emit_region_helpers() -> Vec<RegionHelper> {
     let mut out = Vec::new();
 
     // -- create ( usize -- Region ) ---------------------------------------
@@ -290,7 +294,7 @@ pub fn emit_region_helpers() -> Vec<(&'static [u8], Vec<u8>, Vec<u8>, Vec<u8>)> 
         b.push(OP_END);
         // slot.size == 0 → free: br to $setup (depths: 0 = this if, 1 =
         // $scan, 2 = $found)
-        load_slot_field(SLOT as u32, OFF_SIZE, &mut b);
+        load_slot_field(SLOT, OFF_SIZE, &mut b);
         b.push(OP_I64_EQZ);
         b.push(OP_IF);
         b.push(0x40);
@@ -331,15 +335,15 @@ pub fn emit_region_helpers() -> Vec<(&'static [u8], Vec<u8>, Vec<u8>, Vec<u8>)> 
         uleb(&mut b, 0);
         // slot {base, size, off, alive} — value first, then the field address
         local_get(&mut b, BASE);
-        push_slot_field_addr(SLOT as u32, OFF_BASE, &mut b);
+        push_slot_field_addr(SLOT, OFF_BASE, &mut b);
         b.push(OP_I64_STORE);
         memarg(&mut b, 0);
         local_get(&mut b, ASIZE);
-        store_slot_field(SLOT as u32, OFF_SIZE, &mut b);
+        store_slot_field(SLOT, OFF_SIZE, &mut b);
         i64_const(&mut b, 0);
-        store_slot_field(SLOT as u32, OFF_OFF, &mut b);
+        store_slot_field(SLOT, OFF_OFF, &mut b);
         i64_const(&mut b, 1);
-        store_slot_field(SLOT as u32, OFF_ALIVE, &mut b);
+        store_slot_field(SLOT, OFF_ALIVE, &mut b);
         // return the handle
         local_get(&mut b, SLOT);
         b.push(OP_I64_EXTEND_I32_U);

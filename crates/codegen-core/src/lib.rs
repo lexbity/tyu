@@ -45,4 +45,7 @@ pub use target::{
 /// The build cache incorporates this value so that a bumped `CODEGEN_REV`
 /// automatically invalidates all cached artifacts, even when source files
 /// and the `langc` binary are unchanged.
-pub const CODEGEN_REV: u64 = 2;
+///
+/// **Bumped to 3 in PLAN-WASM-2 B1**: wasm32-unknown-unknown target registration
+/// and the codegen-wasm backend (§6.7 op mapping, DEC-35 hand-rolled encoder).
+pub const CODEGEN_REV: u64 = 3;

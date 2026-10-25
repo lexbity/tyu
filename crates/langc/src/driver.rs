@@ -363,7 +363,13 @@ pub fn emit_obj_driver(
         }
     };
     let mut obj_buf = [0u8; 512];
-    let obj_path = match join_path(&mut obj_buf, out_dir, module_name, b".o") {
+    // PLAN-WASM-2 B1: wasm32 target emits .wasm, not .o
+    let ext: &[u8] = if target.spec().assembler == codegen_core::AssemblerKind::None {
+        b".wasm"
+    } else {
+        b".o"
+    };
+    let obj_path = match join_path(&mut obj_buf, out_dir, module_name, ext) {
         Some(p) => p,
         None => {
             let _ = diag::error_simple(1013, b"--out-dir path too long");
@@ -583,7 +589,12 @@ pub fn emit_obj_driver(
         return 2;
     }
 
-    if fs::write_file(asm_path, mem.as_slice()).is_err() {
+    // D-W14: `AssemblerKind::None` (wasm32) — no .asm file emitted; the
+    // backend's output bytes ARE the final object (binary WebAssembly).
+    // Skip writing the .asm for None targets.
+    if target.spec().assembler != codegen_core::AssemblerKind::None
+        && fs::write_file(asm_path, mem.as_slice()).is_err()
+    {
         let _ = diag::error_simple(1015, b"failed to write output .asm");
         return 2;
     }

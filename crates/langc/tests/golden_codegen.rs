@@ -139,6 +139,7 @@ fn assembler_available(target: Target) -> bool {
         Target::ArmV7MUnknownNone => has_cmd("arm-none-eabi-as"),
         Target::RiscV32UnknownNone => has_cmd("riscv32-unknown-elf-as"),
         Target::X86_64UnknownLinuxGnu => has_cmd("cc"),
+        Target::Wasm32UnknownUnknown => true, // No assembler needed (D-W14)
     }
 }
 

@@ -29,6 +29,10 @@ fn arithmetic_and_stack_pass() {
         return;
     }
     build_langc();
+    // This test invokes the `tyu` binary directly. Building `langc` alone
+    // leaves `target/debug/tyu` stale or absent, so always build the driver
+    // whose platform discovery and QEMU orchestration this test exercises.
+    build_tyu();
 
     let output = Command::new(common::tyu_exe())
         .args([

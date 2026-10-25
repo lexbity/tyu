@@ -20,10 +20,11 @@ def x86_64_unknown_linux_gnu : TargetSpec := { triple := "x86_64-unknown-linux-g
 def x86_64_unknown_none : TargetSpec := { triple := "x86_64-unknown-none", slotBytes := 8, wordBits := 64, archTag := 1 }
 def armv7m_unknown_none : TargetSpec := { triple := "armv7m-unknown-none", slotBytes := 4, wordBits := 32, archTag := 2 }
 def riscv32_unknown_none : TargetSpec := { triple := "riscv32-unknown-none", slotBytes := 4, wordBits := 32, archTag := 3 }
+def wasm32_unknown_unknown : TargetSpec := { triple := "wasm32-unknown-unknown", slotBytes := 8, wordBits := 64, archTag := 4 }
 
-def TARGETS : List TargetSpec := [ x86_64_unknown_linux_gnu,  x86_64_unknown_none,  armv7m_unknown_none,  riscv32_unknown_none ]
+def TARGETS : List TargetSpec := [ x86_64_unknown_linux_gnu,  x86_64_unknown_none,  armv7m_unknown_none,  riscv32_unknown_none,  wasm32_unknown_unknown ]
 
-theorem target_count : TARGETS.length = 4 := by
+theorem target_count : TARGETS.length = 5 := by
   decide
 
 end Tyu.IR

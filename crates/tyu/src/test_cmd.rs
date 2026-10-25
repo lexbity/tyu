@@ -2046,14 +2046,23 @@ mod tests {
                     );
                     assert_eq!(spec.word_bits, 32, "{triple}: Elf32 requires word_bits=32");
                 }
+                OutputFormat::Wasm => {
+                    assert_eq!(spec.slot_bytes, 8, "{triple}: Wasm uses 8-byte slots");
+                    assert_eq!(spec.word_bits, 64, "{triple}: Wasm uses 64-bit words");
+                    assert_eq!(spec.pointer_bits, 32, "{triple}: Wasm uses 32-bit pointers");
+                }
                 _ => {}
             }
 
-            // Flat address space: pointer_bits == word_bits.
-            assert_eq!(
-                spec.pointer_bits, spec.word_bits,
-                "{triple}: pointer_bits != word_bits",
-            );
+            // Hosted/native targets use flat address spaces. Wasm is the
+            // deliberate split-width target (64-bit language words, 32-bit
+            // linear-memory pointers; PLAN-WASM-2 §6.7).
+            if target != Target::Wasm32UnknownUnknown {
+                assert_eq!(
+                    spec.pointer_bits, spec.word_bits,
+                    "{triple}: pointer_bits != word_bits",
+                );
+            }
 
             // native_int_ty matches word_bits.
             if spec.word_bits == 64 {
@@ -2083,6 +2092,14 @@ mod tests {
                         linker_str, "ld",
                         "{triple}: Fasm linker must be 'ld', got '{}'",
                         linker_str,
+                    );
+                }
+                AssemblerKind::None => {
+                    // wasm32 target: no linker, no assembler (D-W14).
+                    assert_eq!(
+                        spec.linker,
+                        b"",
+                        "{triple}: None assembler must have empty linker",
                     );
                 }
             }

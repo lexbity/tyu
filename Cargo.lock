@@ -228,6 +228,7 @@ dependencies = [
  "codegen-arm",
  "codegen-core",
  "codegen-riscv",
+ "codegen-wasm",
  "codegen-x86_64",
  "diag-core",
  "frontend",

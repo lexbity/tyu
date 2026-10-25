@@ -470,14 +470,17 @@ impl<'a> WasmBackend<'a> {
                 push!();
             }
             lir::OpKind::LocalSet { slot, .. } => {
-                pop!();
+                // IR LocalSet: pop from data stack, store in IR declared local.
+                // The value must move from the data stack slot to the IR local.
+                pop!();  // Get value from data stack onto wasm operand stack
                 out.push(OP_LOCAL_SET);
                 uleb(out, Self::declared_local(slot, in_len, slots) as u64);
             }
             lir::OpKind::LocalGet { slot, .. } => {
+                // IR LocalGet: get from IR declared local, push to data stack.
                 out.push(OP_LOCAL_GET);
                 uleb(out, Self::declared_local(slot, in_len, slots) as u64);
-                push!();
+                push!();  // Store value from wasm operand stack into data stack
             }
             lir::OpKind::Call { name, sig, .. } => {
                 let n = name.as_bytes();
@@ -864,60 +867,27 @@ impl CodegenBackend for WasmBackend<'_> {
         hdr.extend_from_slice(&decls);
         let mut body = hdr;
 
-        // Prologue: $cur = the entry block.
+        // For single-block words (the common case), emit straight-line code.
+        // Multi-block words use the dispatch ladder (DEC-41 fallback: single-block
+        // is the fast path; Br/BrIf are rejected at the REPL boundary for v1 anyway,
+        // so this covers the B1 corpus).
+        let blocks = w.blocks.len();
+        let entry = Self::block_index(w, w.entry).unwrap_or(0);
+
+        // Prologue: initialize $cur to the entry block (always 0 for now since
+        // we only handle the entry block).
         body.push(OP_I32_CONST);
-        sleb(&mut body, Self::block_index(w, w.entry).unwrap_or(0) as i64);
+        sleb(&mut body, entry as i64);
         body.push(OP_LOCAL_SET);
         uleb(&mut body, cur as u64);
 
-        // The dispatch ladder (the corrected canonical shape):
-        //
-        //   loop $dispatch            ← Br/BrIf re-dispatch (back edges too)
-        //     block $c(n-1) … block $c1, block $c0   (outermost first)
-        //       block $hdr
-        //         local.get $cur
-        //         br_table n entries (value k → depth k+1 = $cK), default 1
-        //       end $hdr              ← case 0's code follows, inside $c0
-        //       … case 0 code …
-        //     end $c0                 ← case 1's code follows, inside $c1
-        //     … case k code …         (br $dispatch = `blocks - k` labels out)
-        //   end $c(n-1)
-        //   unreachable               (statically-unreachable fallthrough —
-        //                              keeps (→1) function frames valid)
-        //   end $dispatch
-        //   end (function)
-        //
-        // ENDs: hdr + (n-1) in-loop + last case + dispatch + function =
-        // n+3 = OPENS. Every IR block terminates (the verifier enforces
-        // it): Br/BrIf emitted their re-dispatch, Ret its return.
-        let blocks = w.blocks.len();
-        body.push(OP_LOOP);
-        body.push(0x40); // $dispatch
-        for _ in (1..blocks).rev() {
-            body.push(OP_BLOCK);
-            body.push(0x40); // $cK — c(n-1) … c1, then c0 pushed last
-        }
-        body.push(OP_BLOCK);
-        body.push(0x40); // $c0
-        body.push(OP_BLOCK);
-        body.push(0x40); // $hdr
-        body.push(OP_LOCAL_GET);
-        uleb(&mut body, cur as u64);
-        body.push(OP_BR_TABLE);
-        uleb(&mut body, blocks as u64); // table entry count
-        for k in 0..blocks {
-            uleb(&mut body, (k + 1) as u64); // value k → $cK (k+1 deep)
-        }
-        uleb(&mut body, 1); // default: $c0 (cur is engine-set and valid)
-        body.push(OP_END); // $hdr
-
         let mut body_calls = Vec::new();
         let mut body_traps = Vec::new();
-        for k in 0..blocks {
-            if k > 0 {
-                body.push(OP_END); // close $c(k-1) — case k's code follows
-            }
-            let blk = w.blocks.get(k).expect("block index in range");
+
+        if blocks == 1 {
+            // Single-block: straight-line, no dispatch needed.
+            // Just emit the entry block's ops.
+            let blk = w.blocks.get(entry).expect("entry block in range");
             let mut h = blk.entry_stack.len();
             for op in blk.ops.iter() {
                 self.emit_op(
@@ -928,17 +898,64 @@ impl CodegenBackend for WasmBackend<'_> {
                     cur,
                     in_len,
                     slots,
-                    k,
+                    entry,
                     blocks,
                     &mut body_calls,
                     &mut body_traps,
                 )?;
             }
+        } else {
+            // Multi-block: the full dispatch ladder.
+            // Structure: loop $dispatch → [block $cN .. block $c0] → block $hdr →
+            // br_table → case 0 code → end $c0 → case 1 code → ... → end $dispatch.
+            body.push(OP_LOOP);
+            body.push(0x40); // $dispatch
+            for _ in (1..blocks).rev() {
+                body.push(OP_BLOCK);
+                body.push(0x40);
+            }
+            body.push(OP_BLOCK);
+            body.push(0x40); // $c0
+            body.push(OP_BLOCK);
+            body.push(0x40); // $hdr
+            body.push(OP_LOCAL_GET);
+            uleb(&mut body, cur as u64);
+            body.push(OP_BR_TABLE);
+            uleb(&mut body, blocks as u64);
+            for k in 0..blocks {
+                uleb(&mut body, (blocks - k) as u64); // label index: $c0=blocks, $c1=blocks-1, ...
+            }
+            uleb(&mut body, blocks as u64); // default: $c0
+            body.push(OP_END); // $hdr
+
+            for k in 0..blocks {
+                if k > 0 {
+                    body.push(OP_END); // close $c(k-1)
+                }
+                let blk = w.blocks.get(k).expect("block index in range");
+                let mut h = blk.entry_stack.len();
+                for op in blk.ops.iter() {
+                    self.emit_op(
+                        w,
+                        op,
+                        &mut body,
+                        &mut h,
+                        cur,
+                        in_len,
+                        slots,
+                        k,
+                        blocks,
+                        &mut body_calls,
+                        &mut body_traps,
+                    )?;
+                }
+            }
+            body.push(OP_END); // end $c0
+            body.push(OP_BR);
+            uleb(&mut body, 1); // br to $dispatch (depth 1 from inside $c0)
         }
-        body.push(OP_END); // end $c(n-1) — the last case block
-        body.push(OP_UNREACHABLE);
-        body.push(OP_END); // $dispatch
-        body.push(OP_END); // the function frame
+
+        body.push(OP_END); // $dispatch or function frame
 
         for (off, span) in body_traps {
             self.trap_sites.push(TrapSite {
@@ -1052,11 +1069,17 @@ impl CodegenBackend for WasmBackend<'_> {
             CALL_LEB_WIDTH,
         );
         wrap_body.extend_from_slice(&enc);
-        for _ in 0..main_out.saturating_sub(1) {
-            wrap_body.push(OP_DROP); // keep only the TOP result
-        }
+        wrap_body.extend(core::iter::repeat_n(
+            OP_DROP,
+            main_out.saturating_sub(1),
+        )); // keep only the TOP result
         wrap_body.push(OP_I32_WRAP_I64);
         wrap_body.push(OP_END);
+
+        // Pre-register import types BEFORE emitting the type section so
+        // that import type indices are valid when the import section emits.
+        let sig_1_0 = self.type_index(&[VAL_I64], &[]);
+        let sig_3_0 = self.type_index(&[VAL_I64, VAL_I32, VAL_I32], &[]);
 
         let mut bin = Vec::new();
         bin.extend_from_slice(b"\0asm");
@@ -1071,8 +1094,6 @@ impl CodegenBackend for WasmBackend<'_> {
         });
 
         // 2. Import: tyu.write_byte, tyu.trap, [tyu.exit].
-        let sig_1_0 = self.type_index(&[VAL_I64], &[]);
-        let sig_3_0 = self.type_index(&[VAL_I64, VAL_I32, VAL_I32], &[]);
         section(&mut bin, SEC_IMPORT, |b| {
             let n = if self.uses_exit { 3 } else { 2 };
             uleb(b, n);

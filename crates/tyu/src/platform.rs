@@ -181,6 +181,8 @@ evidence = "tests/demo.rs"
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("runtime/foo")).unwrap();
         fs::create_dir_all(root.join("platforms/bar")).unwrap();
+        fs::create_dir_all(root.join("platforms/bar.bak")).unwrap();
+        fs::create_dir_all(root.join("platforms/.bar.tmp")).unwrap();
         fs::write(
             root.join("runtime/foo/platform.toml"),
             r#"
@@ -247,6 +249,12 @@ rung = "untested"
 "#,
         )
         .unwrap();
+        // Transient copies are not packs, even when they contain a manifest
+        // that would be invalid if treated as a live platform.
+        fs::write(root.join("platforms/bar.bak/platform.toml"), "[platform]\n")
+            .unwrap();
+        fs::write(root.join("platforms/.bar.tmp/platform.toml"), "[platform]\n")
+            .unwrap();
 
         let packs = discover_platforms_in(&root).unwrap();
         let names: Vec<_> = packs.iter().map(|pack| pack.name().to_string()).collect();

@@ -8,7 +8,7 @@
 //!   `src/semantics/ops.json`) + `SEMANTICS_total` (the completeness proof:
 //!   every op form has a row; a hand-edited generated file dropping a row
 //!   fails the port build);
-//! - `Tyu/IR/Target.lean` — the `TargetSpec` records (the four recognized
+//! - `Tyu/IR/Target.lean` — the `TargetSpec` records (the recognized
 //!   triples), mirroring `verifier::target::TARGETS`;
 //! - `Tyu/Mem.lean` — the MemModel/Device/Services *interfaces* with
 //!   law-statement placeholders (structure fields, never axioms).

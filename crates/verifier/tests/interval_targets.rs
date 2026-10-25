@@ -50,6 +50,11 @@ fn word_domain_matches_each_target_width() {
             (-(1i64 << 31), (1i64 << 31) - 1),
             (1u64 << 32) - 1,
         ),
+        (
+            verifier::target::WASM32_UNKNOWN_UNKNOWN,
+            (i64::MIN, i64::MAX),
+            i64::MAX as u64,
+        ),
     ];
     for &(spec, (lo, hi), umax) in cases {
         assert_eq!(
@@ -224,7 +229,7 @@ fn committed_vectors_are_data_transparent_across_triples() {
 /// verifier's own boundary identity (a guard against accidental renumbering).
 #[test]
 fn target_identity_table_is_the_boundary() {
-    assert_eq!(TARGETS.len(), 4);
+    assert_eq!(TARGETS.len(), 5);
     for spec in TARGETS.iter() {
         assert_eq!(
             spec.triple,

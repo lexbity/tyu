@@ -17,6 +17,7 @@ tyu = { path = "../tyu" }
 [dev-dependencies]
 codegen-arm = { path = "../codegen-arm" }
 codegen-riscv = { path = "../codegen-riscv" }
+codegen-wasm = { path = "../codegen-wasm" }
 codegen-x86_64 = { path = "../codegen-x86_64" }
 frontend = { path = "../frontend" }
 ir = { path = "../ir" }
@@ -45,4 +46,8 @@ harness = true
 
 [[test]]
 name    = "mutation_elision"
+harness = true
+
+[[test]]
+name    = "wasm"
 harness = true

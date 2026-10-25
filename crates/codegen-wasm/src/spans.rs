@@ -78,6 +78,7 @@ pub fn section(records: &[SpanRecord], out: &mut Vec<u8>) {
 /// consumer of the format (B2's trampoline mirrors this reading; the G54
 /// harness parse-backs every emitted section through it). Unknown versions
 /// fail CLOSED (an Err, never a guess at an unknown layout).
+#[allow(dead_code)]
 pub fn decode(payload: &[u8]) -> Result<Vec<SpanRecord>, ()> {
     let mut i = 0usize;
     let version = uleb_at(payload, &mut i).ok_or(())?;
@@ -110,6 +111,7 @@ pub fn decode(payload: &[u8]) -> Result<Vec<SpanRecord>, ()> {
     Ok(out)
 }
 
+#[allow(dead_code)]
 fn uleb_at(payload: &[u8], i: &mut usize) -> Option<u64> {
     let mut result = 0u64;
     let mut shift = 0u32;
@@ -189,7 +191,7 @@ mod tests {
         assert_eq!(out[0], 0);
         let name_len = out[2] as usize;
         assert_eq!(&out[3..3 + name_len], SECTION_NAME);
-        let mut payload = out[3 + name_len..].to_vec();
-        assert_eq!(decode(&mut payload).unwrap(), records.to_vec());
+        let payload = out[3 + name_len..].to_vec();
+        assert_eq!(decode(&payload).unwrap(), records.to_vec());
     }
 }

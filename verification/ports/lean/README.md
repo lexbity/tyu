@@ -13,7 +13,7 @@ verification/ports/lean/
   Tyu.lean                  library root — the generated data layer
   Tyu/IR/Op.lean            GENERATED — the op-form enum (42 rows)
   Tyu/IR/Semantics.lean     GENERATED — the semantics table + SEMANTICS_total
-  Tyu/IR/Target.lean        GENERATED — the four recognized TargetSpec records
+  Tyu/IR/Target.lean        GENERATED — the recognized TargetSpec records
   Tyu/Mem.lean              GENERATED — MemModel interface + law-statement
                             placeholders (structure fields, never axioms)
   Main.lean                 the conformance executable
