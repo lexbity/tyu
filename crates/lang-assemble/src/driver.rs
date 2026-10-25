@@ -9,6 +9,10 @@ fn default_assembler_path(kind: AssemblerKind) -> &'static [u8] {
         AssemblerKind::Fasm => b"fasm",
         AssemblerKind::GasArm => b"arm-none-eabi-as",
         AssemblerKind::GasRiscV => b"riscv32-elf-as",
+        // D-W14: the wasm32 target emits its final binary directly — there
+        // is no assembler, and this driver's text-assembly flow never meets
+        // it (a wasm build resolving an assembler is a caller bug).
+        AssemblerKind::None => b"",
     }
 }
 
@@ -20,7 +24,10 @@ pub fn run(config: &Config) -> i32 {
 
     match spec.assembler {
         AssemblerKind::Fasm => run_with_driver(config, &FasmDriver { path }),
-        AssemblerKind::GasArm | AssemblerKind::GasRiscV => {
+        // D-W14: None (wasm32) has no text assembly to assemble — its
+        // backend emits the final binary. This driver is a text-assembly
+        // tool; reaching it with None is a caller bug, surfaced loudly.
+        AssemblerKind::None | AssemblerKind::GasArm | AssemblerKind::GasRiscV => {
             let _ = diag::error_simple(
                 2005,
                 b"assembler backend not yet implemented for this target",

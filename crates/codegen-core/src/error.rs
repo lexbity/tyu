@@ -50,6 +50,17 @@ pub enum CodegenError {
 
     /// `set_mmio_apertures` received more than the 8-aperture capacity.
     TooManyMmioApertures,
+
+    /// The wasm32 backend's resource intern area is full (PLAN-WASM-2 B1,
+    /// §6.6: 256 places — a module declaring more is a format error, the
+    /// analogue of the string-area capacity code).
+    ResourceCapacityExceeded,
+
+    /// The target REJECTS the construct at compile (PLAN-WASM-2 B1, FR-44):
+    /// task/interrupt ops and the MMIO family on wasm32 (E9156-class — the
+    /// REPL's boundary diagnostic; `UnsupportedOp` covers ops a target
+    /// merely lacks, this covers ops the target's platform model forbids).
+    UnsupportedConstruct,
 }
 
 impl CodegenError {
@@ -70,8 +81,10 @@ impl CodegenError {
             Self::StringLiteralCapacityExceeded => 8011,
             Self::ScopedAllocationOverflow => 8012,
             Self::ModInfoTooLarge => 8013,
+            Self::UnsupportedConstruct => 9021,
             Self::NoMmioAperture => 8014,
             Self::TooManyMmioApertures => 8015,
+            Self::ResourceCapacityExceeded => 8016,
         }
     }
 }

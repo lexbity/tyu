@@ -5,6 +5,7 @@ pub use codegen_core::{CodegenBackend, CodegenError};
 
 use codegen_arm::ArmThumbBackend;
 use codegen_riscv::RiscVBackend;
+use codegen_wasm::WasmBackend;
 use codegen_x86_64::X86_64HostedBackend;
 use ir as lir;
 
@@ -17,6 +18,7 @@ pub enum Backend<'a> {
     X86(X86_64HostedBackend<'a>),
     Arm(ArmThumbBackend<'a>),
     RiscV(RiscVBackend<'a>),
+    Wasm(WasmBackend<'a>),
 }
 
 impl<'a> CodegenBackend for Backend<'a> {
@@ -25,6 +27,7 @@ impl<'a> CodegenBackend for Backend<'a> {
             Backend::X86(b) => b.emit_prelude(),
             Backend::Arm(b) => b.emit_prelude(),
             Backend::RiscV(b) => b.emit_prelude(),
+            Backend::Wasm(b) => b.emit_prelude(),
         }
     }
 
@@ -33,6 +36,7 @@ impl<'a> CodegenBackend for Backend<'a> {
             Backend::X86(b) => b.emit_word(w),
             Backend::Arm(b) => b.emit_word(w),
             Backend::RiscV(b) => b.emit_word(w),
+            Backend::Wasm(b) => b.emit_word(w),
         }
     }
 
@@ -41,6 +45,7 @@ impl<'a> CodegenBackend for Backend<'a> {
             Backend::X86(b) => b.emit_postlude(),
             Backend::Arm(b) => b.emit_postlude(),
             Backend::RiscV(b) => b.emit_postlude(),
+            Backend::Wasm(b) => b.emit_postlude(),
         }
     }
 
@@ -49,6 +54,9 @@ impl<'a> CodegenBackend for Backend<'a> {
             Backend::X86(b) => CodegenBackend::emit_extern_word(b, name),
             Backend::Arm(b) => CodegenBackend::emit_extern_word(b, name),
             Backend::RiscV(b) => CodegenBackend::emit_extern_word(b, name),
+            // wasm: imports are the module's own §6.7 surface — no extrn
+            // declarations (the trait default is the no-op).
+            Backend::Wasm(b) => CodegenBackend::emit_extern_word(b, name),
         }
     }
 
@@ -57,6 +65,7 @@ impl<'a> CodegenBackend for Backend<'a> {
             Backend::X86(b) => b.set_expected_abi_hash(hash),
             Backend::Arm(b) => b.set_expected_abi_hash(hash),
             Backend::RiscV(b) => b.set_expected_abi_hash(hash),
+            Backend::Wasm(_) => {}
         }
     }
 
@@ -76,5 +85,7 @@ impl<'a> CodegenBackend for Backend<'a> {
         if let Backend::X86(b) = self {
             b.set_ds_guards_elided(elide);
         }
+        // Wasm: no data-stack guards to elide (§2 native-stack geometry is
+        // out of scope; the wasm module's slots are wasm locals).
     }
 }

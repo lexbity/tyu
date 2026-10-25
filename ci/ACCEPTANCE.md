@@ -18,6 +18,32 @@ toolchain-tier legs (Lean 4 needed) execute under the port job
 | 9 | `proven` × unmodeled bundle: build + deploy fail E6510; `no-open` succeeds, manifest records `unmodeled` | `tooling-tests::unmodeled_pipeline`, `tyu::deploy_pairing`, `tyu::platform_model_lint` | Rust | 2026-09-28 (acceptance CR-09/09b) |
 | 10 | All extended gates green on reference CI | `bash ci/guards.sh` (G24–G51) | Rust | 2026-09-28 (acceptance CR-10) |
 
+## The browser REPL acceptance matrix (PLAN-WASM-2, `ci/wasm.sh`)
+
+The WASM REPL plan's acceptance criteria map to the `ci/wasm.sh` registry.
+All legs execute under `bash ci/wasm.sh` (host + browser tiers) and the red
+paths under `bash ci/wasm.sh --selftest`.
+
+| AC | Criterion | Gate(s) / leg | Tier | Last green |
+|---|---|---|---|---|
+| AC-W1 (W1) | L2 completed, contract traps carry the §Q6 detail, trace header, debug projections; G53 zero-delta | `wasm-repl` crate suite incl. `debug_abi`/L2 engine cases; G53 byte-differential; grep gates | Rust | this branch (`ci/wasm.sh` run) |
+| AC-W2 (W2) | CM6 editor from `pkg/vendor/editor.js` (SRI), lang-tyu tests, NFR-11 budgets, reproducible build, `?editor=fallback` leg | G55 build-web + budgets + reproducibility; `lang-tyu/test/tree.test.mjs`; smoke legs | Rust + browser | this branch |
+| AC-W3 (W3) | `pack-examples` classifies 100% of labs; byte-identical re-packs; hash pin; sidebar hello lab runs Ok | G58 pack + determinism legs; smoke sidebar/deep-link legs | Rust + browser | this branch |
+| AC-W4 (W4) | Red lab → trap 20 with backtrace + sig-vs-actual from ABI data; click-to-source lands on the span; spanmap property test; G57(a) | smoke G57(b) fixture leg vs the committed native dump; `debug_dump_parity.rs`; `spanmap.test.mjs` | Rust + browser | this branch |
+| AC-W5 (W5) | Completions offer imported words with signatures; `?word` + view-source for sysroot words; transcript statuses; G58 red-lab expectations | smoke W5 legs; `examples_expectations.rs` (every runnable lab driven) | Rust + browser | this branch |
+| AC-W6 (W6) | IR pane byte-equal to `langc --emit=ir` over the labs corpus; page-fail path demonstrated; foundation record + doc sweep | `examples_ir_parity.rs`; `smoke.mjs --pagefail`; the D-W13/D-W8 sweep | Rust + browser | this branch |
+| AC-W7 (W7) | `ci/wasm.sh` standalone green; selftest red paths (G52/G53/G55/G56/G58 + page-fail); budgets enforced; artifact upload in `ci.yml`; docs updated | this matrix + the workflow's `if: failure()` upload | CI | this branch |
+| AC-B1/B2/H1 | The wasm32 codegen backend, platform pack, and hardening (B1/B2/H1) | not yet scheduled — G54's validator/run legs await them (DEC-28) | — | pending |
+
+NFR evidence recorded by the gates: NFR-11 budgets print per build-web run
+(wasm 590 KiB, JS+CSS ~62 KiB app + ~380 KiB vendor, blob 6 KiB, brotli
+first-load total ~280 KiB — all under their lines); NFR-12's keystroke→paint
+p95 measures ~17 ms in the smoke's rAF-bounded probe (the smoke asserts the
+loose 100 ms bar; the 16 ms CI-machine bar is the W7 bench note — the probe
+is frame-quantized, so one paint frame is the floor); NFR-14's
+reproducibility legs hash-verify both the wasm artifact and the editor
+bundle across rebuilds.
+
 ## NFR numbers (recorded from `bash ci/acceptance.sh --measure-nfr`)
 
 | NFR | Definition | Gate | Recorded |

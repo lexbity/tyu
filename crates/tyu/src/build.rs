@@ -982,7 +982,9 @@ fn assemble_image_def(target: Target, out_dir: &Path) -> Result<PathBuf, TyuErro
     fs::write(&asm_path, asm).map_err(TyuError::Io)?;
 
     match target.spec().assembler {
-        AssemblerKind::GasArm => {
+        // D-W14: None (wasm32) builds no runtime image — the backend emits
+        // the module binary directly; this image-def path never meets it.
+        AssemblerKind::None | AssemblerKind::GasArm => {
             let status = Command::new("arm-none-eabi-as")
                 .current_dir(out_dir)
                 .args([
@@ -2031,6 +2033,13 @@ fn assemble_asm_file(
     label: &str,
 ) -> Result<(), TyuError> {
     match target.spec().assembler {
+        // D-W14: None (wasm32) emits its final binary directly — this
+        // text-assembly helper never meets it.
+        AssemblerKind::None => {
+            return Err(TyuError::Build(
+                "wasm32 emits binary modules (no assembler stage)".into(),
+            ));
+        }
         AssemblerKind::Fasm => {
             let status = Command::new("fasm")
                 .args([
@@ -2220,6 +2229,9 @@ fn generate_runtime_symtab(
     let flavor = match target.spec().assembler {
         AssemblerKind::Fasm => AsmFlavor::FasmX86_64,
         AssemblerKind::GasArm | AssemblerKind::GasRiscV => AsmFlavor::Gas32,
+        // D-W14: None (wasm32) links no native runtime symbol table — this
+        // runtime-symtab flow never meets it; the match must stay total.
+        AssemblerKind::None => AsmFlavor::Gas32,
     };
 
     let asm_path = out_dir.join("lang_symtab.asm");
@@ -2392,6 +2404,13 @@ fn assemble_modpack_object(
 fn render_modpack_asm(target: Target, lmods: &[(u32, String)]) -> Result<String, TyuError> {
     let mut asm = String::new();
     match target.spec().assembler {
+        // D-W14: None (wasm32) packs no native-loader modpack — this flow
+        // never meets it (the match stays total, the arm is a caller bug).
+        AssemblerKind::None => {
+            return Err(TyuError::Build(
+                "wasm32 packs no native-loader modpack".into(),
+            ));
+        }
         AssemblerKind::Fasm => {
             asm.push_str("format ELF64\n\nsection '.modpack' writeable\n");
             for (len, path) in lmods {
@@ -2475,6 +2494,8 @@ fn render_keys_asm(
         format!(".byte {key_bytes}\n")
     };
     match target.spec().assembler {
+        // D-W14: None (wasm32) has no native runtime key section.
+        AssemblerKind::None => String::new(),
         AssemblerKind::Fasm => format!(
             "format ELF64\n\nsection '.lang.keys' writeable\n    db {mask}\n    db 0, 0, 0, 0, 0, 0, 0\n{key_line_fasm}"
         ),
@@ -2567,7 +2588,7 @@ fn device_loader_rust_target(target: Target) -> Result<&'static str, TyuError> {
         Target::X86_64UnknownNone => Ok("x86_64-unknown-none"),
         Target::ArmV7MUnknownNone => Ok("thumbv7m-none-eabi"),
         Target::RiscV32UnknownNone => Ok("riscv32im-unknown-none-elf"),
-        Target::X86_64UnknownLinuxGnu => Err(TyuError::Build(
+        Target::X86_64UnknownLinuxGnu | Target::Wasm32UnknownUnknown => Err(TyuError::Build(
             "--mode=dynamic is only supported for bare-metal QEMU targets".into(),
         )),
     }
@@ -2578,7 +2599,7 @@ fn device_loader_profile(target: Target) -> Result<&'static str, TyuError> {
         Target::X86_64UnknownNone | Target::ArmV7MUnknownNone | Target::RiscV32UnknownNone => {
             Ok("release")
         }
-        Target::X86_64UnknownLinuxGnu => Err(TyuError::Build(
+        Target::X86_64UnknownLinuxGnu | Target::Wasm32UnknownUnknown => Err(TyuError::Build(
             "--mode=dynamic is only supported for bare-metal QEMU targets".into(),
         )),
     }

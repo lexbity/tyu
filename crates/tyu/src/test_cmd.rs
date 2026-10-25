@@ -40,6 +40,8 @@ const ALL_TARGETS: &[Target] = &[
 fn required_tools(target: Target) -> &'static [&'static str] {
     match target {
         Target::X86_64UnknownLinuxGnu => &["langc"],
+        // wasm32 test runs need langc + Node's wasm engine (the G54 leg).
+        Target::Wasm32UnknownUnknown => &["langc"],
         Target::X86_64UnknownNone => &["langc", "fasm", "ld", "qemu-system-x86_64"],
         Target::ArmV7MUnknownNone => &[
             "langc",

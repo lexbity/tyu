@@ -21,6 +21,7 @@ semantics = { path = "../semantics" }
 ir = { path = "../ir" }
 codegen-core  = { path = "../codegen-core" }
 codegen-x86_64 = { path = "../codegen-x86_64" }
+codegen-wasm = { path = "../codegen-wasm" }
 codegen-arm   = { path = "../codegen-arm" }
 codegen-riscv = { path = "../codegen-riscv" }
 lmod           = { path = "../lmod" }

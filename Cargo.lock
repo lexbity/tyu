@@ -139,6 +139,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "codegen-wasm"
+version = "0.1.0"
+dependencies = [
+ "codegen-core",
+ "frontend",
+ "ir",
+]
+
+[[package]]
 name = "codegen-x86_64"
 version = "0.1.0"
 dependencies = [
@@ -446,6 +455,7 @@ dependencies = [
  "codegen-arm",
  "codegen-core",
  "codegen-riscv",
+ "codegen-wasm",
  "codegen-x86_64",
  "frontend",
  "hosted",

@@ -14,15 +14,20 @@ pub enum Target {
     ArmV7MUnknownNone,
     /// RISC-V 32-bit bare-metal (QEMU virt machine, RV32IM).
     RiscV32UnknownNone,
+    /// wasm32 (browser/sandbox target, PLAN-WASM-2 B1): emits a binary
+    /// WebAssembly module — no assembler, no linker, no QEMU; the artifact
+    /// runs under any wasm engine (Node's V8 for G54, the browser's for B2).
+    Wasm32UnknownUnknown,
 }
 
 impl Target {
     /// All known target triples. Used for exhaustive iteration in tests.
-    pub const ALL: [Target; 4] = [
+    pub const ALL: [Target; 5] = [
         Target::X86_64UnknownLinuxGnu,
         Target::X86_64UnknownNone,
         Target::ArmV7MUnknownNone,
         Target::RiscV32UnknownNone,
+        Target::Wasm32UnknownUnknown,
     ];
 
     /// Parse a target triple from a raw byte string.
@@ -35,6 +40,7 @@ impl Target {
             b"x86_64-unknown-none" => Some(Self::X86_64UnknownNone),
             b"armv7m-unknown-none" => Some(Self::ArmV7MUnknownNone),
             b"riscv32-unknown-none" => Some(Self::RiscV32UnknownNone),
+            b"wasm32-unknown-unknown" => Some(Self::Wasm32UnknownUnknown),
             _ => None,
         }
     }
@@ -46,6 +52,7 @@ impl Target {
             Self::X86_64UnknownNone => b"x86_64-unknown-none",
             Self::ArmV7MUnknownNone => b"armv7m-unknown-none",
             Self::RiscV32UnknownNone => b"riscv32-unknown-none",
+            Self::Wasm32UnknownUnknown => b"wasm32-unknown-unknown",
         }
     }
 
@@ -57,6 +64,7 @@ impl Target {
             Self::X86_64UnknownNone => &X86_64_UNKNOWN_NONE,
             Self::ArmV7MUnknownNone => &ARM_V7M_UNKNOWN_NONE,
             Self::RiscV32UnknownNone => &RISCV32_UNKNOWN_NONE,
+            Self::Wasm32UnknownUnknown => &WASM32_UNKNOWN_UNKNOWN,
         }
     }
 }
@@ -79,6 +87,12 @@ pub enum CallingConv {
     Aapcs32,
     /// Standard RISC-V calling convention (ILP32 / LP64).
     RiscV,
+    /// The wasm32 module ABI (PLAN-WASM-2 B1): every function takes its
+    /// declared stack inputs as i64 parameters and returns its outputs —
+    /// the "calling convention" is the wasm type signature itself. The
+    /// arch tag is a NEW value (4): wasm modules are not `.lmod` loads, so
+    /// the tag never meets the loader; it exists so `abi_hash` stays total.
+    Wasm,
 }
 
 impl CallingConv {
@@ -92,6 +106,7 @@ impl CallingConv {
             CallingConv::SysV64 => 1,  // ARCH_TAG_X86_64
             CallingConv::Aapcs32 => 2, // ARCH_TAG_ARM
             CallingConv::RiscV => 3,   // ARCH_TAG_RISCV
+            CallingConv::Wasm => 4,    // wasm32 module ABI (never loader-met)
         }
     }
 }
@@ -105,6 +120,11 @@ pub enum AssemblerKind {
     GasArm,
     /// GNU assembler targeting RISC-V bare-metal (`riscv32-unknown-elf-as`).
     GasRiscV,
+    /// No assembler: the backend emits its final artifact DIRECTLY (the
+    /// wasm32 backend emits binary WebAssembly — D-W14, the first
+    /// assembler-free target; the driver writes its output bytes as the
+    /// object and skips the assemble/link stages entirely).
+    None,
 }
 
 /// The binary format produced by `--emit=obj`.
@@ -118,6 +138,8 @@ pub enum OutputFormat {
     FlatBin,
     /// Intel HEX record format. Used for flash programming.
     IntelHex,
+    /// Binary WebAssembly module (the wasm32 target; PLAN-WASM-2 B1).
+    Wasm,
 }
 
 /// Optional platform-level services a target's sysroot provides.
@@ -617,6 +639,36 @@ static RISCV32_NONE_QEMU: QemuSpec = QemuSpec {
     interrupt_source: None,
 };
 
+// ---------------------------------------------------------------------------
+// wasm32-unknown-unknown (PLAN-WASM-2 B1)
+// ---------------------------------------------------------------------------
+
+/// The wasm32 module target. Uniform 64-bit arithmetic semantics (§6.7: the
+/// data-stack slot IS the wasm operand-stack value, i64) so `ConstI64` wraps
+/// identically to every hosted golden; pointer values are stored in i64
+/// slots — the spec records `pointer_bits: 32` as the LOGICAL pointer width
+/// (the wasm linear-memory convention). `AssemblerKind::None` (D-W14): the
+/// backend emits the binary module directly; `OutputFormat::Wasm`; no
+/// linker, no QEMU.
+static WASM32_UNKNOWN_UNKNOWN: TargetSpec = TargetSpec {
+    word_bits: 64,
+    pointer_bits: 32,
+    endian: Endian::Little,
+    has_hardware_mul: true,
+    has_hardware_div: true,
+    has_fpu: false,
+    stack_alignment_bytes: 16,
+    output_format: OutputFormat::Wasm,
+    assembler: AssemblerKind::None,
+    calling_conv: CallingConv::Wasm,
+    native_int_ty: b"i64",
+    slot_bytes: 8,
+    qemu: None,
+    mmio_apertures: &[],
+    reloc_isa: None,
+    linker: b"",
+};
+
 static RISCV32_UNKNOWN_NONE: TargetSpec = TargetSpec {
     word_bits: 32,
     pointer_bits: 32,
@@ -703,6 +755,34 @@ mod tests {
         assert!(matches!(AssemblerKind::Fasm, AssemblerKind::Fasm));
         assert!(matches!(AssemblerKind::GasArm, AssemblerKind::GasArm));
         assert!(matches!(AssemblerKind::GasRiscV, AssemblerKind::GasRiscV));
+    }
+
+    #[test]
+    fn wasm32_target_parses_and_specs() {
+        let t = Target::parse(b"wasm32-unknown-unknown");
+        assert_eq!(t, Some(Target::Wasm32UnknownUnknown));
+        let spec = t.unwrap().spec();
+        assert_eq!(spec.word_bits, 64);
+        assert_eq!(spec.pointer_bits, 32);
+        assert_eq!(spec.slot_bytes, 8);
+        assert_eq!(spec.assembler, AssemblerKind::None);
+        assert_eq!(spec.output_format, OutputFormat::Wasm);
+        assert!(spec.qemu.is_none());
+        assert!(spec.mmio_apertures.is_empty());
+        assert_eq!(spec.calling_conv, CallingConv::Wasm);
+        assert_eq!(spec.calling_conv.arch_tag(), 4);
+        assert_eq!(t.unwrap().triple(), b"wasm32-unknown-unknown");
+    }
+
+    #[test]
+    fn existing_targets_unchanged_after_wasm_added() {
+        let none = Target::X86_64UnknownNone.spec();
+        assert_eq!(none.linker, b"ld");
+        assert_eq!(none.assembler, AssemblerKind::Fasm);
+        let arm = Target::ArmV7MUnknownNone.spec();
+        assert_eq!(arm.calling_conv.arch_tag(), 2);
+        let riscv = Target::RiscV32UnknownNone.spec();
+        assert_eq!(riscv.calling_conv.arch_tag(), 3);
     }
 
     #[test]

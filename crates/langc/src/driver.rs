@@ -449,6 +449,18 @@ pub fn emit_obj_driver(
             bk.set_platform_hash(platform_hash);
             Backend::RiscV(bk)
         }
+        Target::Wasm32UnknownUnknown => {
+            // PLAN-WASM-2 B1: the wasm module binary — no aperture table
+            // (MMIO is B2 scope, rejected at emit), no modinfo stamping.
+            let bk = codegen_wasm::WasmBackend::new(
+                module,
+                src,
+                &mut mem,
+                debug_trap_loc,
+                AsmMode::Object,
+            );
+            Backend::Wasm(bk)
+        }
     };
 
     if let Err(e) = gen.emit_prelude() {
@@ -576,13 +588,65 @@ pub fn emit_obj_driver(
         return 2;
     }
 
+    // D-W14: `AssemblerKind::None` (wasm32) — the backend's output bytes
+    // ARE the final object (binary WebAssembly); the assemble stage is
+    // skipped entirely and the bytes are written to the object path. The
+    // out directory is created here (the assemble stage normally does it).
+    if target.spec().assembler == codegen_core::AssemblerKind::None {
+        // hosted::fs has no mkdir; the None path is CI/dev-driven, so shell
+        // out to the same primitive the assemble stage's callers use.
+        let mkdir = process::run(b"mkdir", &[b"-p", out_dir]);
+        if mkdir.map(|s| s.code != 0).unwrap_or(true) {
+            let _ = diag::error_simple(1015, b"failed to create output directory");
+            return 2;
+        }
+        if fs::write_file(obj_path, mem.as_slice()).is_err() {
+            let _ = diag::error_simple(1015, b"failed to write output object");
+            return 2;
+        }
+        if mem.err.is_some() {
+            let _ = diag::error_simple(1014, b"out of memory");
+            return 2;
+        }
+        // P2: `--write-obl` after the artifact — the same obligation
+        // pipeline the assemble path runs below (one flow, two emission
+        // formats).
+        if let Some(ctx) = extract_ctx.as_mut() {
+            fill_contract_intent_clauses(ctx, module, src, search_dirs);
+            if let Err(code) = transclude_contract_predicates(ctx, module, src, search_dirs) {
+                let _ = diag::error_simple(code, b"contract predicate interface stale (E6413)");
+                return 2;
+            }
+            finalize_contract_intent_subjects(ctx);
+            let mut obl_buf = [0u8; 512];
+            let obl_path = match join_path(&mut obl_buf, out_dir, module_name, b".obl.json") {
+                Some(p) => p,
+                None => {
+                    let _ = diag::error_simple(1013, b"output path too long");
+                    return 2;
+                }
+            };
+            if write_obl && match verifier::codec::encode_obl(ctx.set()) {
+                Ok(bytes) => fs::write_file(obl_path, &bytes).is_err(),
+                Err(_) => true,
+            } {
+                let _ = diag::error_simple(1015, b"failed to write output .obl.json");
+                return 2;
+            }
+        }
+        return 0;
+    }
+
     let riscv_as_candidates: [&[u8]; 4] = [
         b"riscv32-elf-as",
         b"riscv32-unknown-elf-as",
         b"riscv64-unknown-elf-as",
         b"riscv64-linux-gnu-as",
     ];
+    // (Unreachable for None: the wasm32 path returned above — these arms
+    // exist for match totality over the remaining text-assembler targets.)
     let assembler_bin: &[u8] = match target.spec().assembler {
+        codegen_core::AssemblerKind::None => b"",
         codegen_core::AssemblerKind::Fasm => b"fasm",
         codegen_core::AssemblerKind::GasArm => b"arm-none-eabi-as",
         // distros ship different riscv assembler names (ubuntu-26.04 has no
@@ -597,6 +661,7 @@ pub fn emit_obj_driver(
     };
     let mut asm_args: Vec<&[u8]> = Vec::new();
     match target.spec().assembler {
+        codegen_core::AssemblerKind::None => {}
         codegen_core::AssemblerKind::Fasm => {
             asm_args.push(asm_path);
             asm_args.push(obj_path);

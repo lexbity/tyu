@@ -1933,6 +1933,9 @@ failures=$((failures + g51_fail))
 # design (DEC-14); the numeric overlap is acknowledged here until a registry
 # extraction (follow-on F-1) unifies the IDs. WASM gates: run
 # `bash ci/wasm.sh` (and `bash ci/wasm.sh --selftest` for the red paths).
+# PLAN-WASM-2 (devdocs/plans/web-ide.md) appends G57 (debug-surface parity)
+# and G58 (examples integrity) to ci/wasm.sh's registry — same pointer
+# rules, same file, no renumbering (its §Q14 registry is the home).
 # ----------------------------------------------------------------------
 
 echo ""

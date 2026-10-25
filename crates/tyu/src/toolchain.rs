@@ -76,6 +76,10 @@ impl ToolRole {
                 codegen_core::AssemblerKind::Fasm => b"fasm",
                 codegen_core::AssemblerKind::GasArm => b"arm-none-eabi-as",
                 codegen_core::AssemblerKind::GasRiscV => b"riscv32-elf-as",
+                // D-W14: None (wasm32) — no assembler tool exists; the
+                // empty name never resolves, and the wasm build flow never
+                // asks for this role.
+                codegen_core::AssemblerKind::None => b"",
             },
             ToolRole::Linker => target.spec().linker,
             ToolRole::Qemu => target.spec().qemu.map(|q| q.system_bin).unwrap_or(b""),

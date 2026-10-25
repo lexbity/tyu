@@ -7,6 +7,31 @@ CI-executed setup reference: every command it gives is a command the
 repository's own CI runs (the `.github/workflows` + `ci/*.sh` gates). The
 README's quick start links here.
 
+## The browser REPL (a fresh clone's serve path)
+
+`web/` is a fully static site whose runtime artifacts are BUILD products — a
+fresh clone has `web/pkg/` empty, so serving before building shows an empty
+shell. The one-command path:
+
+```sh
+bash ci/wasm.sh                     # builds web/pkg/: the wasm engine, the
+                                    # sysroot blob, examples.js, the editor
+                                    # bundle, and the hash manifest — then
+                                    # runs every gate (G52–G58 + smoke)
+cd web && python3 -m http.server 8080
+```
+
+Then open <http://localhost:8080>. Build prerequisites beyond the `hosted`
+tier: **Node ≥ 20** (the editor bundle builds from the committed
+`web/editor/package-lock.json` via `npm ci` — CI does this, `ci/wasm.sh`
+expects the modules present), **wasm-bindgen-cli 0.2.108** (must match the
+quarantined crate pin exactly), **brotli** (the compressed-budget gate), and
+**Playwright's chromium** (`cd web/test && npm ci && npx playwright install
+--with-deps chromium`) for the browser smoke. `bash ci/wasm.sh --selftest`
+proves every gate's red path. Note the ordering rule: `ci/wasm.sh` (build-web)
+must run BEFORE serving — the page refuses to boot unverified artifacts
+rather than guessing.
+
 ## Tiers
 
 The toolchain is used at three increasing tiers. A higher tier includes the

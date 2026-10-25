@@ -1,0 +1,16 @@
+[package]
+name = "codegen-wasm"
+version = "0.1.0"
+edition = "2021"
+description = "The wasm32-unknown-unknown codegen backend (PLAN-WASM-2 B1): a hand-rolled zero-dependency binary WebAssembly encoder + the §6.7 op mapping. R-C/DEC-35: NO external crates — the validator/runtime that check the output are CI tools, never dependencies."
+
+[dependencies]
+ir = { path = "../ir" }
+codegen-core = { path = "../codegen-core" }
+frontend = { path = "../frontend" }
+
+[features]
+# G54's miscompile selftest (AC-B1): a deliberately wrong opcode arm under
+# this switch — the parity leg MUST go red, proving the native goldens are
+# actually consulted. Mirrors wasm-repl's `wasm-selftest` (G52/G53 pattern).
+wasm-selftest = []

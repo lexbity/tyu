@@ -66,6 +66,27 @@ Checkout our  [book](docs/book/README.md) for more details and examples.
   ([ch14](docs/book/ch14-proving-the-program.md),
   [ch15](docs/book/ch15-the-machine-as-witness.md))
 
+## The browser REPL — the language running in your tab
+
+The repository ships a fully static browser REPL (`ci/wasm.sh` builds it into
+`web/`): a CodeMirror editor with a Tyu grammar, the book's labs as one-click
+examples, a debug console (call frames, post-mortem backtrace with
+click-to-source, `--emit=ir` pane, per-submission transcript), and a session
+model that accumulates definitions transactionally. Every artifact it loads is
+SHA-256-pinned and hash-verified before use; nothing renders rich text, no
+servers, no post-boot network.
+
+```bash
+bash ci/wasm.sh                     # build the artifact set into web/pkg/
+cd web && python3 -m http.server 8080
+# → http://localhost:8080  (deep links: #example=ch01/green-01-hello)
+```
+
+Requirements for the build: the `hosted` tier plus Node ≥ 20, `wasm-bindgen-cli`
+0.2.108, `brotli`, and Playwright's chromium for the browser smoke. The
+one-command gates (including the red-path selftest) live in `ci/wasm.sh`; see
+[SETUP.md](SETUP.md) for the fresh-clone serve path.
+
 ## Documents
 
 - **The book** — *Assembling in Tyu*:  every lab

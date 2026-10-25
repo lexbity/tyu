@@ -123,11 +123,11 @@ jobs:
         run: cargo test --workspace --release
         env:
           TYU_BIN_DIR: ${{ github.workspace }}/target/release
-      - name: WASM REPL gates (PLAN-WASM-1, ci/wasm.sh)
-        # G52 (fork ↔ src_interp fragvec differential + FR-1/FR-15 proofs) runs
-        # on every commit from P1; the run is host-only today (no wasm32 target
-        # needed). The --selftest pass proves the gate's red path in CI (AC-9).
-        # The job grows G53–G56 per slice and moves to a wasm-tooled job in P5.
+      - name: WASM REPL host-side gates (ci/wasm.sh)
+        # G52/G53 host legs (fork differential, execution differential, G56
+        # goldens, G57(a)/G58 behavioral pins) run host-only here; the
+        # --selftest pass proves the gates' red paths in CI (AC-9). The
+        # full browser-tooled run lives in the wasm job below.
         run: |
           bash ci/wasm.sh
           bash ci/wasm.sh --selftest
@@ -181,10 +181,36 @@ jobs:
           cd web/test
           npm ci --no-fund --no-audit
           npx playwright install --with-deps chromium
+      - name: Install the editor toolchain (W2)
+        # The editor bundle builds from the COMMITTED lockfile
+        # (web/editor/package-lock.json) — the served artifact must not
+        # float. esbuild + the pinned @codemirror/* tree come from npm ci.
+        run: |
+          cd web/editor
+          npm ci --no-fund --no-audit
       - name: WASM gates
         run: bash ci/wasm.sh
       - name: WASM gates (red paths, AC-9)
         run: bash ci/wasm.sh --selftest
+      - name: Upload failure artifacts (D-W11)
+        # The built artifact set (wasm, sysroot blob, examples, editor
+        # bundle, hash manifest) on ANY failure — a repro or a hash
+        # investigation must not need a local rebuild.
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: wasm-artifacts-${{ github.run_id }}
+          path: |
+            web/pkg/
+            /tmp/g55-*.log
+            /tmp/g58-*.log
+          if-no-files-found: ignore
+          retention-days: 7
+      # DEC-28: wasmtime + wasm-tools are installed when B1 lands (G54's
+      # validator/run legs need them). Until then the wasm job intentionally
+      # does NOT carry an unused 100+ MiB toolchain — the deferral is
+      # recorded here and in ci/wasm.sh's header, not forgotten.
+      # TODO(B1): apt/cargo-install wasmtime + wasm-tools in this step.
 
   # ---------------------------------------------------------------------------
   # ARM (armv7m) — cross-compiled under QEMU

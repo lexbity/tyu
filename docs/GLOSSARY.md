@@ -69,3 +69,23 @@ The platform descriptor (`platform.toml`, schema 2) is the validated, canonicall
 ## `platform_hash`
 
 `platform_hash` is the FNV-1a-64 hash of a platform descriptor's canonical serialization, stamped into modinfo v4 and compared by the loader — a mismatch rejects the module (`E5220`, wrong board) before any binding or relocation. See `crates/tyu/src/platform/desc/canonical.rs`, `crates/lmod/src/modinfo.rs`, and `crates/loader-core/src/apertures.rs`.
+
+## REPL session
+
+A REPL session is the browser/native interpreter's accumulating state: one module (≤ 64 words) built from repeated submissions, a persistent data stack and region heap, and transactional phrases — a faulting phrase rolls its stack/heap/frames back via the undo journal while its definitions commit and its already-emitted output stays. Run (`reset` + submit) is the program model; submit-without-reset is the session model. See `crates/wasm-repl/src/session.rs` and `devdocs/plans/web-ide.md` §Q3.
+
+## Phrase
+
+A phrase is a submission's trailing expression sequence (`7 wrap drop`), compiled into the synthetic `repl-phrase` word and executed against the persistent stack under the transaction rules. Its declared inputs are pinned to the ACTUAL session stack at compile time (the W1 reconciliation), so the checker verifies the phrase against reality. See `crates/wasm-repl/src/phrase.rs` and `crates/wasm-repl/src/session.rs`.
+
+## Debug snapshot projections
+
+The debug projections (`wasm_repl::debug`) are the read-only views — frames, trace events, dictionary, word source, regions, status — that every debug surface (the native `repl-cli debug-dump`, the wasm ABI, the browser console) renders from. One core, one JSON encoder, one span mapper (I-8/I-11): the JS layer never synthesizes debug facts. See `crates/wasm-repl/src/debug.rs` and `test-goldens/repl/debug/`.
+
+## Span bridge
+
+The span bridge (`web/spanmap.mjs`) is the single translator between the engine's UTF-8 byte spans and the editor's UTF-16 offsets — ASCII fast path, general walk, torn offsets clamp to code-point starts. Engine spans anchor to the submitted buffer via the session's anchor map (`ReplSession::doc_span`); no component indexes the doc with a raw engine span. See `crates/wasm-repl/src/session.rs` and `web/spanmap.mjs`.
+
+## Examples pack
+
+The examples pack (`repl-cli pack-examples`) is the only bridge between the book's lab corpus (`docs/book/labs/**`) and the browser's example surface: a total, table-driven classifier (green/red/engine/interlude + native-only rules, each with a reason), header-derived expectation codes, deterministic emission, hash-pinned into `web/pkg/examples.js`. Its behavioral pin drives every runnable lab through a session: green → Ok, red → the checker's code. See `crates/wasm-repl/src/examples_pack.rs` and `crates/wasm-repl/tests/examples_expectations.rs`.

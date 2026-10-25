@@ -35,10 +35,10 @@ struct TargetRegs {
 }
 
 /// Return GDB register numbers for the trap payload, per target.
-fn register_table(target: Target) -> TargetRegs {
+fn register_table(target: Target) -> Result<TargetRegs, TyuError> {
     use codegen_core::Target::*;
     match target {
-        X86_64UnknownLinuxGnu | X86_64UnknownNone => TargetRegs {
+        X86_64UnknownLinuxGnu | X86_64UnknownNone => Ok(TargetRegs {
             trap_code: regs::x86_64::RDI,
             valid: regs::x86_64::RSI,
             source_line: regs::x86_64::RDX,
@@ -46,8 +46,8 @@ fn register_table(target: Target) -> TargetRegs {
             ds_ptr: regs::x86_64::DS_PTR,
             trap_pc: regs::x86_64::RIP,
             slot_bytes: 8,
-        },
-        ArmV7MUnknownNone => TargetRegs {
+        }),
+        ArmV7MUnknownNone => Ok(TargetRegs {
             trap_code: regs::arm::TRAP_CODE,
             valid: regs::arm::VALID,
             source_line: regs::arm::LINE,
@@ -55,8 +55,8 @@ fn register_table(target: Target) -> TargetRegs {
             ds_ptr: regs::arm::DS_PTR,
             trap_pc: regs::arm::PC,
             slot_bytes: 4,
-        },
-        RiscV32UnknownNone => TargetRegs {
+        }),
+        RiscV32UnknownNone => Ok(TargetRegs {
             trap_code: regs::riscv::TRAP_CODE,
             valid: regs::riscv::VALID,
             source_line: regs::riscv::LINE,
@@ -64,7 +64,13 @@ fn register_table(target: Target) -> TargetRegs {
             ds_ptr: regs::riscv::DS_PTR,
             trap_pc: regs::riscv::PC,
             slot_bytes: 4,
-        },
+        }),
+        // wasm32: no QEMU gdbstub escalation — the module runs under a wasm
+        // engine and its traps surface through the host import (B2), not a
+        // register map.
+        Wasm32UnknownUnknown => Err(TyuError::Debug(
+            "gdb escalation is not applicable to the wasm32 target".into(),
+        )),
     }
 }
 
@@ -227,7 +233,19 @@ pub fn escalate(
         }
     };
 
-    let regs = register_table(target);
+    let regs = match register_table(target) {
+        Ok(r) => r,
+        Err(e) => {
+            return EscalationOutcome {
+                diagnostic_string: None,
+                error: Some(e.to_string()),
+                target,
+                mode,
+                port: 0,
+                phase: Some("register-map"),
+            };
+        }
+    };
     let port = match ephemeral_port() {
         Ok(p) => p,
         Err(e) => {
@@ -569,7 +587,17 @@ pub fn classify_hang_on_port(image: &Path, target: Target, port: u16) -> HangCla
         let mut client = connect_rsp_client(&mut qemu, port, "hang connect")?;
 
         // 2. Sample the program counter using target-specific PC register.
-        let regs = register_table(target);
+        // wasm32: no gdbstub register map (B2) — hang classification
+        // cannot sample a PC; classify as the "not hang" path honestly.
+        let regs = match register_table(target) {
+            Ok(r) => r,
+            Err(e) => {
+                return Ok(HangClass::Unknown {
+                    word: None,
+                    reason: e.to_string(),
+                });
+            }
+        };
         let pc = sample_running_pc(&mut client, &regs)?;
 
         // 3. Map PC → word name via nm -n (sorted symbols).
