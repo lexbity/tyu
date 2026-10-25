@@ -563,8 +563,10 @@ function wire(repl) {
     runBtn.disabled = true;
   };
 
-  // FR-30: `?word` introspection — never a submission. Session words jump
-  // to their definition; sysroot words show the blob source.
+  // FR-30: `?word` introspection — never a submission. Imported/sysroot
+  // words show the defining file's source; session words jump to their
+  // definition WHEN the editor holds the session buffer (the def_span's
+  // anchor), else the offset is shown textually — never a wrong jump.
   const introspect = () => {
     const name = localEditor.currentDoc().trim().slice(1);
     const info = repl.words().find((w) => w.name === name);
@@ -577,9 +579,16 @@ function wire(repl) {
     if (src.origin === "sysroot") {
       text += `\nsource: ${src.path}\n${src.source}`;
     } else if (src.origin === "session") {
-      const pos = spanMap.toUtf16(src.def_span_start, src.def_span_len);
-      text += "\n(definition selected in the editor)";
-      localEditor.jumpTo(pos.from, pos.to);
+      const sessionSrc = new TextDecoder().decode(repl.session_source());
+      const sessionMap = buildSpanMap(sessionSrc);
+      const { from, to } = sessionMap.toUtf16(src.def_span_start, src.def_span_len);
+      text += `\ndefined at ${src.def_span_start}..${src.def_span_start + src.def_span_len} in the session buffer`;
+      if (localEditor.currentDoc() === sessionSrc) {
+        localEditor.jumpTo(from, to);
+        text += "\n(definition selected in the editor)";
+      }
+    } else {
+      text += "\n(checker builtin — lowered inline, no body)";
     }
     showDiag(text);
   };

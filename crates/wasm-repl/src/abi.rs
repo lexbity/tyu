@@ -367,26 +367,28 @@ impl WasmRepl {
     /// count). The synthetic `repl-phrase` wrapper is machinery, not an
     /// entry.
     pub fn words(&self) -> Vec<JsWordInfo> {
+        let sysroot: Option<&dyn crate::debug::SysrootFiles> = Some(&self.search.sysroot);
         match self.session.compiled() {
-            Some(c) => crate::debug::words(c, self.session.source())
+            Some(c) => crate::debug::words(c, self.session.source(), sysroot)
                 .into_iter()
                 .map(|w| {
+                    // def_spans are SESSION-BUFFER offsets (the words() scan
+                    // over the accumulated source — the I-9 anchor); raw,
+                    // like the dump (I-11).
                     let (origin, def_start, def_len, path) = match &w.origin {
-                        crate::debug::WordOrigin::Session { def_span } => {
-                            let span = doc_span(&self.session, *def_span);
-                            (
+                        crate::debug::WordOrigin::Session { def_span } => (
                             "session",
-                            span.start as u32,
-                            span.end.saturating_sub(span.start) as u32,
+                            def_span.start as u32,
+                            def_span.end.saturating_sub(def_span.start) as u32,
                             String::new(),
-                        )
-                        }
+                        ),
                         crate::debug::WordOrigin::Sysroot { path } => (
                             "sysroot",
                             0,
                             0,
                             String::from_utf8_lossy(path).into_owned(),
                         ),
+                        crate::debug::WordOrigin::Builtin => ("builtin", 0, 0, String::new()),
                     };
                     JsWordInfo {
                         name: String::from_utf8_lossy(&w.name).into_owned(),
@@ -414,16 +416,14 @@ impl WasmRepl {
             sysroot,
             name.as_bytes(),
         ) {
-            crate::debug::WordSource::Session { def_span } => {
-                let span = doc_span(&self.session, def_span);
-                JsWordSource {
+            // def_span is a SESSION-BUFFER offset (the words() scan space).
+            crate::debug::WordSource::Session { def_span } => JsWordSource {
                 origin: "session".to_string(),
                 path: String::new(),
                 source: String::new(),
-                def_span_start: span.start as u32,
-                def_span_len: span.end.saturating_sub(span.start) as u32,
-                }
-            }
+                def_span_start: def_span.start as u32,
+                def_span_len: def_span.end.saturating_sub(def_span.start) as u32,
+            },
             crate::debug::WordSource::Sysroot { path, source } => JsWordSource {
                 origin: "sysroot".to_string(),
                 path: String::from_utf8_lossy(&path).into_owned(),
@@ -454,6 +454,13 @@ impl WasmRepl {
                 alive: r.alive,
             })
             .collect()
+    }
+
+    /// `session_source`: the accumulated session buffer (the I-9 anchor the
+    /// dictionary's definition spans index). The UI pairs it with
+    /// `session word def_span` for view-source jumps.
+    pub fn session_source(&self) -> Vec<u8> {
+        self.session.source().to_vec()
     }
 
     /// `fuel_default`: the session's current default per-phrase budget —

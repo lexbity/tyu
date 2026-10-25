@@ -74,14 +74,19 @@ pub enum TraceEventView {
 }
 
 /// A word's origin (DEC-29): session words resolve to the buffer; sysroot
-/// words resolve into the blob's file map.
+/// words resolve into the blob's file map; the checker's operator words
+/// (dup/+/drop/… — lowered inline by the compiler, no body anywhere) are
+/// language builtins (the as-built third member of the closed set).
 #[derive(Clone, Debug, PartialEq)]
 pub enum WordOrigin {
-    /// Defined in the session buffer at `def_span` (`&src[span]` is the
-    /// definition's name token — the I-9 anchor).
+    /// Defined in the SESSION BUFFER at `def_span` (`&source[span]` is the
+    /// definition's name token — the I-9 anchor is the session buffer, the
+    /// accumulating text, not the last submission).
     Session { def_span: Span },
     /// Defined by a sysroot source file.
     Sysroot { path: Vec<u8> },
+    /// A checker builtin (operator word, lowered inline — no body).
+    Builtin,
 }
 
 /// One dictionary word (completions, `?word` introspection, the dictionary
@@ -209,26 +214,77 @@ fn trace_view_of(e: &Event) -> TraceEventView {
     }
 }
 
-/// The session's dictionary: module words (session-defined — imports
-/// contribute signatures only, never bodies) with their definition spans
-/// resolved against the session buffer.
-pub fn words(compiled: &Compiled, source: &[u8]) -> Vec<WordInfo> {
-    compiled
+/// The session's dictionary (FR-30): module words (session-defined, with
+/// their definition spans resolved against the session buffer) plus the
+/// IMPORTED words (signature-only — callable and checked, no interpreter
+/// body). `sysroot` classifies imported words' origins against the blob's
+/// file map; `None` leaves them `Sysroot { path: [] }` rather than guessing.
+pub fn words(
+    compiled: &Compiled,
+    source: &[u8],
+    sysroot: Option<&dyn SysrootFiles>,
+) -> Vec<WordInfo> {
+    let checker_builtins: Vec<&[u8]> = semantics::typecheck::builtin_words()
+        .iter()
+        .map(|e| e.name.as_bytes())
+        .collect();
+    let mut out: Vec<WordInfo> = compiled
         .module
         .words
         .iter()
         // The synthetic `repl-phrase` word is session machinery (the §7.2
         // phrase wrapper), not a student-facing dictionary entry.
         .filter(|w| w.name.as_bytes() != b"repl-phrase")
-        .map(|w| WordInfo {
-            name: w.name.as_bytes().to_vec(),
-            sig: crate::engine::sig_text_of(w),
-            effects: effects_text(w.performs),
-            origin: WordOrigin::Session {
-                def_span: def_span(source, w.name.as_bytes()).unwrap_or(Span::UNKNOWN),
-            },
+        .map(|w| {
+            // def_span is a SESSION-BUFFER offset (the scan runs over the
+            // accumulated source — the I-9 anchor), never doc-mapped.
+            let span = def_span(source, w.name.as_bytes()).unwrap_or(Span::UNKNOWN);
+            WordInfo {
+                name: w.name.as_bytes().to_vec(),
+                sig: crate::engine::sig_text_of(w),
+                effects: effects_text(w.performs),
+                origin: WordOrigin::Session { def_span: span },
+            }
         })
-        .collect()
+        .collect();
+    for imp in &compiled.imports {
+        // Checker operator words ride the env too — classify them as
+        // builtins, not as imports with a fabricated sysroot path.
+        if checker_builtins.contains(&imp.name.as_slice()) {
+            out.push(WordInfo {
+                name: imp.name.clone(),
+                sig: imp.sig.clone(),
+                effects: imp.effects.clone(),
+                origin: WordOrigin::Builtin,
+            });
+            continue;
+        }
+        let origin = WordOrigin::Sysroot {
+            path: imported_origin(sysroot, &imp.name),
+        };
+        out.push(WordInfo {
+            name: imp.name.clone(),
+            sig: imp.sig.clone(),
+            effects: imp.effects.clone(),
+            origin,
+        });
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
+}
+
+/// The sysroot file that defines an imported word (the `: name` convention),
+/// or empty — never a fabricated path.
+fn imported_origin(sysroot: Option<&dyn SysrootFiles>, name: &[u8]) -> Vec<u8> {
+    let Some(table) = sysroot else {
+        return Vec::new();
+    };
+    for (path, content) in table.files() {
+        if defines_word(&content, name) {
+            return path;
+        }
+    }
+    Vec::new()
 }
 
 /// The sysroot file map `word_source` resolves against (DEC-29): the wasm
@@ -293,6 +349,9 @@ pub fn regions(heap: &RegionHeap) -> Vec<RegionInfo> {
 pub fn status(stack_depth: usize, compiled: Option<&Compiled>, fuel: Fuel) -> SessionStatus {
     SessionStatus {
         stack_depth,
+        // The dictionary size the UI renders — module words plus the
+        // imported words (exactly `words()`'s population, bar the sysroot
+        // origin resolution it needs no sysroot for).
         word_count: compiled
             .map(|c| {
                 c.module
@@ -300,6 +359,7 @@ pub fn status(stack_depth: usize, compiled: Option<&Compiled>, fuel: Fuel) -> Se
                     .iter()
                     .filter(|w| w.name.as_bytes() != b"repl-phrase")
                     .count()
+                    + c.imports.len()
             })
             .unwrap_or(0),
         fuel_ops: fuel.remaining(),
@@ -318,6 +378,12 @@ fn cell_of(word: &ir::Word, s: Slot) -> StackCell {
 }
 
 /// The declared effect set as text (`-` = pure; bit names otherwise).
+/// The declared effect set as text (`-` = pure). Public: the compile side
+/// renders imported words' effects through the same one formatter (I-11).
+pub fn effects_text_pub(performs: ir::EffectSet) -> Vec<u8> {
+    effects_text(performs)
+}
+
 fn effects_text(performs: ir::EffectSet) -> Vec<u8> {
     const NAMES: [(&[u8], u16); 5] = [
         (b"suspend", ir::EffectSet::SUSPEND),
@@ -352,11 +418,28 @@ fn def_span(source: &[u8], name: &[u8]) -> Option<Span> {
         if t.kind == TokenKind::Eof {
             return None;
         }
-        if prev_colon
-            && t.kind == TokenKind::Ident
-            && &source[t.span.start..t.span.end] == name
-        {
-            return Some(t.span);
+        if prev_colon && t.kind == TokenKind::Ident {
+            // Dotted names (`platform.io.log`) lex as Ident (Dot Ident)* —
+            // reassembled exactly like the phrase pass does (§7.2).
+            let mut full: Vec<u8> = source[t.span.start..t.span.end].to_vec();
+            let mut span = t.span;
+            let mut look = lex;
+            loop {
+                if look.next().kind != TokenKind::PunctDot {
+                    break;
+                }
+                let id = look.next();
+                if id.kind != TokenKind::Ident {
+                    return None;
+                }
+                full.push(b'.');
+                full.extend_from_slice(&source[id.span.start..id.span.end]);
+                span.end = id.span.end;
+                lex = look;
+            }
+            if full.as_slice() == name {
+                return Some(span);
+            }
         }
         prev_colon = t.kind == TokenKind::PunctColon;
     }
@@ -466,6 +549,7 @@ fn json_word(w: &WordInfo) -> String {
         WordOrigin::Sysroot { path } => {
             format!("{{\"origin\":\"sysroot\",\"path\":{}}}", json_escape(path))
         }
+        WordOrigin::Builtin => "{\"origin\":\"builtin\"}".to_string(),
     };
     format!(
         "{{\"name\":{},\"sig\":{},\"effects\":{},\"origin\":{}}}",
@@ -518,16 +602,12 @@ pub fn dump_submission(session: &crate::session::ReplSession, submit_index: usiz
             .collect(),
         None => Vec::new(),
     };
+    // def_spans are session-buffer offsets (the words() scan) — raw, like
+    // the ABI (I-11).
     let words: Vec<String> = match compiled {
-        Some(c) => words(c, session.source())
+        Some(c) => words(c, session.source(), None)
             .iter()
-            .map(|w| {
-                let mut w = w.clone();
-                if let WordOrigin::Session { def_span } = &mut w.origin {
-                    *def_span = doc(*def_span);
-                }
-                json_word(&w)
-            })
+            .map(json_word)
             .collect(),
         None => Vec::new(),
     };

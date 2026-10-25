@@ -13,14 +13,40 @@
 //                        bridge and its property tests land in W4, and no
 //                        non-ASCII fixture ships before it).
 
-import { EditorView, keymap, lineNumbers, highlightActiveLine, drawSelection, dropCursor } from "@codemirror/view";
+import { EditorView, keymap, lineNumbers } from "@codemirror/view";
 import { Compartment, EditorState } from "@codemirror/state";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { syntaxHighlighting } from "@codemirror/language";
 import { linter } from "@codemirror/lint";
-import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
+import { autocompletion, closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
 
 import { tyu, tyuHighlightStyle } from "./index.mjs";
+
+function completions(host) {
+  // FR-30: signature-labeled completions from the session dictionary, top
+  // 50 by prefix (§Q9's render cap). Empty until the first compile puts
+  // words in the dictionary.
+  return autocompletion({
+    override: [
+      (context) => {
+        const word = context.matchBefore(/[a-zA-Z_][a-zA-Z0-9_.\-]*/);
+        if (!word || (word.from === word.to && !context.explicit)) return null;
+        const prefix = word.text.toLowerCase();
+        const all = host.getCompletions?.() ?? [];
+        const options = all
+          .filter((w) => w.label.toLowerCase().startsWith(prefix))
+          .slice(0, 50)
+          .map((w) => ({
+            label: w.label,
+            detail: w.detail,
+            type: "word",
+            apply: w.label,
+          }));
+        return { from: word.from, options, validFor: /^[a-zA-Z0-9_.\-]*$/ };
+      },
+    ],
+  });
+}
 
 function diagnosticsLinter(host) {
   // The linter re-runs on doc changes; externally-driven diagnostic updates
@@ -81,15 +107,13 @@ export function mount(parent, host) {
       extensions: [
         lineNumbers(),
         history(),
-        drawSelection(),
-        dropCursor(),
         EditorState.allowMultipleSelections.of(true),
-        highlightActiveLine(),
         closeBrackets(),
         readOnly.of([]),
         tyu(),
         syntaxHighlighting(tyuHighlightStyle, { fallback: true }),
         lintExt,
+        completions(host),
         runKeymap,
         // `indentWithTab` is a key BINDING (not an extension): it lives in
         // the base keymap's `of` list.

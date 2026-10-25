@@ -60,8 +60,24 @@ pub struct Compiled {
     /// session's MMIO addresses resolve against it (empty when the session
     /// has no descriptor — MMIO modules are then compile-rejected, E3640).
     pub apertures: Vec<ApertureEntry>,
+    /// The IMPORTED words (W5, FR-30): signature-only dictionary entries —
+    /// callable, checked, and introspectable, but with no interpreter body
+    /// (invoking one at run time is a dictionary miss). Not module words,
+    /// not interpreter builtins.
+    pub imports: Vec<ImportedWord>,
     dict: Vec<(ir::Atom, DictTarget)>,
     subtypes: Vec<SubtypeRange>,
+}
+
+/// One imported word's introspection surface (name + declared signature +
+/// declared effects, rendered).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ImportedWord {
+    pub name: Vec<u8>,
+    /// `( in -- out )`, from the import's declared signature.
+    pub sig: Vec<u8>,
+    /// The declared effect set, rendered (`-` when pure).
+    pub effects: Vec<u8>,
 }
 
 impl Compiled {
@@ -104,6 +120,7 @@ impl Compiled {
             spec,
             src,
             apertures: Vec::new(),
+            imports: Vec::new(),
             dict,
             subtypes: Vec::new(),
         }
@@ -198,14 +215,69 @@ pub fn compile(
         })
         .collect();
 
+    // The imported-word dictionary (W5): env entries that are neither the
+    // interpreter builtins nor module words. Their signatures/effects are
+    // exactly what the checker verified calls against — captured verbatim.
+    let imports: Vec<ImportedWord> = {
+        let module_words: Vec<&[u8]> = built.words.iter().map(|w| w.name.as_bytes()).collect();
+        let builtin_names: Vec<&[u8]> = BUILTIN_NAMES.to_vec();
+        let mut seen = Vec::new();
+        let mut out = Vec::new();
+        for entry in env.iter() {
+            let name = entry.name.as_bytes().to_vec();
+            if module_words.contains(&name.as_slice())
+                || builtin_names.contains(&name.as_slice())
+                || seen.contains(&name)
+            {
+                continue;
+            }
+            seen.push(name.clone());
+            let sig = render_entry_sig(&entry.sig);
+            let effects = crate::debug::effects_text_pub(entry.performs);
+            out.push(ImportedWord {
+                name,
+                sig,
+                effects,
+            });
+        }
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        out
+    };
+
     Ok(Compiled {
         module: built,
         spec,
         src,
         apertures,
+        imports,
         dict,
         subtypes: ranges,
     })
+}
+
+/// `( in -- out )` from a checked `WordSig` (the env's type atoms are the
+/// canonical names).
+fn render_entry_sig(sig: &semantics::types::WordSig) -> Vec<u8> {
+    let names = |ts: &[semantics::types::TypeAtom; 8], len: u8| -> Vec<u8> {
+        let mut out = Vec::new();
+        for (i, ty) in ts.iter().enumerate().take(len as usize) {
+            if i != 0 {
+                out.push(b' ');
+            }
+            out.extend_from_slice(ty.as_bytes());
+        }
+        out
+    };
+    let mut out = Vec::new();
+    out.extend_from_slice(b"( ");
+    out.extend_from_slice(&names(&sig.inputs, sig.in_len));
+    out.extend_from_slice(b" --");
+    if sig.out_len > 0 {
+        out.push(b' ');
+    }
+    out.extend_from_slice(&names(&sig.outputs, sig.out_len));
+    out.extend_from_slice(b" )");
+    out
 }
 
 /// Resolve the descriptor's aperture table (P4): absolute `base` for

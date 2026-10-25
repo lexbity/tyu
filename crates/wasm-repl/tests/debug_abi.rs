@@ -219,7 +219,7 @@ fn non_contract_traps_have_no_detail() {
 fn words_carry_session_definition_spans() {
     let mut sess = session(1_000_000);
     assert_eq!(submit(&mut sess, b": double ( i64 -- i64 ) dup + ;"), Status::Ok);
-    let words = debug::words(sess.compiled().unwrap(), sess.source());
+    let words = debug::words(sess.compiled().unwrap(), sess.source(), None);
     let double = words
         .iter()
         .find(|w| w.name == b"double")
@@ -336,6 +336,8 @@ fn status_and_empty_inputs_are_structured() {
     assert_eq!(submit(&mut sess, b": f ( -- ) ; 1 2 +"), Status::Ok);
     let st = debug::status(sess.stack_cells().len(), sess.compiled(), sess.fuel());
     assert_eq!(st.stack_depth, 1);
-    assert_eq!(st.word_count, 1);
+    // One module word plus the checker's operator builtins (dup/drop/+/… —
+    // the W5 dictionary includes the full introspectable surface).
+    assert_eq!(st.word_count, 1 + 16);
     assert!(sess.last_status().is_some());
 }

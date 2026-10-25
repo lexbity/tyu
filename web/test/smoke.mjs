@@ -360,6 +360,72 @@ try {
     const fuelNote = await page.textContent("#fuel-note");
     assert(fuelNote.includes(repl_fuel_from_dump(dump)), `fuel note from ABI (${fuelNote})`);
 
+    // ---------------------------------------------------------------
+    // W5 / AC-W5: the introspection surface. Completions offer imported
+    // words with their declared signatures after a compile; `?word` on a
+    // sysroot word shows the defining file's source; the transcript
+    // reflects the session's statuses.
+    // ---------------------------------------------------------------
+    await page.goto(`${base}#example=${encodeURIComponent("ch01/green-01-hello")}`);
+    await page.waitForFunction(
+      () => document.querySelector("#examples .example.target"),
+      null,
+      { timeout: 10_000 }
+    );
+    // Completions: a prefix of the imported word opens the tooltip.
+    await page.click(".cm-content");
+    await page.keyboard.press("ControlOrMeta+a");
+    await page.keyboard.insertText("plat");
+    await page.waitForSelector(".cm-tooltip-autocomplete", { timeout: 10_000 });
+    const completion = await page.evaluate(() =>
+      [...document.querySelectorAll(".cm-completionLabel")].map((el) => el.textContent)
+    );
+    assert(
+      completion.includes("platform.io.log"),
+      `completion offers the imported word (${JSON.stringify(completion)})`
+    );
+    const ioDetail = await page.evaluate(() => {
+      // The detail rides the option row of the platform.io.log entry.
+      const rows = [...document.querySelectorAll(".cm-completionItem, li")];
+      const row = rows.find((el) => el.textContent.includes("platform.io.log"));
+      return row?.textContent ?? "";
+    });
+    assert(
+      ioDetail.includes("( str -- )"),
+      `completion carries the declared signature (${JSON.stringify(ioDetail)})`
+    );
+
+    // ?word on a sysroot word: origin + defining file + source, never a
+    // submission.
+    await page.click(".cm-content");
+    await page.keyboard.press("ControlOrMeta+a");
+    await page.keyboard.insertText("?platform.io.log");
+    await page.click("#submit");
+    await page.waitForTimeout(300);
+    const inspect = await page.textContent("#diag");
+    assert(
+      inspect.includes("platform.io.log") && inspect.includes("( str -- )"),
+      `introspection renders the signature (${JSON.stringify(inspect)})`
+    );
+    assert(
+      inspect.includes("sysroot") && inspect.includes("platform/linux.def"),
+      `view-source resolves the defining file (${JSON.stringify(inspect)})`
+    );
+    const statusAfterInspect = await page.textContent("#status");
+    assert(
+      !statusAfterInspect.includes("compile-error"),
+      `?word is never submitted (${statusAfterInspect})`
+    );
+
+    // The transcript shows the session's submissions with their statuses
+    // (introspection is not a submission, so it has no row — the records
+    // here are the example load and the earlier fixture run).
+    const trText = await page.$eval("#transcript", (el) => el.textContent);
+    assert(
+      trText.includes("example") && trText.includes("→ ok"),
+      `transcript reflects submissions with statuses (${JSON.stringify(trText.slice(0, 200))})`
+    );
+
     // Reload resets (Fresh state, §4.2).
     await page.reload({ waitUntil: "load" });
     await page.waitForFunction(
