@@ -932,7 +932,7 @@ for triple in x86_64-unknown-linux-gnu x86_64-unknown-none armv7m-unknown-none r
         g25_fail=1
     fi
 done
-[ "$g25_fail" -eq 0 ] && msg $GREEN "  G25: statement goldens exact-set present for all four triples (band rule §Q4)"
+[ "$g25_fail" -eq 0 ] && msg $GREEN "  G25: statement goldens exact-set present for all five triples (band rule §Q4)"
 failures=$((failures + g25_fail))
 
 # --- G26: PLAN-VERIFY-3 P2.1 — verifier layering (no codegen-core) ---

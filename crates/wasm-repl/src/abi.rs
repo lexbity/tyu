@@ -30,6 +30,9 @@ use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use codegen_core::compiled_desc::{
+    decode_compiled_desc, validate_compiled_desc, CompiledDescriptor,
+};
 
 use wasm_bindgen::prelude::*;
 
@@ -132,6 +135,7 @@ fn start() {
 pub struct WasmRepl {
     session: ReplSession,
     search: SysrootSearch,
+    descriptor: CompiledDescriptor,
     bound: Vec<u16>,
 }
 
@@ -150,9 +154,17 @@ impl WasmRepl {
                 String::from_utf8_lossy(&d.message)
             )
         })?;
+        let descriptor = decode_compiled_desc(include_bytes!(
+            "../../../platforms/wasm32-unknown-unknown/platform.desc"
+        ))
+        .and_then(|desc| validate_compiled_desc(&desc).map(|()| desc))
+        .map_err(|e| format!("E9153: invalid browser platform descriptor: {e:?}"))?;
+        let mut session = ReplSession::new(SessionOpts::default());
+        session.set_descriptor(Some(Box::new(descriptor)));
         Ok(WasmRepl {
-            session: ReplSession::new(SessionOpts::default()),
+            session,
             search: SysrootSearch { sysroot },
+            descriptor,
             bound: Vec::new(),
         })
     }
@@ -163,6 +175,24 @@ impl WasmRepl {
         let result = self.session.transactional_submit(src.as_bytes(), &tables);
         self.stream_output(&result);
         JsSubmitResult::of(&self.session, result)
+    }
+
+    /// Compile a fresh Run submission to a nested Wasm module. Execution is
+    /// performed by the page's Wasm runtime so its imports share the same
+    /// output and peripheral devices as interpreter mode.
+    pub fn compile_backend(&self, src: &str) -> Result<Vec<u8>, String> {
+        let tables: [&dyn SourceTable; 1] = [&self.search];
+        crate::session::compile_backend_run(src.as_bytes(), &tables, &self.descriptor).map_err(
+            |d| {
+                format!(
+                    "E{} @{}..{}: {}",
+                    d.code,
+                    d.span.start,
+                    d.span.end,
+                    String::from_utf8_lossy(&d.message)
+                )
+            },
+        )
     }
 
     /// `repl_step` (§6.2): resume the fuel-suspended phrase with `ops` more
@@ -253,19 +283,19 @@ impl WasmRepl {
                 .map(|f| {
                     let span = doc_span(&self.session, f.call_span);
                     JsFrameCell {
-                    index: f.index,
-                    word: String::from_utf8_lossy(&f.word).into_owned(),
-                    sig: String::from_utf8_lossy(&f.sig).into_owned(),
-                    call_span_start: span.start as u32,
-                    call_span_end: span.end as u32,
-                    locals: f
-                        .locals
-                        .iter()
-                        .map(|c| JsStackCell {
-                            ty_name: String::from_utf8_lossy(&c.ty_name).into_owned(),
-                            value_hex: String::from_utf8_lossy(&c.value_hex).into_owned(),
-                        })
-                        .collect(),
+                        index: f.index,
+                        word: String::from_utf8_lossy(&f.word).into_owned(),
+                        sig: String::from_utf8_lossy(&f.sig).into_owned(),
+                        call_span_start: span.start as u32,
+                        call_span_end: span.end as u32,
+                        locals: f
+                            .locals
+                            .iter()
+                            .map(|c| JsStackCell {
+                                ty_name: String::from_utf8_lossy(&c.ty_name).into_owned(),
+                                value_hex: String::from_utf8_lossy(&c.value_hex).into_owned(),
+                            })
+                            .collect(),
                     }
                 })
                 .collect(),
@@ -300,34 +330,42 @@ impl WasmRepl {
                             // through `detail`-free scalar fields below.
                             ("periph", 0, 0, 0, String::new(), 0, None, 0)
                         }
-                        crate::debug::TraceEventView::Call { word, depth } => {
-                            ("call", 0, 0, 0, String::from_utf8_lossy(&word).into_owned(), depth, None, 0)
-                        }
+                        crate::debug::TraceEventView::Call { word, depth } => (
+                            "call",
+                            0,
+                            0,
+                            0,
+                            String::from_utf8_lossy(&word).into_owned(),
+                            depth,
+                            None,
+                            0,
+                        ),
                         crate::debug::TraceEventView::Trap { code, span, detail } => {
                             let span = doc_span(repl, span);
                             (
-                            "trap",
-                            code,
-                            span.start as u32,
-                            span.end.saturating_sub(span.start) as u32,
-                            String::new(),
-                            0,
-                            detail.map(|d| JsTrapDetail {
-                                kind: String::from_utf8_lossy(d.kind.name()).into_owned(),
-                                word: String::from_utf8_lossy(&d.word).into_owned(),
-                                declared: String::from_utf8_lossy(&d.declared).into_owned(),
-                                actual: d
-                                    .actual
-                                    .iter()
-                                    .map(|c| JsStackCell {
-                                        ty_name: String::from_utf8_lossy(&c.ty_name).into_owned(),
-                                        value_hex: String::from_utf8_lossy(&c.value_hex)
-                                            .into_owned(),
-                                    })
-                                    .collect(),
-                            }),
-                            0,
-                        )
+                                "trap",
+                                code,
+                                span.start as u32,
+                                span.end.saturating_sub(span.start) as u32,
+                                String::new(),
+                                0,
+                                detail.map(|d| JsTrapDetail {
+                                    kind: String::from_utf8_lossy(d.kind.name()).into_owned(),
+                                    word: String::from_utf8_lossy(&d.word).into_owned(),
+                                    declared: String::from_utf8_lossy(&d.declared).into_owned(),
+                                    actual: d
+                                        .actual
+                                        .iter()
+                                        .map(|c| JsStackCell {
+                                            ty_name: String::from_utf8_lossy(&c.ty_name)
+                                                .into_owned(),
+                                            value_hex: String::from_utf8_lossy(&c.value_hex)
+                                                .into_owned(),
+                                        })
+                                        .collect(),
+                                }),
+                                0,
+                            )
                         }
                         crate::debug::TraceEventView::Device { code } => {
                             ("device", code, 0, 0, String::new(), 0, None, 0)
@@ -382,12 +420,9 @@ impl WasmRepl {
                             def_span.end.saturating_sub(def_span.start) as u32,
                             String::new(),
                         ),
-                        crate::debug::WordOrigin::Sysroot { path } => (
-                            "sysroot",
-                            0,
-                            0,
-                            String::from_utf8_lossy(path).into_owned(),
-                        ),
+                        crate::debug::WordOrigin::Sysroot { path } => {
+                            ("sysroot", 0, 0, String::from_utf8_lossy(path).into_owned())
+                        }
                         crate::debug::WordOrigin::Builtin => ("builtin", 0, 0, String::new()),
                     };
                     JsWordInfo {
@@ -657,7 +692,9 @@ impl JsSubmitResult {
             _ => frontend::span::Span::UNKNOWN,
         };
         let detail = match &result.status {
-            Status::Trapped { detail: Some(d), .. } => Some(JsTrapDetail {
+            Status::Trapped {
+                detail: Some(d), ..
+            } => Some(JsTrapDetail {
                 kind: String::from_utf8_lossy(d.kind.name()).into_owned(),
                 word: String::from_utf8_lossy(&d.word).into_owned(),
                 declared: String::from_utf8_lossy(&d.declared).into_owned(),
@@ -745,12 +782,30 @@ pub struct JsFrameCell {
 
 #[wasm_bindgen]
 impl JsFrameCell {
-    #[wasm_bindgen(getter)] pub fn index(&self) -> u32 { self.index }
-    #[wasm_bindgen(getter)] pub fn word(&self) -> String { self.word.clone() }
-    #[wasm_bindgen(getter)] pub fn sig(&self) -> String { self.sig.clone() }
-    #[wasm_bindgen(getter)] pub fn call_span_start(&self) -> u32 { self.call_span_start }
-    #[wasm_bindgen(getter)] pub fn call_span_end(&self) -> u32 { self.call_span_end }
-    #[wasm_bindgen(getter)] pub fn locals(&self) -> Vec<JsStackCell> { self.locals.clone() }
+    #[wasm_bindgen(getter)]
+    pub fn index(&self) -> u32 {
+        self.index
+    }
+    #[wasm_bindgen(getter)]
+    pub fn word(&self) -> String {
+        self.word.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn sig(&self) -> String {
+        self.sig.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn call_span_start(&self) -> u32 {
+        self.call_span_start
+    }
+    #[wasm_bindgen(getter)]
+    pub fn call_span_end(&self) -> u32 {
+        self.call_span_end
+    }
+    #[wasm_bindgen(getter)]
+    pub fn locals(&self) -> Vec<JsStackCell> {
+        self.locals.clone()
+    }
 }
 
 #[wasm_bindgen]
@@ -772,19 +827,58 @@ pub struct JsTraceEvent {
 
 #[wasm_bindgen]
 impl JsTraceEvent {
-    #[wasm_bindgen(getter)] pub fn kind(&self) -> String { self.kind.clone() }
-    #[wasm_bindgen(getter)] pub fn code(&self) -> u32 { self.code }
-    #[wasm_bindgen(getter)] pub fn span_start(&self) -> u32 { self.span_start }
-    #[wasm_bindgen(getter)] pub fn span_len(&self) -> u32 { self.span_len }
-    #[wasm_bindgen(getter)] pub fn word(&self) -> String { self.word.clone() }
-    #[wasm_bindgen(getter)] pub fn depth(&self) -> u16 { self.depth }
-    #[wasm_bindgen(getter)] pub fn ap(&self) -> u16 { self.ap }
-    #[wasm_bindgen(getter)] pub fn off(&self) -> u32 { self.off }
-    #[wasm_bindgen(getter)] pub fn width(&self) -> u8 { self.width }
-    #[wasm_bindgen(getter)] pub fn val(&self) -> u64 { self.val }
-    #[wasm_bindgen(getter)] pub fn is_write(&self) -> bool { self.is_write }
-    #[wasm_bindgen(getter)] pub fn exit(&self) -> i64 { self.exit }
-    #[wasm_bindgen(getter)] pub fn detail(&self) -> Option<JsTrapDetail> { self.detail.clone() }
+    #[wasm_bindgen(getter)]
+    pub fn kind(&self) -> String {
+        self.kind.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn code(&self) -> u32 {
+        self.code
+    }
+    #[wasm_bindgen(getter)]
+    pub fn span_start(&self) -> u32 {
+        self.span_start
+    }
+    #[wasm_bindgen(getter)]
+    pub fn span_len(&self) -> u32 {
+        self.span_len
+    }
+    #[wasm_bindgen(getter)]
+    pub fn word(&self) -> String {
+        self.word.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn depth(&self) -> u16 {
+        self.depth
+    }
+    #[wasm_bindgen(getter)]
+    pub fn ap(&self) -> u16 {
+        self.ap
+    }
+    #[wasm_bindgen(getter)]
+    pub fn off(&self) -> u32 {
+        self.off
+    }
+    #[wasm_bindgen(getter)]
+    pub fn width(&self) -> u8 {
+        self.width
+    }
+    #[wasm_bindgen(getter)]
+    pub fn val(&self) -> u64 {
+        self.val
+    }
+    #[wasm_bindgen(getter)]
+    pub fn is_write(&self) -> bool {
+        self.is_write
+    }
+    #[wasm_bindgen(getter)]
+    pub fn exit(&self) -> i64 {
+        self.exit
+    }
+    #[wasm_bindgen(getter)]
+    pub fn detail(&self) -> Option<JsTrapDetail> {
+        self.detail.clone()
+    }
 }
 
 #[wasm_bindgen]
@@ -798,10 +892,22 @@ pub struct JsTrapDetail {
 
 #[wasm_bindgen]
 impl JsTrapDetail {
-    #[wasm_bindgen(getter)] pub fn kind(&self) -> String { self.kind.clone() }
-    #[wasm_bindgen(getter)] pub fn word(&self) -> String { self.word.clone() }
-    #[wasm_bindgen(getter)] pub fn declared(&self) -> String { self.declared.clone() }
-    #[wasm_bindgen(getter)] pub fn actual(&self) -> Vec<JsStackCell> { self.actual.clone() }
+    #[wasm_bindgen(getter)]
+    pub fn kind(&self) -> String {
+        self.kind.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn word(&self) -> String {
+        self.word.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn declared(&self) -> String {
+        self.declared.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn actual(&self) -> Vec<JsStackCell> {
+        self.actual.clone()
+    }
 }
 
 #[wasm_bindgen]
@@ -817,13 +923,34 @@ pub struct JsWordInfo {
 
 #[wasm_bindgen]
 impl JsWordInfo {
-    #[wasm_bindgen(getter)] pub fn name(&self) -> String { self.name.clone() }
-    #[wasm_bindgen(getter)] pub fn sig(&self) -> String { self.sig.clone() }
-    #[wasm_bindgen(getter)] pub fn effects(&self) -> String { self.effects.clone() }
-    #[wasm_bindgen(getter)] pub fn origin(&self) -> String { self.origin.clone() }
-    #[wasm_bindgen(getter)] pub fn def_span_start(&self) -> u32 { self.def_span_start }
-    #[wasm_bindgen(getter)] pub fn def_span_len(&self) -> u32 { self.def_span_len }
-    #[wasm_bindgen(getter)] pub fn path(&self) -> String { self.path.clone() }
+    #[wasm_bindgen(getter)]
+    pub fn name(&self) -> String {
+        self.name.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn sig(&self) -> String {
+        self.sig.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn effects(&self) -> String {
+        self.effects.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn origin(&self) -> String {
+        self.origin.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn def_span_start(&self) -> u32 {
+        self.def_span_start
+    }
+    #[wasm_bindgen(getter)]
+    pub fn def_span_len(&self) -> u32 {
+        self.def_span_len
+    }
+    #[wasm_bindgen(getter)]
+    pub fn path(&self) -> String {
+        self.path.clone()
+    }
 }
 
 #[wasm_bindgen]
@@ -837,11 +964,26 @@ pub struct JsWordSource {
 
 #[wasm_bindgen]
 impl JsWordSource {
-    #[wasm_bindgen(getter)] pub fn origin(&self) -> String { self.origin.clone() }
-    #[wasm_bindgen(getter)] pub fn path(&self) -> String { self.path.clone() }
-    #[wasm_bindgen(getter)] pub fn source(&self) -> String { self.source.clone() }
-    #[wasm_bindgen(getter)] pub fn def_span_start(&self) -> u32 { self.def_span_start }
-    #[wasm_bindgen(getter)] pub fn def_span_len(&self) -> u32 { self.def_span_len }
+    #[wasm_bindgen(getter)]
+    pub fn origin(&self) -> String {
+        self.origin.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn path(&self) -> String {
+        self.path.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn source(&self) -> String {
+        self.source.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn def_span_start(&self) -> u32 {
+        self.def_span_start
+    }
+    #[wasm_bindgen(getter)]
+    pub fn def_span_len(&self) -> u32 {
+        self.def_span_len
+    }
 }
 
 #[wasm_bindgen]
@@ -856,14 +998,32 @@ pub struct JsRegionInfo {
 
 #[wasm_bindgen]
 impl JsRegionInfo {
-    #[wasm_bindgen(getter)] pub fn id(&self) -> u32 { self.id }
-    #[wasm_bindgen(getter)] pub fn off(&self) -> u32 { self.off }
+    #[wasm_bindgen(getter)]
+    pub fn id(&self) -> u32 {
+        self.id
+    }
+    #[wasm_bindgen(getter)]
+    pub fn off(&self) -> u32 {
+        self.off
+    }
     /// Named `size` (not `len`) — the clippy `len_without_is_empty` gate is
     /// part of G55 and a region row is not a collection.
-    #[wasm_bindgen(getter)] pub fn size(&self) -> u32 { self.len }
-    #[wasm_bindgen(getter)] pub fn cursor(&self) -> u32 { self.cursor }
-    #[wasm_bindgen(getter)] pub fn kind(&self) -> u8 { self.kind }
-    #[wasm_bindgen(getter)] pub fn alive(&self) -> bool { self.alive }
+    #[wasm_bindgen(getter)]
+    pub fn size(&self) -> u32 {
+        self.len
+    }
+    #[wasm_bindgen(getter)]
+    pub fn cursor(&self) -> u32 {
+        self.cursor
+    }
+    #[wasm_bindgen(getter)]
+    pub fn kind(&self) -> u8 {
+        self.kind
+    }
+    #[wasm_bindgen(getter)]
+    pub fn alive(&self) -> bool {
+        self.alive
+    }
 }
 
 #[wasm_bindgen]
@@ -878,10 +1038,28 @@ pub struct JsStatusSummary {
 
 #[wasm_bindgen]
 impl JsStatusSummary {
-    #[wasm_bindgen(getter)] pub fn status(&self) -> String { self.status.clone() }
-    #[wasm_bindgen(getter)] pub fn exit_code(&self) -> i64 { self.exit_code }
-    #[wasm_bindgen(getter)] pub fn diag_code(&self) -> u32 { self.diag_code }
-    #[wasm_bindgen(getter)] pub fn stack_depth(&self) -> u32 { self.stack_depth }
-    #[wasm_bindgen(getter)] pub fn word_count(&self) -> u32 { self.word_count }
-    #[wasm_bindgen(getter)] pub fn fuel_ops(&self) -> u64 { self.fuel_ops }
+    #[wasm_bindgen(getter)]
+    pub fn status(&self) -> String {
+        self.status.clone()
+    }
+    #[wasm_bindgen(getter)]
+    pub fn exit_code(&self) -> i64 {
+        self.exit_code
+    }
+    #[wasm_bindgen(getter)]
+    pub fn diag_code(&self) -> u32 {
+        self.diag_code
+    }
+    #[wasm_bindgen(getter)]
+    pub fn stack_depth(&self) -> u32 {
+        self.stack_depth
+    }
+    #[wasm_bindgen(getter)]
+    pub fn word_count(&self) -> u32 {
+        self.word_count
+    }
+    #[wasm_bindgen(getter)]
+    pub fn fuel_ops(&self) -> u64 {
+        self.fuel_ops
+    }
 }

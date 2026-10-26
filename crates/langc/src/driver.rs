@@ -456,8 +456,9 @@ pub fn emit_obj_driver(
             Backend::RiscV(bk)
         }
         Target::Wasm32UnknownUnknown => {
-            // PLAN-WASM-2 B1: the wasm module binary — no aperture table
-            // (MMIO is B2 scope, rejected at emit), no modinfo stamping.
+            // PLAN-WASM-2 B1/B2: the Wasm module binary. MMIO operands carry
+            // the aperture identity/offset validated by typechecking; the
+            // backend lowers them through the browser peripheral imports.
             let bk = codegen_wasm::WasmBackend::new(
                 module,
                 src,
@@ -637,10 +638,12 @@ pub fn emit_obj_driver(
                     return 2;
                 }
             };
-            if write_obl && match verifier::codec::encode_obl(ctx.set()) {
-                Ok(bytes) => fs::write_file(obl_path, &bytes).is_err(),
-                Err(_) => true,
-            } {
+            if write_obl
+                && match verifier::codec::encode_obl(ctx.set()) {
+                    Ok(bytes) => fs::write_file(obl_path, &bytes).is_err(),
+                    Err(_) => true,
+                }
+            {
                 let _ = diag::error_simple(1015, b"failed to write output .obl.json");
                 return 2;
             }

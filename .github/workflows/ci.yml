@@ -172,6 +172,12 @@ jobs:
           sudo apt-get install -y -qq brotli
           rustup target add wasm32-unknown-unknown
           cargo install wasm-bindgen-cli --version 0.2.108 --locked
+      - name: Install Wasm validator and runtime (G54)
+        # Exact tool versions keep the emitted-binary validation and runtime
+        # behavior reproducible. These are CI tools only, never Rust deps.
+        run: |
+          cargo install wasm-tools --version 1.262.0 --locked
+          cargo install wasmtime-cli --version 50.0.0 --locked
       - uses: actions/setup-node@6044e13b5db4789f651b0647997ca587f6d59396 # v4
         with:
           node-version: 22
@@ -206,12 +212,6 @@ jobs:
             /tmp/g58-*.log
           if-no-files-found: ignore
           retention-days: 7
-      # DEC-28: wasmtime + wasm-tools are installed when B1 lands (G54's
-      # validator/run legs need them). Until then the wasm job intentionally
-      # does NOT carry an unused 100+ MiB toolchain — the deferral is
-      # recorded here and in ci/wasm.sh's header, not forgotten.
-      # TODO(B1): apt/cargo-install wasmtime + wasm-tools in this step.
-
   # ---------------------------------------------------------------------------
   # ARM (armv7m) — cross-compiled under QEMU
   # ---------------------------------------------------------------------------

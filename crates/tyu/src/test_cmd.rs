@@ -2097,8 +2097,7 @@ mod tests {
                 AssemblerKind::None => {
                     // wasm32 target: no linker, no assembler (D-W14).
                     assert_eq!(
-                        spec.linker,
-                        b"",
+                        spec.linker, b"",
                         "{triple}: None assembler must have empty linker",
                     );
                 }

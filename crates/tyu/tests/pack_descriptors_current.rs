@@ -24,7 +24,7 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// The in-tree packs: four metal boards plus the hosted runtime pack. Each
+/// The in-tree packs: five metal/browser boards plus the hosted runtime pack. Each
 /// entry is (pack root, manifest-relative path).
 fn packs() -> Vec<(PathBuf, &'static str)> {
     vec![
@@ -32,6 +32,7 @@ fn packs() -> Vec<(PathBuf, &'static str)> {
         ("platforms/armv7m-unknown-none", "platform.toml"),
         ("platforms/riscv32-unknown-none", "platform.toml"),
         ("platforms/rp2350", "platform.toml"),
+        ("platforms/wasm32-unknown-unknown", "platform.toml"),
         ("runtime", "linux-x86_64-hosted.platform.toml"),
     ]
     .into_iter()

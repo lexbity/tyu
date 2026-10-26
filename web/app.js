@@ -1,28 +1,12 @@
-// Tyu browser REPL (PLAN-WASM-1 P5, extended by PLAN-WASM-2 W2): the
-// static-site runtime.
-//
-// Boot path (§4.3): fetch the wasm artifact → verify its SHA-256 against the
-// build-pinned hash (NFR-10) → instantiate → verify + install the
-// `tyu-sysroot/1` blob → construct the session. A hash mismatch or boot
-// failure fails the page loudly with the artifact hash + engine version
-// (§10) — it never boots "best effort".
-//
-// Editor (W2, DEC-17/DEC-26): the CodeMirror 6 stack arrives as the SRI-pinned
-// `pkg/vendor/editor.js` classic script (window.__tyu_editor); this module
-// drives it exclusively through `editor_app.mjs` (R-G) and degrades to the
-// textarea — loudly — on any editor failure.
-//
-// Run semantics (DEC-19): Run (button / Mod-Enter) = reset + submit — the
-// program model; "submit" (button / Shift-Mod-Enter) = session submit — the
-// accumulating model. The status bar names the mode of the last action.
-//
-// No eval, no innerHTML with program content, no post-boot network (§1, NFR-10).
+// Static browser REPL. Integrity-gated boot, CM6 with textarea fallback,
+// interpreter sessions, and optional nested codegen-wasm execution.
 
 import { WasmRepl } from "./pkg/wasm_repl.js";
 import init from "./pkg/wasm_repl.js"; // default export = the async __wbg_init
 import { ARTIFACTS } from "./pkg/artifacts.js";
 import { createEditor } from "./editor_app.mjs";
 import { buildSpanMap } from "./spanmap.mjs";
+import { decodeSpanPayload, resolveHardwareTrap } from "./wasm_spans.mjs";
 
 // ---------------------------------------------------------------------------
 // DOM
@@ -37,6 +21,7 @@ const submitBtn = $("submit");
 const runBtn = $("run");
 const stepBtn = $("step");
 const fuelNoteEl = $("fuel-note");
+const backendModeEl = $("backend-mode");
 const diagEl = $("diag");
 const stackEl = $("stack");
 const consoleEl = $("console");
@@ -123,41 +108,38 @@ async function verified(kind, path, pinned) {
   return bytes;
 }
 
-// ---------------------------------------------------------------------------
-// The §6.2 imported surface: the page's first-party device layer. Devices
-// are plain functions of their own state (§Q6 determinism); only apertures
-// the page binds (repl.bind_device) are reachable — the engine rejects any
-// other access with E9152 inside wasm, so a JS exception can never become a
-// wasm trap (§6.2 error discipline).
-// ---------------------------------------------------------------------------
-
 const devices = new Map(); // aperture (number) → Uint8Array (RAM backing)
+let backendTrace = [];
 
 globalThis.tyu = {
   periph_read(ap, off, width) {
     const dev = devices.get(Number(ap));
     if (!dev) {
-      console.warn(`tyu: read on unbound aperture ${ap} (engine should gate this)`);
-      return 0n;
+      throw new Error(`read on unbound aperture ${ap}`);
     }
     let v = 0n;
     const base = Number(off);
     for (let i = 0; i < Number(width); i++) {
       v |= BigInt(dev[base + i] ?? 0) << BigInt(8 * i);
     }
+    backendTrace.push({ kind: "periph-read", aperture: Number(ap), offset: base, width: Number(width), value: v.toString() });
     return v;
   },
 
   periph_write(ap, off, width, val) {
     const dev = devices.get(Number(ap));
     if (!dev) {
-      console.warn(`tyu: write on unbound aperture ${ap} (engine should gate this)`);
-      return;
+      throw new Error(`write on unbound aperture ${ap}`);
     }
     const base = Number(off);
     for (let i = 0; i < Number(width); i++) {
       dev[base + i] = Number((val >> BigInt(8 * i)) & 0xffn);
     }
+    backendTrace.push({ kind: "periph-write", aperture: Number(ap), offset: base, width: Number(width), value: val.toString() });
+  },
+
+  barrier(kind, after) {
+    backendTrace.push({ kind: "barrier", barrier: ["none", "before", "after", "both"][Number(kind)] ?? "unknown", phase: after ? "after" : "before" });
   },
 
   emit_output(bytes) {
@@ -170,7 +152,24 @@ globalThis.tyu = {
     // UI timing only; the engine never calls this (§Q6, G55-a).
     return performance.now();
   },
+
+  write_byte(value) {
+    backendOutput.push(Number(BigInt.asUintN(8, value)));
+  },
+  exit(value) {
+    throw { tyuBackendExit: true, code: BigInt.asIntN(64, value) };
+  },
+  trap(code, start, len) {
+    throw {
+      tyuBackendTrap: true,
+      code: Number(BigInt.asUintN(32, code)),
+      spanStart: Number(start) >>> 0,
+      spanLen: Number(len) >>> 0,
+    };
+  },
 };
+
+let backendOutput = [];
 
 // ---------------------------------------------------------------------------
 // UI behavior
@@ -203,12 +202,6 @@ function refreshStack(repl) {
     })
   );
 }
-
-// ---------------------------------------------------------------------------
-// The example corpus (W3, DEC-18): hash-verified BEFORE import (I-7). The
-// module's only exports are data constants; a hash-mismatched module is
-// never instantiated. Failure degrades the PANE, never the page.
-// ---------------------------------------------------------------------------
 
 let EXAMPLES = null;
 
@@ -289,22 +282,24 @@ async function loadExample(ex) {
   }
   replInstance.reset();
   consoleEl.textContent = "";
+  stackEl.replaceChildren();
+  framesEl.replaceChildren();
+  irEl.textContent = "";
   lastDiagnostics = [];
+  bumpLint();
   editor.setDoc(ex.source);
   editor.setReadOnly(ex.kind === "native-only");
   loadedSource = ex.source;
-  try {
-    const result = replInstance.submit(ex.source);
-    renderResult(replInstance, result, `example ${ex.id.split("/")[1]}`);
-  } catch (e) {
-    pageFail(`wasm exception from submit: ${e.message ?? e}`);
-    return;
-  }
   if (ex.kind === "native-only") {
     showDiag(`native-only — ${ex.reason ?? ""}`);
   } else {
     showDiag("");
   }
+  const fuel = Number(replInstance.fuel_default());
+  setStatus(
+    "ready",
+    `interp · example loaded · stack ${replInstance.stack().length} · words ${replInstance.words().length} · fuel ${Math.round(fuel / 1_000_000)}M`
+  );
   examplesEl.querySelectorAll(".example.target").forEach((el) => el.classList.remove("target"));
   const target = examplesEl.querySelector(`[data-example-id="${CSS.escape(ex.id)}"]`);
   if (target) {
@@ -415,13 +410,6 @@ function renderResult(repl, result, mode) {
   runBtn.disabled = false;
 }
 
-// ---------------------------------------------------------------------------
-// The debug console (W4, §Q4–§Q11): every pixel is ABI data (I-8). The UI
-// selects the frame source by the last status — LIVE frames while a phrase
-// is suspended, the POST-MORTEM backtrace from trace_events when it trapped
-// (§Q8/§7.2) — and renders caps per §Q9 (truncation visible, never silent).
-// ---------------------------------------------------------------------------
-
 const RENDER_CAPS = {
   stackCells: 200, // top N + a "+N deeper" line
   traceEvents: 512, // first N + a counter
@@ -520,12 +508,6 @@ function frameRow(f, clickable) {
   }
   return li;
 }
-
-// ---------------------------------------------------------------------------
-// The transcript (FR-31, §Q11): per-submission records — source, mode,
-// status, diagnostics, output range, stack depth — FIFO at 100 (§Q9),
-// exportable from ?debug=1.
-// ---------------------------------------------------------------------------
 
 const TRANSCRIPT_CAP = 100;
 const transcript = [];
@@ -641,25 +623,160 @@ function wire(repl) {
     // The session model (DEC-19): submit without reset — the accumulating
     // module + persistent stack.
     beginSubmit();
+    backendModeEl.disabled = true;
     try {
       const result = repl.submit(localEditor.currentDoc());
-      renderResult(repl, result, "session");
+      renderResult(repl, result, "interp session");
     } catch (e) {
       // A throw crossing the boundary is a wasm trap — an engine bug (§10).
       pageFail(`wasm exception from submit: ${e.message ?? e}`);
+    } finally {
+      backendModeEl.disabled = false;
     }
   };
-  const runProgram = () => {
+  const backendNotice = (text) => {
+    const notice = $("backend-notice");
+    notice.hidden = !text;
+    notice.textContent = text;
+  };
+  const runInterpreter = (notice = "") => {
+    repl.reset();
+    consoleEl.textContent = "";
+    const result = repl.submit(localEditor.currentDoc());
+    renderResult(repl, result, "interp run");
+    backendNotice(notice);
+  };
+  const runBackend = async () => {
+    repl.reset();
+    consoleEl.textContent = "";
+    backendOutput = [];
+    backendTrace = [];
+    lastDiagnostics = [];
+    showDiag("");
+    const bytes = repl.compile_backend(localEditor.currentDoc());
+    const module = await WebAssembly.compile(bytes);
+    const custom = WebAssembly.Module.customSections(module, "tyu.spans/1");
+    if (custom.length !== 1) throw new Error("missing or duplicate tyu.spans/1 section");
+    const spanRecords = decodeSpanPayload(custom[0]);
+    const instance = await WebAssembly.instantiate(module, { tyu: globalThis.tyu });
+    let status = "ok";
+    let exitCode = 0n;
+    try {
+      exitCode = BigInt(instance.exports.tyu_main());
+    } catch (e) {
+      if (e?.tyuBackendTrap) {
+        status = "trapped";
+        exitCode = BigInt(e.code);
+        lastDiagnostics = [{
+          from: spanMap.toUtf16(e.spanStart, e.spanLen).from,
+          to: spanMap.toUtf16(e.spanStart, e.spanLen).to,
+          message: `E${e.code} backend trap`,
+          severity: "error",
+        }];
+        bumpLint();
+        showDiag(`E${e.code} @${e.spanStart}..${e.spanStart + e.spanLen} backend trap`);
+      } else if (e?.tyuBackendExit) {
+        status = "exited";
+        exitCode = e.code;
+      } else {
+        const resolved = resolveHardwareTrap(bytes, module, e, spanRecords);
+        if (!resolved) {
+          // RuntimeError stacks are not standardized. If this engine doesn't
+          // expose a code offset that resolves through tyu.spans/1, switch
+          // substrates visibly; never invent a source location.
+          throw new Error(`backend trap span unresolved: ${e?.message ?? e}`);
+        }
+        status = "trapped";
+        exitCode = BigInt(resolved.code);
+        const pos = spanMap.toUtf16(resolved.spanStart, resolved.spanLen);
+        lastDiagnostics = [{
+          from: pos.from,
+          to: pos.to,
+          message: `E${resolved.code} backend memory trap`,
+          severity: "error",
+        }];
+        bumpLint();
+        showDiag(`E${resolved.code} @${resolved.spanStart}..${resolved.spanStart + resolved.spanLen} backend memory trap`);
+      }
+    }
+    consoleEl.textContent = new TextDecoder().decode(new Uint8Array(backendOutput));
+    const summary = status === "trapped"
+      ? `wasm · trapped ${exitCode}`
+      : status === "exited"
+        ? `wasm · exited ${exitCode}`
+        : `wasm · ok · exit ${exitCode}`;
+    setStatus("ready", `${summary} · backend run`);
+    stepBtn.disabled = true;
+    submitBtn.disabled = false;
+    runBtn.disabled = false;
+    backendNotice("");
+    // Backend execution has no interpreter frame/stack snapshot. Clear those
+    // panels instead of displaying stale facts from the prior substrate.
+    stackEl.replaceChildren();
+    framesEl.replaceChildren();
+    const traceHeading = document.createElement("h3");
+    traceHeading.textContent = "backend trace (host events)";
+    framesEl.append(traceHeading);
+    const traceList = document.createElement("ol");
+    for (const event of backendTrace) {
+      const row = document.createElement("li");
+      row.textContent = event.kind === "barrier"
+        ? `barrier ${event.barrier} (${event.phase})`
+        : `${event.kind} ap${event.aperture} +0x${event.offset.toString(16)} /${event.width} = ${event.value}`;
+      traceList.append(row);
+    }
+    framesEl.append(traceList);
+    const transcriptResult = {
+      status,
+      diag_code: status === "trapped" ? Number(exitCode) : 0,
+      diag_message: status === "trapped" ? "backend trap" : "",
+      output_start: 0,
+      output_end: 0,
+    };
+    transcript.push({
+      n: transcript.length + 1,
+      mode: "wasm",
+      source: localEditor.currentDoc(),
+      status,
+      diag_code: transcriptResult.diag_code,
+      diag_message: transcriptResult.diag_message,
+      output: consoleEl.textContent,
+      stack_depth: null,
+      exit_code: exitCode.toString(),
+      events: backendTrace,
+    });
+    while (transcript.length > TRANSCRIPT_CAP) transcript.shift();
+    renderTranscript();
+  };
+  const runProgram = async () => {
     // The program model (DEC-19): reset + submit the whole buffer — every
     // run a deterministic, shareable demo.
     beginSubmit();
+    submitBtn.disabled = true;
+    backendModeEl.disabled = true;
+    backendNotice("");
+    // Give the browser one frame to paint the disabled controls before the
+    // synchronous compile/execute window begins.
+    await new Promise(requestAnimationFrame);
     try {
-      repl.reset();
-      consoleEl.textContent = "";
-      const result = repl.submit(localEditor.currentDoc());
-      renderResult(repl, result, "run");
+      if (backendModeEl.value === "wasm") {
+        await runBackend();
+      } else {
+        runInterpreter();
+      }
     } catch (e) {
-      pageFail(`wasm exception from submit: ${e.message ?? e}`);
+      // Backend compilation/instantiation/hardware traps are explicitly
+      // named; the active mode changes to interp before fallback executes.
+      if (backendModeEl.value === "wasm") {
+        backendModeEl.value = "interp";
+        runInterpreter(`wasm backend failed; fell back to interpreter: ${e?.message ?? e}`);
+      } else {
+        pageFail(`wasm exception from submit: ${e.message ?? e}`);
+      }
+    } finally {
+      backendModeEl.disabled = false;
+      submitBtn.disabled = false;
+      runBtn.disabled = false;
     }
   };
 
@@ -670,7 +787,7 @@ function wire(repl) {
   stepBtn.addEventListener("click", () => {
     try {
       const result = repl.step(stepBudget);
-      renderResult(repl, result, "session");
+      renderResult(repl, result, "interp session");
     } catch (e) {
       // A step throw is either the E9151 boundary rejection (a status, not
       // a bug) or a wasm trap — page-fail like every other trap (FR-33).

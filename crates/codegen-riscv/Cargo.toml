@@ -7,6 +7,5 @@ description = "RISC-V code generation backend for Tyu."
 [dependencies]
 frontend     = { path = "../frontend" }
 ir           = { path = "../ir" }
-semantics    = { path = "../semantics" }
 codegen-core = { path = "../codegen-core" }
 lmod         = { path = "../lmod" }

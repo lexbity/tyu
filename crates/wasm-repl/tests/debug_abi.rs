@@ -58,7 +58,12 @@ fn sysroot_map() -> SysrootMap {
                 if p.is_dir() {
                     walk(&p, base, out);
                 } else if p.extension().map(|x| x == "def").unwrap_or(false) {
-                    let rel = p.strip_prefix(base).unwrap().to_str().unwrap().replace('\\', "/");
+                    let rel = p
+                        .strip_prefix(base)
+                        .unwrap()
+                        .to_str()
+                        .unwrap()
+                        .replace('\\', "/");
                     if let Ok(bytes) = std::fs::read(&p) {
                         out.push((rel.into_bytes(), bytes));
                     }
@@ -136,7 +141,10 @@ fn trace_events_of_a_contract_trap_carry_the_detail() {
         Status::Ok
     );
     assert_eq!(
-        submit(&mut sess, b": add-safely ( i64 -- i64 ) needs [ no-sevens ] 1 + ;"),
+        submit(
+            &mut sess,
+            b": add-safely ( i64 -- i64 ) needs [ no-sevens ] 1 + ;"
+        ),
         Status::Ok
     );
     let st = submit(&mut sess, b"7 add-safely drop");
@@ -218,7 +226,10 @@ fn non_contract_traps_have_no_detail() {
 #[test]
 fn words_carry_session_definition_spans() {
     let mut sess = session(1_000_000);
-    assert_eq!(submit(&mut sess, b": double ( i64 -- i64 ) dup + ;"), Status::Ok);
+    assert_eq!(
+        submit(&mut sess, b": double ( i64 -- i64 ) dup + ;"),
+        Status::Ok
+    );
     let words = debug::words(sess.compiled().unwrap(), sess.source(), None);
     let double = words
         .iter()
@@ -243,7 +254,10 @@ fn words_carry_session_definition_spans() {
 #[test]
 fn word_source_resolves_all_three_ways() {
     let mut sess = session(1_000_000);
-    assert_eq!(submit(&mut sess, b": double ( i64 -- i64 ) dup + ;"), Status::Ok);
+    assert_eq!(
+        submit(&mut sess, b": double ( i64 -- i64 ) dup + ;"),
+        Status::Ok
+    );
     let map = sysroot_map();
     assert!(!map.0.is_empty(), "the hosted sysroot has .def files");
 
@@ -292,10 +306,7 @@ fn word_source_resolves_all_three_ways() {
 #[test]
 fn regions_reflect_the_committed_heap() {
     let mut sess = session(1_000_000);
-    assert_eq!(
-        submit(&mut sess, b"import platform/mem;"),
-        Status::Ok
-    );
+    assert_eq!(submit(&mut sess, b"import platform/mem;"), Status::Ok);
     assert_eq!(
         submit(&mut sess, b"64 as usize platform.mem.region-create"),
         Status::Ok

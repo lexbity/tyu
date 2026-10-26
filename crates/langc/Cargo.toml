@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2021"
 description = "Single-module Tyu compiler CLI."
 
+[features]
+# G54's red-path build deliberately corrupts one backend arm in the compiler
+# process invoked by the differential test. This is test-only instrumentation;
+# normal builds have no altered codegen behavior.
+wasm-selftest = ["codegen-wasm/wasm-selftest"]
+
 [lib]
 name = "langc"
 path = "src/lib.rs"

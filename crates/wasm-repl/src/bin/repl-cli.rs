@@ -356,7 +356,6 @@ fn ir_hash(session: &ReplSession) -> String {
     format!("{:016x}", fnv1a(&rendered))
 }
 
-
 // ---------------------------------------------------------------------------
 // Debug-dump mode (FR-27/G57): drives the session script and prints, after
 // every submission, the lib-encoded snapshot line (`debug::dump_submission`
@@ -517,7 +516,11 @@ fn main() {
                         let p = e.path();
                         if p.is_dir() {
                             stack.push(p);
-                        } else if p.extension().map(|x| x == "mod" || x == "toml").unwrap_or(false) {
+                        } else if p
+                            .extension()
+                            .map(|x| x == "mod" || x == "toml")
+                            .unwrap_or(false)
+                        {
                             let rel = p
                                 .strip_prefix(&labs_root)
                                 .unwrap()
@@ -539,17 +542,24 @@ fn main() {
                     }
                 }
             }
-            let out_bytes = wasm_repl::examples_pack::pack_examples(&files)
-                .unwrap_or_else(|e| {
-                    eprintln!("pack-examples: {e}");
-                    std::process::exit(1);
-                });
+            let out_bytes = wasm_repl::examples_pack::pack_examples(&files).unwrap_or_else(|e| {
+                eprintln!("pack-examples: {e}");
+                std::process::exit(1);
+            });
             std::fs::write(&out, &out_bytes).expect("write examples.js");
-            let runnable = out_bytes.windows(b"kind: \"runnable\"".len())
-                .filter(|w| w == b"kind: \"runnable\"").count();
-            let native = out_bytes.windows(b"kind: \"native-only\"".len())
-                .filter(|w| w == b"kind: \"native-only\"").count();
-            println!("packed {} runnable / {native} native-only → {out} ({} bytes)", runnable, out_bytes.len());
+            let runnable = out_bytes
+                .windows(b"kind: \"runnable\"".len())
+                .filter(|w| w == b"kind: \"runnable\"")
+                .count();
+            let native = out_bytes
+                .windows(b"kind: \"native-only\"".len())
+                .filter(|w| w == b"kind: \"native-only\"")
+                .count();
+            println!(
+                "packed {} runnable / {native} native-only → {out} ({} bytes)",
+                runnable,
+                out_bytes.len()
+            );
         }
         "debug-dump" => {
             let file = rest.first().expect("usage: repl-cli debug-dump <session>");

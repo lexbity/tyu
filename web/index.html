@@ -36,6 +36,12 @@
   <header id="statusbar">
     <span id="brand">tyu repl</span>
     <span id="status" data-state="booting">booting…</span>
+    <label id="backend-mode-label">execution
+      <select id="backend-mode" aria-label="execution backend">
+        <option value="interp" selected>interpreter</option>
+        <option value="wasm">wasm32</option>
+      </select>
+    </label>
     <span id="engine-info" title="engine version + artifact SHA-256 (§10)"></span>
   </header>
 
@@ -50,6 +56,7 @@
         <span id="fuel-note" class="muted"></span>
       </div>
       <div id="diag" class="hidden"></div>
+      <div id="backend-notice" class="backend-notice" hidden></div>
     </section>
 
     <section id="side">

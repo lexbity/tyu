@@ -43,10 +43,11 @@
 //!   nested instantiation shares it); there is NO start section — the
 //!   module does nothing at instantiation (B2 instantiates nested modules;
 //!   side effects there would run the program at link time).
-//! - **Rejected at compile** (FR-3/FR-44): TaskSpawn/Interrupt* and the
-//!   MMIO family → `CodegenError::UnsupportedConstruct` (E9156-class).
-//!   MMIO is B2 scope: the aperture table exists only with a platform
-//!   descriptor.
+//! - **Rejected at compile** (FR-44): TaskSpawn/Interrupt* remain unsupported
+//!   on this target. MMIO uses a packed aperture-relative pointer in i64
+//!   slots and explicit `tyu.periph_read`/`tyu.periph_write` imports; the
+//!   front end has already checked those places against the platform
+//!   descriptor before the backend receives the IR.
 //! - **Cast/Bitcast**: the native codegen's semantics, mirrored — a cast
 //!   between the same primitive is a no-op retag; differing widths are
 //!   canonicalized source-width-first then target-width (mask + signed
@@ -81,6 +82,9 @@ use regions::helper_key;
 pub(crate) const IMPORT_WRITE_BYTE: u32 = 0;
 pub(crate) const IMPORT_TRAP: u32 = 1;
 pub(crate) const IMPORT_EXIT: u32 = 2;
+pub(crate) const IMPORT_PERIPH_READ: u32 = 3;
+pub(crate) const IMPORT_PERIPH_WRITE: u32 = 4;
+pub(crate) const IMPORT_BARRIER: u32 = 5;
 
 /// The region-ABI builtin word names (the sysroot's `platform.mem.*`
 /// intrinsics) — the Call arms lower them to the module's own helpers.
@@ -102,8 +106,29 @@ const STACK_CAP: usize = 4096;
 #[derive(Clone, Debug, PartialEq)]
 enum Callee {
     Import(u32),
+    Exit,
+    PeripheralRead,
+    PeripheralWrite,
+    Barrier { kind: u32, after: bool },
     Word(Vec<u8>),
     Helper(u32),
+}
+
+/// Shared, short-lived emission state passed to the operation-family handlers.
+/// Each handler borrows only the fields it uses, keeping its contract explicit.
+struct OpContext<'a> {
+    w: &'a lir::Word,
+    op: &'a lir::Op,
+    out: &'a mut Vec<u8>,
+    h: &'a mut usize,
+    cur: usize,
+    in_len: usize,
+    slots: usize,
+    mmio_scratch: Option<u32>,
+    k: usize,
+    blocks: usize,
+    body_calls: &'a mut Vec<(usize, Callee)>,
+    body_traps: &'a mut Vec<(usize, lir::Span)>,
 }
 
 struct Func {
@@ -143,6 +168,9 @@ pub struct WasmBackend<'a> {
     funcs: Vec<Func>,
     /// Does any streamed word call `testio.exit`?
     uses_exit: bool,
+    uses_mmio: bool,
+    uses_barrier: bool,
+    entry_name: &'static [u8],
     /// Which region helpers any word referenced (emitted in the postlude,
     /// in the fixed HELPER_* order — dead helpers never ship).
     used_helpers: [bool; 4],
@@ -175,6 +203,9 @@ impl<'a> WasmBackend<'a> {
             types: Vec::new(),
             funcs: Vec::new(),
             uses_exit: false,
+            uses_mmio: false,
+            uses_barrier: false,
+            entry_name: b"main",
             used_helpers: [false; 4],
             strings: Vec::new(),
             string_bytes: Vec::new(),
@@ -194,6 +225,13 @@ impl<'a> WasmBackend<'a> {
         }
         self.types.push((params.to_vec(), results.to_vec()));
         (self.types.len() - 1) as u32
+    }
+
+    /// Select the IR word wrapped by the exported `tyu_main` entry point.
+    /// Production compiler invocations keep `main`; the browser session
+    /// uses a generated entry word for a trailing interactive phrase.
+    pub fn set_entry_word(&mut self, name: &'static [u8]) {
+        self.entry_name = name;
     }
 
     /// The word's stack-slot local count: the verified peak (the IR's
@@ -222,6 +260,151 @@ impl<'a> WasmBackend<'a> {
         } else {
             (in_len + slots + 1 + (slot as usize - in_len)) as u32
         }
+    }
+
+    fn declared_local_with_scratch(
+        slot: u16,
+        in_len: usize,
+        slots: usize,
+        has_scratch: bool,
+    ) -> u32 {
+        if has_scratch && (slot as usize) >= in_len {
+            (in_len + slots + 2 + (slot as usize - in_len)) as u32
+        } else {
+            Self::declared_local(slot, in_len, slots)
+        }
+    }
+
+    fn mmio_width(w: &lir::Word, ty: lir::TypeId) -> Result<u8, CodegenError> {
+        let (bits, _) = lir::storage_bits_signed(w, ty, 64)
+            .ok_or(CodegenError::UnknownTypeProperties { type_id: ty })?;
+        let width = match bits {
+            8 => 1,
+            16 => 2,
+            32 => 4,
+            64 => 8,
+            _ => return Err(CodegenError::UnsupportedConstruct),
+        };
+        Ok(width)
+    }
+
+    fn emit_mmio_addr_parts(ptr: u32, out: &mut Vec<u8>) {
+        // MMIO pointers are encoded as (aperture << 32) | offset. Pointer
+        // arithmetic changes only the low 32-bit aperture-relative offset.
+        out.push(OP_LOCAL_GET);
+        uleb(out, ptr as u64);
+        out.push(OP_I64_CONST);
+        sleb(out, 32);
+        out.push(OP_I64_SHR_U);
+        out.push(OP_I32_WRAP_I64);
+        out.push(OP_LOCAL_GET);
+        uleb(out, ptr as u64);
+        out.push(OP_I32_WRAP_I64);
+    }
+
+    fn emit_periph_read(ptr: u32, width: u8, out: &mut Vec<u8>, calls: &mut Vec<(usize, Callee)>) {
+        Self::emit_mmio_addr_parts(ptr, out);
+        out.push(OP_I32_CONST);
+        sleb(out, i64::from(width));
+        out.push(OP_CALL);
+        let off = out.len();
+        out.extend_from_slice(&[0; CALL_LEB_WIDTH]);
+        calls.push((off, Callee::PeripheralRead));
+    }
+
+    fn emit_periph_write_prefix(ptr: u32, width: u8, out: &mut Vec<u8>) {
+        Self::emit_mmio_addr_parts(ptr, out);
+        out.push(OP_I32_CONST);
+        sleb(out, i64::from(width));
+    }
+
+    /// Check every source-level linear-memory access before issuing the Wasm
+    /// load/store. JS engines expose compiled-code PCs for hardware traps,
+    /// not stable Wasm byte offsets, so DEC-40's custom-section table cannot
+    /// be the primary path for a student OOB access. This guard routes that
+    /// case through the typed trap import with the originating IR span. The
+    /// side table remains as a fail-closed fallback for unexpected engine
+    /// traps in generated code.
+    fn emit_memory_guard(
+        scratch: u32,
+        span: lir::Span,
+        out: &mut Vec<u8>,
+        calls: &mut Vec<(usize, Callee)>,
+    ) {
+        // Require a zero-extended wasm32 pointer, keep the reserved null page
+        // inaccessible, and ensure the full i64 access fits in current memory.
+        out.push(OP_LOCAL_GET);
+        uleb(out, u64::from(scratch));
+        out.push(OP_I64_CONST);
+        sleb(out, 32);
+        out.push(OP_I64_SHR_U);
+        out.push(OP_I64_EQZ);
+
+        out.push(OP_LOCAL_GET);
+        uleb(out, u64::from(scratch));
+        out.push(OP_I32_WRAP_I64);
+        out.push(OP_I32_CONST);
+        sleb(out, 4096);
+        out.push(OP_I32_GE_U);
+        out.push(OP_I32_AND);
+
+        out.push(OP_LOCAL_GET);
+        uleb(out, u64::from(scratch));
+        out.push(OP_I32_WRAP_I64);
+        out.push(OP_MEMORY_SIZE);
+        out.push(0); // memory index 0
+        out.push(OP_I32_CONST);
+        sleb(out, 16);
+        out.push(OP_I32_SHL);
+        out.push(OP_I32_CONST);
+        sleb(out, 8);
+        out.push(OP_I32_SUB);
+        out.push(OP_I32_LE_U);
+        out.push(OP_I32_AND);
+
+        out.push(OP_IF);
+        out.push(0x40); // empty block type
+        out.push(OP_ELSE);
+        out.push(OP_I64_CONST);
+        sleb(out, 22); // frozen Bounds trap code
+        out.push(OP_I32_CONST);
+        sleb(out, span.start as i64);
+        out.push(OP_I32_CONST);
+        sleb(out, (span.end - span.start) as i64);
+        out.push(OP_CALL);
+        let off = out.len();
+        out.extend_from_slice(&[0; CALL_LEB_WIDTH]);
+        calls.push((off, Callee::Import(IMPORT_TRAP)));
+        out.push(OP_UNREACHABLE);
+        out.push(OP_END);
+    }
+
+    fn emit_barrier(
+        kind: lir::BarrierKind,
+        after: bool,
+        out: &mut Vec<u8>,
+        calls: &mut Vec<(usize, Callee)>,
+    ) {
+        let value = match kind {
+            lir::BarrierKind::None => return,
+            lir::BarrierKind::Before => 1,
+            lir::BarrierKind::After => 2,
+            lir::BarrierKind::Both => 3,
+        };
+        out.push(OP_I32_CONST);
+        sleb(out, value);
+        out.push(OP_I32_CONST);
+        sleb(out, i64::from(after));
+        out.push(OP_CALL);
+        let off = out.len();
+        out.extend_from_slice(&[0; CALL_LEB_WIDTH]);
+        calls.push((
+            off,
+            Callee::Barrier {
+                kind: value as u32,
+                after,
+            },
+        ));
     }
 
     fn block_index(w: &lir::Word, id: lir::BlockId) -> Option<usize> {
@@ -282,8 +465,8 @@ impl<'a> WasmBackend<'a> {
         Ok(addr)
     }
 
-    /// Emit one IR op into `out` under the height cursor `h` (the data
-    /// stack is locals `$s0..`; `h` is the LIVE height at this point).
+    /// Emit one IR op, preserving barrier placement while delegating each
+    /// operation family to a bounded, reviewable handler.
     #[allow(clippy::too_many_arguments)]
     fn emit_op(
         &mut self,
@@ -294,13 +477,62 @@ impl<'a> WasmBackend<'a> {
         cur: usize,
         in_len: usize,
         slots: usize,
+        mmio_scratch: Option<u32>,
         k: usize,
         blocks: usize,
         body_calls: &mut Vec<(usize, Callee)>,
         body_traps: &mut Vec<(usize, lir::Span)>,
     ) -> Result<(), CodegenError> {
-        // push/pop move values between the wasm operand stack and the slot
-        // locals $s0.. (h = the live height).
+        let barrier = match op.kind {
+            lir::OpKind::MmioVolLoad { barrier, .. }
+            | lir::OpKind::MmioVolStore { barrier, .. }
+            | lir::OpKind::MmioVolLoadField { barrier, .. }
+            | lir::OpKind::MmioVolStoreField { barrier, .. } => Some(barrier),
+            _ => None,
+        };
+        if let Some(kind) = barrier {
+            Self::emit_barrier(kind, false, out, body_calls);
+        }
+        let handled = {
+            let mut ctx = OpContext {
+                w,
+                op,
+                out,
+                h,
+                cur,
+                in_len,
+                slots,
+                mmio_scratch,
+                k,
+                blocks,
+                body_calls,
+                body_traps,
+            };
+            self.emit_op_stack(&mut ctx)?
+                || self.emit_op_call(&mut ctx)?
+                || self.emit_op_memory(&mut ctx)?
+                || self.emit_op_mmio(&mut ctx)?
+                || self.emit_op_control(&mut ctx)?
+                || self.emit_op_pointer(&mut ctx)?
+        };
+        if !handled {
+            return Err(CodegenError::UnsupportedOp {
+                op_name: b"operation dispatch",
+            });
+        }
+        if let Some(kind) = barrier {
+            Self::emit_barrier(kind, true, out, body_calls);
+        }
+        Ok(())
+    }
+
+    fn emit_op_stack(&mut self, ctx: &mut OpContext<'_>) -> Result<bool, CodegenError> {
+        let op = ctx.op;
+        let out = &mut *ctx.out;
+        let h = &mut *ctx.h;
+        let in_len = ctx.in_len;
+        let slots = ctx.slots;
+        let mmio_scratch = ctx.mmio_scratch;
         macro_rules! push {
             () => {{
                 let hh = *h;
@@ -317,9 +549,6 @@ impl<'a> WasmBackend<'a> {
                 uleb(out, hh as u64);
             }};
         }
-        // A Tyu binary op `( a b -- r )`: `a` sits in the deeper slot and
-        // must reach the wasm operand stack FIRST (wasm computes `i1 <op>
-        // i2` with i2 on top — the Sub/Cmp order is load-bearing).
         macro_rules! binary {
             ($opcode:expr) => {{
                 *h -= 2;
@@ -331,16 +560,6 @@ impl<'a> WasmBackend<'a> {
                 push!();
             }};
         }
-        /// A patchable call: `OP_CALL` + a fixed-width operand + a record.
-        macro_rules! pcall {
-            ($callee:expr) => {{
-                out.push(OP_CALL);
-                let off = out.len();
-                out.extend_from_slice(&[0u8; CALL_LEB_WIDTH]);
-                body_calls.push((off, $callee));
-            }};
-        }
-        /// Canonicalize the i32 verdict on the operand stack to a 0/1 i64.
         macro_rules! boolify {
             () => {{
                 out.push(OP_I64_EQZ);
@@ -348,17 +567,6 @@ impl<'a> WasmBackend<'a> {
                 out.push(OP_I64_EXTEND_I32_U);
             }};
         }
-        /// The trailing span arguments of a region-helper call (DEC-40: the
-        /// CALL SITE's op span travels with the trap).
-        macro_rules! span_args {
-            () => {{
-                out.push(OP_I32_CONST);
-                sleb(out, op.span.start as i64);
-                out.push(OP_I32_CONST);
-                sleb(out, (op.span.end - op.span.start) as i64);
-            }};
-        }
-
         match op.kind {
             lir::OpKind::ConstI64(v) => {
                 out.push(OP_I64_CONST);
@@ -436,7 +644,9 @@ impl<'a> WasmBackend<'a> {
                     lir::CmpKind::Le => OP_I64_LE_S,
                     lir::CmpKind::Ge => OP_I64_GE_S,
                 });
-                boolify!();
+                // Comparisons already produce canonical i32 booleans;
+                // widen directly into the backend's uniform i64 slots.
+                out.push(OP_I64_EXTEND_I32_U);
                 push!();
             }
             lir::OpKind::AndBool => {
@@ -472,23 +682,66 @@ impl<'a> WasmBackend<'a> {
             lir::OpKind::LocalSet { slot, .. } => {
                 // IR LocalSet: pop from data stack, store in IR declared local.
                 // The value must move from the data stack slot to the IR local.
-                pop!();  // Get value from data stack onto wasm operand stack
+                pop!(); // Get value from data stack onto wasm operand stack
                 out.push(OP_LOCAL_SET);
-                uleb(out, Self::declared_local(slot, in_len, slots) as u64);
+                uleb(
+                    out,
+                    Self::declared_local_with_scratch(slot, in_len, slots, mmio_scratch.is_some())
+                        as u64,
+                );
             }
             lir::OpKind::LocalGet { slot, .. } => {
                 // IR LocalGet: get from IR declared local, push to data stack.
                 out.push(OP_LOCAL_GET);
-                uleb(out, Self::declared_local(slot, in_len, slots) as u64);
-                push!();  // Store value from wasm operand stack into data stack
+                uleb(
+                    out,
+                    Self::declared_local_with_scratch(slot, in_len, slots, mmio_scratch.is_some())
+                        as u64,
+                );
+                push!(); // Store value from wasm operand stack into data stack
             }
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+
+    fn emit_op_call(&mut self, ctx: &mut OpContext<'_>) -> Result<bool, CodegenError> {
+        let op = ctx.op;
+        let out = &mut *ctx.out;
+        let h = &mut *ctx.h;
+        let body_calls = &mut *ctx.body_calls;
+        macro_rules! push {
+            () => {{
+                let hh = *h;
+                out.push(OP_LOCAL_SET);
+                uleb(out, hh as u64);
+                *h += 1;
+            }};
+        }
+        macro_rules! span_args {
+            () => {{
+                out.push(OP_I32_CONST);
+                sleb(out, op.span.start as i64);
+                out.push(OP_I32_CONST);
+                sleb(out, (op.span.end - op.span.start) as i64);
+            }};
+        }
+        macro_rules! pcall {
+            ($callee:expr) => {{
+                out.push(OP_CALL);
+                let off = out.len();
+                out.extend_from_slice(&[0u8; CALL_LEB_WIDTH]);
+                body_calls.push((off, $callee));
+            }};
+        }
+        match op.kind {
             lir::OpKind::Call { name, sig, .. } => {
                 let n = name.as_bytes();
                 let argc = sig.in_len as usize;
                 let out_len = sig.out_len as usize;
                 // args: s(h-argc) .. s(h-1) in order (the callee's first
                 // parameter is the DEEPEST slot).
-                for i in (0..argc).rev() {
+                for i in 0..argc {
                     out.push(OP_LOCAL_GET);
                     uleb(out, (*h - argc + i) as u64);
                 }
@@ -496,7 +749,7 @@ impl<'a> WasmBackend<'a> {
                 let callee = if n == b"testio.write-byte" || n == b"testio.emit-output" {
                     Callee::Import(IMPORT_WRITE_BYTE)
                 } else if n == b"testio.exit" {
-                    Callee::Import(IMPORT_EXIT)
+                    Callee::Exit
                 } else if n == REGION_CREATE {
                     self.used_helpers[regions::HELPER_CREATE as usize] = true;
                     span_args!();
@@ -521,8 +774,43 @@ impl<'a> WasmBackend<'a> {
                     push!();
                 }
             }
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+
+    fn emit_op_memory(&mut self, ctx: &mut OpContext<'_>) -> Result<bool, CodegenError> {
+        let op = ctx.op;
+        let out = &mut *ctx.out;
+        let h = &mut *ctx.h;
+        let mmio_scratch = ctx.mmio_scratch;
+        let body_calls = &mut *ctx.body_calls;
+        let body_traps = &mut *ctx.body_traps;
+        macro_rules! push {
+            () => {{
+                let hh = *h;
+                out.push(OP_LOCAL_SET);
+                uleb(out, hh as u64);
+                *h += 1;
+            }};
+        }
+        macro_rules! pop {
+            () => {{
+                *h -= 1;
+                let hh = *h;
+                out.push(OP_LOCAL_GET);
+                uleb(out, hh as u64);
+            }};
+        }
+        match op.kind {
             lir::OpKind::Load { ty: _ } => {
                 pop!(); // addr (i64 slot)
+                let scratch = mmio_scratch.expect("every word has the memory scratch local");
+                out.push(OP_LOCAL_SET);
+                uleb(out, u64::from(scratch));
+                Self::emit_memory_guard(scratch, op.span, out, body_calls);
+                out.push(OP_LOCAL_GET);
+                uleb(out, u64::from(scratch));
                 out.push(OP_I32_WRAP_I64); // memory addressing is i32 (§6.7)
                 out.push(OP_I64_LOAD);
                 memarg(out, 0);
@@ -532,8 +820,14 @@ impl<'a> WasmBackend<'a> {
             lir::OpKind::Store { ty: _ } => {
                 // stack: [addr, value] → wasm store consumes [addr, value].
                 *h -= 2;
+                let scratch = mmio_scratch.expect("every word has the memory scratch local");
                 out.push(OP_LOCAL_GET);
                 uleb(out, *h as u64);
+                out.push(OP_LOCAL_SET);
+                uleb(out, u64::from(scratch));
+                Self::emit_memory_guard(scratch, op.span, out, body_calls);
+                out.push(OP_LOCAL_GET);
+                uleb(out, u64::from(scratch));
                 out.push(OP_I32_WRAP_I64);
                 out.push(OP_LOCAL_GET);
                 uleb(out, (*h + 1) as u64);
@@ -541,6 +835,208 @@ impl<'a> WasmBackend<'a> {
                 memarg(out, 0);
                 body_traps.push((out.len() - 2, op.span)); // the store opcode
             }
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+
+    fn emit_op_mmio(&mut self, ctx: &mut OpContext<'_>) -> Result<bool, CodegenError> {
+        let w = ctx.w;
+        let op = ctx.op;
+        let out = &mut *ctx.out;
+        let h = &mut *ctx.h;
+        let mmio_scratch = ctx.mmio_scratch;
+        let body_calls = &mut *ctx.body_calls;
+        macro_rules! push {
+            () => {{
+                let hh = *h;
+                out.push(OP_LOCAL_SET);
+                uleb(out, hh as u64);
+                *h += 1;
+            }};
+        }
+        match op.kind {
+            lir::OpKind::MmioVolLoad { ty, .. } => {
+                let ptr = (*h - 1) as u32;
+                let width = Self::mmio_width(w, ty)?;
+                *h -= 1;
+                Self::emit_periph_read(ptr, width, out, body_calls);
+                let bits = i64::from(width) * 8;
+                if width < 8 {
+                    out.push(OP_I64_CONST);
+                    sleb(out, (1i64 << bits) - 1);
+                    out.push(OP_I64_AND);
+                }
+                push!();
+            }
+            lir::OpKind::MmioVolStore { ty, write_kind, .. } => {
+                let ptr = (*h - 2) as u32;
+                let val = (*h - 1) as u32;
+                let width = Self::mmio_width(w, ty)?;
+                let scratch = mmio_scratch.ok_or(CodegenError::UnsupportedConstruct)?;
+                if write_kind != lir::WriteKind::Plain {
+                    Self::emit_periph_read(ptr, width, out, body_calls);
+                    out.push(OP_LOCAL_SET);
+                    uleb(out, u64::from(scratch));
+                }
+                Self::emit_periph_write_prefix(ptr, width, out);
+                if write_kind == lir::WriteKind::Plain {
+                    out.push(OP_LOCAL_GET);
+                    uleb(out, u64::from(val));
+                } else {
+                    out.push(OP_LOCAL_GET);
+                    uleb(out, u64::from(scratch));
+                    out.push(OP_LOCAL_GET);
+                    uleb(out, u64::from(val));
+                    match write_kind {
+                        lir::WriteKind::W1c => {
+                            out.push(OP_I64_CONST);
+                            sleb(out, -1);
+                            out.push(OP_I64_XOR);
+                            out.push(OP_I64_AND);
+                        }
+                        lir::WriteKind::W1s => out.push(OP_I64_OR),
+                        lir::WriteKind::Xor => out.push(OP_I64_XOR),
+                        lir::WriteKind::Plain => unreachable!(),
+                    }
+                }
+                if width < 8 {
+                    out.push(OP_I64_CONST);
+                    sleb(out, (1i64 << (u32::from(width) * 8)) - 1);
+                    out.push(OP_I64_AND);
+                }
+                out.push(OP_CALL);
+                let off = out.len();
+                out.extend_from_slice(&[0; CALL_LEB_WIDTH]);
+                body_calls.push((off, Callee::PeripheralWrite));
+                *h -= 2;
+            }
+            lir::OpKind::MmioVolLoadField {
+                reg_ty,
+                field_ty,
+                mask,
+                shift,
+                ..
+            } => {
+                let ptr = (*h - 1) as u32;
+                let width = Self::mmio_width(w, reg_ty)?;
+                let field_width = Self::mmio_width(w, field_ty)?;
+                *h -= 1;
+                Self::emit_periph_read(ptr, width, out, body_calls);
+                out.push(OP_I64_CONST);
+                sleb(out, mask as i64);
+                out.push(OP_I64_AND);
+                if shift != 0 {
+                    out.push(OP_I64_CONST);
+                    sleb(out, i64::from(shift));
+                    out.push(OP_I64_SHR_U);
+                }
+                let bits = i64::from(field_width) * 8;
+                if field_width < 8 {
+                    out.push(OP_I64_CONST);
+                    sleb(out, (1i64 << bits) - 1);
+                    out.push(OP_I64_AND);
+                }
+                push!();
+            }
+            lir::OpKind::MmioVolStoreField {
+                reg_ty,
+                mask,
+                shift,
+                write_kind,
+                ..
+            } => {
+                let ptr = (*h - 2) as u32;
+                let field = (*h - 1) as u32;
+                let width = Self::mmio_width(w, reg_ty)?;
+                let scratch = mmio_scratch.ok_or(CodegenError::UnsupportedConstruct)?;
+                Self::emit_periph_read(ptr, width, out, body_calls);
+                out.push(OP_LOCAL_SET);
+                uleb(out, u64::from(scratch));
+                Self::emit_periph_write_prefix(ptr, width, out);
+                if write_kind != lir::WriteKind::Plain {
+                    out.push(OP_LOCAL_GET);
+                    uleb(out, u64::from(scratch));
+                }
+                out.push(OP_LOCAL_GET);
+                uleb(out, u64::from(scratch));
+                out.push(OP_I64_CONST);
+                sleb(out, !(mask as i64));
+                out.push(OP_I64_AND);
+                out.push(OP_LOCAL_GET);
+                uleb(out, u64::from(field));
+                if shift != 0 {
+                    out.push(OP_I64_CONST);
+                    sleb(out, i64::from(shift));
+                    out.push(OP_I64_SHL);
+                }
+                out.push(OP_I64_CONST);
+                sleb(out, mask as i64);
+                out.push(OP_I64_AND);
+                out.push(OP_I64_OR);
+                if write_kind != lir::WriteKind::Plain {
+                    match write_kind {
+                        lir::WriteKind::W1c => {
+                            out.push(OP_I64_CONST);
+                            sleb(out, -1);
+                            out.push(OP_I64_XOR);
+                            out.push(OP_I64_AND);
+                        }
+                        lir::WriteKind::W1s => out.push(OP_I64_OR),
+                        lir::WriteKind::Xor => out.push(OP_I64_XOR),
+                        lir::WriteKind::Plain => unreachable!(),
+                    }
+                }
+                if width < 8 {
+                    out.push(OP_I64_CONST);
+                    sleb(out, (1i64 << (u32::from(width) * 8)) - 1);
+                    out.push(OP_I64_AND);
+                }
+                out.push(OP_CALL);
+                let off = out.len();
+                out.extend_from_slice(&[0; CALL_LEB_WIDTH]);
+                body_calls.push((off, Callee::PeripheralWrite));
+                *h -= 2;
+            }
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+
+    fn emit_op_control(&mut self, ctx: &mut OpContext<'_>) -> Result<bool, CodegenError> {
+        let w = ctx.w;
+        let op = ctx.op;
+        let out = &mut *ctx.out;
+        let h = &mut *ctx.h;
+        let cur = ctx.cur;
+        let k = ctx.k;
+        let blocks = ctx.blocks;
+        let body_calls = &mut *ctx.body_calls;
+        macro_rules! push {
+            () => {{
+                let hh = *h;
+                out.push(OP_LOCAL_SET);
+                uleb(out, hh as u64);
+                *h += 1;
+            }};
+        }
+        macro_rules! pop {
+            () => {{
+                *h -= 1;
+                let hh = *h;
+                out.push(OP_LOCAL_GET);
+                uleb(out, hh as u64);
+            }};
+        }
+        macro_rules! pcall {
+            ($callee:expr) => {{
+                out.push(OP_CALL);
+                let off = out.len();
+                out.extend_from_slice(&[0u8; CALL_LEB_WIDTH]);
+                body_calls.push((off, $callee));
+            }};
+        }
+        match op.kind {
             lir::OpKind::TrapIfFalse { code } => {
                 pop!(); // the guard's bool (canonical 0/1 i64)
                 out.push(OP_I64_EQZ); // i32: 1 when the guard FAILED
@@ -565,8 +1061,8 @@ impl<'a> WasmBackend<'a> {
             // unchanged, no check (§Q7's reading, pinned by the goldens).
             lir::OpKind::Bitcast { .. } => {}
             lir::OpKind::Br { target } => {
-                let t = Self::block_index(w, target)
-                    .ok_or(CodegenError::MalformedIr { detail: 2 })?;
+                let t =
+                    Self::block_index(w, target).ok_or(CodegenError::MalformedIr { detail: 2 })?;
                 out.push(OP_I32_CONST);
                 sleb(out, t as i64);
                 out.push(OP_LOCAL_SET);
@@ -583,11 +1079,15 @@ impl<'a> WasmBackend<'a> {
                     .ok_or(CodegenError::MalformedIr { detail: 2 })?;
                 pop!(); // the condition (canonical 0/1 i64)
                 out.push(OP_I32_WRAP_I64); // 0/1 → i32 for select
+                out.push(OP_LOCAL_SET);
+                uleb(out, cur as u64); // hold condition until it is topmost
                 out.push(OP_I32_CONST);
                 sleb(out, t as i64);
                 out.push(OP_I32_CONST);
                 sleb(out, e as i64);
-                out.push(OP_SELECT); // i32 selected target
+                out.push(OP_LOCAL_GET);
+                uleb(out, cur as u64);
+                out.push(OP_SELECT); // stack order: then, else, condition
                 out.push(OP_LOCAL_SET);
                 uleb(out, cur as u64);
                 // BOTH arms re-dispatch: the IR has no implicit fallthrough
@@ -613,7 +1113,7 @@ impl<'a> WasmBackend<'a> {
                     // slot (§6.6 scoped area). Stack: [ptr] → [desc].
                     let desc = self.next_scoped_desc()?;
                     pop!(); // ptr (value stays on the wasm stack)
-                    // desc[0] = ptr
+                            // desc[0] = ptr
                     out.push(OP_I32_CONST);
                     sleb(out, desc);
                     out.push(OP_I64_STORE);
@@ -646,6 +1146,32 @@ impl<'a> WasmBackend<'a> {
                     })
                 }
             },
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+
+    fn emit_op_pointer(&mut self, ctx: &mut OpContext<'_>) -> Result<bool, CodegenError> {
+        let op = ctx.op;
+        let out = &mut *ctx.out;
+        let h = &mut *ctx.h;
+        macro_rules! push {
+            () => {{
+                let hh = *h;
+                out.push(OP_LOCAL_SET);
+                uleb(out, hh as u64);
+                *h += 1;
+            }};
+        }
+        macro_rules! pop {
+            () => {{
+                *h -= 1;
+                let hh = *h;
+                out.push(OP_LOCAL_GET);
+                uleb(out, hh as u64);
+            }};
+        }
+        match op.kind {
             lir::OpKind::AddrOf {
                 place,
                 mutable: _,
@@ -657,6 +1183,18 @@ impl<'a> WasmBackend<'a> {
                 let addr = self.intern_resource(place.as_bytes())?;
                 out.push(OP_I64_CONST);
                 sleb(out, addr);
+                push!();
+            }
+            lir::OpKind::AddrOf {
+                base: lir::AddrOfBase::Mmio { aperture, offset },
+                ..
+            }
+            | lir::OpKind::MmioPlace {
+                aperture, offset, ..
+            } => {
+                let encoded = (i64::from(aperture) << 32) | i64::from(offset);
+                out.push(OP_I64_CONST);
+                sleb(out, encoded);
                 push!();
             }
             lir::OpKind::PtrAddConst { offset, .. } => {
@@ -680,22 +1218,12 @@ impl<'a> WasmBackend<'a> {
             }
             lir::OpKind::TaskSpawn { .. }
             | lir::OpKind::InterruptEnable
-            | lir::OpKind::InterruptDisable
-            | lir::OpKind::AddrOf {
-                base: lir::AddrOfBase::Mmio { .. },
-                ..
-            }
-            | lir::OpKind::MmioPlace { .. }
-            | lir::OpKind::MmioVolLoad { .. }
-            | lir::OpKind::MmioVolStore { .. }
-            | lir::OpKind::MmioVolLoadField { .. }
-            | lir::OpKind::MmioVolStoreField { .. } => {
-                // Rejected in the per-word scan (FR-3/FR-44); the arm
-                // exists for match totality over the IR surface.
+            | lir::OpKind::InterruptDisable => {
                 return Err(CodegenError::UnsupportedConstruct);
             }
+            _ => return Ok(false),
         }
-        Ok(())
+        Ok(true)
     }
 
     /// Cast semantics mirrored from the native `emit_cast` (I-12): the same
@@ -783,8 +1311,224 @@ fn type_class(w: &lir::Word, ty: lir::TypeId) -> lir::TypeClass {
 fn find_resource_decl(m: &ModuleAst, src: &[u8], name: &[u8]) -> bool {
     m.decls.iter().any(|d| {
         d.kind == DeclKind::Resource
-            && src.get(d.name.start..d.name.end).map(|b| b == name).unwrap_or(false)
+            && src
+                .get(d.name.start..d.name.end)
+                .map(|b| b == name)
+                .unwrap_or(false)
     })
+}
+
+fn emit_module_sections(
+    backend: &mut WasmBackend<'_>,
+    import_count: u32,
+    funcs: Vec<Func>,
+) -> Result<(), CodegenError> {
+    // ---- assemble the module (section order is normative) ----
+    let main_idx = funcs
+        .iter()
+        .position(|f| f.name == backend.entry_name)
+        .ok_or(CodegenError::MissingEntryPoint {
+            name: backend.entry_name,
+        })?;
+    let (main_in, main_out) = {
+        let t = funcs[main_idx].type_index as usize;
+        let (p, r) = backend.types[t].clone();
+        (p.len(), r.len())
+    };
+    // The wrapper: () → i32 — the exit code (main's TOP result; the
+    // driver's entry gate enforces `main ( -- i64 )`, the drop chain
+    // keeps the wrapper total regardless). Zeros feed main's inputs.
+    let wrapper_type = backend.type_index(&[], &[VAL_I32]);
+    let mut wrap_body = Vec::new();
+    uleb(&mut wrap_body, 0); // no local groups
+    for _ in 0..main_in {
+        wrap_body.push(OP_I64_CONST);
+        sleb(&mut wrap_body, 0);
+    }
+    wrap_body.push(OP_CALL);
+    let mut enc = Vec::new();
+    padded_uleb(
+        &mut enc,
+        u64::try_from(main_idx).unwrap_or(0) + u64::from(import_count),
+        CALL_LEB_WIDTH,
+    );
+    wrap_body.extend_from_slice(&enc);
+    if main_out == 0 {
+        wrap_body.push(OP_I32_CONST);
+        sleb(&mut wrap_body, 0);
+    } else {
+        wrap_body.extend(core::iter::repeat_n(OP_DROP, main_out - 1)); // keep only the TOP result
+        wrap_body.push(OP_I32_WRAP_I64);
+    }
+    wrap_body.push(OP_END);
+
+    // Pre-register import types BEFORE emitting the type section so
+    // that import type indices are valid when the import section emits.
+    let sig_1_0 = backend.type_index(&[VAL_I64], &[]);
+    let sig_3_0 = backend.type_index(&[VAL_I64, VAL_I32, VAL_I32], &[]);
+    let (sig_periph_read, sig_periph_write) = if backend.uses_mmio {
+        (
+            Some(backend.type_index(&[VAL_I32, VAL_I32, VAL_I32], &[VAL_I64])),
+            Some(backend.type_index(&[VAL_I32, VAL_I32, VAL_I32, VAL_I64], &[])),
+        )
+    } else {
+        (None, None)
+    };
+    let sig_barrier = backend
+        .uses_barrier
+        .then(|| backend.type_index(&[VAL_I32, VAL_I32], &[]));
+
+    let mut bin = Vec::new();
+    bin.extend_from_slice(b"\0asm");
+    bin.extend_from_slice(&1u32.to_le_bytes());
+
+    // 1. Type.
+    section(&mut bin, SEC_TYPE, |b| {
+        uleb(b, backend.types.len() as u64);
+        for (p, r) in &backend.types {
+            functype(b, p, r);
+        }
+    });
+
+    // 2. Imports: testio, trap, optional exit, and optional MMIO bridge.
+    section(&mut bin, SEC_IMPORT, |b| {
+        let n = 2
+            + usize::from(backend.uses_exit)
+            + 2 * usize::from(backend.uses_mmio)
+            + usize::from(backend.uses_barrier);
+        uleb(b, n as u64);
+        for (ns, nm, t) in [
+            (&b"tyu"[..], &b"write_byte"[..], sig_1_0),
+            (&b"tyu"[..], &b"trap"[..], sig_3_0),
+        ] {
+            name(b, ns);
+            name(b, nm);
+            b.push(0x00);
+            uleb(b, t as u64);
+        }
+        if backend.uses_exit {
+            name(b, b"tyu");
+            name(b, b"exit");
+            b.push(0x00);
+            uleb(b, sig_1_0 as u64);
+        }
+        if backend.uses_mmio {
+            for (nm, ty) in [
+                (
+                    &b"periph_read"[..],
+                    sig_periph_read.expect("MMIO import type"),
+                ),
+                (
+                    &b"periph_write"[..],
+                    sig_periph_write.expect("MMIO import type"),
+                ),
+            ] {
+                name(b, b"tyu");
+                name(b, nm);
+                b.push(0x00);
+                uleb(b, ty as u64);
+            }
+        }
+        if backend.uses_barrier {
+            name(b, b"tyu");
+            name(b, b"barrier");
+            b.push(0x00);
+            uleb(b, sig_barrier.expect("barrier import type") as u64);
+        }
+    });
+
+    // 3. Function (defined funcs + the wrapper).
+    section(&mut bin, SEC_FUNCTION, |b| {
+        uleb(b, funcs.len() as u64 + 1);
+        for f in &funcs {
+            uleb(b, f.type_index as u64);
+        }
+        uleb(b, u64::from(wrapper_type));
+    });
+
+    // 4. Memory (§6.6: initial 16, max 256).
+    section(&mut bin, SEC_MEMORY, |b| {
+        uleb(b, 1);
+        uleb(b, 1); // limits flag: min AND max
+        uleb(b, regions::MEMORY_MIN_PAGES);
+        uleb(b, regions::MEMORY_MAX_PAGES);
+    });
+
+    // 5. Global: the mutable region-arena cursor = ARENA_BASE (§6.6).
+    section(&mut bin, SEC_GLOBAL, |b| {
+        uleb(b, 1);
+        b.push(VAL_I64);
+        b.push(0x01); // mutable
+        b.push(OP_I64_CONST);
+        sleb(b, regions::ARENA_BASE);
+        b.push(OP_END);
+    });
+
+    // 6. Export: tyu_main (the wrapper, appended last) + memory.
+    let wrapper_idx = u64::from(import_count) + funcs.len() as u64;
+    section(&mut bin, SEC_EXPORT, |b| {
+        uleb(b, 2);
+        name(b, b"tyu_main");
+        b.push(0x00);
+        uleb(b, wrapper_idx);
+        name(b, b"memory");
+        b.push(0x02);
+        uleb(b, 0);
+    });
+
+    // 7. Code: the word bodies + the used helpers + the wrapper. Built
+    // by hand (not `section`) so each body's MODULE-ABSOLUTE offset is
+    // known — the `tyu.spans/1` records are absolute code offsets.
+    let mut code_payload = Vec::new();
+    uleb(&mut code_payload, funcs.len() as u64 + 1);
+    let mut func_offsets = Vec::with_capacity(funcs.len() + 1);
+    for f in &funcs {
+        uleb(&mut code_payload, f.body.len() as u64);
+        func_offsets.push(code_payload.len());
+        code_payload.extend_from_slice(&f.body);
+    }
+    uleb(&mut code_payload, wrap_body.len() as u64);
+    func_offsets.push(code_payload.len());
+    code_payload.extend_from_slice(&wrap_body);
+
+    bin.push(SEC_CODE);
+    uleb(&mut bin, code_payload.len() as u64);
+    let code_payload_base = bin.len();
+    bin.extend_from_slice(&code_payload);
+
+    // 8. Data: the interned strings (one active segment), at their
+    // fixed §6.6 addresses.
+    if !backend.string_bytes.is_empty() {
+        let bytes = core::mem::take(&mut backend.string_bytes);
+        section(&mut bin, SEC_DATA, |b| {
+            uleb(b, 1);
+            uleb(b, 0); // active, memory 0
+            b.push(OP_I32_CONST);
+            sleb(b, regions::STRINGS_BASE);
+            b.push(OP_END);
+            uleb(b, bytes.len() as u64);
+            b.extend_from_slice(&bytes);
+        });
+    }
+
+    // 9. The tyu.spans/1 side table (DEC-40): version-first, records
+    // for every word-body load/store (the hardware-trap class), with
+    // body offsets resolved to module-absolute code offsets. Always
+    // emitted (a version header minimum) so a consumer can
+    // version-check even a trap-free module.
+    let records: Vec<spans::SpanRecord> = backend
+        .trap_sites
+        .iter()
+        .map(|site| spans::SpanRecord {
+            code_offset: (code_payload_base + func_offsets[site.func] + site.body_offset) as u32,
+            span_start: site.span.start as u32,
+            span_len: (site.span.end - site.span.start) as u32,
+        })
+        .collect();
+    spans::section(&records, &mut bin);
+
+    backend.out.write(&bin);
+    Ok(())
 }
 
 impl CodegenBackend for WasmBackend<'_> {
@@ -804,8 +1548,10 @@ impl CodegenBackend for WasmBackend<'_> {
                     }
                     lir::OpKind::TaskSpawn { .. }
                     | lir::OpKind::InterruptEnable
-                    | lir::OpKind::InterruptDisable
-                    | lir::OpKind::AddrOf {
+                    | lir::OpKind::InterruptDisable => {
+                        return Err(CodegenError::UnsupportedConstruct);
+                    }
+                    lir::OpKind::AddrOf {
                         base: lir::AddrOfBase::Mmio { .. },
                         ..
                     }
@@ -813,11 +1559,17 @@ impl CodegenBackend for WasmBackend<'_> {
                     | lir::OpKind::MmioVolLoad { .. }
                     | lir::OpKind::MmioVolStore { .. }
                     | lir::OpKind::MmioVolLoadField { .. }
-                    | lir::OpKind::MmioVolStoreField { .. } => {
-                        return Err(CodegenError::UnsupportedConstruct);
-                    }
+                    | lir::OpKind::MmioVolStoreField { .. } => self.uses_mmio = true,
                     _ => {}
                 }
+                let barrier = match op.kind {
+                    lir::OpKind::MmioVolLoad { barrier, .. }
+                    | lir::OpKind::MmioVolStore { barrier, .. }
+                    | lir::OpKind::MmioVolLoadField { barrier, .. }
+                    | lir::OpKind::MmioVolStoreField { barrier, .. } => barrier,
+                    _ => lir::BarrierKind::None,
+                };
+                self.uses_barrier |= barrier != lir::BarrierKind::None;
             }
         }
 
@@ -842,14 +1594,15 @@ impl CodegenBackend for WasmBackend<'_> {
             }
         }
         let declared_overflow = max_declared.saturating_sub(in_len);
-
         // Local GROUP declaration (the leading uleb is the GROUP count, not
         // the local count): the slot pool (i64), the dispatch cursor (i32),
-        // then the declared-overflow locals (i64). Wasm assigns group locals
+        // a memory/MMIO scratch (i64), then declared-overflow locals (i64).
+        // Wasm assigns group locals
         // AFTER the params — the pool aliases params 0..in_len (the initial
         // data stack IS the declared inputs), so the cursor's index is
         // in_len-shifted.
         let cur = in_len + slots; // the i32 dispatch cursor's local index
+        let mmio_scratch = Some((cur + 1) as u32);
         let mut hdr = Vec::new();
         let mut groups = 0usize;
         let mut decls = Vec::new();
@@ -858,6 +1611,8 @@ impl CodegenBackend for WasmBackend<'_> {
             groups += 1;
         }
         locals_group(&mut decls, 1, VAL_I32);
+        groups += 1;
+        locals_group(&mut decls, 1, VAL_I64);
         groups += 1;
         if declared_overflow > 0 {
             locals_group(&mut decls, declared_overflow, VAL_I64);
@@ -898,6 +1653,7 @@ impl CodegenBackend for WasmBackend<'_> {
                     cur,
                     in_len,
                     slots,
+                    mmio_scratch,
                     entry,
                     blocks,
                     &mut body_calls,
@@ -923,9 +1679,11 @@ impl CodegenBackend for WasmBackend<'_> {
             body.push(OP_BR_TABLE);
             uleb(&mut body, blocks as u64);
             for k in 0..blocks {
-                uleb(&mut body, (blocks - k) as u64); // label index: $c0=blocks, $c1=blocks-1, ...
+                // At the br_table, depth 0 exits $hdr and falls through to
+                // case 0; depth 1 exits $c0 and falls through to case 1.
+                uleb(&mut body, k as u64);
             }
-            uleb(&mut body, blocks as u64); // default: $c0
+            uleb(&mut body, 0); // invalid cursor defaults to case 0
             body.push(OP_END); // $hdr
 
             for k in 0..blocks {
@@ -943,6 +1701,7 @@ impl CodegenBackend for WasmBackend<'_> {
                         cur,
                         in_len,
                         slots,
+                        mmio_scratch,
                         k,
                         blocks,
                         &mut body_calls,
@@ -952,10 +1711,16 @@ impl CodegenBackend for WasmBackend<'_> {
             }
             body.push(OP_END); // end $c0
             body.push(OP_BR);
-            uleb(&mut body, 1); // br to $dispatch (depth 1 from inside $c0)
+            uleb(&mut body, 0); // re-dispatch at the enclosing loop
+            body.push(OP_END); // end $dispatch loop
+                               // Every IR block terminates in Br/BrIf/Ret. If the dispatch
+                               // ladder nevertheless falls through, the module is malformed
+                               // or the cursor is corrupt; keep the function result type
+                               // sound and fail closed.
+            body.push(OP_UNREACHABLE);
         }
 
-        body.push(OP_END); // $dispatch or function frame
+        body.push(OP_END); // function frame
 
         for (off, span) in body_traps {
             self.trap_sites.push(TrapSite {
@@ -976,13 +1741,25 @@ impl CodegenBackend for WasmBackend<'_> {
 
     fn emit_postlude(&mut self) -> Result<(), CodegenError> {
         // ---- the key→index map + patching ----
-        let import_count: u32 = if self.uses_exit { 3 } else { 2 };
+        let import_count: u32 = 2
+            + u32::from(self.uses_exit)
+            + 2 * u32::from(self.uses_mmio)
+            + u32::from(self.uses_barrier);
         let mut keys: Vec<(Vec<u8>, u32)> = vec![
             (b"$import:write_byte".to_vec(), IMPORT_WRITE_BYTE),
             (b"$import:trap".to_vec(), IMPORT_TRAP),
         ];
         if self.uses_exit {
             keys.push((b"$import:exit".to_vec(), IMPORT_EXIT));
+        }
+        if self.uses_mmio {
+            let first = 2 + u32::from(self.uses_exit);
+            keys.push((b"$import:periph_read".to_vec(), first));
+            keys.push((b"$import:periph_write".to_vec(), first + 1));
+        }
+        if self.uses_barrier {
+            let idx = 2 + u32::from(self.uses_exit) + 2 * u32::from(self.uses_mmio);
+            keys.push((b"$import:barrier".to_vec(), idx));
         }
         for (i, f) in self.funcs.iter().enumerate() {
             keys.push((f.name.clone(), import_count + i as u32));
@@ -1022,13 +1799,18 @@ impl CodegenBackend for WasmBackend<'_> {
             for (off, callee) in &f.calls {
                 let idx = match callee {
                     Callee::Import(i) => *i,
-                    Callee::Word(n) => *keys
-                        .iter()
-                        .find(|(k, _)| k == n)
-                        .map(|(_, i)| i)
-                        .ok_or(CodegenError::UnsupportedOp {
+                    Callee::Exit => IMPORT_EXIT,
+                    Callee::PeripheralRead => IMPORT_PERIPH_READ + u32::from(self.uses_exit) - 1,
+                    Callee::PeripheralWrite => IMPORT_PERIPH_WRITE + u32::from(self.uses_exit) - 1,
+                    Callee::Barrier { kind, after } => {
+                        let _ = (kind, after); // Arguments are encoded at the call site.
+                        IMPORT_BARRIER + u32::from(self.uses_exit) - 1
+                    }
+                    Callee::Word(n) => *keys.iter().find(|(k, _)| k == n).map(|(_, i)| i).ok_or(
+                        CodegenError::UnsupportedOp {
                             op_name: b"call (unresolved call target on wasm32)",
-                        })?,
+                        },
+                    )?,
                     Callee::Helper(h) => *keys
                         .iter()
                         .find(|(k, _)| k == &helper_key(*h))
@@ -1041,172 +1823,7 @@ impl CodegenBackend for WasmBackend<'_> {
             }
         }
 
-        // ---- assemble the module (section order is normative) ----
-        let main_idx = funcs
-            .iter()
-            .position(|f| f.name == b"main")
-            .ok_or(CodegenError::MissingEntryPoint { name: b"main" })?;
-        let (main_in, main_out) = {
-            let t = funcs[main_idx].type_index as usize;
-            let (p, r) = self.types[t].clone();
-            (p.len(), r.len())
-        };
-        // The wrapper: () → i32 — the exit code (main's TOP result; the
-        // driver's entry gate enforces `main ( -- i64 )`, the drop chain
-        // keeps the wrapper total regardless). Zeros feed main's inputs.
-        let wrapper_type = self.type_index(&[], &[VAL_I32]);
-        let mut wrap_body = Vec::new();
-        uleb(&mut wrap_body, 0); // no local groups
-        for _ in 0..main_in {
-            wrap_body.push(OP_I64_CONST);
-            sleb(&mut wrap_body, 0);
-        }
-        wrap_body.push(OP_CALL);
-        let mut enc = Vec::new();
-        padded_uleb(
-            &mut enc,
-            u64::try_from(main_idx).unwrap_or(0) + u64::from(import_count),
-            CALL_LEB_WIDTH,
-        );
-        wrap_body.extend_from_slice(&enc);
-        wrap_body.extend(core::iter::repeat_n(
-            OP_DROP,
-            main_out.saturating_sub(1),
-        )); // keep only the TOP result
-        wrap_body.push(OP_I32_WRAP_I64);
-        wrap_body.push(OP_END);
-
-        // Pre-register import types BEFORE emitting the type section so
-        // that import type indices are valid when the import section emits.
-        let sig_1_0 = self.type_index(&[VAL_I64], &[]);
-        let sig_3_0 = self.type_index(&[VAL_I64, VAL_I32, VAL_I32], &[]);
-
-        let mut bin = Vec::new();
-        bin.extend_from_slice(b"\0asm");
-        bin.extend_from_slice(&1u32.to_le_bytes());
-
-        // 1. Type.
-        section(&mut bin, SEC_TYPE, |b| {
-            uleb(b, self.types.len() as u64);
-            for (p, r) in &self.types {
-                functype(b, p, r);
-            }
-        });
-
-        // 2. Import: tyu.write_byte, tyu.trap, [tyu.exit].
-        section(&mut bin, SEC_IMPORT, |b| {
-            let n = if self.uses_exit { 3 } else { 2 };
-            uleb(b, n);
-            for (ns, nm, t) in [
-                (&b"tyu"[..], &b"write_byte"[..], sig_1_0),
-                (&b"tyu"[..], &b"trap"[..], sig_3_0),
-            ] {
-                name(b, ns);
-                name(b, nm);
-                b.push(0x00);
-                uleb(b, t as u64);
-            }
-            if self.uses_exit {
-                name(b, b"tyu");
-                name(b, b"exit");
-                b.push(0x00);
-                uleb(b, sig_1_0 as u64);
-            }
-        });
-
-        // 3. Function (defined funcs + the wrapper).
-        section(&mut bin, SEC_FUNCTION, |b| {
-            uleb(b, funcs.len() as u64 + 1);
-            for f in &funcs {
-                uleb(b, f.type_index as u64);
-            }
-            uleb(b, u64::from(wrapper_type));
-        });
-
-        // 4. Memory (§6.6: initial 16, max 256).
-        section(&mut bin, SEC_MEMORY, |b| {
-            uleb(b, 1);
-            uleb(b, 1); // limits flag: min AND max
-            uleb(b, regions::MEMORY_MIN_PAGES);
-            uleb(b, regions::MEMORY_MAX_PAGES);
-        });
-
-        // 5. Global: the mutable region-arena cursor = ARENA_BASE (§6.6).
-        section(&mut bin, SEC_GLOBAL, |b| {
-            uleb(b, 1);
-            b.push(VAL_I64);
-            b.push(0x01); // mutable
-            b.push(OP_I64_CONST);
-            sleb(b, regions::ARENA_BASE);
-            b.push(OP_END);
-        });
-
-        // 6. Export: tyu_main (the wrapper, appended last) + memory.
-        let wrapper_idx = u64::from(import_count) + funcs.len() as u64;
-        section(&mut bin, SEC_EXPORT, |b| {
-            uleb(b, 2);
-            name(b, b"tyu_main");
-            b.push(0x00);
-            uleb(b, wrapper_idx);
-            name(b, b"memory");
-            b.push(0x02);
-            uleb(b, 0);
-        });
-
-        // 7. Code: the word bodies + the used helpers + the wrapper. Built
-        // by hand (not `section`) so each body's MODULE-ABSOLUTE offset is
-        // known — the `tyu.spans/1` records are absolute code offsets.
-        let mut code_payload = Vec::new();
-        uleb(&mut code_payload, funcs.len() as u64 + 1);
-        let mut func_offsets = Vec::with_capacity(funcs.len() + 1);
-        for f in &funcs {
-            uleb(&mut code_payload, f.body.len() as u64);
-            func_offsets.push(code_payload.len());
-            code_payload.extend_from_slice(&f.body);
-        }
-        uleb(&mut code_payload, wrap_body.len() as u64);
-        func_offsets.push(code_payload.len());
-        code_payload.extend_from_slice(&wrap_body);
-
-        bin.push(SEC_CODE);
-        uleb(&mut bin, code_payload.len() as u64);
-        let code_payload_base = bin.len();
-        bin.extend_from_slice(&code_payload);
-
-        // 8. Data: the interned strings (one active segment), at their
-        // fixed §6.6 addresses.
-        if !self.string_bytes.is_empty() {
-            let bytes = core::mem::take(&mut self.string_bytes);
-            section(&mut bin, SEC_DATA, |b| {
-                uleb(b, 1);
-                uleb(b, 0); // active, memory 0
-                b.push(OP_I32_CONST);
-                sleb(b, regions::STRINGS_BASE);
-                b.push(OP_END);
-                uleb(b, bytes.len() as u64);
-                b.extend_from_slice(&bytes);
-            });
-        }
-
-        // 9. The tyu.spans/1 side table (DEC-40): version-first, records
-        // for every word-body load/store (the hardware-trap class), with
-        // body offsets resolved to module-absolute code offsets. Always
-        // emitted (a version header minimum) so a consumer can
-        // version-check even a trap-free module.
-        let records: Vec<spans::SpanRecord> = self
-            .trap_sites
-            .iter()
-            .map(|site| spans::SpanRecord {
-                code_offset: (code_payload_base + func_offsets[site.func] + site.body_offset)
-                    as u32,
-                span_start: site.span.start as u32,
-                span_len: (site.span.end - site.span.start) as u32,
-            })
-            .collect();
-        spans::section(&records, &mut bin);
-
-        self.out.write(&bin);
-        Ok(())
+        emit_module_sections(self, import_count, funcs)
     }
 
     fn emit_extern_word(&mut self, _name: &[u8]) -> Result<(), CodegenError> {

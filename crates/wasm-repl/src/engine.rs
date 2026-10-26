@@ -560,15 +560,19 @@ impl<'c> Engine<'c> {
                     let Value::Ptr(base) = p.val else {
                         unreachable!("pop_checked(Ptr) returned a non-pointer")
                     };
-                    state
-                        .stack
-                        .push(Slot::ptr(ir::TY_PTR_MUT, base.wrapping_add(u64::from(offset))));
+                    state.stack.push(Slot::ptr(
+                        ir::TY_PTR_MUT,
+                        base.wrapping_add(u64::from(offset)),
+                    ));
                     StepResult::Continue(next_op)
                 }
                 Err(f) => self.pop_fault(f, op.span, word, ValKind::Ptr),
             },
             OpKind::PtrAddIndex { scale, .. } => {
-                match (pop_checked(state, ValKind::Int), pop_checked(state, ValKind::Ptr)) {
+                match (
+                    pop_checked(state, ValKind::Int),
+                    pop_checked(state, ValKind::Ptr),
+                ) {
                     (Ok(idx), Ok(base)) => {
                         let Value::Int(i) = idx.val else {
                             unreachable!("pop_checked(Int) returned a non-int")
@@ -610,8 +614,10 @@ impl<'c> Engine<'c> {
                     StepResult::Trap(TrapCode::StackOverflow, op.span)
                 }
             }
-            OpKind::AddI64 => match (pop_checked(state, ValKind::Int), pop_checked(state, ValKind::Int))
-            {
+            OpKind::AddI64 => match (
+                pop_checked(state, ValKind::Int),
+                pop_checked(state, ValKind::Int),
+            ) {
                 (Ok(b), Ok(a)) => {
                     let Value::Int(bv) = b.val else {
                         unreachable!("pop_checked(Int) returned a non-int")
@@ -631,8 +637,10 @@ impl<'c> Engine<'c> {
                 }
                 (Err(f), _) | (_, Err(f)) => self.pop_fault(f, op.span, word, ValKind::Int),
             },
-            OpKind::SubI64 => match (pop_checked(state, ValKind::Int), pop_checked(state, ValKind::Int))
-            {
+            OpKind::SubI64 => match (
+                pop_checked(state, ValKind::Int),
+                pop_checked(state, ValKind::Int),
+            ) {
                 (Ok(b), Ok(a)) => {
                     let (Value::Int(bv), Value::Int(av)) = (b.val, a.val) else {
                         unreachable!("pop_checked(Int) returned a non-int")
@@ -642,8 +650,10 @@ impl<'c> Engine<'c> {
                 }
                 (Err(f), _) | (_, Err(f)) => self.pop_fault(f, op.span, word, ValKind::Int),
             },
-            OpKind::MulI64 => match (pop_checked(state, ValKind::Int), pop_checked(state, ValKind::Int))
-            {
+            OpKind::MulI64 => match (
+                pop_checked(state, ValKind::Int),
+                pop_checked(state, ValKind::Int),
+            ) {
                 (Ok(b), Ok(a)) => {
                     let (Value::Int(bv), Value::Int(av)) = (b.val, a.val) else {
                         unreachable!("pop_checked(Int) returned a non-int")
@@ -653,8 +663,10 @@ impl<'c> Engine<'c> {
                 }
                 (Err(f), _) | (_, Err(f)) => self.pop_fault(f, op.span, word, ValKind::Int),
             },
-            OpKind::Cmp { out, kind } => match (pop_checked(state, ValKind::Int), pop_checked(state, ValKind::Int))
-            {
+            OpKind::Cmp { out, kind } => match (
+                pop_checked(state, ValKind::Int),
+                pop_checked(state, ValKind::Int),
+            ) {
                 (Ok(b), Ok(a)) => {
                     let (Value::Int(bv), Value::Int(av)) = (b.val, a.val) else {
                         unreachable!("pop_checked(Int) returned a non-int")
@@ -676,7 +688,10 @@ impl<'c> Engine<'c> {
                 (Err(f), _) | (_, Err(f)) => self.pop_fault(f, op.span, word, ValKind::Int),
             },
             OpKind::AndBool => {
-                match (pop_checked(state, ValKind::Bool), pop_checked(state, ValKind::Bool)) {
+                match (
+                    pop_checked(state, ValKind::Bool),
+                    pop_checked(state, ValKind::Bool),
+                ) {
                     (Ok(b), Ok(a)) => {
                         let (Value::Bool(bv), Value::Bool(av)) = (b.val, a.val) else {
                             unreachable!("pop_checked(Bool) returned a non-bool")
@@ -688,7 +703,10 @@ impl<'c> Engine<'c> {
                 }
             }
             OpKind::OrBool => {
-                match (pop_checked(state, ValKind::Bool), pop_checked(state, ValKind::Bool)) {
+                match (
+                    pop_checked(state, ValKind::Bool),
+                    pop_checked(state, ValKind::Bool),
+                ) {
                     (Ok(b), Ok(a)) => {
                         let (Value::Bool(bv), Value::Bool(av)) = (b.val, a.val) else {
                             unreachable!("pop_checked(Bool) returned a non-bool")
@@ -734,7 +752,12 @@ impl<'c> Engine<'c> {
                 // A missing frame/local is a real underflow (trap 10) — the
                 // fabricated-zero path is deleted (D-W5). The local's own type
                 // travels with it (set by the LocalSet that wrote it).
-                match state.frames.last().and_then(|f| f.locals.get(slot as usize)).copied() {
+                match state
+                    .frames
+                    .last()
+                    .and_then(|f| f.locals.get(slot as usize))
+                    .copied()
+                {
                     Some(v) => {
                         state.stack.push(v);
                         StepResult::Continue(next_op)
@@ -1024,7 +1047,11 @@ impl<'c> Engine<'c> {
                         let Value::Bool(b) = slot.val else {
                             unreachable!("pop_checked(Bool) returned a non-bool")
                         };
-                        if b { then_tgt } else { else_tgt }
+                        if b {
+                            then_tgt
+                        } else {
+                            else_tgt
+                        }
                     }
                     // An empty stack at a conditional branch is a real
                     // underflow (trap 10) — the silent-false path is deleted
@@ -1079,10 +1106,7 @@ impl<'c> Engine<'c> {
                                 ));
                             };
                             let bytes = atom.as_bytes();
-                            let Some(pos) = caller
-                                .types
-                                .iter()
-                                .position(|a| a.as_bytes() == bytes)
+                            let Some(pos) = caller.types.iter().position(|a| a.as_bytes() == bytes)
                             else {
                                 return StepResult::Fault(Fault::internal(
                                     op.span,
@@ -1681,5 +1705,8 @@ pub fn sig_text_of(word: &ir::Word) -> Vec<u8> {
 /// `TrapDetail.actual`).
 fn top_cells(state: &ExecState, word: &ir::Word, cap: usize) -> Vec<StackCell> {
     let start = state.stack.len().saturating_sub(cap);
-    state.stack[start..].iter().map(|&s| cell_of(word, s)).collect()
+    state.stack[start..]
+        .iter()
+        .map(|&s| cell_of(word, s))
+        .collect()
 }

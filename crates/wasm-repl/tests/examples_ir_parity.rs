@@ -6,8 +6,8 @@
 //! defect.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::process::Command;
+use std::sync::Arc;
 
 use wasm_repl::compile::SourceTable;
 use wasm_repl::examples_pack::{classify_examples, Expect, Kind, LabFile};
@@ -117,10 +117,7 @@ fn labs_ir_render_is_byte_equal_to_langc() {
 
         // The native verdict: `langc --emit=ir` for the same buffer.
         let native = Command::new(&langc)
-            .args([
-                "--emit=ir",
-                &format!("--sysroot={}", sysroot.display()),
-            ])
+            .args(["--emit=ir", &format!("--sysroot={}", sysroot.display())])
             .arg(&lab_path)
             .output()
             .expect("langc --emit=ir runs");
@@ -160,7 +157,10 @@ fn labs_ir_render_is_byte_equal_to_langc() {
                 // IR parity pin extends to the failure mode (FR-11: native
                 // codes verbatim).
                 let wasm_repl::Status::CompileError { diag } = &result.status else {
-                    panic!("{} packs red but the session says {:?}", ex.id, result.status);
+                    panic!(
+                        "{} packs red but the session says {:?}",
+                        ex.id, result.status
+                    );
                 };
                 assert!(
                     !native.status.success(),

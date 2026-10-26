@@ -79,8 +79,7 @@ fn native_only_reason(chapter: &str, id: &str, stem: &str) -> Option<String> {
     // Chapter rules.
     if chapter == "ch08" {
         return Some(
-            "MMIO — needs a platform descriptor the browser REPL does not ship (E3640)"
-                .to_string(),
+            "MMIO — needs a platform descriptor the browser REPL does not ship (E3640)".to_string(),
         );
     }
     if chapter == "ch10" {
@@ -103,9 +102,7 @@ fn native_only_reason(chapter: &str, id: &str, stem: &str) -> Option<String> {
     // Exact exceptions (as-built divergences, each verified by probe).
     let reason = match id {
         // Interrupts are rejected at the REPL boundary (E9156).
-        "ch11/green-01-compliant-share" => {
-            "interrupts — rejected on the browser platform (E9156)"
-        }
+        "ch11/green-01-compliant-share" => "interrupts — rejected on the browser platform (E9156)",
         // Tasks are rejected at the REPL boundary (E9156).
         "ch12/green-01-spawn-join-run" | "ch12/green-02-two-workers" => {
             "tasks — rejected on the browser platform (E9156)"
@@ -223,9 +220,7 @@ fn header_expect(content: &str) -> Option<Expect> {
         let bytes = line.as_bytes();
         let mut i = 0;
         while i + 5 <= bytes.len() {
-            if bytes[i] == b'E'
-                && bytes[i + 1..i + 5].iter().all(|b| b.is_ascii_digit())
-            {
+            if bytes[i] == b'E' && bytes[i + 1..i + 5].iter().all(|b| b.is_ascii_digit()) {
                 let code = line[i + 1..i + 5].parse::<u32>().ok()?;
                 return Some(Expect::Diag { code: Some(code) });
             }
@@ -289,10 +284,7 @@ pub fn classify_examples(files: &[LabFile]) -> Result<Vec<Example>, String> {
             .map(|(_, n)| n.clone())
     };
 
-    let mut mods: Vec<&LabFile> = files
-        .iter()
-        .filter(|f| f.path.ends_with(".mod"))
-        .collect();
+    let mut mods: Vec<&LabFile> = files.iter().filter(|f| f.path.ends_with(".mod")).collect();
     mods.sort_by(|a, b| a.path.cmp(&b.path));
 
     let mut examples: Vec<Example> = Vec::new();
@@ -304,7 +296,11 @@ pub fn classify_examples(files: &[LabFile]) -> Result<Vec<Example>, String> {
         }
         let (stem, in_subdir) = stem_and_subdir(&f.path)?;
         let id = f.path.trim_end_matches(".mod").to_string();
-        let title = title_for(&stem, chapter_num(&chapter), manifest_name(&chapter, file_name).as_deref());
+        let title = title_for(
+            &stem,
+            chapter_num(&chapter),
+            manifest_name(&chapter, file_name).as_deref(),
+        );
 
         // Subdir layouts are chapter-native-only by rule (ch10 multi-module
         // pairs, ch14 prose snippets); any other chapter gaining subdirs is
@@ -354,9 +350,7 @@ pub fn classify_examples(files: &[LabFile]) -> Result<Vec<Example>, String> {
                 Some(Expect::Trap { code }) => Expect::Trap { code },
                 _ => Expect::Diag { code: None },
             }
-        } else if stem.starts_with("green-")
-            || stem.starts_with("interlude-")
-        {
+        } else if stem.starts_with("green-") || stem.starts_with("interlude-") {
             // Greens and interludes teach "compiles clean". A declared
             // header code (a red-style expectation on a green lab) is
             // layout drift — refused, never guessed around.
@@ -390,12 +384,13 @@ pub fn classify_examples(files: &[LabFile]) -> Result<Vec<Example>, String> {
 /// Classify AND emit the generated data module (the packer's full contract).
 pub fn pack_examples(files: &[LabFile]) -> Result<Vec<u8>, String> {
     let examples = classify_examples(files)?;
-    let (runnable, native_only) = examples
-        .iter()
-        .fold((0usize, 0usize), |(r, n), e| match e.kind {
-            Kind::Runnable => (r + 1, n),
-            Kind::NativeOnly => (r, n + 1),
-        });
+    let (runnable, native_only) =
+        examples
+            .iter()
+            .fold((0usize, 0usize), |(r, n), e| match e.kind {
+                Kind::Runnable => (r + 1, n),
+                Kind::NativeOnly => (r, n + 1),
+            });
     emit(&examples).map(|mut out| {
         // The coverage summary rides the front of the artifact as a
         // comment (machine-parseable by the G58 gate).
@@ -567,11 +562,7 @@ mod tests {
         let b = pack_examples(&files).unwrap();
         assert_eq!(a, b, "two runs are byte-identical (G58)");
         // Input order does not matter: sorted before emit.
-        let reordered = vec![
-            files[1].clone(),
-            files[2].clone(),
-            files[0].clone(),
-        ];
+        let reordered = vec![files[1].clone(), files[2].clone(), files[0].clone()];
         let c = pack_examples(&reordered).unwrap();
         assert_eq!(a, c, "sorted emit is input-order independent");
     }
@@ -620,7 +611,10 @@ mod tests {
 
     #[test]
     fn unclassifiable_is_a_build_error() {
-        let files = vec![lab("ch06/interlude-deep-stack.mod", GREEN), lab("ch06/mystery-lab.mod", GREEN)];
+        let files = vec![
+            lab("ch06/interlude-deep-stack.mod", GREEN),
+            lab("ch06/mystery-lab.mod", GREEN),
+        ];
         let err = pack_examples(&files).unwrap_err();
         assert!(err.contains("unclassifiable"), "{err}");
     }

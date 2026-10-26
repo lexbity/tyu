@@ -107,11 +107,7 @@ impl Trace {
     /// journal `Output`/`Call` events plus the run outcome's trap/fuel/done
     /// tail. The journal is *walked*, not cloned (D-W4: the full-journal
     /// clone for trace derivation is gone — this is a view).
-    pub fn from_phrase(
-        header: TraceHeader,
-        journal_effects: &Journal,
-        outcome: &Outcome,
-    ) -> Trace {
+    pub fn from_phrase(header: TraceHeader, journal_effects: &Journal, outcome: &Outcome) -> Trace {
         let mut t = Trace::new(header);
         for e in journal_effects.iter() {
             match e {
@@ -143,10 +139,7 @@ impl Trace {
             Outcome::Ok { .. } => t.events.push(Event::Done { exit: 0 }),
             Outcome::Exited { code, .. } => t.events.push(Event::Done { exit: *code }),
             Outcome::Trap {
-                code,
-                span,
-                detail,
-                ..
+                code, span, detail, ..
             } => t.events.push(Event::Trap {
                 code: *code,
                 span: *span,

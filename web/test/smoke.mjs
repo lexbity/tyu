@@ -161,6 +161,7 @@ try {
     const run = async (src) => {
       await typeInto(src);
       await page.click("#run");
+      await page.waitForFunction(() => !document.getElementById("run")?.disabled, null, { timeout: 10_000 });
     };
 
     // Highlighting is live: a `module` keyword in the buffer carries the
@@ -181,11 +182,78 @@ try {
     cells = await page.$$eval("#stack li", (lis) => lis.map((li) => li.textContent.trim()));
     assert(cells.length === 3, `run left the fresh program's stack (${cells.length})`);
 
+    // B2: opt-in backend mode compiles the same Tyu source in the page,
+    // instantiates the nested module with the board/output imports, and
+    // keeps the active substrate explicit in the status line.
+    await page.selectOption("#backend-mode", "wasm");
+    await run("import platform/testio { testio.write-byte };\n65 testio.write-byte");
+    await page.waitForFunction(() => !document.getElementById("run")?.disabled, null, { timeout: 10_000 });
+    const backendStatus = await page.textContent("#status");
+    assert(backendStatus.includes("wasm · ok"), `backend mode completes honestly (${backendStatus})`);
+    const backendOut = await page.textContent("#console");
+    assert(backendOut === "A", `backend import streams the same output byte (${JSON.stringify(backendOut)})`);
+    assert((await page.textContent("#status")).includes("backend run"), "backend mode is named in status");
+    await run(`module BrowserMmio;
+import platform/testio { testio.write-byte };
+register-map Scratch
+  0x00 A u32 rw
+end;
+const scratch = Scratch @ board.scratch;
+: main ( -- i64 )
+  &!scratch.A 65 as u32 !u32
+  &scratch.A @u32 as i64 testio.write-byte
+  0
+;
+export { main };
+end;`);
+    assert(await page.textContent("#console") === "A", "backend MMIO imports read and write the same board device");
+    assert((await page.textContent("#status")).includes("wasm · ok"), "backend MMIO program remains in wasm mode");
+    const backendTrace = await page.textContent("#frames");
+    assert(backendTrace.includes("periph-write ap0 +0x0 /4"), "backend trace records the MMIO write");
+    assert(backendTrace.includes("periph-read ap0 +0x0 /4"), "backend trace records the MMIO read");
+    assert((backendTrace.match(/barrier both/g) ?? []).length === 4, `both barriers are recorded around both MMIO accesses (${backendTrace})`);
+    await run(`module BrowserRegion;
+import platform/mem;
+import platform/testio { testio.write-byte };
+: main ( -- i64 )
+  64 as usize platform.mem.region-create
+  dup 16 as usize platform.mem.region-alloc
+  dup 42 as i64 !i64
+  dup @i64 42 == [ 65 testio.write-byte ] [ 70 testio.write-byte ] if
+  drop platform.mem.region-destroy
+  0 ;
+export { main };
+end;`);
+    assert(await page.textContent("#console") === "A", "backend guarded region load/store preserves the region allocator semantics");
+    assert((await page.textContent("#status")).includes("wasm · ok"), "backend memory accesses remain in wasm mode");
+    const subtypeTrap = `module BrowserSubtypeTrap;
+subtype Percent = i64 range 0 .. 100;
+: main ( -- i64 )
+  150 as Percent drop
+  0 ;
+export { main };
+end;`;
+    await run(subtypeTrap);
+    assert((await page.textContent("#status")).includes("wasm · trapped 21"), "backend subtype guard reports trap 21");
+    assert((await page.textContent("#diag")).includes("E21"), "backend trap is visible in the diagnostic pane");
+    const trapDiag = await page.textContent("#diag");
+    const castStart = subtypeTrap.indexOf("as Percent");
+    assert(trapDiag.includes(`@${castStart}..${castStart + 2}`), `backend trap carries the exact source span (${trapDiag})`);
+    await page.waitForSelector(".cm-lintRange-error, .cm-lintPoint-error", { timeout: 2_000 });
+    await run("word-that-does-not-exist");
+    const fallbackStatus = await page.textContent("#status");
+    const fallbackNotice = await page.textContent("#backend-notice");
+    assert(fallbackStatus.includes("interp run"), `backend failure displays interpreter as active (${fallbackStatus})`);
+    assert(fallbackNotice.includes("fell back to interpreter"), `backend fallback is explicit (${fallbackNotice})`);
+    await page.selectOption("#backend-mode", "interp");
+    await run("1 2 3");
+
     // The session flow starts from a clean slate (an emptied run resets).
     await page.click(".cm-content");
     await page.keyboard.press("ControlOrMeta+a");
     await page.keyboard.press("Backspace");
     await page.click("#run");
+    await page.waitForFunction(() => !document.getElementById("run")?.disabled, null, { timeout: 10_000 });
     cells = await page.$$eval("#stack li", (lis) => lis.map((li) => li.textContent.trim()));
     assert(cells.length === 0, `empty run resets the stack (${cells.length})`);
 
@@ -269,7 +337,7 @@ try {
     await page.keyboard.insertText("1 1 +");
     await page.click("#run");
     await page.waitForFunction(() =>
-      document.getElementById("status")?.textContent.includes("run ·"), null, { timeout: 10_000 });
+      document.getElementById("status")?.textContent.includes("interp run ·"), null, { timeout: 10_000 });
     const greenStatus = await page.textContent("#status");
     assert(greenStatus.includes("ok"), `green example runs ok (${greenStatus})`);
 
@@ -281,6 +349,8 @@ try {
     await page.click("#run");
     await page.waitForFunction(() =>
       document.getElementById("status")?.textContent.includes("compile-error"), null, { timeout: 10_000 });
+    await page.waitForFunction(() =>
+      document.getElementById("diag")?.textContent.includes("3202"), null, { timeout: 10_000 });
     const redStatus = await page.textContent("#status");
     const redDiag = await page.textContent("#diag");
     assert(redStatus.includes("E3202"), `red example rejected with its expected code (${redStatus})`);
@@ -410,6 +480,8 @@ try {
       null,
       { timeout: 10_000 }
     );
+    await page.click("#run");
+    await page.waitForFunction(() => !document.getElementById("run")?.disabled, null, { timeout: 10_000 });
     // Completions: a prefix of the imported word opens the tooltip.
     await page.click(".cm-content");
     await page.keyboard.press("ControlOrMeta+a");
@@ -460,7 +532,7 @@ try {
     // here are the example load and the earlier fixture run).
     const trText = await page.$eval("#transcript", (el) => el.textContent);
     assert(
-      trText.includes("example") && trText.includes("→ ok"),
+      trText.includes("interp run") && trText.includes("→ ok"),
       `transcript reflects submissions with statuses (${JSON.stringify(trText.slice(0, 200))})`
     );
 
@@ -469,9 +541,9 @@ try {
     await page.click(".cm-content");
     await page.keyboard.press("ControlOrMeta+a");
     await page.keyboard.insertText("1 2 +");
-    await page.click("#run");
+    await run("1 2 +");
     await page.waitForFunction(() =>
-      (document.getElementById("ir")?.textContent ?? "").length > 0, null,
+      (document.getElementById("ir")?.textContent ?? "").includes("module repl-session"), null,
       { timeout: 10_000 });
     const irOpen = await page.$eval("#ir-pane", (el) => el.open || el.hasAttribute("open"));
     await page.$eval("#ir-pane", (el) => { el.open = true; });

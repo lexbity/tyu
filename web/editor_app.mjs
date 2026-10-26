@@ -63,7 +63,6 @@ function cm6Editor(parentEl, textareaEl, host) {
   return {
     setDoc: (t) => api.setDoc(t),
     currentDoc: () => api.currentDoc(),
-    jumpTo: (span) => api.jumpTo(span),
     focus: () => api.focus(),
     refreshLint: () => api.refreshLint(),
     setReadOnly: (v) => api.setReadOnly(v),

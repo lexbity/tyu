@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PLAN-WASM-1 CI gates — G52–G56 (declared here, NOT in ci/guards.sh).
+# Browser platform CI gates — G52–G58 (declared here, NOT in ci/guards.sh).
 #
 # The existing `ci/guards.sh` registry ends at G51 (§Q10). The WASM REPL
 # plan's new gates live in this file so the flat G1–G51 registry is not
@@ -7,7 +7,7 @@
 #
 #   G52  Fork ↔ `src_interp` fragvec corpus trace agreement            (P1)
 #   G53  Interpreter ↔ native execution goldens (+IR render parity)    (P2/P6)
-#   G54  codegen-wasm: wasmtime validate + run, trace parity            (B1/B2)
+#   G54  codegen-wasm: wasm-tools validate + wasmtime/native parity     (B1/B2)
 #   G55  Browser bundle budgets, artifact hashes, now_ms grep, smoke    (P5)
 #   G56  REPL session goldens byte-exact                                (P3)
 #
@@ -23,7 +23,8 @@
 # Implemented: G52 (P1), G53 (P2 + W6's labs-corpus IR parity + the G57(a)
 # debug-dump parity pin), G56 (P3), G55 (P5 + W2/W4/W6: editor build+budgets,
 # debug-console smoke legs, the FR-33 page-fail demonstration), G58 (W3/W5:
-# pack, determinism, behavioral legs). G54 awaits B1/B2. ci/guards.sh
+# pack, determinism, behavioral legs). G54 is implemented by B1; B2 extends
+# its corpus with MMIO and platform-pack acceptance. ci/guards.sh
 # carries a pointer comment for the G52-G56 numbering overlap with
 # PLAN-RELEASE-1's G52-G55 (DEC-14 note).
 #
@@ -82,13 +83,15 @@ g52_green() {
     # `codegen-core` entered the allowlist in P4 for the compiled platform
     # descriptor (`Option<&CompiledDescriptor>` — the target-spec's compiled
     # board identity, §Q5/DEC-8; the plan's R-A "codegen-core (target spec
-    # only)" grew exactly by this type).
+    # only)" grew exactly by this type). B2 adds codegen-wasm for the
+    # artifact-level optional browser backend; that crate has no external
+    # dependencies (R-C).
     local bad
     bad=$(
         awk '/^\[dependencies\]/{f=1;next} /^\[/{f=0} f' crates/wasm-repl/Cargo.toml \
             | grep -E '^[a-z][a-z0-9_-]*[[:space:]]*=' \
             | cut -d= -f1 | sed 's/[[:space:]]//g' \
-            | grep -vE '^(ir|frontend|semantics|verifier|codegen-core)$' || true
+            | grep -vE '^(ir|frontend|semantics|verifier|codegen-core|codegen-wasm)$' || true
     )
     if [ -n "$bad" ]; then
         fail "wasm-repl [dependencies] has a crate outside the in-tree R-A allowlist (FR-1, I-6): $bad"
@@ -215,6 +218,53 @@ g53_selftest() {
 }
 
 # ---------------------------------------------------------------------------
+# G54 (B1): validate every emitted module and compare execution against a
+# separately compiled hosted-native oracle over the complete G53 core corpus.
+# The test builds both artifacts from the same source fixture, captures the
+# hosted binary's testio output/exit result, validates Wasm as MVP, and runs
+# the module under wasmtime with the testio host imports. B2 adds MMIO.
+# ---------------------------------------------------------------------------
+
+g54_green() {
+    msg $YELLOW "G54: codegen-wasm validation and hosted-native parity"
+    if cargo build -p langc -p tyu --release > /tmp/g54-build.log 2>&1; then
+        if cargo test -p execution-tests --features g54 --test wasm --release \
+            > /tmp/g54-parity.log 2>&1; then
+            msg $GREEN "  G54: core corpus + MMIO fixtures validate and match hosted-native/register-map expectations"
+        else
+            fail "G54 wasm validation/native parity (see /tmp/g54-parity.log)"
+        fi
+    else
+        fail "G54 langc/tyu release build (see /tmp/g54-build.log)"
+    fi
+}
+
+g54_selftest() {
+    msg $YELLOW "G54 selftest: a deliberately miscompiled AddI64 must diverge from native"
+    if cargo build -p tyu --release > /tmp/g54-selftest-build.log 2>&1 \
+        && cargo build -p langc --features wasm-selftest --release \
+            >> /tmp/g54-selftest-build.log 2>&1; then
+        if cargo test -p execution-tests --features g54 --test wasm \
+            exported_main_result_matches_hosted_native_exit_status --release -- --exact \
+            > /tmp/g54-selftest.log 2>&1; then
+            fail "selftest: deliberately miscompiled AddI64 PASSED native parity (G54 blind)"
+        else
+            msg $GREEN "  G54 selftest: deliberately miscompiled AddI64 correctly failed native parity"
+        fi
+    else
+        fail "G54 selftest driver build (see /tmp/g54-selftest-build.log)"
+    fi
+    # Restore the normal compiler artifact: this gate intentionally replaces
+    # target/release/langc with a mutation, and later local gates must never
+    # accidentally reuse that test binary.
+    if cargo build -p langc --release >> /tmp/g54-selftest-build.log 2>&1; then
+        msg $GREEN "  G54 selftest: normal langc artifact restored"
+    else
+        fail "G54 selftest could not restore normal langc (see /tmp/g54-selftest-build.log)"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # G56 (P3): REPL session goldens byte-exact (DEC-3..DEC-6, §7.2/§7.3). The
 # host driver replays every `test-goldens/repl/*.session` and requires the
 # produced `tyu.repl-transcript/1` to match the committed `.expected`
@@ -251,6 +301,17 @@ g56_selftest() {
         fail "selftest: the corrupted rollback PASSED the session goldens (G56 blind)"
     else
         msg $GREEN "  G56 selftest: corrupted rollback correctly redded the goldens"
+    fi
+}
+
+g57_selftest() {
+    msg $YELLOW "G57 selftest: corrupted frame ordering must red debug parity"
+    if cargo test -p wasm-repl --features wasm-selftest --test debug_abi \
+        frames_of_a_suspended_phrase_are_innermost_first --release \
+        > /tmp/g57-selftest.log 2>&1; then
+        fail "selftest: corrupted FrameCell order PASSED G57 (G57 blind)"
+    else
+        msg $GREEN "  G57 selftest: corrupted FrameCell order correctly failed parity"
     fi
 }
 
@@ -340,7 +401,6 @@ EOF2
         fail "editor SRI injection failed (index.html script tag malformed?)"
         return 1
     fi
-
     msg $GREEN "  G55: build-web complete (engine v${ver}, wasm ${wasm_sha:0:12}…, editor ${sri:0:16}…)"
 }
 
@@ -483,6 +543,11 @@ smoke() {
 g55_green() {
     msg $YELLOW "G55: the wasm boundary and the static browser shell"
     wasm_clippy
+    if node --test web/test/*.test.mjs > /tmp/g55-node-tests.log 2>&1; then
+        msg $GREEN "  G55: browser span-map and Wasm span-table tests green"
+    else
+        fail "browser span-map/Wasm span-table tests (see /tmp/g55-node-tests.log)"
+    fi
     if build_web; then
         budgets
         reproducibility
@@ -542,13 +607,16 @@ case "$mode" in
     run)
         g52_green
         g53_green
+        g54_green
         g56_green
         g55_green
         ;;
     --selftest)
         g52_selftest
         g53_selftest
+        g54_selftest
         g56_selftest
+        g57_selftest
         g55_selftest
         ;;
     *)
@@ -562,4 +630,4 @@ if [ "$failures" -gt 0 ]; then
     msg $RED "ci/wasm.sh ($mode): $failures gate(s) failed — see the FAIL lines above"
     exit 1
 fi
-msg $GREEN "ci/wasm.sh ($mode): all PLAN-WASM-1 gates defined so far passed."
+msg $GREEN "ci/wasm.sh ($mode): all browser platform gates passed."

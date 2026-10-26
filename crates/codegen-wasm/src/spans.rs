@@ -8,10 +8,14 @@
 //!    guards, region-ABI argument traps) call the `tyu.trap` import with
 //!    `(code, span_start, span_len)` — the span travels at runtime, no side
 //!    table needed.
-//! 2. **Hardware traps** (an out-of-bounds `load`/`store`, division traps)
-//!    never reach the host through an import; the engine reports the trapping
-//!    instruction's code offset. The host trampoline consults THIS table to
-//!    resolve that offset to a span.
+//! 2. **Unexpected hardware traps** never reach the host through an import.
+//!    WebAssembly does not standardize a RuntimeError's stack offset as a
+//!    module byte offset, so ordinary JS hosts cannot reliably join it to
+//!    this table. Source `Load`/`Store` operations are bounds-guarded in
+//!    generated code and report through `tyu.trap` with their IR span. This
+//!    table remains a fail-closed best-effort diagnostic aid for a host that
+//!    can prove its PC coordinate system; otherwise backend mode falls back
+//!    visibly rather than guessing.
 //!
 //! Format (version-first, fail-closed consumers — B2's trampoline MUST reject
 //! unknown versions rather than guess):
@@ -21,24 +25,23 @@
 //!   uleb version        (= 1; consumers fail closed above it)
 //!   uleb record_count
 //!   per record:
-//!     uleb code_offset  — byte offset of the trapping instruction, relative
-//!                         to the start of the CODE section's payload (stable:
-//!                         call operands are fixed-width, so patching never
-//!                         shifts offsets)
+//!     uleb code_offset  — absolute module byte offset of the trapping
+//!                         instruction (stable: call operands are fixed-width,
+//!                         so patching never shifts offsets)
 //!     uleb span_start   — I-9 span encoding (UTF-8 byte offset into the
 //!                         session/compilation buffer)
 //!     uleb span_len
 //! ```
 //!
-//! B1 emits one record per word-body `Load`/`Store` (the only word-level ops
-//! that can trap at the hardware level — every other failure is an
-//! out-of-line check). B2 extends coverage to the MMIO lowering as it lands.
+//! B1 emits one record per word-body `Load`/`Store`. B2 adds explicit bounds
+//! guards to those source accesses; the records are retained for runtimes
+//! that expose a verifiable module-PC mapping and fail closed elsewhere.
 
 use alloc::vec;
 use alloc::vec::Vec;
 
-/// The section name (custom section id 0, name payload below).
-pub const SECTION_NAME: &[u8] = b"tyu.spans";
+/// The versioned section name (custom section id 0, name payload below).
+pub const SECTION_NAME: &[u8] = b"tyu.spans/1";
 
 /// The format version this backend emits. Consumers fail closed above it.
 pub const VERSION: u64 = 1;
@@ -46,8 +49,7 @@ pub const VERSION: u64 = 1;
 /// One trap-point → span record.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SpanRecord {
-    /// Byte offset of the trapping instruction, relative to the start of the
-    /// CODE section payload.
+    /// Absolute byte offset of the trapping instruction in the Wasm module.
     pub code_offset: u32,
     /// I-9 span encoding.
     pub span_start: u32,
@@ -93,7 +95,9 @@ pub fn decode(payload: &[u8]) -> Result<Vec<SpanRecord>, ()> {
         let code_offset = uleb_at(payload, &mut i).ok_or(())?;
         let span_start = uleb_at(payload, &mut i).ok_or(())?;
         let span_len = uleb_at(payload, &mut i).ok_or(())?;
-        if code_offset > u32::MAX as u64 || span_start > u32::MAX as u64 || span_len > u32::MAX as u64
+        if code_offset > u32::MAX as u64
+            || span_start > u32::MAX as u64
+            || span_len > u32::MAX as u64
         {
             return Err(());
         }
@@ -136,8 +140,16 @@ mod tests {
     #[test]
     fn round_trips() {
         let records = [
-            SpanRecord { code_offset: 0, span_start: 0, span_len: 0 },
-            SpanRecord { code_offset: 42, span_start: 120, span_len: 14 },
+            SpanRecord {
+                code_offset: 0,
+                span_start: 0,
+                span_len: 0,
+            },
+            SpanRecord {
+                code_offset: 42,
+                span_start: 120,
+                span_len: 14,
+            },
             SpanRecord {
                 code_offset: u32::MAX,
                 span_start: u32::MAX,
@@ -167,7 +179,11 @@ mod tests {
 
     #[test]
     fn truncated_payload_is_rejected() {
-        let records = [SpanRecord { code_offset: 1, span_start: 2, span_len: 3 }];
+        let records = [SpanRecord {
+            code_offset: 1,
+            span_start: 2,
+            span_len: 3,
+        }];
         let mut payload = Vec::new();
         encode(&records, &mut payload);
         payload.pop(); // cut the last record field
@@ -184,7 +200,11 @@ mod tests {
 
     #[test]
     fn frames_as_a_named_custom_section() {
-        let records = [SpanRecord { code_offset: 9, span_start: 8, span_len: 7 }];
+        let records = [SpanRecord {
+            code_offset: 9,
+            span_start: 8,
+            span_len: 7,
+        }];
         let mut out = Vec::new();
         section(&records, &mut out);
         // id 0, len, uleb(name len) + name, then the payload.

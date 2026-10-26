@@ -77,13 +77,14 @@ end;
     ),
 ];
 
-/// The four triples the statement pipeline is parameterized over (§Q3) —
+/// The registered triples the statement pipeline is parameterized over (§Q3) —
 /// statement hashes MUST differ across triples and be pinned per triple.
 pub const TRIPLES: &[&str] = &[
     "x86_64-unknown-linux-gnu",
     "x86_64-unknown-none",
     "armv7m-unknown-none",
     "riscv32-unknown-none",
+    "wasm32-unknown-unknown",
 ];
 
 pub fn workspace_root() -> PathBuf {

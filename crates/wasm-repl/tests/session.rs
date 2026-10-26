@@ -259,8 +259,14 @@ fn journal_reversal_is_lifo() {
     assert_eq!(h0, 0);
     let (p0, _) = heap.region_alloc(0, 16).unwrap();
 
-    let mut state =
-    ExecState::in_session(Vec::new(), heap, Fuel::new(1000), false, Journal::new(), Vec::new());
+    let mut state = ExecState::in_session(
+        Vec::new(),
+        heap,
+        Fuel::new(1000),
+        false,
+        Journal::new(),
+        Vec::new(),
+    );
     let mut journal = Journal::new();
     // Simulated phrase effects, in execution order: store, create,
     // store (overwrites region 0's bytes), destroy.
@@ -470,8 +476,8 @@ fn mmio_session_fault_rolls_back_the_register() {
 // and the L2b divergence as an E9158 engine bug (never a student trap).
 // ---------------------------------------------------------------------------
 
-use wasm_repl::engine::{DetailKind, Engine, ExecState, Outcome};
 use wasm_repl::compile::Compiled;
+use wasm_repl::engine::{DetailKind, Engine, ExecState, Outcome};
 
 /// A hand-built IR word with the standard 7-prim type table prefix (the
 /// irgen seeding order: empty, i64, bool, str, ptr, ptr_mut, mmio).
@@ -571,7 +577,11 @@ fn l2a_kind_mismatch_is_trap_20_with_detail() {
         vec![(
             ir::BlockId(0),
             vec![],
-            vec![ir::OpKind::ConstBool(true), ir::OpKind::ConstBool(true), ir::OpKind::AddI64],
+            vec![
+                ir::OpKind::ConstBool(true),
+                ir::OpKind::ConstBool(true),
+                ir::OpKind::AddI64,
+            ],
         )],
     )]);
     let mut state = ExecState::new(&compiled);
@@ -596,7 +606,11 @@ fn l2c_call_slot_mismatch_is_trap_20_with_detail() {
         b"add-two",
         &[ir::TY_I64, ir::TY_I64],
         &[ir::TY_I64, ir::TY_I64],
-        vec![(ir::BlockId(0), vec![ir::TY_I64, ir::TY_I64], vec![ir::OpKind::AddI64])],
+        vec![(
+            ir::BlockId(0),
+            vec![ir::TY_I64, ir::TY_I64],
+            vec![ir::OpKind::AddI64],
+        )],
     );
     let sig = callee.sig;
     let main = hand_word(
@@ -639,7 +653,11 @@ fn l2c_depth_shortfall_stays_trap_10() {
         b"add-two",
         &[ir::TY_I64, ir::TY_I64],
         &[ir::TY_I64],
-        vec![(ir::BlockId(0), vec![ir::TY_I64, ir::TY_I64], vec![ir::OpKind::AddI64])],
+        vec![(
+            ir::BlockId(0),
+            vec![ir::TY_I64, ir::TY_I64],
+            vec![ir::OpKind::AddI64],
+        )],
     );
     let sig = callee.sig;
     let main = hand_word(
@@ -681,7 +699,13 @@ fn l2b_entry_divergence_is_internal_e9158() {
         &[],
         &[],
         vec![
-            (ir::BlockId(0), vec![], vec![ir::OpKind::Br { target: ir::BlockId(1) }]),
+            (
+                ir::BlockId(0),
+                vec![],
+                vec![ir::OpKind::Br {
+                    target: ir::BlockId(1),
+                }],
+            ),
             (ir::BlockId(1), vec![ir::TY_BOOL], vec![ir::OpKind::Ret]),
         ],
     );

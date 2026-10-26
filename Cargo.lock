@@ -135,7 +135,6 @@ dependencies = [
  "frontend",
  "ir",
  "lmod",
- "semantics",
 ]
 
 [[package]]
@@ -1241,6 +1240,7 @@ name = "wasm-repl"
 version = "0.1.0"
 dependencies = [
  "codegen-core",
+ "codegen-wasm",
  "frontend",
  "ir",
  "proptest",

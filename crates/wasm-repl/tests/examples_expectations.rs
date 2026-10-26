@@ -113,7 +113,11 @@ fn every_runnable_example_pinned_behaviorally() {
     let mut reds = 0usize;
     for ex in &packed {
         let Kind::Runnable = ex.kind else {
-            assert!(!ex.reason.is_empty(), "native-only {} names its reason", ex.id);
+            assert!(
+                !ex.reason.is_empty(),
+                "native-only {} names its reason",
+                ex.id
+            );
             continue;
         };
         let mut session = wasm_repl::ReplSession::new(wasm_repl::SessionOpts::default());
@@ -143,7 +147,10 @@ fn every_runnable_example_pinned_behaviorally() {
                 reds += 1;
             }
             Expect::Trap { .. } => {
-                panic!("{} packs a trap expectation — the as-built classifier never emits those", ex.id)
+                panic!(
+                    "{} packs a trap expectation — the as-built classifier never emits those",
+                    ex.id
+                )
             }
         }
     }

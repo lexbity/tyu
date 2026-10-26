@@ -107,9 +107,14 @@ pub struct WordInfo {
 #[derive(Clone, Debug, PartialEq)]
 pub enum WordSource {
     /// A session word: show the definition's range of the editor buffer.
-    Session { def_span: Span },
+    Session {
+        def_span: Span,
+    },
     /// A sysroot word: the defining file's path and full source.
-    Sysroot { path: Vec<u8>, source: Vec<u8> },
+    Sysroot {
+        path: Vec<u8>,
+        source: Vec<u8>,
+    },
     NotFound,
 }
 
@@ -167,16 +172,14 @@ pub fn frames(compiled: &Compiled, state: &ExecState) -> Vec<FrameCell> {
             locals: frame.locals.iter().map(|&s| cell_of(word, s)).collect(),
         });
     }
+    #[cfg(feature = "wasm-selftest")]
+    out.reverse();
     out
 }
 
 /// The last submission's normalized trace, as [`TraceEventView`]s.
 pub fn trace_events(trace: &Trace) -> Vec<TraceEventView> {
-    trace
-        .events()
-        .iter()
-        .map(trace_view_of)
-        .collect()
+    trace.events().iter().map(trace_view_of).collect()
 }
 
 fn trace_view_of(e: &Event) -> TraceEventView {
@@ -322,7 +325,10 @@ pub fn word_source(
     if let Some(table) = sysroot {
         for (path, content) in table.files() {
             if defines_word(&content, name) {
-                return WordSource::Sysroot { path, source: content };
+                return WordSource::Sysroot {
+                    path,
+                    source: content,
+                };
             }
         }
     }
@@ -544,7 +550,10 @@ fn json_event_doc(e: &TraceEventView, doc: &dyn Fn(Span) -> Span) -> String {
 fn json_word(w: &WordInfo) -> String {
     let origin = match &w.origin {
         WordOrigin::Session { def_span } => {
-            format!("{{\"origin\":\"session\",\"def_span\":{}}}", json_span(*def_span))
+            format!(
+                "{{\"origin\":\"session\",\"def_span\":{}}}",
+                json_span(*def_span)
+            )
         }
         WordOrigin::Sysroot { path } => {
             format!("{{\"origin\":\"sysroot\",\"path\":{}}}", json_escape(path))
@@ -571,13 +580,15 @@ fn json_region(r: &RegionInfo) -> String {
 /// regions / status — derived ONLY from the session's own accessors (I-8),
 /// the same data the wasm ABI wraps. The G57(a) parity test compares this
 /// byte-for-byte against the CLI's output.
-pub fn dump_submission(session: &crate::session::ReplSession, submit_index: usize, source: &[u8]) -> String {
+pub fn dump_submission(
+    session: &crate::session::ReplSession,
+    submit_index: usize,
+    source: &[u8],
+) -> String {
     // I-9: every span in the dump is DOC-relative — the same mapping the
     // wasm ABI applies (I-11: one mapper, both surfaces; unmappable
     // machinery spans collapse to UNKNOWN, never an anchor offset).
-    let doc = |span: Span| -> Span {
-        session.doc_span(span).unwrap_or(Span::UNKNOWN)
-    };
+    let doc = |span: Span| -> Span { session.doc_span(span).unwrap_or(Span::UNKNOWN) };
     let compiled = session.compiled();
     let frames: Vec<String> = match session.suspended_state().zip(compiled) {
         Some((st, c)) => frames(c, st)

@@ -172,8 +172,21 @@ fn load_slot_field(handle_param: u32, field_off: i64, out: &mut Vec<u8>) {
     memarg(out, 0);
 }
 
-/// Push the store address of a slot field for a handle param (a store
-/// consumes `[value, addr]` with the address on TOP).
+/// Load a field using the create helper's i32 slot index.
+fn load_slot_i32_field(slot_local: u32, field_off: i64, out: &mut Vec<u8>) {
+    local_get(out, slot_local);
+    out.push(OP_I64_EXTEND_I32_U);
+    i64_const(out, SLOT_BYTES);
+    out.push(OP_I64_MUL);
+    i64_const(out, REGION_TABLE_ADDR + field_off);
+    out.push(OP_I64_ADD);
+    out.push(OP_I32_WRAP_I64);
+    out.push(OP_I64_LOAD);
+    memarg(out, 0);
+}
+
+/// Push the store address of a slot field for an i64 handle parameter. A Wasm
+/// store consumes the address first and the value above it on the stack.
 fn push_slot_field_addr(handle_param: u32, field_off: i64, out: &mut Vec<u8>) {
     local_get(out, handle_param);
     i64_const(out, SLOT_BYTES);
@@ -183,9 +196,20 @@ fn push_slot_field_addr(handle_param: u32, field_off: i64, out: &mut Vec<u8>) {
     out.push(OP_I32_WRAP_I64);
 }
 
+fn push_slot_i32_field_addr(slot_local: u32, field_off: i64, out: &mut Vec<u8>) {
+    local_get(out, slot_local);
+    out.push(OP_I64_EXTEND_I32_U);
+    i64_const(out, SLOT_BYTES);
+    out.push(OP_I64_MUL);
+    i64_const(out, REGION_TABLE_ADDR + field_off);
+    out.push(OP_I64_ADD);
+    out.push(OP_I32_WRAP_I64);
+}
+
 /// Store `value_expr` (already pushed) into a slot field.
-fn store_slot_field(handle_param: u32, field_off: i64, out: &mut Vec<u8>) {
+fn store_slot_field(handle_param: u32, field_off: i64, value_local: u32, out: &mut Vec<u8>) {
     push_slot_field_addr(handle_param, field_off, out);
+    local_get(out, value_local);
     out.push(OP_I64_STORE);
     memarg(out, 0);
 }
@@ -223,7 +247,12 @@ fn emit_grow_to_fit(pages_local: u32, ss: u32, sl: u32, out: &mut Vec<u8>) {
     i32_const(out, -1);
     out.push(OP_I32_EQ);
     if_void(out);
-    push_trap(ir::trap_code_u32(ir::TrapCode::Unreachable) as i64, ss, sl, out);
+    push_trap(
+        ir::trap_code_u32(ir::TrapCode::Unreachable) as i64,
+        ss,
+        sl,
+        out,
+    );
     out.push(OP_END);
     out.push(OP_END);
 }
@@ -235,19 +264,34 @@ fn emit_handle_guards(h: u32, size_param: Option<u32>, ss: u32, sl: u32, out: &m
     i64_const(out, REGION_TABLE_SLOTS);
     out.push(OP_I64_GE_U);
     if_void(out);
-    push_trap(ir::trap_code_u32(ir::TrapCode::Unreachable) as i64, ss, sl, out);
+    push_trap(
+        ir::trap_code_u32(ir::TrapCode::Unreachable) as i64,
+        ss,
+        sl,
+        out,
+    );
     out.push(OP_END);
     if let Some(sp) = size_param {
         local_get(out, sp);
         out.push(OP_I64_EQZ);
         if_void(out);
-        push_trap(ir::trap_code_u32(ir::TrapCode::Unreachable) as i64, ss, sl, out);
+        push_trap(
+            ir::trap_code_u32(ir::TrapCode::Unreachable) as i64,
+            ss,
+            sl,
+            out,
+        );
         out.push(OP_END);
     }
     load_slot_field(h, OFF_SIZE, out);
     out.push(OP_I64_EQZ);
     if_void(out);
-    push_trap(ir::trap_code_u32(ir::TrapCode::Unreachable) as i64, ss, sl, out);
+    push_trap(
+        ir::trap_code_u32(ir::TrapCode::Unreachable) as i64,
+        ss,
+        sl,
+        out,
+    );
     out.push(OP_END);
 }
 
@@ -265,6 +309,7 @@ pub fn emit_region_helpers() -> Vec<RegionHelper> {
         let mut b = Vec::new();
         // params: 0 = size (i64), 1 = span_start (i32), 2 = span_len (i32)
         // locals: 3 = asize, 4 = base, 5 = pages (all i64), 6 = slot (i32)
+        uleb(&mut b, 2); // local groups
         locals_group(&mut b, 3, VAL_I64);
         locals_group(&mut b, 1, VAL_I32);
         const ASIZE: u32 = 3;
@@ -276,6 +321,7 @@ pub fn emit_region_helpers() -> Vec<RegionHelper> {
 
         push_align8(0, &mut b);
         local_set(&mut b, ASIZE);
+        local_get(&mut b, ASIZE);
         trap_if_zero(TRAP_23, 1, 2, &mut b);
 
         // The free-slot scan (the hosted `.region_scan` loop): the first
@@ -284,7 +330,7 @@ pub fn emit_region_helpers() -> Vec<RegionHelper> {
         b.push(0x40); // $found — br here lands on the setup code
         b.push(OP_LOOP);
         b.push(0x40); // $scan
-        // slot >= 16 → exhausted
+                      // slot >= 16 → exhausted
         local_get(&mut b, SLOT);
         i32_const(&mut b, REGION_TABLE_SLOTS as i32);
         b.push(OP_I32_GE_U);
@@ -294,7 +340,7 @@ pub fn emit_region_helpers() -> Vec<RegionHelper> {
         b.push(OP_END);
         // slot.size == 0 → free: br to $setup (depths: 0 = this if, 1 =
         // $scan, 2 = $found)
-        load_slot_field(SLOT, OFF_SIZE, &mut b);
+        load_slot_i32_field(SLOT, OFF_SIZE, &mut b);
         b.push(OP_I64_EQZ);
         b.push(OP_IF);
         b.push(0x40);
@@ -333,17 +379,23 @@ pub fn emit_region_helpers() -> Vec<RegionHelper> {
         b.push(OP_I64_ADD);
         b.push(OP_GLOBAL_SET);
         uleb(&mut b, 0);
-        // slot {base, size, off, alive} — value first, then the field address
+        // slot {base, size, off, alive}; stores take address, then value.
+        push_slot_i32_field_addr(SLOT, OFF_BASE, &mut b);
         local_get(&mut b, BASE);
-        push_slot_field_addr(SLOT, OFF_BASE, &mut b);
         b.push(OP_I64_STORE);
         memarg(&mut b, 0);
+        push_slot_i32_field_addr(SLOT, OFF_SIZE, &mut b);
         local_get(&mut b, ASIZE);
-        store_slot_field(SLOT, OFF_SIZE, &mut b);
+        b.push(OP_I64_STORE);
+        memarg(&mut b, 0);
+        push_slot_i32_field_addr(SLOT, OFF_OFF, &mut b);
         i64_const(&mut b, 0);
-        store_slot_field(SLOT, OFF_OFF, &mut b);
+        b.push(OP_I64_STORE);
+        memarg(&mut b, 0);
+        push_slot_i32_field_addr(SLOT, OFF_ALIVE, &mut b);
         i64_const(&mut b, 1);
-        store_slot_field(SLOT, OFF_ALIVE, &mut b);
+        b.push(OP_I64_STORE);
+        memarg(&mut b, 0);
         // return the handle
         local_get(&mut b, SLOT);
         b.push(OP_I64_EXTEND_I32_U);
@@ -364,10 +416,12 @@ pub fn emit_region_helpers() -> Vec<RegionHelper> {
     {
         let mut b = Vec::new();
         // params: 0 = handle, 1 = size (i64), 2 = span_start, 3 = span_len
-        // locals: 4 = aligned, 5 = old off (i64)
-        locals_group(&mut b, 2, VAL_I64);
+        // locals: 4 = aligned, 5 = old off, 6 = store scratch (i64)
+        uleb(&mut b, 1); // local groups
+        locals_group(&mut b, 3, VAL_I64);
         const ALIGNED: u32 = 4;
         const OLD_OFF: u32 = 5;
+        const STORE_VALUE: u32 = 6;
 
         emit_handle_guards(0, Some(1), 2, 3, &mut b);
         push_align8(1, &mut b);
@@ -382,13 +436,19 @@ pub fn emit_region_helpers() -> Vec<RegionHelper> {
         load_slot_field(0, OFF_SIZE, &mut b);
         b.push(OP_I64_GT_U);
         if_void(&mut b);
-        push_trap(ir::trap_code_u32(ir::TrapCode::RegionExhausted) as i64, 2, 3, &mut b);
+        push_trap(
+            ir::trap_code_u32(ir::TrapCode::RegionExhausted) as i64,
+            2,
+            3,
+            &mut b,
+        );
         b.push(OP_END);
         // slot.off = old_off + aligned
         load_slot_field(0, OFF_OFF, &mut b);
         local_get(&mut b, ALIGNED);
         b.push(OP_I64_ADD);
-        store_slot_field(0, OFF_OFF, &mut b);
+        local_set(&mut b, STORE_VALUE);
+        store_slot_field(0, OFF_OFF, STORE_VALUE, &mut b);
         // return base + old_off
         load_slot_field(0, OFF_BASE, &mut b);
         local_get(&mut b, OLD_OFF);
@@ -409,8 +469,10 @@ pub fn emit_region_helpers() -> Vec<RegionHelper> {
         // params: 0 = handle, 1 = span_start, 2 = span_len; no extra locals
         uleb(&mut b, 0); // zero local groups
         emit_handle_guards(0, None, 1, 2, &mut b);
+        push_slot_field_addr(0, OFF_OFF, &mut b);
         i64_const(&mut b, 0);
-        store_slot_field(0, OFF_OFF, &mut b);
+        b.push(OP_I64_STORE);
+        memarg(&mut b, 0);
         b.push(OP_END);
         out.push((REGION_RESET, vec![VAL_I64, VAL_I32, VAL_I32], vec![], b));
     }
@@ -424,18 +486,25 @@ pub fn emit_region_helpers() -> Vec<RegionHelper> {
         // params: 0 = handle, 1 = span_start, 2 = span_len; no extra locals
         uleb(&mut b, 0);
         emit_handle_guards(0, None, 1, 2, &mut b);
+        push_slot_field_addr(0, OFF_BASE, &mut b);
         i64_const(&mut b, 0);
-        store_slot_field(0, OFF_BASE, &mut b);
+        b.push(OP_I64_STORE);
+        memarg(&mut b, 0);
+        push_slot_field_addr(0, OFF_SIZE, &mut b);
         i64_const(&mut b, 0);
-        store_slot_field(0, OFF_SIZE, &mut b);
+        b.push(OP_I64_STORE);
+        memarg(&mut b, 0);
+        push_slot_field_addr(0, OFF_OFF, &mut b);
         i64_const(&mut b, 0);
-        store_slot_field(0, OFF_OFF, &mut b);
+        b.push(OP_I64_STORE);
+        memarg(&mut b, 0);
+        push_slot_field_addr(0, OFF_ALIVE, &mut b);
         i64_const(&mut b, 0);
-        store_slot_field(0, OFF_ALIVE, &mut b);
+        b.push(OP_I64_STORE);
+        memarg(&mut b, 0);
         b.push(OP_END);
         out.push((REGION_DESTROY, vec![VAL_I64, VAL_I32, VAL_I32], vec![], b));
     }
 
     out
 }
-

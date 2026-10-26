@@ -40,6 +40,9 @@ body {
 #status[data-state="error"]   { color: var(--err); }
 
 #engine-info { margin-left: auto; color: var(--muted); font-size: 12px; }
+#backend-mode-label { color: var(--muted); font-size: 12px; }
+#backend-mode { background: var(--panel); color: var(--ink); border: 1px solid #2a3040; font: inherit; }
+.backend-notice { color: var(--warn); border: 1px solid var(--warn); padding: 0.5rem; margin-top: 0.5rem; }
 
 #layout {
   flex: 1;

@@ -69,7 +69,10 @@ fn cli_debug_dump_equals_the_core_api_snapshot() {
     let text = String::from_utf8(out.stdout).unwrap();
     let mut lines = text.lines();
     let header = lines.next().expect("header");
-    assert_eq!(header, format!("{{\"v\":1,\"engine\":{}}}", wasm_repl::ENGINE_VERSION));
+    assert_eq!(
+        header,
+        format!("{{\"v\":1,\"engine\":{}}}", wasm_repl::ENGINE_VERSION)
+    );
     let cli_line = lines.next().expect("one submission line");
     assert!(
         lines.next().is_none(),

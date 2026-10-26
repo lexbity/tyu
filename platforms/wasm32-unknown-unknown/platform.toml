@@ -1,0 +1,66 @@
+[platform]
+name = "wasm32-unknown-unknown"
+schema = 3
+family = "wasm32"
+compiler-interface = 1
+description = "Static browser platform with sandboxed WebAssembly MMIO imports"
+
+[[platform.isa]]
+triple = "wasm32-unknown-unknown"
+arch = "wasm32"
+default = true
+expected_abi_hash = "0x0000000000000000"
+
+[metal]
+path = "."
+startup = ""
+linker = ""
+
+[verification]
+isr_stack_slots = 32
+
+[model]
+model_semantics = "unmodeled"
+mmio = "nondeterministic"
+concurrency = "unmodeled"
+
+[test]
+rung = "untested"
+
+[[platform.apertures]]
+id = 0
+name = "mmio"
+kind = "emulated"
+size = 0x10000
+
+[[platform.devices]]
+map = "Scratch"
+instance = "scratch"
+aperture = 0
+base_offset = 0
+registers = [
+  { offset = 0x00, name = "A", width = 32, access = "rw", barrier = "both" },
+  { offset = 0x04, name = "B", width = 32, access = "rw" },
+]
+
+[[platform.devices]]
+map = "Strategy"
+instance = "strategy"
+aperture = 0
+base_offset = 0
+registers = [
+  { offset = 0x00, name = "CTRL", width = 32, access = "rw" },
+  { offset = 0x04, name = "STATUS", width = 32, access = "rw", write_kind = "w1c" },
+  { offset = 0x08, name = "SETBITS", width = 32, access = "rw", write_kind = "w1s" },
+  { offset = 0x10, name = "FIFO", width = 8, access = "rw", read_kind = "effectful" },
+  { offset = 0x28, name = "SETXOR", width = 32, access = "rw", write_kind = "xor" },
+]
+
+[[platform.devices]]
+map = "StrategySeed"
+instance = "strategy_seed"
+aperture = 0
+base_offset = 0
+registers = [
+  { offset = 0x04, name = "STATUS", width = 32, access = "rw" },
+]

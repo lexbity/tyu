@@ -53,7 +53,7 @@ async function main() {
   }
   copyFileSync(join(HERE, "editor.css"), join(OUT_DIR, "editor.css"));
 
-  // 3. The manifest fragment: sizes + SRI hash (sha384 — the standard SRI
+  // 3. The manifest fragment: sizes + the SRI sha384 that build-web pins to
   //    strength for JS). Consumed by ci/wasm.sh build-web; never hand-edited.
   const js = readFileSync(join(OUT_DIR, "editor.js"));
   const css = readFileSync(join(OUT_DIR, "editor.css"));

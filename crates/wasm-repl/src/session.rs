@@ -13,6 +13,7 @@
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use codegen_core::compiled_desc::CompiledDescriptor;
+use codegen_core::CodegenBackend;
 use core::ops::Range;
 use frontend::lex::Lexer;
 use frontend::span::Span;
@@ -526,8 +527,13 @@ impl ReplSession {
             let doc = submission.to_vec();
             let mut map = AnchorMap {
                 doc: doc.clone(),
-                base: if committed_module_form { 0 } else { "module repl-session;
-".len() },
+                base: if committed_module_form {
+                    0
+                } else {
+                    "module repl-session;
+"
+                    .len()
+                },
                 synthetic: None,
                 synthetic_len: 0,
             };
@@ -551,8 +557,11 @@ impl ReplSession {
                 map.synthetic_len = syn.len();
                 map.synthetic = Some((
                     synthetic_at,
-                    synthetic_at + syn.len() - phrase_len - " ;
-".len(),
+                    synthetic_at + syn.len()
+                        - phrase_len
+                        - " ;
+"
+                        .len(),
                     phrase_in_doc,
                     phrase_len,
                 ));
@@ -942,31 +951,27 @@ fn builtin_word_effect(name: &[u8]) -> Option<EffectSig> {
     })
 }
 
-    /// Resolve a word's declared effect from a `Compiled` module (the phrase's
-    /// lookup against the decls-only compile). `None` when the module does not
-    /// define the name — the caller falls through to the builtin tables; no
-    /// pre-scan double lookup, no `expect`, no silent default (D-W6).
-    fn lookup_word_in(c: &Compiled, name: &[u8]) -> Option<EffectSig> {
-        let w = c
-            .module
-            .words
-            .iter()
-            .find(|w| w.name.as_bytes() == name)?;
-        let sig = &w.sig;
-        let ty_name = |id: ir::TypeId| -> Vec<u8> {
-            w.types
-                .get(id.0 as usize)
-                .map(|a| a.as_bytes().to_vec())
-                .unwrap_or_else(|| b"?".to_vec())
-        };
-        let inputs = (0..sig.in_len as usize)
-            .map(|i| ty_name(sig.inputs[i]))
-            .collect();
-        let outputs = (0..sig.out_len as usize)
-            .map(|i| ty_name(sig.outputs[i]))
-            .collect();
-        Some(EffectSig { inputs, outputs })
-    }
+/// Resolve a word's declared effect from a `Compiled` module (the phrase's
+/// lookup against the decls-only compile). `None` when the module does not
+/// define the name — the caller falls through to the builtin tables; no
+/// pre-scan double lookup, no `expect`, no silent default (D-W6).
+fn lookup_word_in(c: &Compiled, name: &[u8]) -> Option<EffectSig> {
+    let w = c.module.words.iter().find(|w| w.name.as_bytes() == name)?;
+    let sig = &w.sig;
+    let ty_name = |id: ir::TypeId| -> Vec<u8> {
+        w.types
+            .get(id.0 as usize)
+            .map(|a| a.as_bytes().to_vec())
+            .unwrap_or_else(|| b"?".to_vec())
+    };
+    let inputs = (0..sig.in_len as usize)
+        .map(|i| ty_name(sig.inputs[i]))
+        .collect();
+    let outputs = (0..sig.out_len as usize)
+        .map(|i| ty_name(sig.outputs[i]))
+        .collect();
+    Some(EffectSig { inputs, outputs })
+}
 
 /// Render an effect signature as canonical `( in -- out )` text — the exact
 /// form `parse_word_sig` accepts, including the empty `( -- )` shape.
@@ -1293,11 +1298,10 @@ fn splice_offset(source: &[u8]) -> Option<usize> {
     for t in &toks {
         if depth == 0
             && t.kind == TokenKind::KwEnd
-            && toks.get(
-                toks.iter().position(|x| x == t).unwrap_or(usize::MAX) + 1,
-            )
-            .map(|n| n.kind)
-            == Some(TokenKind::PunctSemi)
+            && toks
+                .get(toks.iter().position(|x| x == t).unwrap_or(usize::MAX) + 1)
+                .map(|n| n.kind)
+                == Some(TokenKind::PunctSemi)
         {
             at = Some(t.span.start);
         }
@@ -1359,5 +1363,153 @@ pub struct VecSink<'a>(pub &'a mut Vec<u8>);
 impl frontend::parse::Output for VecSink<'_> {
     fn write(&mut self, bytes: &[u8]) {
         self.0.extend_from_slice(bytes);
+    }
+}
+
+/// Compile one fresh Run submission for the optional browser Wasm backend.
+/// The interpreter session remains the owner of transactional phrase state;
+/// this path compiles the same verified IR for one program-style invocation.
+pub fn compile_backend_run(
+    submission: &[u8],
+    search: &[&dyn SourceTable],
+    descriptor: &codegen_core::compiled_desc::CompiledDescriptor,
+) -> Result<Vec<u8>, crate::Diag> {
+    const ENTRY: &[u8] = b"__tyu_browser_entry";
+    let split = split_submission(submission);
+    let (module_text, entry_name) = if let Some(phrase) = split.phrase.as_deref() {
+        let decls = split.decls.unwrap_or_default();
+        let declarations = assemble_module(&decls, split.module_form, None);
+        let lookup = compile(
+            &declarations,
+            search,
+            verifier::target::WASM32_UNKNOWN_UNKNOWN,
+            Some(descriptor),
+        )?;
+        let effect = phrase::phrase_effect(phrase, &[], |name| {
+            lookup_word_in(&lookup, name)
+                .or_else(|| builtin_word_effect(name))
+                .or_else(|| {
+                    semantics::typecheck::builtin_words()
+                        .iter()
+                        .find(|word| word.name.as_bytes() == name)
+                        .map(|word| EffectSig {
+                            inputs: (0..word.sig.in_len as usize)
+                                .map(|i| word.sig.inputs[i].as_bytes().to_vec())
+                                .collect(),
+                            outputs: (0..word.sig.out_len as usize)
+                                .map(|i| word.sig.outputs[i].as_bytes().to_vec())
+                                .collect(),
+                        })
+                })
+        })
+        .ok_or_else(|| {
+            crate::Diag::from_bytes(
+                code::E9156_TASKS,
+                Span::UNKNOWN,
+                b"backend Run phrase has no statically inferable stack effect",
+            )
+        })?;
+        let mut synthetic = alloc::string::String::from(": __tyu_browser_entry ");
+        synthetic.push_str(&sig_text(&effect));
+        synthetic.push(' ');
+        synthetic.push_str(core::str::from_utf8(phrase).map_err(|_| {
+            crate::Diag::from_bytes(2001, Span::UNKNOWN, b"backend source is not valid UTF-8")
+        })?);
+        synthetic.push_str(" ;\n");
+        (
+            assemble_module(&decls, split.module_form, Some(&synthetic)),
+            ENTRY,
+        )
+    } else {
+        let decls = split.decls.unwrap_or_default();
+        (
+            assemble_module(&decls, split.module_form, None),
+            &b"main"[..],
+        )
+    };
+
+    let built = compile(
+        &module_text,
+        search,
+        verifier::target::WASM32_UNKNOWN_UNKNOWN,
+        Some(descriptor),
+    )?;
+    let ast = frontend::parse::Parser::new(&module_text)
+        .parse_module_ast()
+        .map_err(|e| crate::Diag::from_bytes(e.code(), e.span(), e.message()))?;
+    let mut bytes = Vec::new();
+    {
+        let mut output = VecSink(&mut bytes);
+        let mut backend = codegen_wasm::WasmBackend::new(
+            &ast,
+            &module_text,
+            &mut output,
+            false,
+            codegen_core::AsmMode::Object,
+        );
+        backend.set_entry_word(entry_name);
+        backend
+            .emit_prelude()
+            .and_then(|()| {
+                for word in built.module.words.iter() {
+                    backend.emit_word(word)?;
+                }
+                backend.emit_postlude()
+            })
+            .map_err(|e| {
+                crate::Diag::from_bytes(e.code(), Span::UNKNOWN, b"wasm backend compile failed")
+            })?;
+    }
+    Ok(bytes)
+}
+
+#[cfg(test)]
+mod backend_compile_tests {
+    use super::compile_backend_run;
+    use codegen_core::compiled_desc::{decode_compiled_desc, validate_compiled_desc};
+
+    #[test]
+    fn phrase_submission_compiles_to_a_standalone_wasm_program() {
+        let descriptor = decode_compiled_desc(include_bytes!(
+            "../../../platforms/wasm32-unknown-unknown/platform.desc"
+        ))
+        .expect("browser platform descriptor decodes");
+        validate_compiled_desc(&descriptor).expect("browser platform descriptor validates");
+        let module = compile_backend_run(b"1 2 +", &[], &descriptor)
+            .expect("a verified phrase compiles for the browser target");
+        assert_eq!(&module[..8], b"\0asm\x01\0\0\0");
+        assert!(module
+            .windows(b"tyu.spans/1".len())
+            .any(|w| w == b"tyu.spans/1"));
+        assert!(module.windows(b"tyu_main".len()).any(|w| w == b"tyu_main"));
+    }
+
+    #[test]
+    fn module_submission_compiles_mmio_to_peripheral_imports() {
+        let descriptor = decode_compiled_desc(include_bytes!(
+            "../../../platforms/wasm32-unknown-unknown/platform.desc"
+        ))
+        .expect("browser platform descriptor decodes");
+        validate_compiled_desc(&descriptor).expect("browser platform descriptor validates");
+        let source = br#"module BrowserMmio;
+register-map Scratch
+  0x00 A u32 rw
+end;
+const scratch = Scratch @ board.scratch;
+: main ( -- i64 )
+  &!scratch.A 65 as u32 !u32
+  &scratch.A @u32 as i64
+;
+export { main };
+end;
+"#;
+        let module = compile_backend_run(source, &[], &descriptor)
+            .expect("MMIO module compiles for the browser platform");
+        assert!(module
+            .windows(b"periph_read".len())
+            .any(|w| w == b"periph_read"));
+        assert!(module
+            .windows(b"periph_write".len())
+            .any(|w| w == b"periph_write"));
     }
 }

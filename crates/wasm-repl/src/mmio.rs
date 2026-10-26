@@ -38,7 +38,6 @@ pub struct ApertureEntry {
     pub size: u32,
 }
 
-
 /// The deterministic base for a descriptor aperture: its absolute `base`
 /// when bus-bound, or the emulated constant indexed by aperture id.
 pub fn aperture_base(id: u16, base: Option<u64>) -> u64 {

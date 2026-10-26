@@ -234,11 +234,7 @@ pub fn compile(
             seen.push(name.clone());
             let sig = render_entry_sig(&entry.sig);
             let effects = crate::debug::effects_text_pub(entry.performs);
-            out.push(ImportedWord {
-                name,
-                sig,
-                effects,
-            });
+            out.push(ImportedWord { name, sig, effects });
         }
         out.sort_by(|a, b| a.name.cmp(&b.name));
         out

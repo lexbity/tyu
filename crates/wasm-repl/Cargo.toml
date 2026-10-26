@@ -51,6 +51,9 @@ verifier = { path = "../verifier" }
 # and P4 deliberately wires platform packs through it (the plan's R-A
 # "codegen-core (target spec only)" grows exactly by this type).
 codegen-core = { path = "../codegen-core" }
+# PLAN-WASM-2 B2: the optional browser backend uses the same zero-dependency
+# Wasm code generator in-process; its bytes cross into JS as an opaque module.
+codegen-wasm = { path = "../codegen-wasm" }
 
 [dev-dependencies]
 # The frozen upstream surface the fork is pinned against (G52). `test-util`
