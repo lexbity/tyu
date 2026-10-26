@@ -215,20 +215,21 @@ pub fn compile(
         })
         .collect();
 
-    // The imported-word dictionary (W5): env entries that are neither the
-    // interpreter builtins nor module words. Their signatures/effects are
-    // exactly what the checker verified calls against — captured verbatim.
+    // The imported-word dictionary (W5): env entries that are not module
+    // words. Their signatures/effects are exactly what the checker verified
+    // calls against — captured verbatim. Engine builtins (`testio.*`,
+    // `platform.io.log`, the region words) are NOT excluded here: the env
+    // carries them because an import DECLARED them, the sysroot's `.def` is
+    // where the student looks them up (W7 — the listing must not lose a
+    // word just because the session also implements it), and the execution
+    // path resolves those names to the engine builtin independently.
     let imports: Vec<ImportedWord> = {
         let module_words: Vec<&[u8]> = built.words.iter().map(|w| w.name.as_bytes()).collect();
-        let builtin_names: Vec<&[u8]> = BUILTIN_NAMES.to_vec();
         let mut seen = Vec::new();
         let mut out = Vec::new();
         for entry in env.iter() {
             let name = entry.name.as_bytes().to_vec();
-            if module_words.contains(&name.as_slice())
-                || builtin_names.contains(&name.as_slice())
-                || seen.contains(&name)
-            {
+            if module_words.contains(&name.as_slice()) || seen.contains(&name) {
                 continue;
             }
             seen.push(name.clone());
@@ -297,6 +298,7 @@ const BUILTIN_NAMES: &[&[u8]] = &[
     b"testio.write-byte",
     b"testio.write-str",
     b"testio.exit",
+    b"platform.io.log",
     b"platform.mem.region-create",
     b"platform.mem.region-alloc",
     b"platform.mem.region-reset",

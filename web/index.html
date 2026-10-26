@@ -36,23 +36,29 @@
   <header id="statusbar">
     <span id="brand">tyu repl</span>
     <span id="status" data-state="booting">booting…</span>
-    <label id="backend-mode-label">execution
-      <select id="backend-mode" aria-label="execution backend">
-        <option value="interp" selected>interpreter</option>
-        <option value="wasm">wasm32</option>
-      </select>
-    </label>
+    <span id="backend-mode-label">execution
+      <!--
+        The segmented backend control (W7): the active substrate is always
+        visible — no dropdown to open. The app reads the active segment;
+        the buttons are the only control (no hidden select to keep in sync).
+      -->
+      <span id="backend-segments" role="radiogroup" aria-label="execution backend">
+        <button type="button" class="segment active" data-backend="interp" role="radio" aria-checked="true">interpreter</button>
+        <button type="button" class="segment" data-backend="wasm" role="radio" aria-checked="false">wasm32</button>
+      </span>
+    </span>
     <span id="engine-info" title="engine version + artifact SHA-256 (§10)"></span>
   </header>
 
   <main id="layout">
     <section id="editor-pane">
       <textarea id="editor" spellcheck="false"
-        placeholder="Tyu is a stack language.&#10;Try: 1 2 +&#10;Define: : double ( i64 -- i64 ) dup + ;&#10;Print:  65 testio.write-byte  (after importing platform/testio)"></textarea>
+        placeholder="Tyu is a stack language.&#10;Try: 1 2 +&#10;Define: : double ( i64 -- i64 ) dup + ;&#10;Print:  &quot;hi\n&quot; platform.io.log  (after importing platform/linux)"></textarea>
       <div id="editor-actions">
-        <button id="run" disabled title="reset the session and run the whole buffer (Mod-Enter)">run</button>
-        <button id="submit" disabled title="submit into the live session (Shift-Mod-Enter)">submit</button>
-        <button id="step" disabled title="resume a fuel-suspended phrase">step</button>
+        <button id="run" class="primary" title="reset the session and run the whole buffer (Mod-Enter)">run <kbd>Ctrl+Enter</kbd></button>
+        <button id="submit" class="secondary" title="submit into the live session (Shift-Mod-Enter)">submit <kbd>Ctrl+Shift+Enter</kbd></button>
+        <button id="step" class="tertiary" title="resume a fuel-suspended phrase (Ctrl+.)">step <kbd>Ctrl+.</kbd></button>
+        <span id="mode-badge" class="mode-badge" hidden></span>
         <span id="fuel-note" class="muted"></span>
       </div>
       <div id="diag" class="hidden"></div>
@@ -60,25 +66,58 @@
     </section>
 
     <section id="side">
-      <h2>examples <span class="muted">(the book's labs)</span></h2>
-      <nav id="examples" aria-label="examples"></nav>
-
-      <h2>stack <span class="muted">(bottom-first)</span></h2>
-      <ol id="stack" aria-live="polite"></ol>
-
-      <h2>output</h2>
-      <pre id="console" aria-live="polite"></pre>
-
-      <details id="ir-pane">
-        <summary>IR <span class="muted">(the last-good --emit=ir render)</span></summary>
-        <pre id="ir"></pre>
+      <!--
+        W7 layout: the right pane is tabs (console / stack / debug) so each
+        panel gets the full sidebar height instead of six stacked sections
+        competing for space. Examples stay above the tabs — navigation, not
+        a tool panel — with a filter box over the 77-lab corpus.
+      -->
+      <details id="examples-pane" open>
+        <summary>examples <span class="muted">(the book's labs)</span></summary>
+        <input type="search" id="example-filter" placeholder="filter labs…" aria-label="filter examples" />
+        <nav id="examples" aria-label="examples"></nav>
       </details>
 
-      <h2>call stack <span class="muted">(live frames / post-mortem backtrace)</span></h2>
-      <div id="frames" aria-live="polite"></div>
+      <div id="side-tabs" role="tablist" aria-label="side panels">
+        <button type="button" class="tab active" id="tab-console" data-tab="console" role="tab" aria-selected="true">console</button>
+        <button type="button" class="tab" id="tab-stack" data-tab="stack" role="tab" aria-selected="false">stack</button>
+        <button type="button" class="tab" id="tab-debug" data-tab="debug" role="tab" aria-selected="false">debug</button>
+      </div>
 
-      <h2>transcript <span class="muted">(this session's submissions)</span></h2>
-      <div id="transcript" aria-live="polite"></div>
+      <div id="panel-console" class="tabpanel" data-panel="console" role="tabpanel" aria-labelledby="tab-console">
+        <div class="panel-head">
+          <h2>output</h2>
+          <span id="run-main-hint" class="muted"></span>
+          <button type="button" id="clear-console" class="mini" title="clear the output pane">clear</button>
+        </div>
+        <pre id="console" aria-live="polite"></pre>
+      </div>
+
+      <div id="panel-stack" class="tabpanel" data-panel="stack" role="tabpanel" aria-labelledby="tab-stack" hidden>
+        <div class="panel-head">
+          <h2>stack <span class="muted">(bottom-first)</span></h2>
+          <button type="button" id="goto-console" class="mini" title="show the output pane">output ›</button>
+        </div>
+        <ol id="stack" aria-live="polite"></ol>
+      </div>
+
+      <div id="panel-debug" class="tabpanel" data-panel="debug" role="tabpanel" aria-labelledby="tab-debug" hidden>
+        <details id="ir-pane">
+          <summary>IR <span class="muted">(the last-good --emit=ir render)</span></summary>
+          <pre id="ir"></pre>
+        </details>
+
+        <div class="panel-head">
+          <h2>call stack <span class="muted">(live frames / backtrace)</span></h2>
+        </div>
+        <div id="frames" aria-live="polite"></div>
+
+        <div class="panel-head">
+          <h2>transcript <span class="muted">(this session's submissions)</span></h2>
+          <button type="button" id="clear-transcript" class="mini" title="clear the transcript">clear</button>
+        </div>
+        <div id="transcript" aria-live="polite"></div>
+      </div>
 
       <div id="debug-pane" class="hidden"></div>
     </section>

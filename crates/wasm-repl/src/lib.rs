@@ -95,7 +95,16 @@ mod transactional_props;
 /// Engine surface version (PLAN-WASM-1 §10): bumped on any change to the
 /// REPL's execution semantics. The browser exposes it for bug reports; the
 /// wasm artifact hash plus this version identify a page's engine exactly.
-pub const ENGINE_VERSION: u32 = 6;
+pub const ENGINE_VERSION: u32 = 7;
+// v7 (W7): `platform.io.log` gained a session implementation (the book's
+// `platform/linux` labs print); string literals decode their escapes at
+// interning (the native decoder's semantics, shared with codegen-wasm);
+// `if`/`while`/`loop` are inferable in bare phrases (phrase.rs pop-order +
+// effect fixes); string-literal phrase atoms; a call reaching an import with
+// no session implementation is a student-facing `UNSUPPORTED_IMPORT` trap
+// (27) at the call site instead of the internal fault (E9158) it used to
+// raise; the wasm32 backend maps `testio.write-str`/`platform.io.log` to a
+// byte-streaming emit_str helper.
 // v6 (PLAN-WASM-2 W1): L2 completed — checked pops (L2a), per-slot Call
 // input contracts + word-local type retagging (L2c), block-entry validation
 // (L2b, E9158); fabricated-value paths deleted; contract traps carry the

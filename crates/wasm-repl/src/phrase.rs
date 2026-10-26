@@ -95,6 +95,13 @@ impl<'a> Env<'a> {
                     let _: i64 = core::str::from_utf8(text).ok()?.parse().ok()?;
                     self.stack.push(Slot::Ty(b"i64".to_vec()));
                 }
+                TokenKind::String => {
+                    // A string literal pushes a `str` (the checker's
+                    // `compile_string` types it `TypeAtom::STR`); this is
+                    // what makes `"x\n" testio.write-str` / `platform.io.log`
+                    // phrases inferable.
+                    self.stack.push(Slot::Ty(b"str".to_vec()));
+                }
                 TokenKind::PunctArrowBind => {
                     // `=> name` pops one value and binds a local.
                     let v = self.pop(None)?;
@@ -134,25 +141,54 @@ impl<'a> Env<'a> {
                         self.stack.push(Slot::Ty(ty));
                     }
                     b"if" => {
-                        // `cond [a] [b] if` — pop cond + 2 quotations; the two
-                        // body effects must agree (the checker re-checks).
-                        let _ = self.pop(None)?; // cond
+                        // `cond [a] [b] if` — the source order pushes cond,
+                        // then [a], then [b], so the pops run b, a, cond.
+                        // (The old arm popped the cond first, hit a
+                        // quotation where it wanted the bool, and rejected
+                        // every natural phrase-if as E3200.) The two
+                        // branches' effects must agree — the checker
+                        // re-checks, and rejects depth mismatches (E3246).
                         let b = self.pop_quot()?;
                         let a = self.pop_quot()?;
+                        let cond = self.pop(None)?;
+                        if slot_ty(&cond) != b"bool" {
+                            return None;
+                        }
                         if a != b {
                             return None;
                         }
                         self.push_effect(a);
                     }
                     b"while" => {
-                        // `[cond] [body] while` — body effect remains.
+                        // `[cond] [body] while` — the loop values are the
+                        // condition's inputs: consumed from the stack below
+                        // the quotations, the condition's outputs (minus its
+                        // trailing bool) persist across checks, and the body
+                        // transforms the loop values in place each
+                        // iteration. (The old arm pushed the body's outputs
+                        // without consuming anything, so every value-
+                        // carrying loop synthesized one value too many and
+                        // the checker rejected the phrase E3220.)
                         let body = self.pop_quot()?;
-                        let _cond = self.pop_quot()?;
-                        self.push_effect(body);
+                        let cond = self.pop_quot()?;
+                        for ty in cond.inputs.iter().rev() {
+                            self.pop(Some(ty))?;
+                        }
+                        self.push_effect(cond.clone());
+                        // The loop consumes the condition's trailing bool.
+                        let top = self.stack.pop()?;
+                        if slot_ty(&top) != b"bool" {
+                            return None;
+                        }
+                        self.apply_sig(body);
                     }
                     b"loop" => {
+                        // `[ body ] loop` — the body consumes its inputs from
+                        // the stack and replaces them with its outputs,
+                        // forever (the same one-value leak as the old
+                        // `while` arm, fixed the same way).
                         let body = self.pop_quot()?;
-                        self.push_effect(body);
+                        self.apply_sig(body);
                     }
                     _ => {
                         // A user local?

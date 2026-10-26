@@ -508,6 +508,12 @@ pub enum TrapCode {
     /// arena overrun or no free region slot (P7). A distinct pre-panic
     /// region-failure trap with its own trace record.
     RegionExhausted,
+    /// A call reached an imported word whose declaring `.def` provides a
+    /// signature only — the current substrate has no implementation for it
+    /// (the hosted/metal runtimes link one; the browser session does not).
+    /// REPL-only: the native toolchain links every import, so hosted/metal
+    /// runs never raise it. The span is the CALL SITE.
+    UnsupportedImport,
 }
 
 pub const fn trap_code_u32(code: TrapCode) -> u32 {
@@ -520,6 +526,7 @@ pub const fn trap_code_u32(code: TrapCode) -> u32 {
         TrapCode::StackOverflow => 10,
         TrapCode::Deadlock => 25,
         TrapCode::RegionExhausted => 26,
+        TrapCode::UnsupportedImport => 27,
     }
 }
 
@@ -1796,6 +1803,7 @@ fn write_op(out: &mut impl Output, w: &Word, op: &Op) {
                 TrapCode::Unreachable => b"UNREACHABLE",
                 TrapCode::Deadlock => b"DEADLOCK",
                 TrapCode::RegionExhausted => b"REGION_EXHAUSTED",
+                TrapCode::UnsupportedImport => b"UNSUPPORTED_IMPORT",
             });
         }
         OpKind::Br { target } => {

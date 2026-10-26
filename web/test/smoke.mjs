@@ -184,8 +184,12 @@ try {
 
     // B2: opt-in backend mode compiles the same Tyu source in the page,
     // instantiates the nested module with the board/output imports, and
-    // keeps the active substrate explicit in the status line.
-    await page.selectOption("#backend-mode", "wasm");
+    // keeps the active substrate explicit in the status line. The segmented
+    // control (W7) keeps the active substrate always visible.
+    await page.click('[data-backend="wasm"]');
+    const wasmActive = await page.$eval('[data-backend="wasm"]',
+      (el) => el.classList.contains("active") && el.getAttribute("aria-checked") === "true");
+    assert(wasmActive, "the wasm32 segment activates on click");
     await run("import platform/testio { testio.write-byte };\n65 testio.write-byte");
     await page.waitForFunction(() => !document.getElementById("run")?.disabled, null, { timeout: 10_000 });
     const backendStatus = await page.textContent("#status");
@@ -245,7 +249,7 @@ end;`;
     const fallbackNotice = await page.textContent("#backend-notice");
     assert(fallbackStatus.includes("interp run"), `backend failure displays interpreter as active (${fallbackStatus})`);
     assert(fallbackNotice.includes("fell back to interpreter"), `backend fallback is explicit (${fallbackNotice})`);
-    await page.selectOption("#backend-mode", "interp");
+    await page.click('[data-backend="interp"]');
     await run("1 2 3");
 
     // The session flow starts from a clean slate (an emptied run resets).
@@ -550,6 +554,95 @@ end;`;
     const irText = await page.textContent("#ir");
     assert(irText.includes("format_ver"), `IR pane renders the emit=ir text (${irText.slice(0, 60)})`);
     assert(irText.includes("repl-session"), "the session module's IR renders");
+
+    // ---------------------------------------------------------------
+    // W7: the layout cleanup — tabs, the example filter, clear controls,
+    // the mode badge, the keyboard hints, the empty states, the DEC-3 hint.
+    // ---------------------------------------------------------------
+    await page.goto(base); // fresh page, clean session
+    await page.waitForFunction(
+      () => document.getElementById("status")?.dataset.state === "ready",
+      null,
+      { timeout: 15_000 }
+    );
+
+    // Tabs: one panel visible at a time.
+    const panelVisible = (name) =>
+      page.$eval(`#panel-${name}`, (el) => !el.hidden);
+    assert(await panelVisible("console"), "the console tab starts active");
+    assert(!(await panelVisible("stack")), "the stack panel starts hidden");
+    await page.click("#tab-stack");
+    assert(await panelVisible("stack"), "the stack tab shows the stack panel");
+    assert(!(await panelVisible("console")), "switching tabs hides the console");
+    await page.click("#tab-console");
+
+    // Empty states: an empty panel says what will appear there (the
+    // pseudo-content is decorative; textContent stays empty).
+    const stackHint = await page.$eval("#stack", (el) => getComputedStyle(el, "::before").content);
+    assert(stackHint.includes("stack is empty"), `empty stack states itself (${stackHint})`);
+    const consoleHint = await page.$eval("#console", (el) => getComputedStyle(el, "::before").content);
+    assert(consoleHint.includes("console ready"), `empty console states itself (${consoleHint})`);
+
+    // The execution-model badge: run marks the program model, submit the
+    // session model — visible before the status line reports it.
+    await run("1 2 3");
+    let badge = await page.textContent("#mode-badge");
+    assert(badge.includes("program"), `run badges the program model (${JSON.stringify(badge)})`);
+    await page.click("#submit");
+    await page.waitForFunction(() => !document.getElementById("submit")?.disabled, null, { timeout: 10_000 });
+    badge = await page.textContent("#mode-badge");
+    assert(badge.includes("session"), `submit badges the session model (${JSON.stringify(badge)})`);
+
+    // Keyboard hints ride the buttons.
+    const runText = await page.textContent("#run");
+    assert(runText.includes("Ctrl+Enter"), `run carries its chord hint (${JSON.stringify(runText)})`);
+    const submitText = await page.textContent("#submit");
+    assert(submitText.includes("Ctrl+Shift+Enter"), `submit carries its chord hint (${JSON.stringify(submitText)})`);
+
+    // Clear controls: table-stakes for a REPL.
+    await page.evaluate(() => { document.getElementById("console").textContent = "marker"; });
+    await page.click("#clear-console");
+    const cleared = await page.textContent("#console");
+    assert(cleared === "", `clear-console empties the pane (${JSON.stringify(cleared)})`);
+    const trBefore = await page.$$eval("#transcript .tr-row", (els) => els.length);
+    assert(trBefore >= 1, `transcript has rows before the clear (${trBefore})`);
+    await page.click("#tab-debug"); // the transcript lives in the debug tab
+    await page.click("#clear-transcript");
+    const trAfter = await page.$$eval("#transcript .tr-row", (els) => els.length);
+    assert(trAfter === 0, "clear-transcript empties the transcript");
+    await page.click("#tab-console");
+
+    // The example filter: narrows the 77-lab corpus, auto-opens matching
+    // chapters, and clears back to the full corpus.
+    await page.fill("#example-filter", "hello");
+    const filtered = await page.$$eval("#examples .example", (els) =>
+      els.map((e) => e.dataset.exampleId));
+    assert(filtered.length >= 1, `filter matches something (${JSON.stringify(filtered)})`);
+    const helloVisible = await page.$eval(
+      '[data-example-id="ch01/green-01-hello"]',
+      (el) => el.offsetParent !== null
+    );
+    assert(helloVisible, "the filter auto-opens the matching chapter");
+    const noJunk = filtered.every((id) => id.toLowerCase().includes("hello"));
+    assert(noJunk, `every match names the query (${JSON.stringify(filtered)})`);
+    await page.fill("#example-filter", "");
+    const allCount = await page.$$eval("#examples .example", (els) => els.length);
+    assert(allCount === 77, `clearing the filter restores the corpus (${allCount})`);
+
+    // The DEC-3 hint: a compiled module exporting main says how to run it.
+    await page.goto(`${base}#example=${encodeURIComponent("ch01/green-01-hello")}`);
+    await page.waitForFunction(
+      () => document.querySelector("#examples .example.target"),
+      null,
+      { timeout: 10_000 }
+    );
+    await page.click("#run");
+    await page.waitForFunction(() => !document.getElementById("run")?.disabled, null, { timeout: 10_000 });
+    const mainHint = await page.textContent("#run-main-hint");
+    assert(
+      mainHint.includes("main") && mainHint.includes("submit"),
+      `module compiles hint at the main submit (${JSON.stringify(mainHint)})`
+    );
 
     // Reload resets (Fresh state, §4.2).
     await page.reload({ waitUntil: "load" });

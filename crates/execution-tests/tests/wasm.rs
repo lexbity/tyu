@@ -494,3 +494,101 @@ fn wasm_tools_rejects_malformed_backend_section_payloads() {
         );
     }
 }
+
+/// W7: `platform.io.log` (and `testio.write-str`) print on the wasm backend
+/// through the emit_str helper — the same decoded bytes the hosted native
+/// runtime prints. This is the book's Lab 1.1 flow at the artifact level.
+#[test]
+fn io_log_and_write_str_print_identically_on_both_substrates() {
+    require_tools();
+    require_drivers();
+    let work = common::temp_dir("wasm-g54-io-log");
+    let host = build_wasi_host(&work);
+
+    let source = work.join("WasmIoLog.mod");
+    fs::write(
+        &source,
+        "module WasmIoLog;\nimport platform/linux { platform.io.log };\n\n: main ( -- i64 )\n  \"assembling in tyu\\n\" platform.io.log\n  \"S\\n\" platform.io.log\n  0 ;\n\nexport { main };\nend;\n",
+    )
+    .expect("write io.log fixture");
+
+    let native = native_run(&source, &work.join("native"));
+    // The hosted runtime's diagnostic channel (io.log, testio.*) is STDERR
+    // (fd 2, runtime/linux-x86_64-hosted.asm) — the wasm host's write_byte
+    // mirrors it onto guest stdout, so the parity comparison is native's
+    // stderr against the wasm run's stdout.
+    let native_err = {
+        let build = Command::new(root().join("target/release/tyu"))
+            .current_dir(root())
+            .args(["build"])
+            .arg(format!("--out-dir={}", work.join("native2").display()))
+            .arg(format!("--sysroot={}", root().join("sysroot").display()))
+            .arg(&source)
+            .output()
+            .expect("run hosted tyu build");
+        assert!(build.status.success(), "hosted build failed:\n{}", String::from_utf8_lossy(&build.stderr));
+        let run = Command::new("timeout")
+            .args(["10s"])
+            .arg(work.join("native2").join("image.elf"))
+            .output()
+            .expect("run hosted native fixture");
+        run.stderr
+    };
+    assert_eq!(native_err, &b"assembling in tyu\nS\n"[..], "hosted native oracle prints the lab output on stderr");
+    assert_eq!(native.0, b"", "the lab prints nothing on native stdout");
+
+    let wasm = compile_wasm(&source, "WasmIoLog", &work.join("wasm"));
+    validate(&wasm);
+    let run = wasmtime_run(&wasm, &host);
+    assert_ne!(run.status.code(), Some(124), "wasmtime timed out");
+    assert!(
+        run.status.success(),
+        "wasmtime failed:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let mut wasm_output = run.stdout;
+    assert!(
+        wasm_output.ends_with(b"0\n"),
+        "wasmtime did not report main's zero return: {:?}",
+        String::from_utf8_lossy(&wasm_output)
+    );
+    wasm_output.truncate(wasm_output.len() - 2);
+    assert_eq!(
+        wasm_output, native_err,
+        "wasm io.log output differs from the hosted-native oracle"
+    );
+
+    // testio.write-str shares the helper: escapes decode identically.
+    let source = work.join("WasmWriteStr.mod");
+    fs::write(
+        &source,
+        "module WasmWriteStr;\nimport platform/testio { testio.write-str };\n\n: main ( -- i64 )\n  \"tab\\tline\\n\\\"q\\\"\\\\\" testio.write-str\n  0 ;\n\nexport { main };\nend;\n",
+    )
+    .expect("write write-str fixture");
+    let _ = native_run(&source, &work.join("native2"));
+    let native_err = {
+        let run = Command::new("timeout")
+            .args(["10s"])
+            .arg(work.join("native2").join("image.elf"))
+            .output()
+            .expect("run hosted native fixture");
+        run.stderr
+    };
+    let wasm = compile_wasm(&source, "WasmWriteStr", &work.join("wasm2"));
+    validate(&wasm);
+    let run = wasmtime_run(&wasm, &host);
+    assert!(run.status.success(), "wasmtime failed:\n{}", String::from_utf8_lossy(&run.stderr));
+    let mut wasm_output = run.stdout;
+    assert!(wasm_output.ends_with(b"0\n"), "missing zero return");
+    wasm_output.truncate(wasm_output.len() - 2);
+    // The oracle for `testio.write-str` is the DECODED string: the
+    // interpreter's TestioWriteStr emits exactly the literal's bytes, and the
+    // wasm emit_str helper must agree byte for byte. (The hosted-native
+    // diagnostic channel dumps the whole intern record — the u64 length
+    // prefix plus adjacent arena bytes — which is a native-side coarseness
+    // the corpus never pinned; both REPL substrates emit the string itself.)
+    assert_eq!(
+        wasm_output, b"tab\tline\n\"q\"\\",
+        "wasm write-str must emit the decoded literal bytes"
+    );
+}

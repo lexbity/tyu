@@ -171,9 +171,9 @@ pub struct WasmBackend<'a> {
     uses_mmio: bool,
     uses_barrier: bool,
     entry_name: &'static [u8],
-    /// Which region helpers any word referenced (emitted in the postlude,
-    /// in the fixed HELPER_* order — dead helpers never ship).
-    used_helpers: [bool; 4],
+    /// Which region/output helpers any word referenced (emitted in the
+    /// postlude, in the fixed HELPER_* order — dead helpers never ship).
+    used_helpers: [bool; 5],
     /// ConstStr interning: (span.start, address) — deduped by span start;
     /// bytes stored with the interpreter's {u64 len}{bytes} layout.
     strings: Vec<(u32, i64)>,
@@ -206,7 +206,7 @@ impl<'a> WasmBackend<'a> {
             uses_mmio: false,
             uses_barrier: false,
             entry_name: b"main",
-            used_helpers: [false; 4],
+            used_helpers: [false; 5],
             strings: Vec::new(),
             string_bytes: Vec::new(),
             resources: Vec::new(),
@@ -412,13 +412,22 @@ impl<'a> WasmBackend<'a> {
     }
 
     fn intern_string(&mut self, span: lir::Span) -> Result<i64, CodegenError> {
+        use codegen_core::strings::decode_string_bytes;
         if let Some((_, a)) = self.strings.iter().find(|(s, _)| *s == span.start as u32) {
             return Ok(*a);
         }
-        let bytes = self
-            .src
-            .get(span.start..span.end)
-            .ok_or(CodegenError::MalformedIr { detail: 1 })?;
+        // The decoded literal (the native backend's decoder — I-12: the wasm
+        // artifact must print what the hosted runtime prints), falling back
+        // to the raw span for a malformed literal (the checker rejects those
+        // upstream; never invent a failure mode here).
+        let bytes: Vec<u8> = match decode_string_bytes(self.src, span) {
+            Some(decoded) => decoded.iter().copied().collect(),
+            None => self
+                .src
+                .get(span.start..span.end)
+                .ok_or(CodegenError::MalformedIr { detail: 1 })?
+                .to_vec(),
+        };
         // The interpreter's intern layout: {u64 len}{bytes} — 8 bytes over
         // the content.
         let total = 8 + bytes.len() as u64;
@@ -428,7 +437,7 @@ impl<'a> WasmBackend<'a> {
         let addr = regions::STRINGS_BASE + self.string_bytes.len() as i64;
         self.string_bytes
             .extend_from_slice(&(bytes.len() as u64).to_le_bytes());
-        self.string_bytes.extend_from_slice(bytes);
+        self.string_bytes.extend_from_slice(&bytes);
         self.strings.push((span.start as u32, addr));
         Ok(addr)
     }
@@ -748,6 +757,13 @@ impl<'a> WasmBackend<'a> {
                 *h -= argc;
                 let callee = if n == b"testio.write-byte" || n == b"testio.emit-output" {
                     Callee::Import(IMPORT_WRITE_BYTE)
+                } else if n == b"testio.write-str" || n == b"platform.io.log" {
+                    // ( str -- ) both print the interned blob whole: the
+                    // helper walks {u64 len}{bytes} and calls the write_byte
+                    // import per byte (the interpreter's TestioWriteStr/IoLog
+                    // execution, mirrored — G54 native parity).
+                    self.used_helpers[regions::HELPER_EMIT_STR as usize] = true;
+                    Callee::Helper(regions::HELPER_EMIT_STR)
                 } else if n == b"testio.exit" {
                     Callee::Exit
                 } else if n == REGION_CREATE {
@@ -1773,6 +1789,7 @@ impl CodegenBackend for WasmBackend<'_> {
             regions::HELPER_ALLOC,
             regions::HELPER_RESET,
             regions::HELPER_DESTROY,
+            regions::HELPER_EMIT_STR,
         ]
         .iter()
         .copied()

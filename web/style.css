@@ -9,6 +9,7 @@
   --ok: #7dd487;
   --err: #ff7a76;
   --warn: #f2c94c;
+  --line: #2a3040;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 
@@ -29,7 +30,7 @@ body {
   gap: 1rem;
   align-items: baseline;
   padding: 0.5rem 1rem;
-  border-bottom: 1px solid #2a3040;
+  border-bottom: 1px solid var(--line);
   background: var(--panel);
 }
 
@@ -41,16 +42,50 @@ body {
 
 #engine-info { margin-left: auto; color: var(--muted); font-size: 12px; }
 #backend-mode-label { color: var(--muted); font-size: 12px; }
-#backend-mode { background: var(--panel); color: var(--ink); border: 1px solid #2a3040; font: inherit; }
+
+/* The segmented execution-backend control (W7): the active substrate is
+   always visible — no dropdown to open. */
+#backend-segments {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  overflow: hidden;
+  vertical-align: middle;
+}
+#backend-segments .segment {
+  background: var(--panel);
+  color: var(--muted);
+  border: none;
+  border-radius: 0;
+  padding: 0.15rem 0.7rem;
+  font: inherit;
+  font-size: 12px;
+  font-weight: bold;
+  cursor: pointer;
+}
+#backend-segments .segment + .segment { border-left: 1px solid var(--line); }
+#backend-segments .segment.active {
+  background: #1d3a4d;
+  color: var(--accent);
+}
+#backend-segments .segment:disabled { color: #4a5261; cursor: default; }
+
 .backend-notice { color: var(--warn); border: 1px solid var(--warn); padding: 0.5rem; margin-top: 0.5rem; }
 
 #layout {
   flex: 1;
   display: grid;
-  grid-template-columns: 1fr 22rem;
+  grid-template-columns: 1fr 24rem;
   gap: 1rem;
   padding: 1rem;
   min-height: 0;
+}
+
+@media (max-width: 900px) {
+  #layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(16rem, 1fr) minmax(16rem, 1fr);
+  }
 }
 
 #editor-pane { display: flex; flex-direction: column; min-height: 0; }
@@ -59,7 +94,7 @@ body {
   flex: 1;
   background: var(--panel);
   color: var(--ink);
-  border: 1px solid #2a3040;
+  border: 1px solid var(--line);
   border-radius: 4px;
   padding: 0.75rem;
   font: inherit;
@@ -69,8 +104,10 @@ body {
 
 #editor:focus { outline: 1px solid var(--accent); }
 
-#editor-actions { display: flex; gap: 0.5rem; padding: 0.5rem 0; align-items: center; }
+#editor-actions { display: flex; gap: 0.5rem; padding: 0.5rem 0; align-items: center; flex-wrap: wrap; }
 
+/* Button hierarchy (W7): run is THE primary action (larger, green), submit
+   is the secondary session path (outline), step is a rare debugging nudge. */
 button {
   background: var(--accent);
   color: #10222e;
@@ -84,7 +121,70 @@ button {
 
 button:disabled { background: #33415a; color: var(--muted); cursor: default; }
 
-#step:disabled { background: var(--panel); }
+#run.primary {
+  background: var(--ok);
+  color: #0a1f0d;
+  font-size: 15px;
+  padding: 0.5rem 1.5rem;
+}
+#run.primary:disabled { background: #33415a; }
+
+#submit.secondary {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+#submit.secondary:disabled {
+  background: transparent;
+  border-color: #33415a;
+  color: var(--muted);
+}
+
+#step.tertiary {
+  background: var(--panel);
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+#step.tertiary:disabled { background: var(--panel); }
+#step.tertiary:not(:disabled) { color: var(--warn); border-color: var(--warn); }
+
+kbd {
+  font: 10px/1 var(--mono);
+  color: inherit;
+  opacity: 0.75;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  padding: 0.05rem 0.25rem;
+  margin-left: 0.3rem;
+  vertical-align: 1px;
+}
+
+/* The last action's execution model (W7): program vs session, visible
+   BEFORE the status line reports it after the fact. */
+.mode-badge {
+  font-size: 11px;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.mode-badge[data-model="program"] { color: var(--ok); border-color: #1d3324; }
+.mode-badge[data-model="session"] { color: var(--accent); border-color: #1d3a4d; }
+
+.mini {
+  background: none;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 0.05rem 0.5rem;
+  font: inherit;
+  font-size: 11px;
+  font-weight: normal;
+  cursor: pointer;
+}
+.mini:hover { color: var(--ink); border-color: var(--muted); }
+.mini:disabled { background: none; }
 
 .muted { color: var(--muted); font-size: 12px; }
 
@@ -101,15 +201,43 @@ button:disabled { background: #33415a; color: var(--muted); cursor: default; }
 
 #side { display: flex; flex-direction: column; min-height: 0; }
 
-/* The examples sidebar (W3): chapter groups, kind badges, deep-link target. */
+/* The examples sidebar (W3/W7): chapter groups above the tabs, with a
+   filter box over the 77-lab corpus. */
+#examples-pane {
+  flex-shrink: 0;
+  margin-bottom: 0.5rem;
+}
+#examples-pane > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  list-style: none;
+}
+#examples-pane > summary::before { content: "▸ "; }
+#examples-pane[open] > summary::before { content: "▾ "; }
+#example-filter {
+  width: 100%;
+  margin: 0.35rem 0;
+  padding: 0.25rem 0.5rem;
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font: inherit;
+  font-size: 12px;
+}
+#example-filter:focus { outline: 1px solid var(--accent); }
+
 #examples {
   overflow-y: auto;
   max-height: 14rem;
   background: var(--panel);
-  border: 1px solid #2a3040;
+  border: 1px solid var(--line);
   border-radius: 4px;
   padding: 0.25rem;
-  margin-bottom: 0.75rem;
+  margin-bottom: 0.25rem;
   flex-shrink: 0;
 }
 #examples details > summary {
@@ -133,6 +261,7 @@ button:disabled { background: #33415a; color: var(--muted); cursor: default; }
   padding: 0.15rem 0.4rem 0.15rem 1.2rem;
   font: inherit;
   font-size: 12px;
+  font-weight: normal;
   cursor: pointer;
 }
 #examples .example:hover { background: #232939; }
@@ -148,38 +277,100 @@ button:disabled { background: #33415a; color: var(--muted); cursor: default; }
 #examples .badge.native-only { background: #2a2033; color: #b48ead; }
 #examples .examples-note { color: var(--muted); font-size: 12px; padding: 0.4rem; }
 
+/* The side tabs (W7): console / stack / debug, one panel fills the rest. */
+#side-tabs {
+  display: flex;
+  gap: 0.25rem;
+  flex-shrink: 0;
+}
+#side-tabs .tab {
+  background: var(--panel);
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 4px 4px 0 0;
+  padding: 0.25rem 0.9rem;
+  font: inherit;
+  font-size: 12px;
+  font-weight: bold;
+  cursor: pointer;
+}
+#side-tabs .tab.active {
+  background: #1d3a4d;
+  color: var(--accent);
+  border-color: #1d3a4d;
+}
+
+.tabpanel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: 1px solid var(--line);
+  border-radius: 0 4px 4px 4px;
+  background: #161922;
+  padding: 0.4rem;
+}
+.tabpanel[hidden] { display: none; }
+
+.panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
 #side h2 {
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--muted);
-  margin: 0.5rem 0 0.25rem;
+  margin: 0.2rem 0 0.25rem;
 }
 
 #stack {
   list-style: none;
-  margin: 0 0 0.75rem;
+  margin: 0 0 0.25rem;
   padding: 0.5rem;
   background: var(--panel);
-  border: 1px solid #2a3040;
+  border: 1px solid var(--line);
   border-radius: 4px;
-  min-height: 6rem;
+  flex: 1;
   display: flex;
   flex-direction: column-reverse; /* bottom-first: index 0 renders at the bottom */
   gap: 0.25rem;
   overflow-y: auto;
+  min-height: 4rem;
 }
 
 #stack li { display: flex; gap: 0.75rem; }
 
 #stack .ty { color: var(--muted); width: 4.5rem; }
 
+/* Empty states (W7): an empty panel says what will appear there. The
+   pseudo-content is decorative — textContent stays empty for the tests. */
+#stack:empty::before {
+  content: "stack is empty — run `1 2 3` to see values";
+  color: var(--muted);
+  font-size: 12px;
+}
+#console:empty::before {
+  content: "console ready — output appears here";
+  color: var(--muted);
+  font-size: 12px;
+}
+#transcript:empty::before {
+  content: "transcript — submissions appear here";
+  color: var(--muted);
+  font-size: 12px;
+}
+
 #console {
   flex: 1;
   margin: 0;
   padding: 0.5rem;
   background: var(--panel);
-  border: 1px solid #2a3040;
+  border: 1px solid var(--line);
   border-radius: 4px;
   overflow-y: auto;
   white-space: pre-wrap;
@@ -200,16 +391,16 @@ button:disabled { background: #33415a; color: var(--muted); cursor: default; }
 /* The debug console (W4): frames/backtrace, transcript, ?debug=1 pane. */
 #frames, #transcript {
   background: var(--panel);
-  border: 1px solid #2a3040;
+  border: 1px solid var(--line);
   border-radius: 4px;
   padding: 0.4rem;
-  max-height: 10rem;
   overflow-y: auto;
   font-size: 12px;
-  margin-bottom: 0.75rem;
-  flex-shrink: 0;
-  min-height: 1.5rem;
+  margin-bottom: 0.4rem;
+  min-height: 3rem;
 }
+#frames { flex: 1; }
+#transcript { flex: 1; max-height: none; }
 #frames h3, #transcript .tr-head {
   margin: 0 0 0.2rem;
   font-size: 12px;
@@ -231,7 +422,7 @@ button:disabled { background: #33415a; color: var(--muted); cursor: default; }
 }
 #debug-pane {
   background: var(--panel);
-  border: 1px solid #2a3040;
+  border: 1px solid var(--line);
   border-radius: 4px;
   padding: 0.4rem;
   font-size: 11px;
@@ -244,9 +435,9 @@ button:disabled { background: #33415a; color: var(--muted); cursor: default; }
 /* The IR pane (W6, FR-32): the last-good --emit=ir render, collapsible. */
 #ir-pane {
   flex-shrink: 0;
-  margin-bottom: 0.75rem;
+  margin-bottom: 0.4rem;
   background: var(--panel);
-  border: 1px solid #2a3040;
+  border: 1px solid var(--line);
   border-radius: 4px;
   padding: 0.25rem 0.4rem;
   font-size: 12px;
@@ -260,7 +451,7 @@ button:disabled { background: #33415a; color: var(--muted); cursor: default; }
 #ir-pane[open] > summary::before { content: "▾ "; }
 #ir {
   margin: 0.3rem 0 0;
-  max-height: 12rem;
+  max-height: 10rem;
   overflow: auto;
   white-space: pre;
   font-size: 11px;

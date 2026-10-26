@@ -733,3 +733,169 @@ fn fabricated_value_paths_are_traps_session_level() {
     let st2 = submit(&mut sess, b"1 drop dup");
     assert!(is_trap_10(&st2), "expected trap 10, got {st2:?}");
 }
+
+// ---------------------------------------------------------------------------
+// W7 fixes: control flow IS inferable in phrases (phrase.rs if/while/loop)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn phrase_while_compiles_and_runs_to_a_value() {
+    let mut sess = session();
+    // The count-down loop: the condition consumes the loop value and leaves
+    // (value, bool); the loop eats the bool; the body transforms the value.
+    // The synthesized signature is ( -- i64 ) — exactly what the checker
+    // computes for the body.
+    assert_eq!(
+        submit(&mut sess, b"10 [ dup 0 > ] [ 1 - ] while"),
+        Status::Ok,
+        "a value-carrying while phrase compiles"
+    );
+    assert_eq!(sess.stack_cells().len(), 1);
+    assert_eq!(sess.stack_cells()[0].value_hex, b"0x0000000000000000");
+}
+
+#[test]
+fn phrase_while_net_zero_shape_still_checks() {
+    let mut sess = session();
+    assert_eq!(
+        submit(&mut sess, b"5 [ dup 0 > ] [ 1 - ] while drop"),
+        Status::Ok,
+        "while + drop nets to ( -- )"
+    );
+    assert_eq!(sess.stack_cells().len(), 0);
+}
+
+#[test]
+fn phrase_loop_with_net_zero_body_compiles_and_suspends_on_fuel() {
+    let mut sess = session();
+    // A `loop` body must be net-zero (the checker's stack-bound rule); the
+    // empty body diverges, and the phrase runs until the fuel budget
+    // suspends it — the E9150/step path, now reachable from a bare phrase.
+    let st = submit(&mut sess, b"0 [ ] loop");
+    assert!(
+        matches!(st, Status::FuelExhausted { .. }),
+        "expected the fuel suspension, got {st:?}"
+    );
+}
+
+#[test]
+fn phrase_if_compiles_and_runs_the_taken_branch() {
+    let mut sess = session();
+    // Equal-effect branches: the taken branch's effect remains.
+    assert_eq!(submit(&mut sess, b"true [ 7 ] [ 9 ] if"), Status::Ok);
+    assert_eq!(sess.stack_cells().len(), 1);
+    assert_eq!(sess.stack_cells()[0].value_hex, b"0x0000000000000007");
+    assert_eq!(submit(&mut sess, b"drop false [ 7 ] [ 9 ] if"), Status::Ok);
+    assert_eq!(sess.stack_cells()[0].value_hex, b"0x0000000000000009");
+}
+
+#[test]
+fn phrase_if_with_output_branches_prints() {
+    let mut sess = session();
+    let s = common::sysroot_search();
+    let r = refs(&s);
+    let st = sess.transactional_submit(
+        b"import platform/testio { testio.write-byte };\ntrue [ 65 testio.write-byte ] [ 66 testio.write-byte ] if",
+        &r,
+    );
+    assert_eq!(st.status, Status::Ok, "an if phrase with output branches compiles");
+    assert_eq!(sess.out_total(), b"A");
+}
+
+// ---------------------------------------------------------------------------
+// W7: `platform.io.log` has a session implementation — the book's labs print
+// ---------------------------------------------------------------------------
+
+const HELLO_MODULE: &[u8] = b"module Hello;\nimport platform/linux { platform.io.log };\n\n: main ( -- i64 )\n  \"assembling in tyu\\n\" platform.io.log\n  \"S\\n\" platform.io.log\n  0 ;\n\nexport { main };\nend;\n";
+
+#[test]
+fn io_log_module_compiles_and_main_phrase_prints_the_lab_output() {
+    let mut sess = session();
+    assert_eq!(submit(&mut sess, HELLO_MODULE), Status::Ok);
+    // DEC-3: the module submission itself never runs main.
+    assert!(sess.out_total().is_empty(), "module submissions do not run");
+    // Submitting main as a phrase executes it — the same output the hosted
+    // native run prints ("assembling in tyu\nS\n").
+    assert_eq!(submit(&mut sess, b"main"), Status::Ok);
+    assert_eq!(sess.out_total(), b"assembling in tyu\nS\n");
+}
+
+#[test]
+fn io_log_phrase_requires_no_module_and_streams_directly() {
+    let mut sess = session();
+    assert_eq!(
+        submit(&mut sess, b"import platform/linux { platform.io.log };"),
+        Status::Ok
+    );
+    assert_eq!(submit(&mut sess, b"\"direct\\n\" platform.io.log"), Status::Ok);
+    assert_eq!(sess.out_total(), b"direct\n");
+}
+
+// ---------------------------------------------------------------------------
+// W7: string literals decode their escapes (the native decoder's semantics)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn string_literals_decode_escapes_for_write_str() {
+    let mut sess = session();
+    assert_eq!(
+        submit(&mut sess, b"import platform/testio { testio.write-str };"),
+        Status::Ok
+    );
+    assert_eq!(
+        submit(&mut sess, b"\"a\\tb\\nc\\\"d\\\\e\" testio.write-str"),
+        Status::Ok
+    );
+    // The escapes decode: tab, newline, a quote from \", a backslash from \\.
+    assert_eq!(sess.out_total(), b"a\tb\nc\"d\\e");
+    // The DELIMITING quotes never leak into the emitted bytes.
+    let s = sess.out_total();
+    assert_eq!(s.first(), Some(&b'a'));
+    assert_eq!(s.last(), Some(&b'e'));
+}
+
+#[test]
+fn string_literals_in_io_log_decode_escapes() {
+    let mut sess = session();
+    assert_eq!(
+        submit(&mut sess, b"import platform/linux { platform.io.log };"),
+        Status::Ok
+    );
+    assert_eq!(
+        submit(&mut sess, b"\"line1\\nline2\\n\" platform.io.log"),
+        Status::Ok
+    );
+    assert_eq!(sess.out_total(), b"line1\nline2\n");
+}
+
+// ---------------------------------------------------------------------------
+// W7: calling an import with no session implementation is a student-facing
+// trap at the call site (27), never the internal fault (E9158)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn unimplemented_import_call_traps_27_at_the_call_site() {
+    let mut sess = session();
+    assert_eq!(
+        submit(
+            &mut sess,
+            b"module Locks;\nimport platform/linux { platform.critical.enter };\n\n: f ( -- )\n  platform.critical.enter ;\n\nexport { f };\nend;\n"
+        ),
+        Status::Ok,
+        "the module compiles — the import declares a signature"
+    );
+    // The import's `.def` declares a signature only; the session has no
+    // implementation. Calling it (through the session word) traps 27 at the
+    // call site instead of the internal fault (E9158) this used to raise.
+    let st = submit(&mut sess, b"f");
+    match st {
+        Status::Trapped {
+            code: ir::TrapCode::UnsupportedImport,
+            span,
+            ..
+        } => {
+            assert!(span.end > span.start, "the trap carries the call site's span");
+        }
+        other => panic!("expected trap 27, got {other:?}"),
+    }
+}

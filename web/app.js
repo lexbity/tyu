@@ -21,7 +21,7 @@ const submitBtn = $("submit");
 const runBtn = $("run");
 const stepBtn = $("step");
 const fuelNoteEl = $("fuel-note");
-const backendModeEl = $("backend-mode");
+const modeBadgeEl = $("mode-badge");
 const diagEl = $("diag");
 const stackEl = $("stack");
 const consoleEl = $("console");
@@ -36,6 +36,84 @@ function setStatus(state, text) {
   statusEl.dataset.state = state;
   statusEl.textContent = text;
 }
+
+// ---------------------------------------------------------------------------
+// Side tabs (W7): console / stack / debug. Output arrival raises the console
+// tab; a post-mortem backtrace raises the debug tab.
+// ---------------------------------------------------------------------------
+
+function selectTab(name) {
+  for (const b of document.querySelectorAll("#side-tabs .tab")) {
+    const on = b.dataset.tab === name;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-selected", on ? "true" : "false");
+  }
+  for (const p of document.querySelectorAll(".tabpanel")) {
+    p.hidden = p.dataset.panel !== name;
+  }
+}
+for (const b of document.querySelectorAll("#side-tabs .tab")) {
+  b.addEventListener("click", () => selectTab(b.dataset.tab));
+}
+
+// ---------------------------------------------------------------------------
+// The segmented execution-backend control (W7). The adapter below keeps the
+// historical `backendModeEl` call sites (`.value` get/set, `.disabled`)
+// working against the always-visible segments.
+// ---------------------------------------------------------------------------
+
+const backendSegments = [...document.querySelectorAll("#backend-segments .segment")];
+
+function setBackendMode(value) {
+  for (const b of backendSegments) {
+    const on = b.dataset.backend === value;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-checked", on ? "true" : "false");
+  }
+}
+for (const b of backendSegments) {
+  b.addEventListener("click", () => setBackendMode(b.dataset.backend));
+}
+const backendModeEl = {
+  get value() {
+    return backendSegments.find((b) => b.classList.contains("active"))?.dataset.backend ?? "interp";
+  },
+  set value(v) {
+    setBackendMode(v);
+  },
+  set disabled(d) {
+    for (const b of backendSegments) b.disabled = d;
+  },
+};
+
+// The last action's execution model, visible before the status line reports
+// it after the fact (W7 P3): run = program (resets), submit = session.
+function setModeBadge(model, text) {
+  modeBadgeEl.hidden = false;
+  modeBadgeEl.dataset.model = model;
+  modeBadgeEl.textContent = text;
+}
+
+// W7 P4: table-stakes clear controls.
+$("clear-console").addEventListener("click", () => {
+  consoleEl.textContent = "";
+});
+$("clear-transcript").addEventListener("click", () => {
+  transcript.length = 0;
+  renderTranscript();
+});
+$("goto-console").addEventListener("click", () => selectTab("console"));
+
+// W7 P6: step's chord (Ctrl+.) — bound at the document level so both the
+// CM6 and the degraded-textarea editors offer it.
+document.addEventListener("keydown", (ev) => {
+  if (ev.ctrlKey && !ev.shiftKey && !ev.altKey && ev.key === ".") {
+    if (!stepBtn.disabled) {
+      ev.preventDefault();
+      stepBtn.click();
+    }
+  }
+});
 
 function showDiag(text) {
   if (text === "") {
@@ -146,6 +224,7 @@ globalThis.tyu = {
     // Stream to the console pane (the session retains its own copy).
     consoleEl.textContent += new TextDecoder().decode(bytes);
     consoleEl.scrollTop = consoleEl.scrollHeight;
+    selectTab("console");
   },
 
   now_ms() {
@@ -222,7 +301,7 @@ async function loadExamples() {
   }
 }
 
-function renderExamples(examples) {
+function renderExamples(examples, query = "") {
   examplesEl.replaceChildren();
   if (!examples) {
     const note = document.createElement("div");
@@ -231,14 +310,30 @@ function renderExamples(examples) {
     examplesEl.append(note);
     return;
   }
+  // The filter box (W7 P2): a case-insensitive substring match over the
+  // lab id and title; chapters with matches auto-open.
+  const q = query.trim().toLowerCase();
+  const matches = (ex) =>
+    q === "" ||
+    ex.id.toLowerCase().includes(q) ||
+    ex.title.toLowerCase().includes(q);
   // Chapter groups, collapsible; labels and badges via textContent (I-7).
   const byChapter = new Map();
   for (const ex of examples) {
+    if (!matches(ex)) continue;
     if (!byChapter.has(ex.chapter)) byChapter.set(ex.chapter, []);
     byChapter.get(ex.chapter).push(ex);
   }
+  if (q !== "" && byChapter.size === 0) {
+    const note = document.createElement("div");
+    note.className = "examples-note";
+    note.textContent = `no labs match “${query.trim()}”`;
+    examplesEl.append(note);
+    return;
+  }
   for (const [chapter, exs] of byChapter) {
     const details = document.createElement("details");
+    if (q !== "") details.open = true;
     const summary = document.createElement("summary");
     summary.textContent = `chapter ${chapter}`;
     details.append(summary);
@@ -296,6 +391,7 @@ async function loadExample(ex) {
     showDiag("");
   }
   const fuel = Number(replInstance.fuel_default());
+  setModeBadge("program", "program · run resets");
   setStatus(
     "ready",
     `interp · example loaded · stack ${replInstance.stack().length} · words ${replInstance.words().length} · fuel ${Math.round(fuel / 1_000_000)}M`
@@ -362,6 +458,14 @@ function renderResult(repl, result, mode) {
   bumpLint();
   renderDebugPanes(repl, result);
   pushTranscript(mode, result);
+  // The execution-model badge (W7 P3): the mode is visible before the
+  // status line reports it after the fact.
+  setModeBadge(
+    mode.includes("session") ? "session" : "program",
+    mode.includes("session") ? "session · accumulates" : "program · run resets"
+  );
+  // A post-mortem backtrace lives in the debug tab — raise it (W7).
+  if (result.status === "trapped") selectTab("debug");
   // §7.4: one line, every field ABI data — mode · outcome · stack · words ·
   // fuel. No JS-side inference.
   const summary = repl.last_status();
@@ -389,6 +493,18 @@ function renderResult(repl, result, mode) {
     // loudly, it never renders the failure as a student outcome.
     pageFail(`internal-invariant violation (E${d}): ${result.diag_message}`);
     return;
+  }
+  // W7: when the compiled module exports `main`, the honest hint is that
+  // the session compiled it (DEC-3: modules do not run) — executing it is
+  // one explicit submit away.
+  const runMainHint = $("run-main-hint");
+  if (
+    (result.status === "ok" || result.status === "exited") &&
+    repl.words().some((w) => w.name === "main")
+  ) {
+    runMainHint.textContent = "main is exported — submit `main` to execute it";
+  } else {
+    runMainHint.textContent = "";
   }
   if (result.status === "ok" || result.status === "exited") {
     showDiag("");
@@ -706,6 +822,7 @@ function wire(repl) {
         ? `wasm · exited ${exitCode}`
         : `wasm · ok · exit ${exitCode}`;
     setStatus("ready", `${summary} · backend run`);
+    setModeBadge("program", "program · run resets");
     stepBtn.disabled = true;
     submitBtn.disabled = false;
     runBtn.disabled = false;
@@ -756,8 +873,22 @@ function wire(repl) {
     backendModeEl.disabled = true;
     backendNotice("");
     // Give the browser one frame to paint the disabled controls before the
-    // synchronous compile/execute window begins.
-    await new Promise(requestAnimationFrame);
+    // synchronous compile/execute window begins — but only when the
+    // renderer is actually framing. An occluded/embedded view may report
+    // "visible" while never delivering a frame (or any queued task), and
+    // the beat is cosmetic — never a correctness gate: probe first, then
+    // owe exactly one frame when frames flow, else proceed synchronously.
+    const framing = await new Promise((resolve) => {
+      let sawFrame = false;
+      requestAnimationFrame(() => {
+        sawFrame = true;
+        resolve(true);
+      });
+      setTimeout(() => resolve(sawFrame), 80);
+    });
+    if (framing) {
+      await new Promise((resolve) => requestAnimationFrame(() => resolve()));
+    }
     try {
       if (backendModeEl.value === "wasm") {
         await runBackend();
@@ -839,6 +970,10 @@ async function boot() {
     // The example corpus (hash-gated) and its deep links (FR-37).
     EXAMPLES = await loadExamples();
     renderExamples(EXAMPLES);
+    // The filter box (W7 P2): re-render the chapter groups per keystroke.
+    $("example-filter").addEventListener("input", (ev) => {
+      renderExamples(EXAMPLES, ev.target.value);
+    });
     window.addEventListener("hashchange", applyDeepLink);
     applyDeepLink();
   } catch (e) {

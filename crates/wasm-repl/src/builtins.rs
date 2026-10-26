@@ -26,6 +26,12 @@ pub enum Builtin {
     TestioWriteByte,
     TestioWriteStr,
     TestioExit,
+    /// `platform.io.log` — the hosted platform's line-print import. The
+    /// hosted/metal runtimes link an assembly implementation; the browser
+    /// session's implementation streams the string's bytes to the same
+    /// diagnostic channel `testio.write-str` uses (W7: the book's
+    /// `platform/linux` labs print in the REPL).
+    IoLog,
     RegionCreate,
     RegionAlloc,
     RegionReset,
@@ -40,6 +46,7 @@ impl Builtin {
             b"testio.write-byte" => Some(Builtin::TestioWriteByte),
             b"testio.write-str" => Some(Builtin::TestioWriteStr),
             b"testio.exit" => Some(Builtin::TestioExit),
+            b"platform.io.log" => Some(Builtin::IoLog),
             b"platform.mem.region-create" => Some(Builtin::RegionCreate),
             b"platform.mem.region-alloc" => Some(Builtin::RegionAlloc),
             b"platform.mem.region-reset" => Some(Builtin::RegionReset),
@@ -57,6 +64,7 @@ impl Builtin {
             Builtin::TestioWriteByte => &[ValKind::Int],
             Builtin::TestioWriteStr => &[ValKind::Ptr],
             Builtin::TestioExit => &[ValKind::Int],
+            Builtin::IoLog => &[ValKind::Ptr],
             Builtin::RegionCreate => &[ValKind::Int],
             Builtin::RegionAlloc => &[ValKind::Int, ValKind::Int],
             Builtin::RegionReset => &[ValKind::Int],
@@ -92,7 +100,7 @@ impl Builtin {
                 st.record_output(1);
                 Ok(())
             }
-            Builtin::TestioWriteStr => {
+            Builtin::TestioWriteStr | Builtin::IoLog => {
                 // ( str -- ) pointer to `[u64 len][bytes...]`, written whole.
                 let ptr = st
                     .stack

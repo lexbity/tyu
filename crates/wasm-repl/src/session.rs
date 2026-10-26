@@ -943,6 +943,7 @@ fn builtin_word_effect(name: &[u8]) -> Option<EffectSig> {
         b"testio.write-byte" => s(&[b"i64"], &[]),
         b"testio.write-str" => s(&[b"str"], &[]),
         b"testio.exit" => s(&[b"i64"], &[]),
+        b"platform.io.log" => s(&[b"str"], &[]),
         b"platform.mem.region-create" => s(&[b"usize"], &[b"Region"]),
         b"platform.mem.region-alloc" => s(&[b"Region", b"usize"], &[b"ptr_mut"]),
         b"platform.mem.region-reset" => s(&[b"Region"], &[]),

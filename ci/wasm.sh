@@ -411,10 +411,15 @@ budgets() {
     # NFR-11 (DEC-17 amendment): the app+glue JS+CSS <= 150 KiB still; the
     # editor vendor bundle adds its own line (<= 400 KiB raw / <= 120 KiB
     # brotli); the combined JS+CSS raw total <= 450 KiB.
+    # NFR-11 (W7 amendment): the right-pane tabs, the example filter, and
+    # the button/empty-state hierarchy add ~9 KiB of hand-written glue —
+    # a feature the 450 KiB cap had no headroom for (it sat 356 bytes under
+    # the line). The combined total moves to 480 KiB; the vendor bundle
+    # keeps its own caps, so the first-load transfer stays vendor-dominated.
     local BUDGET_JS="${TYU_G55_JS_MAX:-153600}"           # app JS+CSS raw <= 150 KiB
     local BUDGET_EDITOR="${TYU_G55_EDITOR_MAX:-409600}"   # vendor raw <= 400 KiB
     local BUDGET_EDITOR_BROTLI="${TYU_G55_EDITOR_BROTLI_MAX:-122880}" # <= 120 KiB
-    local BUDGET_JSTOTAL="${TYU_G55_JS_TOTAL_MAX:-460800}" # JS+CSS total raw <= 450 KiB
+    local BUDGET_JSTOTAL="${TYU_G55_JS_TOTAL_MAX:-491520}" # JS+CSS total raw <= 480 KiB
     local BUDGET_SYSROOT="${TYU_G55_SYSROOT_MAX:-262144}" # blob       <= 256 KiB
     local BUDGET_TOTAL="${TYU_G55_TOTAL_MAX:-1048576}"    # brotli     <= 1 MiB
     local failed_b=0

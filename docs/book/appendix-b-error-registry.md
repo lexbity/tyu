@@ -68,6 +68,7 @@ Hosted exit status equals the trap code.
 | 24 | `TASK_QUEUE_OVERFLOW` | **environmental**: the scheduler's task queues filled (a runtime resource, not a language-invariant violation) | (registry, ch. 12) |
 | 25 | `DEADLOCK` | **environmental**: all tasks blocked and nothing is runnable (a runtime scheduling fact) | (registry, ch. 12) |
 | 26 | `REGION_EXHAUSTED` | **environmental**: an allocation region ran out (a runtime resource) | (registry) |
+| 27 | `UNSUPPORTED_IMPORT` | a call reached an imported word whose `.def` declares a signature only — the current substrate links no implementation (the hosted/metal runtimes link every import and never raise it; the browser session does) | (browser REPL) |
 
 > **Environmental failure semantics.** Traps 24/25/26 are *environmental*
 > failure classes, not language-invariant violations: a program proven under

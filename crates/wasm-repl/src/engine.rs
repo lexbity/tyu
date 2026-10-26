@@ -19,6 +19,7 @@
 
 use alloc::vec;
 use alloc::vec::Vec;
+use codegen_core::strings::decode_string_bytes;
 use ir::{BlockId, OpKind, Span, TrapCode};
 
 use crate::builtins::{Builtin, BuiltinSignal};
@@ -209,8 +210,8 @@ impl ExecState {
                         if strings.iter().any(|(s, _)| *s == span.start as u32) {
                             continue;
                         }
-                        let bytes = compiled.src.get(span.start..span.end).unwrap_or(&[]);
-                        if let Ok(addr) = heap.intern(bytes) {
+                        let bytes = Self::const_str_bytes(compiled, span);
+                        if let Ok(addr) = heap.intern(&bytes) {
                             strings.push((span.start as u32, addr));
                         }
                     }
@@ -261,6 +262,23 @@ impl ExecState {
         }
     }
 
+    /// The bytes of a `ConstStr`: the decoded literal (the native backend's
+    /// `decode_string_bytes` — the same escapes the hosted runtime's
+    /// `io.log` decodes), falling back to the raw span when the literal is
+    /// not a well-formed quoted string. Both heap interns go through this,
+    /// so `testio.write-str`/`platform.io.log` emit what the native run
+    /// prints — never the raw source text with quotes and escapes.
+    fn const_str_bytes(compiled: &Compiled, span: Span) -> Vec<u8> {
+        if let Some(decoded) = decode_string_bytes(&compiled.src, span) {
+            return decoded.iter().copied().collect();
+        }
+        compiled
+            .src
+            .get(span.start..span.end)
+            .unwrap_or(&[])
+            .to_vec()
+    }
+
     /// Re-intern this compiled module's `ConstStr`s into the *current* heap
     /// (the session's persistent heap). Deterministic per `Compiled`.
     pub fn intern_compiled(&mut self, compiled: &Compiled) {
@@ -271,8 +289,8 @@ impl ExecState {
                         if self.strings.iter().any(|(s, _)| *s == span.start as u32) {
                             continue;
                         }
-                        let bytes = compiled.src.get(span.start..span.end).unwrap_or(&[]);
-                        if let Ok(addr) = self.heap.intern(bytes) {
+                        let bytes = Self::const_str_bytes(compiled, span);
+                        if let Ok(addr) = self.heap.intern(&bytes) {
                             self.strings.push((span.start as u32, addr));
                         }
                     }
@@ -925,10 +943,17 @@ impl<'c> Engine<'c> {
                         op: 0,
                     })
                 }
-                None => StepResult::Fault(Fault::internal(
-                    op.span,
-                    b"call target out of range (dictionary resolution guarantees a word)",
-                )),
+                None => {
+                    // The checker admits a call only when the name is in its
+                    // env: a session word, an engine builtin, or an imported
+                    // declaration. The dictionary carries the first two, so
+                    // a miss here is exactly an import whose `.def` declares
+                    // a signature this substrate does not implement (the
+                    // hosted/metal runtimes link one). A student-facing trap
+                    // at the call site — never the internal fault (E9158)
+                    // this case used to raise.
+                    StepResult::Trap(TrapCode::UnsupportedImport, op.span)
+                }
             },
             OpKind::Load { ty } => match self.step_load(word, ty, op.span, state) {
                 Ok(()) => StepResult::Continue(next_op),

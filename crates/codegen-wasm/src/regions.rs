@@ -28,7 +28,9 @@
 //! defect), so the trapping helpers take the span as trailing parameters.
 
 use super::encoder::*;
-use crate::{IMPORT_TRAP, REGION_ALLOC, REGION_CREATE, REGION_DESTROY, REGION_RESET};
+use crate::{
+    IMPORT_TRAP, IMPORT_WRITE_BYTE, REGION_ALLOC, REGION_CREATE, REGION_DESTROY, REGION_RESET,
+};
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -93,10 +95,21 @@ pub const HELPER_CREATE: u32 = 0;
 pub const HELPER_ALLOC: u32 = 1;
 pub const HELPER_RESET: u32 = 2;
 pub const HELPER_DESTROY: u32 = 3;
+/// `testio.write-str` / `platform.io.log`: stream an interned string blob to
+/// the host, byte by byte, through the `tyu.write_byte` import (W7). Not a
+/// region-ABI helper — it shares the used-helper shipping machinery so dead
+/// helpers never bloat the artifact.
+pub const HELPER_EMIT_STR: u32 = 4;
 
 /// The helper's builtin word name, by HELPER_* id (the fixed order
 /// `emit_region_helpers` emits in).
-pub const HELPER_NAME: [&[u8]; 4] = [REGION_CREATE, REGION_ALLOC, REGION_RESET, REGION_DESTROY];
+pub const HELPER_NAME: [&[u8]; 5] = [
+    REGION_CREATE,
+    REGION_ALLOC,
+    REGION_RESET,
+    REGION_DESTROY,
+    b"emit_str",
+];
 
 /// The patch key of a helper (the backend's key→index map).
 pub fn helper_key(h: u32) -> Vec<u8> {
@@ -105,6 +118,7 @@ pub fn helper_key(h: u32) -> Vec<u8> {
         HELPER_ALLOC => b"$helper:alloc",
         HELPER_RESET => b"$helper:reset",
         HELPER_DESTROY => b"$helper:destroy",
+        HELPER_EMIT_STR => b"$helper:emit_str",
         _ => b"$helper:?",
     };
     name.to_vec()
@@ -504,6 +518,65 @@ pub fn emit_region_helpers() -> Vec<RegionHelper> {
         memarg(&mut b, 0);
         b.push(OP_END);
         out.push((REGION_DESTROY, vec![VAL_I64, VAL_I32, VAL_I32], vec![], b));
+    }
+
+    // -- emit_str ( str -- ) -------------------------------------------------
+    // W7: stream the interned string blob `[u64 len][bytes...]` to the host
+    // through the `tyu.write_byte` import (index 0 — always present), one
+    // byte per call. The interpreter's TestioWriteStr/IoLog execution,
+    // mirrored at the artifact level so `platform.io.log` prints the same
+    // bytes the hosted runtime does. No traps: the intern area's loads are
+    // always in-bounds by the memory contract.
+    {
+        let mut b = Vec::new();
+        // params: 0 = ptr (i64); locals: 1 = len (i64), 2 = i (i64)
+        uleb(&mut b, 1); // local groups
+        locals_group(&mut b, 2, VAL_I64);
+        const LEN: u32 = 1;
+        const I: u32 = 2;
+        // len = i64.load(ptr)
+        local_get(&mut b, 0);
+        b.push(OP_I32_WRAP_I64);
+        b.push(OP_I64_LOAD);
+        memarg(&mut b, 0);
+        local_set(&mut b, LEN);
+        // i = 0
+        i64_const(&mut b, 0);
+        local_set(&mut b, I);
+        // block $done { loop $again { ... } }
+        b.push(OP_BLOCK);
+        b.push(0x40);
+        b.push(OP_LOOP);
+        b.push(0x40);
+        // i >= len → br $done (depth 1: the loop is depth 0)
+        local_get(&mut b, I);
+        local_get(&mut b, LEN);
+        b.push(OP_I64_GE_U);
+        b.push(OP_BR_IF);
+        uleb(&mut b, 1);
+        // push the i-th byte: i64.load8_u(ptr + 8 + i)
+        local_get(&mut b, 0);
+        i64_const(&mut b, 8);
+        local_get(&mut b, I);
+        b.push(OP_I64_ADD);
+        b.push(OP_I64_ADD);
+        b.push(OP_I32_WRAP_I64);
+        b.push(OP_I64_LOAD8_U);
+        memarg(&mut b, 0);
+        // write_byte(byte) — the write_byte import is unconditionally index 0
+        b.push(OP_CALL);
+        uleb(&mut b, IMPORT_WRITE_BYTE as u64);
+        // i += 1; br $again
+        local_get(&mut b, I);
+        i64_const(&mut b, 1);
+        b.push(OP_I64_ADD);
+        local_set(&mut b, I);
+        b.push(OP_BR);
+        uleb(&mut b, 0);
+        b.push(OP_END); // $again
+        b.push(OP_END); // $done
+        b.push(OP_END); // the function body's own terminator
+        out.push((b"emit_str", vec![VAL_I64], vec![], b));
     }
 
     out
