@@ -520,64 +520,67 @@ pub fn emit_region_helpers() -> Vec<RegionHelper> {
         out.push((REGION_DESTROY, vec![VAL_I64, VAL_I32, VAL_I32], vec![], b));
     }
 
-    // -- emit_str ( str -- ) -------------------------------------------------
-    // W7: stream the interned string blob `[u64 len][bytes...]` to the host
-    // through the `tyu.write_byte` import (index 0 — always present), one
-    // byte per call. The interpreter's TestioWriteStr/IoLog execution,
-    // mirrored at the artifact level so `platform.io.log` prints the same
-    // bytes the hosted runtime does. No traps: the intern area's loads are
-    // always in-bounds by the memory contract.
-    {
-        let mut b = Vec::new();
-        // params: 0 = ptr (i64); locals: 1 = len (i64), 2 = i (i64)
-        uleb(&mut b, 1); // local groups
-        locals_group(&mut b, 2, VAL_I64);
-        const LEN: u32 = 1;
-        const I: u32 = 2;
-        // len = i64.load(ptr)
-        local_get(&mut b, 0);
-        b.push(OP_I32_WRAP_I64);
-        b.push(OP_I64_LOAD);
-        memarg(&mut b, 0);
-        local_set(&mut b, LEN);
-        // i = 0
-        i64_const(&mut b, 0);
-        local_set(&mut b, I);
-        // block $done { loop $again { ... } }
-        b.push(OP_BLOCK);
-        b.push(0x40);
-        b.push(OP_LOOP);
-        b.push(0x40);
-        // i >= len → br $done (depth 1: the loop is depth 0)
-        local_get(&mut b, I);
-        local_get(&mut b, LEN);
-        b.push(OP_I64_GE_U);
-        b.push(OP_BR_IF);
-        uleb(&mut b, 1);
-        // push the i-th byte: i64.load8_u(ptr + 8 + i)
-        local_get(&mut b, 0);
-        i64_const(&mut b, 8);
-        local_get(&mut b, I);
-        b.push(OP_I64_ADD);
-        b.push(OP_I64_ADD);
-        b.push(OP_I32_WRAP_I64);
-        b.push(OP_I64_LOAD8_U);
-        memarg(&mut b, 0);
-        // write_byte(byte) — the write_byte import is unconditionally index 0
-        b.push(OP_CALL);
-        uleb(&mut b, IMPORT_WRITE_BYTE as u64);
-        // i += 1; br $again
-        local_get(&mut b, I);
-        i64_const(&mut b, 1);
-        b.push(OP_I64_ADD);
-        local_set(&mut b, I);
-        b.push(OP_BR);
-        uleb(&mut b, 0);
-        b.push(OP_END); // $again
-        b.push(OP_END); // $done
-        b.push(OP_END); // the function body's own terminator
-        out.push((b"emit_str", vec![VAL_I64], vec![], b));
-    }
+    out.push(emit_emit_str_helper());
 
     out
+}
+
+// -- emit_str ( str -- ) -----------------------------------------------------
+// W7: stream the interned string blob `[u64 len][bytes...]` to the host
+// through the `tyu.write_byte` import (index 0 — always present), one byte
+// per call. The interpreter's TestioWriteStr/IoLog execution, mirrored at
+// the artifact level so `platform.io.log` prints the same bytes the hosted
+// runtime does. No traps: the intern area's loads are always in-bounds by
+// the memory contract. (Its own function: `emit_region_helpers` sits under
+// the G12 250-line bar only because the helpers stay factored per helper.)
+fn emit_emit_str_helper() -> RegionHelper {
+    let mut b = Vec::new();
+    // params: 0 = ptr (i64); locals: 1 = len (i64), 2 = i (i64)
+    uleb(&mut b, 1); // local groups
+    locals_group(&mut b, 2, VAL_I64);
+    const LEN: u32 = 1;
+    const I: u32 = 2;
+    // len = i64.load(ptr)
+    local_get(&mut b, 0);
+    b.push(OP_I32_WRAP_I64);
+    b.push(OP_I64_LOAD);
+    memarg(&mut b, 0);
+    local_set(&mut b, LEN);
+    // i = 0
+    i64_const(&mut b, 0);
+    local_set(&mut b, I);
+    // block $done { loop $again { ... } }
+    b.push(OP_BLOCK);
+    b.push(0x40);
+    b.push(OP_LOOP);
+    b.push(0x40);
+    // i >= len → br $done (depth 1: the loop is depth 0)
+    local_get(&mut b, I);
+    local_get(&mut b, LEN);
+    b.push(OP_I64_GE_U);
+    b.push(OP_BR_IF);
+    uleb(&mut b, 1);
+    // push the i-th byte: i64.load8_u(ptr + 8 + i)
+    local_get(&mut b, 0);
+    i64_const(&mut b, 8);
+    local_get(&mut b, I);
+    b.push(OP_I64_ADD);
+    b.push(OP_I64_ADD);
+    b.push(OP_I32_WRAP_I64);
+    b.push(OP_I64_LOAD8_U);
+    memarg(&mut b, 0);
+    // write_byte(byte) — the write_byte import is unconditionally index 0
+    b.push(OP_CALL);
+    uleb(&mut b, IMPORT_WRITE_BYTE as u64);
+    // i += 1; br $again
+    local_get(&mut b, I);
+    i64_const(&mut b, 1);
+    b.push(OP_I64_ADD);
+    local_set(&mut b, I);
+    b.push(OP_BR);
+    uleb(&mut b, 0);
+    b.push(OP_END); // $again
+    b.push(OP_END); // $done
+    b.push(OP_END); // the function body's own terminator
+    (b"emit_str", vec![VAL_I64], vec![], b)
 }

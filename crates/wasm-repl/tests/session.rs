@@ -798,7 +798,11 @@ fn phrase_if_with_output_branches_prints() {
         b"import platform/testio { testio.write-byte };\ntrue [ 65 testio.write-byte ] [ 66 testio.write-byte ] if",
         &r,
     );
-    assert_eq!(st.status, Status::Ok, "an if phrase with output branches compiles");
+    assert_eq!(
+        st.status,
+        Status::Ok,
+        "an if phrase with output branches compiles"
+    );
     assert_eq!(sess.out_total(), b"A");
 }
 
@@ -827,7 +831,10 @@ fn io_log_phrase_requires_no_module_and_streams_directly() {
         submit(&mut sess, b"import platform/linux { platform.io.log };"),
         Status::Ok
     );
-    assert_eq!(submit(&mut sess, b"\"direct\\n\" platform.io.log"), Status::Ok);
+    assert_eq!(
+        submit(&mut sess, b"\"direct\\n\" platform.io.log"),
+        Status::Ok
+    );
     assert_eq!(sess.out_total(), b"direct\n");
 }
 
@@ -894,7 +901,10 @@ fn unimplemented_import_call_traps_27_at_the_call_site() {
             span,
             ..
         } => {
-            assert!(span.end > span.start, "the trap carries the call site's span");
+            assert!(
+                span.end > span.start,
+                "the trap carries the call site's span"
+            );
         }
         other => panic!("expected trap 27, got {other:?}"),
     }

@@ -39,7 +39,7 @@
 
 set -euo pipefail
 
-RED=1; GREEN=2; YELLOW=3; NC=0
+RED=1; GREEN=2; YELLOW=3
 failures=0
 
 msg() {
@@ -525,7 +525,8 @@ wasm_clippy() {
 }
 
 smoke() {
-    local mode="$1" log="/tmp/g55-smoke${mode:+-tampered}.log"
+    local mode="$1"
+    local log="/tmp/g55-smoke${mode:+-tampered}.log"
     if ! node --version > /dev/null 2>&1; then
         fail "node not available for the browser smoke"
         return

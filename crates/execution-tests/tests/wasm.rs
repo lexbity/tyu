@@ -526,7 +526,11 @@ fn io_log_and_write_str_print_identically_on_both_substrates() {
             .arg(&source)
             .output()
             .expect("run hosted tyu build");
-        assert!(build.status.success(), "hosted build failed:\n{}", String::from_utf8_lossy(&build.stderr));
+        assert!(
+            build.status.success(),
+            "hosted build failed:\n{}",
+            String::from_utf8_lossy(&build.stderr)
+        );
         let run = Command::new("timeout")
             .args(["10s"])
             .arg(work.join("native2").join("image.elf"))
@@ -534,7 +538,11 @@ fn io_log_and_write_str_print_identically_on_both_substrates() {
             .expect("run hosted native fixture");
         run.stderr
     };
-    assert_eq!(native_err, &b"assembling in tyu\nS\n"[..], "hosted native oracle prints the lab output on stderr");
+    assert_eq!(
+        native_err,
+        &b"assembling in tyu\nS\n"[..],
+        "hosted native oracle prints the lab output on stderr"
+    );
     assert_eq!(native.0, b"", "the lab prints nothing on native stdout");
 
     let wasm = compile_wasm(&source, "WasmIoLog", &work.join("wasm"));
@@ -577,7 +585,11 @@ fn io_log_and_write_str_print_identically_on_both_substrates() {
     let wasm = compile_wasm(&source, "WasmWriteStr", &work.join("wasm2"));
     validate(&wasm);
     let run = wasmtime_run(&wasm, &host);
-    assert!(run.status.success(), "wasmtime failed:\n{}", String::from_utf8_lossy(&run.stderr));
+    assert!(
+        run.status.success(),
+        "wasmtime failed:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
     let mut wasm_output = run.stdout;
     assert!(wasm_output.ends_with(b"0\n"), "missing zero return");
     wasm_output.truncate(wasm_output.len() - 2);
