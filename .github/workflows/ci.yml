@@ -17,6 +17,11 @@
 # 26.04 qemu-system-misc does NOT carry the riscv binaries), and package
 # binutils provides /usr/bin/ld.
 #
+# Every apt/rustup/npm/cargo-install fetch step routes through ci/retry.sh:
+# they are network steps, and a stalled mirror must retry (and, worst case,
+# hit the job timeout) rather than silently eat the budget of the step that
+# follows.
+#
 # Runs the full test matrix on every push/PR, including the poison
 # corpus, debug-mode (`.lang.debug`) leg, hermetic RSP client, and
 # all three hardware backends (x86_64, ARM, RISC-V) under QEMU.
@@ -70,8 +75,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install tools (x86_64)
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq \
+          bash ci/retry.sh -- sudo apt-get update -qq
+          bash ci/retry.sh -- sudo apt-get install -y -qq \
             fasm \
             qemu-system-x86 \
             qemu-system-arm \
@@ -123,14 +128,17 @@ jobs:
         run: cargo test --workspace --release
         env:
           TYU_BIN_DIR: ${{ github.workspace }}/target/release
-      - name: WASM REPL host-side gates (ci/wasm.sh)
+      - name: WASM REPL host-side gates (ci/wasm.sh --host-only)
         # G52/G53 host legs (fork differential, execution differential, G56
-        # goldens, G57(a)/G58 behavioral pins) run host-only here; the
-        # --selftest pass proves the gates' red paths in CI (AC-9). The
-        # full browser-tooled run lives in the wasm job below.
+        # goldens, G57(a) debug-dump parity), the host legs of G55 (span-table
+        # node tests, now_ms grep), and the G58 pack-drift red path run here
+        # WITHOUT the wasm toolchain; G54 and the browser-tooled G55 legs are
+        # owned by the dedicated wasm job below — --host-only skips them
+        # explicitly rather than failing on the absent CLIs. The --selftest
+        # pass proves every host-runnable red path in CI (AC-9).
         run: |
-          bash ci/wasm.sh
-          bash ci/wasm.sh --selftest
+          bash ci/wasm.sh --host-only
+          bash ci/wasm.sh --host-only --selftest
       - name: Golden codegen corpus
         run: cargo test --release -p langc --test golden_codegen
       - name: Encryption feature tests
@@ -161,15 +169,19 @@ jobs:
   wasm:
     runs-on: ubuntu-26.04
     needs: lint
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install tools (wasm)
         # wasm-bindgen-cli must match the quarantined wasm-bindgen crate
-        # version exactly (crates/wasm-repl/Cargo.toml, R-4 pin).
+        # version exactly (crates/wasm-repl/Cargo.toml, R-4 pin). fasm and
+        # binutils are the G53/G54 native-oracle requirement: the hosted
+        # x86_64 oracle legs (wasm-repl exec_parity, execution-tests wasm)
+        # assemble/link with fasm+ld and panic under CI when either is
+        # missing — see require_tools in both test files.
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq brotli
+          bash ci/retry.sh -- sudo apt-get update -qq
+          bash ci/retry.sh -- sudo apt-get install -y -qq brotli fasm binutils
           rustup target add wasm32-unknown-unknown
           cargo install wasm-bindgen-cli --version 0.2.108 --locked
       - name: Install Wasm validator and runtime (G54)
@@ -178,7 +190,7 @@ jobs:
         run: |
           cargo install wasm-tools --version 1.262.0 --locked
           cargo install wasmtime-cli --version 50.0.0 --locked
-      - uses: actions/setup-node@6044e13b5db4789f651b0647997ca587f6d59396 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
       - name: Install Playwright (browser smoke)
@@ -218,13 +230,16 @@ jobs:
   arm:
     runs-on: ubuntu-26.04
     needs: lint
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install tools (ARM)
+        # apt fetches are network steps (ci/retry.sh) — a stalled mirror can
+        # otherwise burn the whole job budget on this step alone; the 30m
+        # timeout leaves headroom for a slow-mirror install.
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq \
+          bash ci/retry.sh -- sudo apt-get update -qq
+          bash ci/retry.sh -- sudo apt-get install -y -qq \
             gcc-arm-none-eabi \
             qemu-system-arm \
             fasm \
@@ -252,13 +267,15 @@ jobs:
   riscv:
     runs-on: ubuntu-26.04
     needs: lint
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install tools (RISC-V)
+        # Network-dependent apt fetches — same retry/timeout rationale as the
+        # ARM job above.
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq \
+          bash ci/retry.sh -- sudo apt-get update -qq
+          bash ci/retry.sh -- sudo apt-get install -y -qq \
             gcc-riscv64-unknown-elf \
             qemu-system-riscv \
             qemu-system-misc \
@@ -290,8 +307,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install tools
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq \
+          bash ci/retry.sh -- sudo apt-get update -qq
+          bash ci/retry.sh -- sudo apt-get install -y -qq \
             fasm \
             qemu-system-x86 \
             binutils

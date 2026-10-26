@@ -33,6 +33,16 @@
 #   bash ci/wasm.sh --selftest run every gate's red-path demo and require
 #                              each to FAIL (AC-9 — a gate that cannot be
 #                              demonstrated red is not a gate)
+#   bash ci/wasm.sh --host-only
+#                              run the host-side legs only: G52/G53/G56 in
+#                              full, the host legs of G55 (span-table node
+#                              tests, now_ms grep), and — under --selftest —
+#                              every host-runnable red path. G54 and the
+#                              browser-tooled G55 legs need wasm-bindgen/
+#                              wasm-tools/wasmtime/playwright and are owned
+#                              by the dedicated wasm job in .github/workflows/
+#                              ci.yml; a tool-less job must pass --host-only
+#                              rather than have the gates silently skip.
 #
 # Runs standalone on a fresh clone with only the documented toolchain (AC-1).
 # `ci/guards.sh` carries a pointer comment for G52–G56 and no gate edits.
@@ -562,6 +572,40 @@ g55_green() {
     fi
 }
 
+g55_host_only() {
+    # The host-runnable legs of G55 for tool-less jobs (--host-only): the
+    # span-table unit tests are plain node (no npm deps) and the now_ms grep
+    # is plain grep. The wasm32 clippy, the bindgen bundle build, the byte
+    # budgets, the reproducibility re-link, and the browser smoke need the
+    # wasm toolchain/playwright provisioned by the dedicated wasm job —
+    # skipping them here is a provisioning decision recorded in the workflow,
+    # never an automatic fallback (a missing tool in the wasm job must red,
+    # not skip).
+    msg $YELLOW "G55: host-side legs (--host-only; browser-tooled legs are owned by the wasm job)"
+    if node --test web/test/*.test.mjs > /tmp/g55-node-tests.log 2>&1; then
+        msg $GREEN "  G55: browser span-map and Wasm span-table tests green"
+    else
+        fail "browser span-map/Wasm span-table tests (see /tmp/g55-node-tests.log)"
+    fi
+    now_ms_grep
+}
+
+g58_selftest() {
+    # Red-path demo (W3/G58): the drift detector — a lab outside the
+    # classification convention must FAIL the pack (never a silent drop).
+    # Host-only (repl-cli pack-examples), so it runs in every mode.
+    msg $YELLOW "G58 selftest: an unclassifiable lab must red the pack"
+    rm -rf /tmp/g58-red-labs
+    cp -r docs/book/labs /tmp/g58-red-labs
+    echo 'module Junk;' > /tmp/g58-red-labs/ch06/zz-mystery-lab.mod
+    if cargo run -q -p wasm-repl --features cli --bin repl-cli -- pack-examples /tmp/g58-red-labs /tmp/g58-red.js         > /tmp/g58-red.log 2>&1; then
+        fail "selftest: the pack PASSED with an unclassifiable lab (G58 blind)"
+    else
+        msg $GREEN "  G58 selftest: the unclassifiable lab correctly redded the pack"
+    fi
+    rm -rf /tmp/g58-red-labs /tmp/g58-red.js
+}
+
 g55_selftest() {
     # Red-path demo 1 (AC-9): a tampered artifact must fail the page's
     # integrity check LOUDLY — the tampered smoke run is itself green (it
@@ -578,18 +622,7 @@ g55_selftest() {
         fail "page-fail demonstration (see /tmp/g55-pagefail.log)"
     fi
 
-    # Red-path demo (W3/G58): the drift detector — a lab outside the
-    # classification convention must FAIL the pack (never a silent drop).
-    msg $YELLOW "G58 selftest: an unclassifiable lab must red the pack"
-    rm -rf /tmp/g58-red-labs
-    cp -r docs/book/labs /tmp/g58-red-labs
-    echo 'module Junk;' > /tmp/g58-red-labs/ch06/zz-mystery-lab.mod
-    if cargo run -q -p wasm-repl --features cli --bin repl-cli -- pack-examples /tmp/g58-red-labs /tmp/g58-red.js         > /tmp/g58-red.log 2>&1; then
-        fail "selftest: the pack PASSED with an unclassifiable lab (G58 blind)"
-    else
-        msg $GREEN "  G58 selftest: the unclassifiable lab correctly redded the pack"
-    fi
-    rm -rf /tmp/g58-red-labs /tmp/g58-red.js
+    g58_selftest
 
     # Red-path demo 2: with a budget knob forced absurdly low, the budget
     # check MUST fail (proving the check is consulted, not decorative). The
@@ -608,22 +641,51 @@ g55_selftest() {
 # Dispatch
 # ---------------------------------------------------------------------------
 
-mode="${1:-run}"
+host_only=0
+mode="run"
+for arg in "$@"; do
+    case "$arg" in
+        run)         mode="run" ;;
+        --selftest)  mode="--selftest" ;;
+        --host-only) host_only=1 ;;
+        *)
+            msg $RED "unknown argument '$arg' (run | --selftest | --host-only)"
+            exit 2
+            ;;
+    esac
+done
+
 case "$mode" in
     run)
         g52_green
         g53_green
-        g54_green
+        if [ "$host_only" -eq 1 ]; then
+            msg $YELLOW "G54: skipped (--host-only: wasm-tools/wasmtime validation legs are owned by the wasm job)"
+        else
+            g54_green
+        fi
         g56_green
-        g55_green
+        if [ "$host_only" -eq 1 ]; then
+            g55_host_only
+        else
+            g55_green
+        fi
         ;;
     --selftest)
         g52_selftest
         g53_selftest
-        g54_selftest
+        if [ "$host_only" -eq 1 ]; then
+            msg $YELLOW "G54 selftest: skipped (--host-only: owned by the wasm job)"
+        else
+            g54_selftest
+        fi
         g56_selftest
         g57_selftest
-        g55_selftest
+        if [ "$host_only" -eq 1 ]; then
+            g58_selftest
+        else
+            g55_selftest
+        fi
         ;;
     *)
         msg $RED "unknown mode '$mode' (run | --selftest)"
