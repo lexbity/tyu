@@ -14,6 +14,7 @@
 
 pub mod arm;
 pub mod riscv;
+pub mod thumb;
 
 /// Size of one on-wire relocation entry in bytes.
 ///

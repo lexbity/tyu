@@ -127,6 +127,10 @@ fn scaffold_manifest(name: &str, expected_abi_hash: u64) -> String {
     format!(
         r#"[platform]
 name = "{name}"
+# The declared runtime kind (hosted | metal). The scaffold lays out a
+# bare-metal firmware pack; flip to kind = "hosted" for a pack whose runtime
+# runs under a host (native process or engine).
+kind = "metal"
 # Pack-manifest schema 3 (developer-proof-pipeline.md §6.7): descriptor-era
 # content plus the optional [model] identity section. A scaffold stays
 # unmodeled (§Q15) until the bundle ships a model artifact.

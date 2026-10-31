@@ -1,6 +1,7 @@
 [platform]
 name = "x86_64-unknown-none"
 schema = 3
+kind = "metal"
 family = "q35"
 compiler-interface = 1
 description = "x86_64 bare-metal runtime"

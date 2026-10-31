@@ -233,22 +233,66 @@ fn lint_pack_manifest(
         let metal = pack.effective_metal(isa);
         let metal_root = validate_relative_path(pack_root, &metal.path)
             .map_err(|detail| TyuError::Platform(format!("{}: {}", pack.name(), detail)))?;
-        let startup_rel = validate_relative_path(&metal_root, &metal.startup)
-            .map_err(|detail| TyuError::Platform(format!("{}: {}", pack.name(), detail)))?;
-        if let Err(e) = validate_existing_file(&startup_rel) {
-            errors.push(e);
-            if !all {
-                return Ok(LintOutcome {
-                    pack: pack_name,
-                    errors,
-                    warnings: Vec::new(),
-                });
+
+        // Linkage follows the declared kind: a metal pack links its firmware
+        // through the declared linker script; a hosted pack links with the
+        // host toolchain and must not declare one.
+        let linker_rel = if manifest.platform.kind == crate::platform::PlatformKind::Metal {
+            if metal.linker.is_empty() {
+                errors.push(LintError::new(
+                    E_PACK_MANIFEST_INVALID,
+                    "kind=metal requires a [metal] linker script",
+                ));
+                if !all {
+                    return Ok(LintOutcome {
+                        pack: pack_name,
+                        errors,
+                        warnings: Vec::new(),
+                    });
+                }
+                None
+            } else {
+                let rel = validate_relative_path(&metal_root, &metal.linker)
+                    .map_err(|detail| TyuError::Platform(format!("{}: {}", pack.name(), detail)))?;
+                if let Err(e) = validate_existing_file(&rel) {
+                    errors.push(e);
+                    if !all {
+                        return Ok(LintOutcome {
+                            pack: pack_name,
+                            errors,
+                            warnings: Vec::new(),
+                        });
+                    }
+                }
+                Some(rel)
             }
-        }
-        let linker_rel = if metal.linker.is_empty() {
-            None
         } else {
-            let rel = validate_relative_path(&metal_root, &metal.linker)
+            if !metal.linker.is_empty() {
+                errors.push(LintError::new(
+                    E_PACK_MANIFEST_INVALID,
+                    "kind=hosted links with the host toolchain; [metal] linker must be empty",
+                ));
+                if !all {
+                    return Ok(LintOutcome {
+                        pack: pack_name,
+                        errors,
+                        warnings: Vec::new(),
+                    });
+                }
+            }
+            None
+        };
+
+        // The startup unit: a metal runtime always has one; a hosted runtime
+        // has one when it runs as a native process, and none at all when the
+        // host engine executes the module binary directly (the wasm backend
+        // emits the module — no native runtime units exist).
+        let engine_hosted = manifest.platform.kind == crate::platform::PlatformKind::Hosted
+            && Target::parse(isa.triple.as_bytes())
+                .map(|t| t.spec().assembler == codegen_core::AssemblerKind::None)
+                .unwrap_or(false);
+        let startup_rel = if !metal.startup.is_empty() {
+            let rel = validate_relative_path(&metal_root, &metal.startup)
                 .map_err(|detail| TyuError::Platform(format!("{}: {}", pack.name(), detail)))?;
             if let Err(e) = validate_existing_file(&rel) {
                 errors.push(e);
@@ -261,18 +305,11 @@ fn lint_pack_manifest(
                 }
             }
             Some(rel)
-        };
-
-        let startup_text = fs::read_to_string(&startup_rel).map_err(|e| {
-            TyuError::Platform(format!("reading '{}': {}", startup_rel.display(), e))
-        })?;
-        let exported = parse_exported_symbols(&startup_text);
-        let required_symbols = required_symbols_for_pack(manifest, metal);
-        for symbol in required_symbols {
-            if !exported.contains(&symbol) {
+        } else {
+            if !engine_hosted {
                 errors.push(LintError::new(
-                    E_PACK_SYMBOL_MISSING,
-                    format!("missing symbol '{}' in {}", symbol, startup_rel.display()),
+                    E_PACK_MANIFEST_INVALID,
+                    "kind=metal requires a [metal] startup unit",
                 ));
                 if !all {
                     return Ok(LintOutcome {
@@ -280,6 +317,30 @@ fn lint_pack_manifest(
                         errors,
                         warnings: Vec::new(),
                     });
+                }
+            }
+            None
+        };
+
+        if let Some(startup_rel) = &startup_rel {
+            let startup_text = fs::read_to_string(startup_rel).map_err(|e| {
+                TyuError::Platform(format!("reading '{}': {}", startup_rel.display(), e))
+            })?;
+            let exported = parse_exported_symbols(&startup_text);
+            let required_symbols = required_symbols_for_pack(manifest, metal);
+            for symbol in required_symbols {
+                if !exported.contains(&symbol) {
+                    errors.push(LintError::new(
+                        E_PACK_SYMBOL_MISSING,
+                        format!("missing symbol '{}' in {}", symbol, startup_rel.display()),
+                    ));
+                    if !all {
+                        return Ok(LintOutcome {
+                            pack: pack_name,
+                            errors,
+                            warnings: Vec::new(),
+                        });
+                    }
                 }
             }
         }
@@ -335,7 +396,7 @@ fn lint_pack_manifest(
     }
 
     for (cap, glue) in &manifest.capabilities {
-        if let Err(e) = lint_capability_glue(pack_root, cap, glue) {
+        if let Err(e) = lint_capability_glue(root, pack, cap, glue) {
             errors.push(e);
             if !all {
                 return Ok(LintOutcome {
@@ -532,7 +593,7 @@ fn lint_pack_manifest(
     if let Some(deploy) = &manifest.deploy {
         if !matches!(
             deploy.method.as_str(),
-            "qemu" | "elf-qemu" | "uf2" | "openocd"
+            "qemu" | "elf-qemu" | "uf2" | "openocd" | "web-bundle"
         ) {
             errors.push(LintError::new(
                 E_PACK_DEPLOY_RECIPE_INVALID,
@@ -914,13 +975,12 @@ fn model_artifact_path(pack_root: &Path) -> PathBuf {
     pack_root.join("model").join("model.toml")
 }
 
-/// P15.1: whether `pack` is the HOSTED bundle — its manifest lives directly
-/// under `runtime/` (the flat `runtime/<name>.platform.toml` layout), and
-/// its model identity carrier + evidence are carried in the `sysroot` next
-/// to the services it models (PLAN-VERIFY-3 §9: "sysroot/ | hosted bundle
-/// model identity carrier (model.toml) for services").
-fn is_hosted_pack(root: &Path, pack: &PlatformPack) -> bool {
-    pack.manifest_path.starts_with(root.join("runtime"))
+/// P15.1: whether `pack` is a HOSTED bundle — declared by `[platform] kind`.
+/// A hosted bundle's model identity carrier + evidence are carried in the
+/// `sysroot` next to the services it models (PLAN-VERIFY-3 §9: "sysroot/ |
+/// hosted bundle model identity carrier (model.toml) for services").
+fn is_hosted_pack(pack: &PlatformPack) -> bool {
+    pack.kind() == crate::platform::PlatformKind::Hosted
 }
 
 /// The hosted bundle's default ISA triple (the sysroot directory its model
@@ -938,7 +998,7 @@ fn hosted_isa_triple(pack: &PlatformPack) -> &str {
 /// `model/model.toml` under the pack root; the hosted bundle carries it in
 /// the sysroot (`sysroot/<triple>/model.toml`).
 fn model_artifact_path_at(root: &Path, pack: &PlatformPack) -> PathBuf {
-    if is_hosted_pack(root, pack) {
+    if is_hosted_pack(pack) {
         root.join("sysroot")
             .join(hosted_isa_triple(pack))
             .join("model.toml")
@@ -951,7 +1011,7 @@ fn model_artifact_path_at(root: &Path, pack: &PlatformPack) -> PathBuf {
 /// packs keep it under the pack root; the hosted bundle's service vectors
 /// live in the sysroot evidence dir next to its model.
 fn model_evidence_path_at(root: &Path, pack: &PlatformPack) -> PathBuf {
-    if is_hosted_pack(root, pack) {
+    if is_hosted_pack(pack) {
         root.join("sysroot")
             .join(hosted_isa_triple(pack))
             .join("evidence")
@@ -1266,14 +1326,33 @@ fn required_memory_regions(memory: &MemorySection) -> Vec<String> {
     regions
 }
 
-fn lint_capability_glue(root: &Path, cap: &str, glue: &CapabilityConfig) -> Result<(), LintError> {
+/// Capability-glue lint. `workspace` is the workspace root, `pack` the pack
+/// being linted: the glue resolves under the pack root, except for a hosted
+/// bundle (P15.1) whose platform glue is carried in the sysroot next to the
+/// services it models — `sysroot/<triple>/<glue>`.
+fn lint_capability_glue(
+    workspace: &Path,
+    pack: &PlatformPack,
+    cap: &str,
+    glue: &CapabilityConfig,
+) -> Result<(), LintError> {
     let required = capability_contract(cap).ok_or_else(|| {
         LintError::new(
             E_PACK_CAPABILITY_GLUE_MISSING,
             format!("unknown capability '{}'", cap),
         )
     })?;
-    let glue_root = validate_relative_path(root, &glue.glue)
+    let glue_base = if is_hosted_pack(pack) {
+        // The glue value (`platform/<name>`) resolves under the hosted
+        // bundle's sysroot triple directory, where its platform glue lives.
+        workspace.join("sysroot").join(hosted_isa_triple(pack))
+    } else {
+        pack.manifest_path
+            .parent()
+            .unwrap_or(workspace)
+            .to_path_buf()
+    };
+    let glue_root = validate_relative_path(&glue_base, &glue.glue)
         .map_err(|detail| LintError::new(E_PACK_PATH_INVALID, detail.to_string()))?;
     let def_path = glue_root.with_extension("def");
     let mod_path = glue_root.with_extension("mod");

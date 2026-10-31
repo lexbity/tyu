@@ -1,6 +1,7 @@
 [platform]
 name = "riscv32-unknown-none"
 schema = 3
+kind = "metal"
 family = "virt"
 compiler-interface = 1
 description = "RV32 bare-metal runtime"

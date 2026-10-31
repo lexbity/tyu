@@ -68,9 +68,43 @@ pub struct VerificationSection {
 /// gate, so a schema-2 pack cannot smuggle model identity past either.
 pub const MANIFEST_SCHEMA_MODEL: u32 = 3;
 
+/// The declared runtime kind of a platform pack (`[platform] kind`): the
+/// single source of truth for which execution flow a pack's runtime belongs
+/// to. There is exactly one model per kind — hosted runtimes run as native
+/// processes under a host (the OS, or a wasm engine), metal runtimes are
+/// firmware images linked against flash/RAM with the on-device loader. The
+/// build never mixes the two flows (a hosted pack gets no firmware entry
+/// units, a metal pack always links a linker script), so the kind is
+/// declared, never inferred from file layout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PlatformKind {
+    /// Runs under a host: a native OS process (hosted-linux; its startup unit
+    /// owns `_start`) or directly by an engine (wasm; no native runtime
+    /// units at all — the backend emits the module binary).
+    Hosted,
+    /// Bare-metal firmware: flash/RAM image, `static_entry`/`dynamic_entry`
+    /// units, on-device loader, QEMU/hardware deploy.
+    Metal,
+}
+
+impl PlatformKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PlatformKind::Hosted => "hosted",
+            PlatformKind::Metal => "metal",
+        }
+    }
+}
+
 #[derive(Clone, Debug, serde::Deserialize)]
 pub struct PlatformSection {
     pub name: String,
+    /// The declared runtime kind (hosted | metal). Required: every pack
+    /// states which execution flow its runtime belongs to, and the build,
+    /// lint, and report surfaces all read this one declaration instead of
+    /// guessing from directory layout or linker-script presence.
+    pub kind: PlatformKind,
     /// The pack-manifest schema stamp. Schema 2 = descriptor-era content;
     /// schema 3 adds the `[model]` section (§6.7). Absent on legacy packs
     /// (the descriptor parse gate rejects a descriptor-bearing pack without
@@ -278,6 +312,11 @@ impl PlatformPack {
         &self.manifest.platform.name
     }
 
+    /// The declared runtime kind (`[platform] kind`).
+    pub fn kind(&self) -> PlatformKind {
+        self.manifest.platform.kind
+    }
+
     /// The declared `[model]` section, if any (§6.7).
     pub fn model(&self) -> Option<&ModelSection> {
         self.manifest.model.as_ref()
@@ -435,6 +474,11 @@ impl ResolvedPlatformSelection {
         self.pack.effective_metal(&self.isa)
     }
 
+    /// The declared runtime kind (`[platform] kind`) of the selected pack.
+    pub fn kind(&self) -> PlatformKind {
+        self.pack.kind()
+    }
+
     pub fn pack_root(&self) -> &Path {
         self.pack.pack_root()
     }
@@ -500,8 +544,9 @@ pub fn list_report(root: &Path) -> Result<String, TyuError> {
     for pack in packs {
         writeln!(
             &mut out,
-            "{} | isa={} | compiler-interface={} | capabilities={} | rung={}",
+            "{} | kind={} | isa={} | compiler-interface={} | capabilities={} | rung={}",
             pack.name(),
+            pack.kind().as_str(),
             pack.isa_summary(),
             pack.manifest.platform.compiler_interface,
             pack.capabilities_summary(),
@@ -549,6 +594,8 @@ pub fn info_report(root: &Path, name: &str, isa_filter: Option<&str>) -> Result<
         writeln!(&mut out, "  description: {}", desc)
             .map_err(|e| TyuError::Platform(e.to_string()))?;
     }
+    writeln!(&mut out, "  kind: {}", pack.kind().as_str())
+        .map_err(|e| TyuError::Platform(e.to_string()))?;
     writeln!(
         &mut out,
         "  compiler-interface: {}",

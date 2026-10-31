@@ -238,6 +238,7 @@ fn broken_platform_tree(dir: &Path) {
         pack.join("platform.toml"),
         r#"[platform]
 name = "broken"
+kind = "hosted"
 compiler-interface = 999
 
 [[platform.isa]]

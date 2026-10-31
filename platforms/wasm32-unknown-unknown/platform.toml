@@ -2,6 +2,7 @@
 name = "wasm32-unknown-unknown"
 schema = 3
 family = "wasm32"
+kind = "hosted"
 compiler-interface = 1
 description = "Static browser platform with sandboxed WebAssembly MMIO imports"
 
@@ -9,7 +10,7 @@ description = "Static browser platform with sandboxed WebAssembly MMIO imports"
 triple = "wasm32-unknown-unknown"
 arch = "wasm32"
 default = true
-expected_abi_hash = "0x0000000000000000"
+expected_abi_hash = "0xada0c3a9a848bee9"
 
 [metal]
 path = "."
@@ -23,6 +24,11 @@ isr_stack_slots = 32
 model_semantics = "unmodeled"
 mmio = "nondeterministic"
 concurrency = "unmodeled"
+
+[deploy]
+# The browser pack ships inside the web bundle (wasm-repl cdylib + bindgen,
+# ci/wasm.sh G55) — there is no device-flash or QEMU deployment step.
+method = "web-bundle"
 
 [test]
 rung = "untested"

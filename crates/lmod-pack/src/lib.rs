@@ -403,6 +403,32 @@ fn apply_internal_reloc(
             }
             out[off..off + 4].copy_from_slice(&(val as u32).to_le_bytes());
         }
+        (EM_ARM, 10) | (EM_ARM, 30) => {
+            // R_ARM_THM_CALL / R_ARM_THM_JUMP24: 4-byte Thumb-2 BL / B.W.
+            // The displacement is relative to place+4 (the architecturally
+            // fixed PC bias) against the branch target with its Thumb bit
+            // (st_value of a Thumb function symbol is odd) stripped — the
+            // same math the loader applies to import-side relocs, with the
+            // site's L bit preserved so a B.W tail-jump never becomes a BL.
+            let kind_name = if r_type == 10 {
+                "R_ARM_THM_CALL"
+            } else {
+                "R_ARM_THM_JUMP24"
+            };
+            let off = site_addr as usize;
+            if off + 4 > out.len() {
+                return Err(PackError::RelocSiteOutOfRange {
+                    site: off,
+                    kind: kind_name,
+                });
+            }
+            let branch_addr = sym_value.wrapping_add(addend as u64) & !1;
+            let disp = (branch_addr as i64)
+                .wrapping_sub(site_addr as i64)
+                .wrapping_sub(4);
+            lmod::reloc::thumb::encode_branch(&mut out[off..off + 4], disp, None)
+                .map_err(|_| PackError::UnsupportedInternalReloc(r_type))?;
+        }
         (EM_RISCV, 16) => {
             let p = site_addr as i64;
             let val = (sym_value as i64).wrapping_add(addend).wrapping_sub(p);
@@ -1053,6 +1079,78 @@ mod tests {
         apply_internal_reloc(&mut out, EM_ARM, 2, 0, 0x2000, 8, 0x100).unwrap();
         let written = u32::from_le_bytes(out[8..12].try_into().unwrap());
         assert_eq!(written, 0x2100, "R_ARM_ABS32 must write S+A");
+    }
+
+    // ---------------------------------------------------------------------
+    // apply_internal_reloc: R_ARM_THM_CALL (10) / R_ARM_THM_JUMP24 (30)
+    // ---------------------------------------------------------------------
+
+    /// Decode the byte displacement a BL/B.W site was patched with, relative
+    /// to place+4 (the PC bias), so the known-answer math stays readable.
+    fn thumb_branch_disp(site: &[u8]) -> (i64, bool) {
+        let insn = &site[..4];
+        let hw0 = u16::from_le_bytes([insn[0], insn[1]]);
+        let hw1 = u16::from_le_bytes([insn[2], insn[3]]);
+        assert_eq!((hw0 >> 11) & 0x1F, 0b11110, "first halfword 11110 prefix");
+        assert_eq!((hw1 >> 14) & 0b11, 0b11, "second halfword 11 prefix");
+        let s: u32 = ((hw0 >> 10) & 1) as u32;
+        let j1: u32 = ((hw1 >> 13) & 1) as u32;
+        let j2: u32 = ((hw1 >> 11) & 1) as u32;
+        let imm10: u32 = (hw0 & 0x03FF) as u32;
+        let imm11: u32 = (hw1 & 0x7FF) as u32;
+        let i1 = j1 ^ (s ^ 1);
+        let i2 = j2 ^ (s ^ 1);
+        let half: u32 = (s << 23) | (i1 << 22) | (i2 << 21) | (imm10 << 11) | imm11;
+        let half_signed: i64 = if half & 0x800000 != 0 {
+            half as i64 - 0x1000000
+        } else {
+            half as i64
+        };
+        (half_signed * 2, hw1 & 0x1000 != 0)
+    }
+
+    #[test]
+    fn reloc_arm_thm_call_forward_and_backward() {
+        // Site at 0x10 calls a Thumb symbol at 0x30 (st_value odd): the
+        // displacement must be target&!1 - (place+4) = 0x30-4-0x10. The site
+        // is seeded BL-shaped (the assembler's `bl` emits L=1) and must keep
+        // its link bit through the pre-resolution.
+        let mut out = vec![0u8; 64];
+        out[0x10 + 2] = 0x02; // BL-shaped second halfword (L=1): hw1 = 0xD002
+        out[0x10 + 3] = 0xD0;
+        apply_internal_reloc(&mut out, EM_ARM, 10, 0x10, 0x31, 0, 0).unwrap();
+        let (disp, link) = thumb_branch_disp(&out[0x10..]);
+        assert_eq!(disp, 0x30 - 4 - 0x10, "THM_CALL forward displacement");
+        assert!(link, "the assembler's BL site keeps its link bit");
+
+        // Backward call: target below the site.
+        let mut out2 = vec![0u8; 64];
+        out2[0x10 + 2] = 0x02;
+        out2[0x10 + 3] = 0xD0;
+        apply_internal_reloc(&mut out2, EM_ARM, 10, 0x10, 0x9, 0, 0).unwrap();
+        let (disp2, _) = thumb_branch_disp(&out2[0x10..]);
+        assert_eq!(disp2, 0x8 - 4 - 0x10, "THM_CALL backward displacement");
+    }
+
+    #[test]
+    fn reloc_arm_thm_jump24_preserves_no_link() {
+        // A B.W site (second halfword bit 12 clear) must stay B.W after the
+        // internal pre-resolution — a tail-jump must not start clobbering lr.
+        let mut out = vec![0u8; 64];
+        out[0x10 + 2] = 0x02; // B.W-shaped second halfword (L=0): hw1 = 0xC002
+        out[0x10 + 3] = 0xC0;
+        apply_internal_reloc(&mut out, EM_ARM, 30, 0x10, 0x21, 0, 0).unwrap();
+        let (disp, link) = thumb_branch_disp(&out[0x10..]);
+        assert_eq!(disp, 0x20 - 4 - 0x10, "THM_JUMP24 displacement");
+        assert!(!link, "B.W site must keep its link bit clear");
+    }
+
+    #[test]
+    fn reloc_arm_thm_call_out_of_range_rejected() {
+        // ±16 MiB is the BL field limit; a ±32 MiB displacement cannot encode.
+        let mut out = vec![0u8; 16];
+        let result = apply_internal_reloc(&mut out, EM_ARM, 10, 0, 0x2000001, 0, 0);
+        assert_eq!(result, Err(PackError::UnsupportedInternalReloc(10)));
     }
 
     #[test]

@@ -2,6 +2,7 @@
 name = "linux-x86_64-hosted"
 schema = 3
 family = "q35-hosted"
+kind = "hosted"
 compiler-interface = 1
 description = "x86_64 hosted runtime"
 

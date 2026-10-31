@@ -1,6 +1,7 @@
 [platform]
 name = "armv7m-unknown-none"
 schema = 3
+kind = "metal"
 family = "lm3s6965evb"
 compiler-interface = 1
 description = "ARMv7-M bare-metal runtime"

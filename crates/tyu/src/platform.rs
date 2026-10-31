@@ -12,9 +12,9 @@ pub use config::{
     info_report, is_qemu_capable_selection, list_report, load_platform_pack,
     platform_pack_for_target, print_info, print_list, resolve_platform_selection, run,
     DebugAgentSection, DebugSection, DeploySection, DeployStep, FeatureUnit, IsaEntry,
-    MemoryRegion, MemorySection, MetalSection, ModelSection, PlatformManifest, PlatformPack,
-    PlatformSection, ResolvedPlatformSelection, SecureBootSection, TestRung, TestSection,
-    MANIFEST_SCHEMA_MODEL,
+    MemoryRegion, MemorySection, MetalSection, ModelSection, PlatformKind, PlatformManifest,
+    PlatformPack, PlatformSection, ResolvedPlatformSelection, SecureBootSection, TestRung,
+    TestSection, MANIFEST_SCHEMA_MODEL,
 };
 pub use desc::compile::{descriptor_file_path, ensure_compiled_descriptor, COMPILED_DESC_FILE};
 pub use desc::{
@@ -44,6 +44,7 @@ mod tests {
             r#"
 [platform]
 name = "demo"
+kind = "metal"
 compiler-interface = 1
 
 [[platform.isa]]
@@ -79,6 +80,7 @@ rung = "untested"
             r#"
 [platform]
 name = "demo"
+kind = "metal"
 compiler-interface = 1
 description = "Demo pack"
 
@@ -188,6 +190,7 @@ evidence = "tests/demo.rs"
             r#"
 [platform]
 name = "foo"
+kind = "metal"
 compiler-interface = 1
 
 [[platform.isa]]
@@ -210,6 +213,7 @@ rung = "untested"
             r#"
 [platform]
 name = "legacy"
+kind = "metal"
 compiler-interface = 1
 
 [[platform.isa]]
@@ -232,6 +236,7 @@ rung = "untested"
             r#"
 [platform]
 name = "bar"
+kind = "metal"
 compiler-interface = 1
 
 [[platform.isa]]

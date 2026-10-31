@@ -172,6 +172,33 @@ pub fn build_resolved(args: &BuildArgs, ctx: BuildContext) -> Result<BuildOutcom
 
     let mode = effective_build_mode(args, target);
 
+    // Mode gate: a dynamic image IS a metal-firmware image. The on-device
+    // loader (`dynamic_entry.asm` → `loader_core::boot`) and the `.modpack`
+    // section only exist in the metal flow; a hosted runtime loads modules
+    // through its host instead (FS-based host loader, engine imports). A
+    // hosted `--mode=dynamic` is therefore refused here — before any runtime
+    // unit is assembled, so the intentional gate fires instead of a confusing
+    // missing-`dynamic_entry.asm` diagnostic.
+    if mode == BuildMode::Dynamic {
+        match platform_selection.as_ref() {
+            Some(selection) if selection.kind() != platform::PlatformKind::Metal => {
+                return Err(TyuError::Build(format!(
+                    "--mode=dynamic requires a metal runtime: platform '{}' declares kind={}",
+                    selection.pack.name(),
+                    selection.kind().as_str(),
+                )));
+            }
+            None if target.spec().qemu.is_none() => {
+                return Err(TyuError::Build(format!(
+                    "--mode=dynamic requires a bare-metal (QEMU-capable) target; '{}' has no \
+                     firmware image flow",
+                    triple,
+                )));
+            }
+            _ => {}
+        }
+    }
+
     // P12.1 (§6.7/§Q15): the bundle's model-semantics id, resolved from the
     // selected pack's `[model]` section (`"unmodeled"` when no pack is
     // selected or the pack declares none). It stamps every langc invocation
@@ -2122,9 +2149,12 @@ fn assemble_asm_file(
 /// Assemble the mandatory core runtime and any optional feature-specific
 /// units for `target`.  Returns a `Vec` of object-file paths to link.
 ///
-/// Core (`runtime.asm`) is always assembled.  Feature-specific units
-/// (e.g. `modload.asm` for `module-loading`) are assembled only when
-/// the corresponding feature is enabled.
+/// Core runtime: a platform pack names its startup unit in `[metal] startup`
+/// (`runtime.asm` for metal packs, the hosted runtime unit for hosted packs,
+/// empty for an engine-hosted pack with no native runtime); a bare
+/// `--target=` run assembles the per-triple convention `runtime.asm`.
+/// Feature-specific units (e.g. `modload.asm` for `module-loading`) are
+/// assembled only when the corresponding feature is enabled.
 pub fn assemble_runtime(
     target: Target,
     out_dir: &Path,
@@ -2148,26 +2178,53 @@ fn assemble_runtime_with_mode(
     mode: BuildMode,
 ) -> Result<Vec<PathBuf>, TyuError> {
     let triple = std::str::from_utf8(target.triple()).map_err(|_| TyuError::NonUtf8Triple)?;
-    let rt_dir = if let Some(selection) = platform_selection {
-        selection.pack_root().join(&selection.metal().path)
-    } else {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("runtime")
-            .join(triple)
+    // Core-runtime layout: the pack's declared metal dir + startup unit, or
+    // the per-triple runtime directory for a bare `--target=` run. An empty
+    // startup declares a runtime with no native units at all (engine-hosted
+    // wasm: the backend emits the module binary directly).
+    let (rt_dir, core_stem) = match platform_selection {
+        Some(selection) => {
+            let stem = Path::new(&selection.metal().startup)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string();
+            (selection.pack_root().join(&selection.metal().path), stem)
+        }
+        None => (
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .join("runtime")
+                .join(triple),
+            "runtime".to_string(),
+        ),
     };
 
-    // Core runtime is always assembled.
     let mut objs = Vec::new();
-    let runtime_obj = assemble_unit(target, &rt_dir, "runtime", out_dir)?;
-    let symtab_obj = generate_runtime_symtab(target, &runtime_obj, out_dir)?;
-    objs.push(runtime_obj);
-    objs.push(symtab_obj);
-    if let Some(entry_obj) = assemble_entry_unit(target, &rt_dir, out_dir, mode)? {
-        objs.push(entry_obj);
+    if !core_stem.is_empty() {
+        let runtime_obj = assemble_unit(target, &rt_dir, &core_stem, out_dir)?;
+        let symtab_obj = generate_runtime_symtab(target, &runtime_obj, out_dir)?;
+        objs.push(runtime_obj);
+        objs.push(symtab_obj);
+    }
+
+    // Firmware entry units exist only in the metal flow. A hosted pack's
+    // startup unit owns the process entry itself (`_start`); there is no
+    // static/dynamic entry indirection to assemble. Bare `--target=` runs
+    // keep the per-triple convention: firmware dirs carry entry units, the
+    // hosted bridge dir does not (and the dynamic mode gate refuses hosted
+    // targets long before the missing-unit error could fire).
+    let entry_units_apply = match platform_selection {
+        Some(selection) => selection.kind() == platform::PlatformKind::Metal,
+        None => true,
+    };
+    if entry_units_apply {
+        if let Some(entry_obj) = assemble_entry_unit(target, &rt_dir, out_dir, mode)? {
+            objs.push(entry_obj);
+        }
     }
 
     // P6: the MMIO aperture-base table the on-device loader re-derives against.
@@ -2523,8 +2580,8 @@ fn build_device_loader_staticlib(
     signing: bool,
     encryption: bool,
 ) -> Result<PathBuf, TyuError> {
-    let triple = device_loader_rust_target(target)?;
-    let profile = device_loader_profile(target)?;
+    let triple = device_loader_rust_target(target)
+        .ok_or_else(|| TyuError::Build("device loader requires a metal target".into()))?;
     // Per-feature-set target dir: concurrent builds (unsigned + signed test
     // matrices, parallel fleet tooling) must not share one archive path —
     // two cargo invocations with different feature sets otherwise overwrite
@@ -2554,6 +2611,7 @@ fn build_device_loader_staticlib(
         manifest.to_string_lossy().as_ref(),
         "--target",
         triple,
+        "--release",
     ]);
     if target == Target::RiscV32UnknownNone {
         cmd.args(["-Z", "build-std=core,alloc"]);
@@ -2563,9 +2621,6 @@ fn build_device_loader_staticlib(
     }
     if encryption {
         cmd.args(["--features", "encryption"]);
-    }
-    if profile == "release" {
-        cmd.arg("--release");
     }
     let status = cmd
         .status()
@@ -2579,29 +2634,20 @@ fn build_device_loader_staticlib(
 
     Ok(target_dir
         .join(triple)
-        .join(profile)
+        .join("release")
         .join("libdevice_loader_archive.a"))
 }
 
-fn device_loader_rust_target(target: Target) -> Result<&'static str, TyuError> {
+/// The Rust target triple the device-loader staticlib builds for. The
+/// dynamic-mode gate refuses hosted/wasm runtimes before the loader is ever
+/// built, so only metal targets reach here (`None` marks the flow-impossible
+/// remainder).
+fn device_loader_rust_target(target: Target) -> Option<&'static str> {
     match target {
-        Target::X86_64UnknownNone => Ok("x86_64-unknown-none"),
-        Target::ArmV7MUnknownNone => Ok("thumbv7m-none-eabi"),
-        Target::RiscV32UnknownNone => Ok("riscv32im-unknown-none-elf"),
-        Target::X86_64UnknownLinuxGnu | Target::Wasm32UnknownUnknown => Err(TyuError::Build(
-            "--mode=dynamic is only supported for bare-metal QEMU targets".into(),
-        )),
-    }
-}
-
-fn device_loader_profile(target: Target) -> Result<&'static str, TyuError> {
-    match target {
-        Target::X86_64UnknownNone | Target::ArmV7MUnknownNone | Target::RiscV32UnknownNone => {
-            Ok("release")
-        }
-        Target::X86_64UnknownLinuxGnu | Target::Wasm32UnknownUnknown => Err(TyuError::Build(
-            "--mode=dynamic is only supported for bare-metal QEMU targets".into(),
-        )),
+        Target::X86_64UnknownNone => Some("x86_64-unknown-none"),
+        Target::ArmV7MUnknownNone => Some("thumbv7m-none-eabi"),
+        Target::RiscV32UnknownNone => Some("riscv32im-unknown-none-elf"),
+        Target::X86_64UnknownLinuxGnu | Target::Wasm32UnknownUnknown => None,
     }
 }
 
@@ -2660,16 +2706,25 @@ pub fn link_image(
         // link (see `assemble_image_def`); layout stays owned by the
         // pack's `metal/<isa>/link.ld`, which must place `.image_def`
         // within the bootrom's first-4 kB scan window (DS2 5.9.5).
-        if selection.metal().linker.is_empty() {
-            // Hosted packs (e.g. linux-x86_64-hosted) declare `linker = ""`.
-            None
-        } else {
+        if selection.kind() == platform::PlatformKind::Metal {
+            // A metal pack links a firmware image: its declared linker
+            // script places sections in flash/RAM and is required.
+            if selection.metal().linker.is_empty() {
+                return Err(TyuError::Build(format!(
+                    "platform '{}' declares kind=metal but has no [metal] linker script",
+                    selection.pack.name(),
+                )));
+            }
             Some(
                 selection
                     .pack_root()
                     .join(&selection.metal().path)
                     .join(&selection.metal().linker),
             )
+        } else {
+            // Hosted packs link as ordinary host executables via the host
+            // toolchain's default script.
+            None
         }
     } else if spec.qemu.is_none() {
         None

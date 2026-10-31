@@ -33,6 +33,7 @@ fn write_modeled_pack(root: &Path) {
         r#"[platform]
 name = "demo-model"
 schema = 3
+kind = "metal"
 compiler-interface = 1
 description = "synthetic modeled bundle for the identity-flow test"
 

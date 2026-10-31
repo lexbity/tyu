@@ -135,6 +135,10 @@ fn write_pack(root: &Path, manifest: &str) {
     write_file(&root.join("platforms/demo/platform.toml"), manifest);
     write_file(&root.join("platforms/demo/runtime.asm"), base_startup());
     write_file(
+        &root.join("platforms/demo/link.ld"),
+        "MEMORY { FLASH : ORIGIN = 0x00000000, LENGTH = 0x100000 }\n",
+    );
+    write_file(
         &root.join("crates/tyu/tests/run_qemu_x86.rs"),
         "#[test] fn run_qemu_pass() {}",
     );
@@ -150,6 +154,7 @@ fn base_manifest() -> String {
 [platform]
 name = "demo"
 schema = 3
+kind = "metal"
 compiler-interface = 1
 description = "demo pack"
 
@@ -162,7 +167,7 @@ expected_abi_hash = "__ABI_HASH__"
 [metal]
 path = "."
 startup = "runtime.asm"
-linker = ""
+linker = "link.ld"
 
 [features.concurrency]
 unit = "concurrency.asm"

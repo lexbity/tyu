@@ -205,17 +205,22 @@ fn event_loop_diverges_but_elides() {
 }
 
 #[test]
-fn hosted_runtime_keeps_guards_fail_closed() {
-    // The plain hosted runtime exports no DS geometry symbols → `N_main`
-    // unavailable → `stack-budget(main)` open → guards retained (absence can
-    // only cause MORE checking; §7.5). This is the *documented* fail-closed
-    // path, not a bug (runtimes exposing the symbols is the §6.4 migration).
+fn hosted_runtime_derives_main_geometry() {
+    // The hosted runtime exports its DS geometry symbols
+    // (`__lang_ds_base`/`__lang_ds_limit`/`__lang_ds_high` — the pack
+    // contract the lint always required), so `N_main` is derivable and the
+    // §6.4 migration is complete: a finite main's `stack-budget(main)`
+    // discharges against the runtime's own geometry and the guards elide.
+    // (A geometry ABSENCE would still fail closed — that is the §7.5 rule
+    // the recursive-main case pins on the metal runtime.)
     let (out_dir, _stderr, ok) = build("hosted", &["--elide-stack-guards"], FINITE_MOD);
     assert!(ok);
     let r = report(&out_dir);
-    assert_eq!(r["contexts"]["stack"]["guards"], "retained");
-    assert_eq!(r["contexts"]["stack"]["main"]["budget"], 0);
-    assert_eq!(r["contexts"]["stack"]["main"]["verdict"], "open");
+    assert_eq!(r["contexts"]["stack"]["guards"], "elided");
+    assert_eq!(r["contexts"]["stack"]["main"]["verdict"], "discharged");
+    // The budget derives from the hosted runtime's data-stack window
+    // (65536 bytes / 8-byte slots) — computed, never hand-declared.
+    assert_eq!(r["contexts"]["stack"]["main"]["budget"], 8192);
 }
 
 #[test]

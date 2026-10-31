@@ -471,7 +471,13 @@ fi
 # manifest stamp and the descriptor content schema are distinct versions.
 # A pack without the stamp is a legacy pack the compiler cannot consume; a
 # missing stamp is exactly the drift this spec retires. Mutation check #8.
+#
+# The same loop pins the declared runtime kind (`kind = "hosted" | "metal"`,
+# the hosted/metal build-flow split's single source of truth): a manifest
+# without the declaration parses nowhere and the build would fall back to
+# inferring the flow from file layout — exactly the mixing the kind retires.
 missing_schema=""
+missing_kind=""
 for manifest in platforms/*/platform.toml runtime/*.platform.toml; do
     if [ ! -e "$manifest" ]; then
         continue
@@ -479,11 +485,20 @@ for manifest in platforms/*/platform.toml runtime/*.platform.toml; do
     if ! grep -qE '^schema[[:space:]]*=[[:space:]]*3' "$manifest"; then
         missing_schema="$missing_schema $manifest"
     fi
+    if ! grep -qE '^kind[[:space:]]*=[[:space:]]*"(hosted|metal)"' "$manifest"; then
+        missing_kind="$missing_kind $manifest"
+    fi
 done
 if [ -z "$missing_schema" ]; then
     msg $GREEN "  G14: all platform pack manifests carry the schema-3 stamp"
 else
     msg $RED "  G14 FAIL: pack manifests missing 'schema = 3':$missing_schema"
+    failures=$((failures + 1))
+fi
+if [ -z "$missing_kind" ]; then
+    msg $GREEN "  G14: all platform pack manifests declare kind = hosted|metal"
+else
+    msg $RED "  G14 FAIL: pack manifests missing the kind declaration:$missing_kind"
     failures=$((failures + 1))
 fi
 

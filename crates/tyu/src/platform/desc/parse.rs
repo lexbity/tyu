@@ -403,6 +403,12 @@ struct RawVerification {
 #[serde(deny_unknown_fields)]
 struct RawPlatformSection {
     name: String,
+    /// v1 runtime-kind declaration (`hosted` | `metal`) — acknowledged so
+    /// deny_unknown_fields does not reject it; the descriptor flow itself is
+    /// kind-neutral (the build owns the hosted/metal split).
+    #[allow(dead_code)]
+    #[serde(default)]
+    kind: Option<String>,
     #[serde(default)]
     schema: Option<u32>,
     #[serde(default)]

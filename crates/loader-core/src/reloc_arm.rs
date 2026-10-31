@@ -94,94 +94,16 @@ pub fn apply_import_reloc(
     }
 }
 
-/// Encode a signed byte offset into a 4-byte Thumb-2 BL/BLX instruction.
+/// Encode a signed byte offset into a 4-byte Thumb-2 BL instruction.
 ///
-/// The `offset` is in bytes and must be halfword-aligned (even) and
-/// within ±16 MB (fits in a signed 25-bit value).  The encoding stores
-/// a signed 24-bit value in halfwords (offset >> 1) into the instruction.
-///
-/// Instruction format for BL (ARMv7-M):
-///   First halfword (at site_off):
-///     1111 0 S imm10[9:0]
-///   Second halfword (at site_off+2):
-///     1111 1 J1 1 J2 imm11[10:0]
-///
-/// Where:
-///   S = (offset_half >> 23) & 1          (bit 10 of first hw)
-///   I1 = (offset_half >> 22) & 1
-///   I2 = (offset_half >> 21) & 1
-///   J1 = !(I1 ^ S)                       (bit 13 of second hw)
-///   J2 = !(I2 ^ S)                       (bit 11 of second hw)
-///   imm10 = (offset_half >> 11) & 0x3FF  (bits 9:0 of first hw)
-///   imm11 = offset_half & 0x7FF          (bits 10:0 of second hw)
+/// The shared bit arithmetic lives in `lmod::reloc::thumb` (module-format
+/// §3.1) so the packer's internal pre-resolution and this loader-side import
+/// binding patch identical instruction shapes; the loader always writes the
+/// BL (link) form. Encode/decode round-trips are pinned by that module's
+/// tests (the decode oracle is test-only there — the firmware build keeps
+/// the 16 KiB device-loader text budget, G7).
 fn encode_thumb_bl(insn: &mut [u8], offset: i64) -> Result<(), ()> {
-    if offset & 1 != 0 {
-        return Err(()); // misaligned
-    }
-    let half = offset >> 1; // convert bytes to halfwords
-                            // Check signed 24-bit range (±16MB)
-    if !(-0x800000..=0x7FFFFF).contains(&half) {
-        return Err(());
-    }
-
-    let h = half as u32;
-    let s: u16 = ((h >> 23) & 1) as u16;
-    let i1: u16 = ((h >> 22) & 1) as u16;
-    let i2: u16 = ((h >> 21) & 1) as u16;
-    let j1: u16 = 1 ^ i1 ^ s;
-    let j2: u16 = 1 ^ i2 ^ s;
-    let imm10: u16 = ((h >> 11) & 0x3FF) as u16;
-    let imm11: u16 = (h & 0x7FF) as u16;
-
-    let hw0 = 0xF000u16 | (s << 10) | imm10;
-    let hw1 = 0xF800u16 | (j1 << 13) | (j2 << 11) | imm11;
-
-    insn[0..2].copy_from_slice(&hw0.to_le_bytes());
-    insn[2..4].copy_from_slice(&hw1.to_le_bytes());
-    Ok(())
-}
-
-/// Decode a Thumb BL (branch-and-link) instruction back to a byte offset.
-/// The reverse of `encode_thumb_bl`.
-///
-/// Only exercised by the encode→decode round-trip unit tests, so gate it on
-/// `test` to avoid a dead-code warning in the firmware (non-test) build.
-#[cfg(test)]
-fn decode_thumb_bl(insn: &[u8]) -> Result<i64, ()> {
-    if insn.len() < 4 {
-        return Err(());
-    }
-    let hw0 = u16::from_le_bytes([insn[0], insn[1]]);
-    let hw1 = u16::from_le_bytes([insn[2], insn[3]]);
-
-    // Check fixed bits: hw0[15:11] = 11110.
-    if (hw0 & 0xF800) != 0xF000 {
-        return Err(());
-    }
-    // hw1[15:11] = 11111.
-    if (hw1 & 0xF800) != 0xF800 {
-        return Err(());
-    }
-
-    let s: u32 = ((hw0 >> 10) & 1) as u32;
-    let j1: u32 = ((hw1 >> 13) & 1) as u32;
-    let j2: u32 = ((hw1 >> 11) & 1) as u32;
-    let imm10: u32 = (hw0 & 0x03FF) as u32;
-    let imm11: u32 = (hw1 & 0x7FF) as u32;
-
-    // I1 = J1 ^ (S ^ 1), I2 = J2 ^ (S ^ 1)
-    let i1 = j1 ^ (s ^ 1);
-    let i2 = j2 ^ (s ^ 1);
-
-    let half: u32 = (s << 23) | (i1 << 22) | (i2 << 21) | (imm10 << 11) | imm11;
-    // Sign-extend from 24 bits.
-    let half_signed = if half & 0x800000 != 0 {
-        half | 0xFF00_0000u32
-    } else {
-        half
-    };
-
-    Ok((half_signed as i64) * 2) // convert halfwords back to bytes
+    lmod::reloc::thumb::encode_bl(insn, offset)
 }
 
 /// Apply the Thumb-bit (LSB=1) to a function address.
@@ -378,25 +300,6 @@ mod tests {
         encode_thumb_bl(&mut insn, 4).unwrap();
         let hw1 = u16::from_le_bytes([insn[2], insn[3]]);
         assert_eq!(hw1 & 0x7FF, 2, "imm11 for offset 4 must be 2");
-    }
-
-    #[test]
-    fn thumb_bl_encode_decode_roundtrip() {
-        // Direct encode→decode round-trip.  Use small offsets where
-        // imm10 < 32 (bits 21:17 of the offset are zero).
-        let cases: [i64; 4] = [4, 0, 0x200, 0x7FE];
-        for &off in &cases {
-            let mut insn = [0u8; 4];
-            assert!(
-                encode_thumb_bl(&mut insn, off).is_ok(),
-                "encode_thumb_bl({off:#x}) must succeed"
-            );
-            let decoded = decode_thumb_bl(&insn).unwrap_or(i64::MIN);
-            assert_eq!(
-                decoded, off,
-                "encode→decode round-trip failed for offset {off:#x}, got {decoded:#x}"
-            );
-        }
     }
 
     #[test]

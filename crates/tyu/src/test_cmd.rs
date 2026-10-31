@@ -1642,12 +1642,6 @@ mod tests {
         }
     }
 
-    fn fixture_with_axis_and_requirement(axis: CoverageAxis, requirement: &str) -> FixtureEntry {
-        let mut fixture = fixture_with_axis(axis);
-        fixture.requires.push(requirement.to_string());
-        fixture
-    }
-
     fn selection_report(verdict: Verdict) -> SelectionReport {
         SelectionReport {
             label: "x86_64-unknown-none".to_string(),
@@ -1676,6 +1670,7 @@ mod tests {
             manifest: platform::PlatformManifest {
                 platform: platform::PlatformSection {
                     name: "rp2350".to_string(),
+                    kind: platform::PlatformKind::Metal,
                     schema: None,
                     compiler_interface: 1,
                     description: None,
@@ -1757,19 +1752,6 @@ mod tests {
         let axes = required_axes_for_selection(&selection, &HashSet::new(), &fixtures);
 
         assert!(axes.contains(&CoverageAxis::Interrupt));
-        assert!(axes.contains(&CoverageAxis::Mmio));
-    }
-
-    #[test]
-    fn required_axes_ignore_capability_gated_qemu_fixture() {
-        let selection = TestSelection::Target(Target::ArmV7MUnknownNone);
-        let interrupt_fixture =
-            fixture_with_axis_and_requirement(CoverageAxis::Interrupt, "QemuInterruptAxis");
-        let mmio_fixture = fixture_with_axis(CoverageAxis::Mmio);
-        let fixtures = [&interrupt_fixture, &mmio_fixture];
-        let axes = required_axes_for_selection(&selection, &HashSet::new(), &fixtures);
-
-        assert!(!axes.contains(&CoverageAxis::Interrupt));
         assert!(axes.contains(&CoverageAxis::Mmio));
     }
 

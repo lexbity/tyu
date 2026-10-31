@@ -37,6 +37,7 @@ fn write_unmodeled_pack(root: &Path) {
         r#"[platform]
 name = "unmodeled-demo"
 schema = 3
+kind = "metal"
 compiler-interface = 1
 description = "synthetic unmodeled bundle (P12.1 §Q15)"
 

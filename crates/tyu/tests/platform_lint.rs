@@ -16,6 +16,8 @@ fn write_file(path: &Path, text: &str) {
     fs::write(path, text).unwrap();
 }
 
+const DEFAULT_LINKER: &str = "MEMORY { FLASH : ORIGIN = 0x00000000, LENGTH = 0x100000 }\n";
+
 fn write_pack(root: &Path, manifest: &str, startup: &str, linker: Option<&str>) {
     write_file(&root.join("platforms/demo/platform.toml"), manifest);
     write_file(&root.join("platforms/demo/runtime.asm"), startup);
@@ -24,10 +26,12 @@ fn write_pack(root: &Path, manifest: &str, startup: &str, linker: Option<&str>) 
         &root.join("crates/tyu/tests/run_qemu_x86.rs"),
         "#[test] fn run_qemu_pass() {}",
     );
-    if let Some(linker) = linker {
-        write_file(&root.join("platforms/demo/link.ld"), linker);
-        write_file(&root.join("runtime/link.ld"), linker);
-    }
+    // A metal pack always links a linker script; the explicit `linker`
+    // argument replaces the default content (a region-anchoring MEMORY
+    // block) where a test asserts on linker facts.
+    let linker = linker.unwrap_or(DEFAULT_LINKER);
+    write_file(&root.join("platforms/demo/link.ld"), linker);
+    write_file(&root.join("runtime/link.ld"), linker);
     write_file(&root.join("platforms/demo/tests/demo.rs"), "demo evidence");
     write_file(
         &root.join("platforms/demo/concurrency.asm"),
@@ -41,6 +45,7 @@ fn base_manifest() -> String {
     r#"
 [platform]
 name = "demo"
+kind = "metal"
 compiler-interface = 1
 description = "demo pack"
 
@@ -53,7 +58,7 @@ expected_abi_hash = "__ABI_HASH__"
 [metal]
 path = "."
 startup = "runtime.asm"
-linker = ""
+linker = "link.ld"
 
 [features.concurrency]
 unit = "concurrency.asm"
@@ -139,7 +144,7 @@ fn lint_reports_missing_memory_region() {
     let root = std::env::temp_dir().join("tyu_platform_lint_memory");
     let _ = fs::remove_dir_all(&root);
     let manifest = base_manifest()
-        .replace("[metal]\npath = \".\"\nstartup = \"runtime.asm\"\nlinker = \"\"\n", "[metal]\npath = \".\"\nstartup = \"runtime.asm\"\nlinker = \"link.ld\"\n\n[memory]\nflash = { name = \"FLASH\", origin = 0x0, length = 0x1000 }\nsram = { name = \"SRAM\", origin = 0x1000, length = 0x1000 }\nds_region = \"SRAM\"\nds_size = 0x4000\n");
+        .replace("[metal]\npath = \".\"\nstartup = \"runtime.asm\"\nlinker = \"link.ld\"", "[metal]\npath = \".\"\nstartup = \"runtime.asm\"\nlinker = \"link.ld\"\n\n[memory]\nflash = { name = \"FLASH\", origin = 0x0, length = 0x1000 }\nsram = { name = \"SRAM\", origin = 0x1000, length = 0x1000 }\nds_region = \"SRAM\"\nds_size = 0x4000\n");
     write_pack(
         &root,
         &manifest,

@@ -139,12 +139,11 @@ name = "isr_lock_atomicity"
 file = "isr_lock_atomicity.mod"
 axes = ["interrupt", "mmio"]
 # Gated by QemuSpec interrupt_source (ARM-only) + mmio_scratch (all QEMU).
-# Eligible only on armv7m-unknown-none (lm3s6965evb with SysTick).
-# FIXME(Slice 7 follow-on): SysTick interrupt delivery needs debugging.
-# The fixture links and runs but the Counter==2 assertion fails because
-# the interrupt doesn't fire in time. Until fixed, keep it opt-in only
-# by requiring a capability no QEMU target advertises.
-requires = ["QemuInterruptAxis"]
+# Eligible only on armv7m-unknown-none (lm3s6965evb with SysTick). The
+# handler stops the timer on entry (see the fixture), so exactly one ISR
+# increment lands and `Counter == 2` holds under either critical-section
+# interleaving.
+requires = []
 
 [[fixture]]
 name = "mmio_smoke_x86"

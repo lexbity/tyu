@@ -21,6 +21,7 @@ fn write_manifest(
             r#"
 [platform]
 name = "{name}"
+kind = "metal"
 compiler-interface = 1
 description = "{name} pack"
 
@@ -99,6 +100,7 @@ fn write_manifest_with_debug_agent(
             r#"
 [platform]
 name = "{name}"
+kind = "metal"
 compiler-interface = 1
 description = "{name} pack"
 
@@ -148,6 +150,7 @@ fn write_consolidated_manifest(path: &Path, name: &str, triple: &str, arch: &str
             r#"
 [platform]
 name = "{name}"
+kind = "metal"
 compiler-interface = 1
 description = "{name} consolidated pack"
 

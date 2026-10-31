@@ -19,6 +19,7 @@ fn manifest(compiler_interface: u16) -> String {
         r#"
 [platform]
 name = "demo"
+kind = "metal"
 compiler-interface = {compiler_interface}
 
 [[platform.isa]]
@@ -41,6 +42,7 @@ fn rp2350_manifest() -> String {
     r#"
 [platform]
 name = "rp2350"
+kind = "metal"
 compiler-interface = 1
 
 [[platform.isa]]

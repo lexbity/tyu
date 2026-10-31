@@ -59,11 +59,16 @@ judge.
 
 ## Toolchain quirks discovered while drafting (for the author)
 
-- **Hosted dynamic-mode entry is missing**: `tyu build --mode=dynamic
-  --target=x86_64-unknown-linux-gnu` fails with "dynamic runtime entry
-  unit .../dynamic_entry.asm is missing" — though the pack half works and
-  produces a valid `.lmod`. The field-update labs therefore run on the
-  QEMU track (and its cargo suites).
+- **RESOLVED — hosted platform flow**: every pack now declares
+  `[platform] kind = "hosted" | "metal"`, and the builder assembles the
+  declared `[metal] startup` unit per pack. `tyu build` /
+  `tyu run --platform=linux-x86_64-hosted` work (the hosted startup unit
+  owns `_start`); `--mode=dynamic` on a hosted runtime is refused early
+  with an intentional gate (dynamic images are metal-firmware images — the
+  on-device loader and `.modpack` only exist in the metal flow). Hosted
+  dynamic module loading remains the host-side (Rust) loader used by the
+  tooling suites. The ISR budget-masking and `@interrupt`-on-hosted items
+  below are unaffected.
 
 - **ISR budget error masked in the production path**: a handler whose peak
   exceeds its binding-site budget reports `E5030` via `langc --emit=ir`,
@@ -73,15 +78,18 @@ judge.
 - **Hosted images with `@interrupt` bindings are not runnable** (they
   build, then crash at startup) — bindings are metal; green lab 11.1 is
   build-only by design.
-- **ARM ISR runtime fixture is FIXME/opt-in**: `isr_lock_atomicity.mod`
-  (lm3s6965evb SysTick) links and runs but its interrupt "doesn't fire in
-  time" per the tree's own comment — chapter 11's runtime half is the
-  documented open edge.
-- **Hosted `tyu run --platform=linux-x86_64-hosted` fails**: the pack's
-  metal startup is `linux-x86_64-hosted.asm` but the builder assembles a
-  fixed `runtime` unit (`runtime/./runtime.asm` not found). Hosted MMIO
-  over the descriptor's simulated devices is therefore not currently
-  runnable; chapter 8 uses the QEMU track.
+- **RESOLVED — ARM ISR runtime fixture**: `isr_lock_atomicity.mod`
+  (lm3s6965evb SysTick) now runs in the `tyu test` QEMU pipeline. The old
+  "interrupt doesn't fire in time" comment was a misdiagnosis: the handler
+  didn't stop the timer, so the free-running tick re-latched its pending
+  bit and the NVIC tail-chained extra entries (nondeterministically many).
+  The handler now stops SysTick on entry and guards against the one
+  deterministic tail-chained re-entry (see the fixture's comment).
+- **RESOLVED — hosted `tyu run --platform=linux-x86_64-hosted`**: the
+  builder now honors the pack's declared `[metal] startup` unit instead of
+  assembling a fixed `runtime` stem. Hosted MMIO over the descriptor's
+  simulated devices runs through the pack path (chapter 8 may use it; the
+  QEMU track remains the metal reference).
 - **`tyu test` fixture naming can affect QEMU linking**: a manifest entry
   named `strategies` failed to link where `mmio_strategies_x86` passed
   (identical fixture). Worked around; worth investigating.

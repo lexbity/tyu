@@ -1751,6 +1751,7 @@ mod tests {
             format!(
                 r#"[platform]
 name = "{name}"
+kind = "hosted"
 compiler-interface = {compiler_interface}
 
 [[platform.isa]]

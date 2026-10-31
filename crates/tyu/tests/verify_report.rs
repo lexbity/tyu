@@ -133,25 +133,37 @@ fn metal_platform_build_reports_discharged_main_context() {
 }
 
 #[test]
-fn platformless_hosted_build_degrades_to_open_main_context() {
-    // The plain hosted runtime (no platform pack) defines no
-    // `__lang_ds_base`/`__lang_ds_limit` symbols in its runtime object, so
-    // N_main cannot be derived → `stack-budget(main)` is open (fail-closed:
-    // absence can only ever cause more checking, never less), and the report
-    // is still written. Contrast the metal test: a runtime that exports its
-    // geometry gets the discharge with no declaration anywhere.
+fn platformless_hosted_build_derives_main_context_from_runtime_geometry() {
+    // The plain hosted runtime (no platform pack) assembles
+    // `runtime/x86_64-unknown-linux-gnu/runtime.asm` — the bridge to the
+    // hosted runtime, which exports its `__lang_ds_base`/`__lang_ds_limit`
+    // geometry — so N_main derives from the runtime binary itself
+    // (§6.4: bounds are computed, never hand-declared) and a finite
+    // `stack-budget(main)` discharges. A runtime that exports NO geometry
+    // still fails closed (absence can only ever cause more checking,
+    // never less) — that rule is pinned by the recursive-main cases.
     let (_, report) = build(
         "noplatform",
         &["--target=x86_64-unknown-linux-gnu"],
         BANK_MOD,
     );
     let v: serde_json::Value = serde_json::from_str(&report).unwrap();
-    assert_eq!(v["contexts"]["stack"]["main"]["budget"], 0);
-    assert_eq!(v["contexts"]["stack"]["main"]["verdict"], "open");
+    assert_eq!(v["contexts"]["stack"]["main"]["verdict"], "discharged");
+    assert_eq!(v["contexts"]["stack"]["main"]["budget"], 8192);
     // The declared ISR grant defaults to 32 with no pack (FR-10).
     assert_eq!(v["contexts"]["stack"]["isr"]["budget"], 32);
-    // No descriptor facts were used → no trusted assumptions.
-    assert!(v["assumptions_trusted"].as_array().unwrap().is_empty());
+    // No descriptor facts were used; the one trusted assumption is the
+    // runtime-geometry derivation itself (honesty block, §7.3).
+    let assumptions = v["assumptions_trusted"].as_array().unwrap();
+    assert_eq!(assumptions.len(), 1);
+    assert_eq!(assumptions[0]["kind"], "runtime");
+    assert!(
+        assumptions[0]["what"]
+            .as_str()
+            .unwrap()
+            .contains("N_main=8192"),
+        "the assumption must name the derived geometry"
+    );
 }
 
 #[test]

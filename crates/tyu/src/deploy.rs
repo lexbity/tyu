@@ -897,6 +897,7 @@ mod tests {
         let manifest = r#"
 [platform]
 name = "demo"
+kind = "metal"
 compiler-interface = 1
 
 [[platform.isa]]

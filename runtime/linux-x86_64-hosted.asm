@@ -469,7 +469,9 @@ __task_cs_mem rb 1048576
 public __mmio_mem
 __mmio_mem rb 65536
 __lang_gpio_state dq 0
+public __lang_ds_base
 __lang_ds_base rb 65536
+public __lang_ds_limit
 __lang_ds_limit:
 public __lang_ds_high
 __lang_ds_high dq 0
