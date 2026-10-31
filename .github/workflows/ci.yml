@@ -22,6 +22,10 @@
 # hit the job timeout) rather than silently eat the budget of the step that
 # follows.
 #
+# The 26.04 baseline is re-provable locally: `bash ci/docker-audit.sh`
+# rebuilds this workflow's wasm-job provisioning and the full ci/wasm.sh
+# gate suite on a pristine ubuntu:26.04 container.
+#
 # Runs the full test matrix on every push/PR, including the poison
 # corpus, debug-mode (`.lang.debug`) leg, hermetic RSP client, and
 # all three hardware backends (x86_64, ARM, RISC-V) under QEMU.
