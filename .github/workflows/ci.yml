@@ -186,6 +186,11 @@ jobs:
         run: |
           bash ci/retry.sh -- sudo apt-get update -qq
           bash ci/retry.sh -- sudo apt-get install -y -qq brotli fasm binutils
+          # GH runners rustup-provision the rust-toolchain.toml pin under the
+          # minimal profile, which omits clippy — the G55 wasm32 clippy gate
+          # needs the pinned nightly's clippy component (S9 audit finding,
+          # same fix as ci/bootstrap-loaders.sh step 0).
+          bash ci/retry.sh -- rustup component add clippy
           rustup target add wasm32-unknown-unknown
           cargo install wasm-bindgen-cli --version 0.2.108 --locked
       - name: Install Wasm validator and runtime (G54)
